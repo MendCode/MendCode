@@ -54,17 +54,16 @@ describe("UI-1 chat chrome", () => {
     await Bun.sleep(5)
     h.app.render()
     const sidebar = () => h.text().map((row) => row.slice(0, SIDEBAR_WIDTH)).join("\n")
-    expect(sidebar()).toContain("◆ Chrome")
-    expect(sidebar()).toContain("1m ago")
-    expect(sidebar()).toContain("● running")
+    // One row each: the current one carries the bar, the running one a spinner frame, ages sit on the right.
+    expect(sidebar()).toMatch(/▌ · Chrome +1m │/)
+    expect(sidebar()).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏•] Client reconnect +10m │/)
     expect(sidebar()).not.toContain("Other project")
     expect(h.sentOf("session.list")[0]).toMatchObject({ directory: "/work/app", limit: 50 })
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.next, directory: "/work/app", title: "Review reconnect", state: "waiting_approval", updatedAt: NOW } as never)
-    expect(sidebar()).toContain("Review reconnect")
-    expect(sidebar()).toContain("? waiting")
-    expect(sidebar()).not.toContain("● running")
+    expect(sidebar()).toContain("? Review reconnect")
+    expect(sidebar()).toMatch(/Sessions +\?1 │/)
     h.app.onGlobal({ type: "session.activity", gseq: 2, at: NOW, sessionId: h.next, directory: "/work/app", title: "Review reconnect", state: "idle", queued: 2, updatedAt: NOW } as never)
-    expect(sidebar()).toContain("2 queued")
+    expect(sidebar()).toContain("… Review reconnect")
   })
 
   test("left arrow focuses sessions, arrows select, Enter switches; a click switches too", async () => {

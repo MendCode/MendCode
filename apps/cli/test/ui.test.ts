@@ -107,7 +107,7 @@ describe("theme", () => {
     setTheme(DEFAULT_THEME)
     expect(colorDepth({ COLORTERM: "truecolor" })).toBe("truecolor")
     expect(colorDepth({})).toBe("256")
-    expect(sgr({ text: "x", fg: "primary" }, "truecolor")).toBe("\x1b[38;2;34;197;94m")
+    expect(sgr({ text: "x", fg: "primary" }, "truecolor")).toBe("\x1b[38;2;250;250;250m")
     expect(sgr({ text: "x", fg: "primary" }, "256")).toMatch(/^\x1b\[38;5;\d+m$/)
     expect(glyphs({ MENDCODE_GLYPHS: "nerd" }).tool).not.toBe(glyphs({}).tool)
   })

@@ -15,6 +15,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Ink, the website's black and white, is the new default theme: if you never picked a theme you get Ink, and `/theme mend` brings the old look back.
+- The sessions sidebar shows one row per session with a state symbol (waiting for you, running, failed, unread reply, queued, idle), the age, child sessions and PR on the right, groups for pinned, today and earlier, and settled sessions folded into one row; only running and approval rows move.
 - Diagrams and charts no longer show art/copy labels; tables and code blocks keep copy.
 - `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
 - `/reviews` shows each pull request's GitHub state (merged, closed, draft, ready, failing checks or conflicts), and `f` can filter to ready, needs work or closed.
@@ -22,6 +24,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
+- Selecting text in a message drawn with its own background colour shows the highlight on that text again.
 
 ## v0.0.4-beta.4 - 2026-11-06
 

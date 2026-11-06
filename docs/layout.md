@@ -125,10 +125,33 @@ The minimal view and a session with nothing in it (the home screen) never show i
 `auto` (under 110 columns it says there is no room and changes nothing). Existing `auto` profiles now mean left sessions
 on wide terminals, with no file rewrite.
 
-Sessions are filtered to the current project, newest first: title, relative update time, `● running`, `? waiting` or a
-queue marker. `◆` marks the current session. From an empty prompt, Left focuses a left list (Right focuses a right list); Up/Down select, Enter switches,
-the arrow toward the prompt or Esc returns to it. A click on a session switches immediately. Long lists keep the selection visible.
-Live `session.activity` updates the list even while chat is open. Prompts, popups, pets and toasts stay in the chat column.
+Sessions are filtered to the current project, newest first, one row each: a state symbol, the title (cut with `…`), then
+on the right edge its age (`now`, `4m`, `3h`, `2d`), `↳N` for N child sessions and `#412` for a linked PR (green open,
+primary merged, muted closed). The symbols, most urgent first:
+
+| Symbol | Colour role | Means |
+|---|---|---|
+| `?` | warning | waiting for your approval (blinks while the activity tick runs) |
+| spinner | primary | running: generating, a tool, compacting |
+| `✗` | error | the last turn failed |
+| `●` | success | unread: a reply finished since this terminal last showed the session |
+| `…` | muted | queued or paused (`~` with ASCII glyphs) |
+| `·` | muted | idle (`.` with ASCII glyphs) |
+| `◇` | muted | settled |
+
+Only running and approval rows move, on the same tick that animates a busy turn; a list with nothing working draws no
+frames by itself. Unread is kept in memory only: a session counts as seen when the list first draws it and while it is
+open, so a fresh start has nothing unread and nothing is written. The header counts what works and what waits
+(`Sessions ⠹2 ?1`).
+
+Groups are Pinned, Today and Earlier, with dim headings and a blank row between them, then one `◇ Settled · N` row that
+folds the settled sessions and shows the most urgent symbol among them. `▌` in the margin marks the current session. From
+an empty prompt, Left focuses a left list (Right focuses a right list); Up/Down select (the selected row gets the selection
+fill, a `›` mark and one muted detail line: tool in flight, queue, draft, children, PR), Enter switches, Enter (or the arrow
+away from the prompt) on the Settled row folds or unfolds it, the arrow toward the prompt or Esc returns to it. A click on
+a session switches immediately and a click on Settled folds it. Long lists keep the selection visible and count the rows
+left out (`↓ 5 more`). Live `session.activity` updates the list even while chat is open. Prompts, popups, pets and toasts
+stay in the chat column.
 
 ## Chat chrome
 

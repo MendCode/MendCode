@@ -61,11 +61,12 @@ describe("theme definitions", () => {
     expect(() => defineTheme({ ...base, colors: { ...base.colors, error: "red" } })).toThrow("[THEME]")
     expect(() => defineTheme({ ...base, name: "Bad Name" })).toThrow("[THEME]")
   })
-  test("the default theme is mend (v1's mend-dark) and is the active theme at startup", () => {
-    expect(DEFAULT_THEME).toBe("mend")
-    expect(THEMES[0]!.name).toBe("mend")
-    expect(activeTheme().name).toBe("mend")
-    expect(activeTheme().label).toBe("MendCode")
+  test("the default theme is ink (the website's black and white) and is the active theme at startup", () => {
+    expect(DEFAULT_THEME).toBe("ink")
+    expect(THEMES[0]!.name).toBe("ink")
+    expect(activeTheme().name).toBe("ink")
+    expect(activeTheme().label).toBe("Ink")
+    expect(themeNames()).toContain("mend")
     expect(themeNames()).toContain("matrix")
   })
   test("mend carries v1's profile tokens and its fixed roles", () => {
@@ -97,7 +98,7 @@ describe("registry", () => {
 
 describe("active theme", () => {
   test("setTheme switches the sgr output", () => {
-    expect(sgr({ text: "x", fg: "primary" }, "truecolor")).toBe("\x1b[38;2;34;197;94m")
+    expect(sgr({ text: "x", fg: "primary" }, "truecolor")).toBe("\x1b[38;2;250;250;250m")
     expect(setTheme("matrix")).toBe(true)
     expect(sgr({ text: "x", fg: "primary" }, "truecolor")).toBe("\x1b[38;2;46;255;106m")
     expect(setTheme("amber")).toBe(true)
@@ -143,7 +144,7 @@ describe("active theme", () => {
     const run = (theme: string) =>
       Bun.spawnSync(["bun", "-e", script], { cwd: path.join(import.meta.dir, "../../.."), env: { ...process.env, MENDCODE_THEME: theme } }).stdout.toString().trim()
     expect(run("mint")).toBe("mint")
-    expect(run("does-not-exist")).toBe("mend")
+    expect(run("does-not-exist")).toBe("ink")
   })
 })
 

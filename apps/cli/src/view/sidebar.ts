@@ -1,13 +1,13 @@
 import type { McpServerStatus, SessionSummary } from "@mendcode/protocol"
 import { BREAKPOINTS } from "../ui/breakpoints"
-import type { ColorName, Glyphs, Line } from "../ui/theme"
+import { glyphs, type ColorName, type Glyphs, type Line } from "../ui/theme"
 import type { SidebarMode } from "./tui-profile"
 import { clip, fit, spread } from "./deck"
 import { compact } from "./format"
 import type { TodoItem, TodoStatus } from "./dock"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
-import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
-import { textWidth, wrap } from "./wrap"
+import { draftSizeLabel, labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
+import { lineWidth, textWidth, wrap } from "./wrap"
 
 /**
  * The left session list uses `auto` from wide (110 columns), with at least 71 cells left for chat.
@@ -169,32 +169,156 @@ export function projectSessions(sessions: readonly SessionSummary[], directory: 
   return sessions.filter((session) => session.directory === directory).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
 }
 
-/** Two rows per session: its title, then relative time and live activity. */
-export function renderSessionSidebar(input: { sessions: readonly SessionSummary[]; current: string; selected?: string; focused: boolean; height: number; now: number; header?: boolean }): { rows: Line[]; hits: Array<{ row: number; sessionId: string }> } {
-  const inner = SIDEBAR_WIDTH - PAD_X - 2
-  // `sidebarHeader` off gives the title row and the blank under it to the sessions.
-  const head: Line[] = input.header === false ? [] : [spread([{ text: "Sessions", fg: "primary", bold: true }], [{ text: input.focused ? "→ prompt" : "← focus", fg: "muted" }], inner), []]
-  const capacity = Math.max(0, Math.floor((input.height - 4 - head.length) / 4))
-  const selected = input.sessions.findIndex((session) => session.sessionId === (input.selected ?? input.current))
-  const start = Math.max(0, Math.min(selected - capacity + 1, input.sessions.length - capacity))
-  const body: Line[] = [...head]
-  const hits: Array<{ row: number; sessionId: string }> = []
-  let section = ""
-  for (const session of input.sessions.slice(start, start + capacity)) {
-    const next = session.archivedAt !== undefined ? "Settled" : session.lifecycle?.pinnedAt !== undefined ? "Pinned" : "Active"
-    if (next !== section) { body.push([{ text: next, fg: "heading", bold: true }]); section = next }
-    const current = session.sessionId === input.current
-    const picked = input.focused && session.sessionId === (input.selected ?? input.current)
-    const waiting = session.state === "waiting_approval"
-    const running = ["generating", "tool", "compacting", "cancelling"].includes(session.state)
-    const mark = waiting ? "?" : running ? "●" : session.state === "queued" || session.queued > 0 ? "…" : " "
-    const live = waiting ? "waiting" : running ? "running" : session.queued > 0 ? `${session.queued} queued` : ""
-    const time = relativeTime(input.now, sessionActivityAt(session))
-    hits.push({ row: body.length, sessionId: session.sessionId }, { row: body.length + 1, sessionId: session.sessionId })
-    body.push(clip([{ text: picked ? "› " : current ? "◆ " : "  ", fg: "primary" }, ...labelSpans(sessionLabel(session, { untitled: "Untitled session", marker: "Draft" }), inner - 2, { fg: current || picked ? "text" : "muted", bold: current || picked })], inner))
-    body.push(spread([{ text: `  ${time === "now" ? time : `${time} ago`}${session.lifecycle?.pr ? ` #${session.lifecycle.pr.number}` : ""}`, fg: "muted" }], [{ text: `${mark}${live ? ` ${live}` : ""}`, fg: waiting ? "warning" : running ? "success" : "muted" }], inner), [])
+/** The collapsed Settled row's stop among the hits and the keyboard's rows; never a session id (those are ULID-like). */
+export const SETTLED_ROW = "settled"
+
+/** What a session row's leading symbol says, most urgent first (the order t3code's status pill uses). */
+export type SessionMark = "approval" | "running" | "error" | "unread" | "queued" | "settled" | "idle"
+
+const RUNNING_STATES: ReadonlySet<string> = new Set(["generating", "tool", "compacting", "cancelling"])
+const MARK_RANK: Record<SessionMark, number> = { approval: 0, error: 1, unread: 2, running: 3, queued: 4, settled: 5, idle: 6 }
+const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
+const PR_FG: Record<string, ColorName> = { OPEN: "success", MERGED: "primary", CLOSED: "muted" }
+
+type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused">>
+
+/** The row's state: waiting for you, working, failed, a reply you have not opened yet, queued or paused, settled, or nothing. */
+export function sessionMark(session: SidebarSession, unread: boolean): SessionMark {
+  if (session.state === "waiting_approval") return "approval"
+  if (RUNNING_STATES.has(session.state)) return "running"
+  if (session.state === "error") return "error"
+  if (session.archivedAt !== undefined) return "settled"
+  // Messages still waiting to run mean the session is not done, so queued wins over a reply not read yet.
+  if (session.state === "queued" || session.queued > 0 || session.paused) return "queued"
+  if (unread) return "unread"
+  return "idle"
+}
+
+/** Whether a row moves on the activity tick: only running and approval rows do. */
+export const markAnimates = (mark: SessionMark) => mark === "running" || mark === "approval"
+
+/** The rows the keyboard stops on, in drawing order: the sessions, with the settled ones folded into `SETTLED_ROW` until opened. */
+export function sidebarStops(sessions: readonly Pick<SessionSummary, "sessionId" | "archivedAt">[], settledOpen: boolean): string[] {
+  const live = sessions.filter((session) => session.archivedAt === undefined).map((session) => session.sessionId)
+  const settled = sessions.filter((session) => session.archivedAt !== undefined).map((session) => session.sessionId)
+  return settled.length === 0 ? live : [...live, SETTLED_ROW, ...(settledOpen ? settled : [])]
+}
+
+type SidebarGlyphs = Pick<Glyphs, "ask" | "running" | "fail" | "dot" | "queue" | "collapsed">
+
+function startOfDay(now: number): number {
+  const day = new Date(now)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
+}
+
+/**
+ * One row per session: a state symbol, the title, then age, child sessions and the PR on the right. Groups are Pinned, Today,
+ * Earlier and a Settled row that folds the settled sessions (showing the most urgent symbol among them) until it is opened.
+ * The current session carries a bar in the margin; the selected row (with focus) gets the element fill and one muted detail line.
+ * `spinner` is the activity tick's frame for running rows and `blink` its on/off for approval rows; with neither the rows are still.
+ */
+export function renderSessionSidebar(input: {
+  sessions: readonly SidebarSession[]
+  current: string
+  selected?: string
+  focused: boolean
+  height: number
+  now: number
+  header?: boolean
+  unread?: readonly string[]
+  spinner?: string
+  blink?: boolean
+  settledOpen?: boolean
+  ascii?: boolean
+  glyphs?: SidebarGlyphs
+}): { rows: Line[]; hits: Array<{ row: number; sessionId: string }> } {
+  // One gutter cell, the two-cell margin (current bar or selection mark), the row, then a blank and the rule.
+  const inner = SIDEBAR_WIDTH - 1 - PAD_X - 2
+  const g = input.glyphs ?? glyphs()
+  const unread = new Set(input.unread ?? [])
+  const children = new Map<string, number>()
+  for (const session of input.sessions) if (session.parentId) children.set(session.parentId, (children.get(session.parentId) ?? 0) + 1)
+  const marks = new Map(input.sessions.map((session) => [session.sessionId, sessionMark(session, unread.has(session.sessionId) && session.sessionId !== input.current)]))
+  const symbol = (mark: SessionMark): { text: string; fg: ColorName } => {
+    if (mark === "running") return { text: input.spinner || g.running, fg: "primary" }
+    if (mark === "approval") return { text: g.ask, fg: input.blink === false ? "muted" : "warning" }
+    // Idle rows keep a dim dot so every title starts in the same column; ASCII's queue mark is the idle dot, so queued reads `~` there.
+    const text = mark === "error" ? g.fail : mark === "unread" ? g.dot : mark === "queued" ? (input.ascii ? "~" : g.queue) : mark === "settled" ? g.collapsed : input.ascii ? "." : "·"
+    return { text, fg: MARK_FG[mark] }
   }
-  if (start > 0 || start + capacity < input.sessions.length) body.push([{ text: `${Math.min(input.sessions.length, start + 1)}–${Math.min(input.sessions.length, start + capacity)} of ${input.sessions.length}`, fg: "muted" }])
-  while (body.length < input.height) body.push([])
-  return { rows: body.slice(0, input.height).map((row): Line => [{ text: " ".repeat(PAD_X) }, ...fit(row, inner), { text: " ", fg: "muted" }, { text: "│", fg: "border" }]), hits }
+  // The header's right side: how many work and how many wait for you, else the focus hint.
+  const counts = [...marks.values()].reduce((sum, mark) => ({ running: sum.running + (mark === "running" ? 1 : 0), approval: sum.approval + (mark === "approval" ? 1 : 0) }), { running: 0, approval: 0 })
+  const summary: Line = input.focused ? [{ text: "→ prompt", fg: "muted" }] : counts.running || counts.approval
+    ? [...(counts.running ? [{ ...symbol("running"), text: `${symbol("running").text}${counts.running}` }] : []), ...(counts.running && counts.approval ? [{ text: " " }] : []), ...(counts.approval ? [{ text: `${g.ask}${counts.approval}`, fg: "warning" as const }] : [])]
+    : [{ text: "← focus", fg: "muted" }]
+  // `sidebarHeader` off gives the title row and the blank under it to the sessions.
+  const head: Line[] = input.header === false ? [] : [spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner), []]
+  const picked = input.focused ? (input.selected ?? input.current) : undefined
+  const today = startOfDay(input.now)
+  const list: Array<{ line: Line; lead?: Line; id?: string; fill?: boolean; detail?: boolean }> = []
+  let group = ""
+  // A dim group heading, with a blank row before every one but the first.
+  const groupHeading = (name: string) => {
+    if (list.length) list.push({ line: [] })
+    list.push({ line: [{ text: name, fg: "muted" }] })
+  }
+  const sessionRow = (session: SidebarSession) => {
+    const mark = marks.get(session.sessionId)!
+    const current = session.sessionId === input.current
+    const selected = session.sessionId === picked
+    const time = relativeTime(input.now, sessionActivityAt(session))
+    const childCount = children.get(session.sessionId) ?? 0
+    const pr = session.lifecycle?.pr
+    const meta: Line = [{ text: time, fg: "muted" }, ...(childCount ? [{ text: ` ${input.ascii ? "^" : "↳"}${childCount}`, fg: "muted" as const }] : []), ...(pr ? [{ text: ` #${pr.number}`, fg: PR_FG[pr.state ?? ""] ?? "muted" }] : [])]
+    const quiet = mark === "idle" || mark === "settled" || mark === "queued"
+    // The meta sits on the right edge with at least two blanks before it; the title gives way with an ellipsis.
+    const titleRoom = Math.max(4, inner - 2 - lineWidth(meta) - 2)
+    const title = labelSpans(sessionLabel(session, { untitled: "Untitled session", marker: "Draft" }), titleRoom, { fg: current || selected || !quiet ? "text" : "muted", bold: current || selected })
+    const lead: Line = current ? [{ text: "▌", fg: "primary" }, { text: " " }] : selected ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
+    list.push({ line: spread([{ ...symbol(mark), text: `${symbol(mark).text} ` }, ...title], meta, inner), lead, id: session.sessionId, fill: selected })
+    if (!selected) return
+    const detail = [session.tool ? `tool ${session.tool}` : "", session.queued > 0 ? `${session.queued} queued` : "", session.paused ? "paused" : "", session.draft ? `draft ${draftSizeLabel(session.draft)}` : "", childCount ? `${childCount} child${childCount === 1 ? "" : "ren"}` : "", pr ? `PR ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : "open"}` : "", mark === "unread" ? "new reply" : mark === "error" ? "failed" : mark === "approval" ? "waiting for you" : ""].filter(Boolean)
+    if (detail.length) list.push({ line: [{ text: `  ${truncateEnd(detail.join(" · "), inner - 2)}`, fg: "muted" }], id: session.sessionId, detail: true, fill: true })
+  }
+  const settled = input.sessions.filter((session) => session.archivedAt !== undefined)
+  for (const session of input.sessions) {
+    if (session.archivedAt !== undefined) continue
+    const next = session.lifecycle?.pinnedAt !== undefined ? "Pinned" : sessionActivityAt(session) >= today ? "Today" : "Earlier"
+    if (next !== group) { groupHeading(next); group = next }
+    sessionRow(session)
+  }
+  if (settled.length) {
+    if (list.length) list.push({ line: [] })
+    const urgent = settled.map((session) => marks.get(session.sessionId)!).sort((a, b) => MARK_RANK[a] - MARK_RANK[b])[0]!
+    const shown = urgent === "settled" || urgent === "idle" ? symbol("settled") : symbol(urgent)
+    list.push({ line: spread([{ ...shown, text: `${shown.text} ` }, { text: "Settled", fg: "muted" }, { text: ` · ${settled.length}`, fg: "muted" }], [{ text: input.settledOpen ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸"), fg: "muted" }], inner), lead: [{ text: "  " }], id: SETTLED_ROW, fill: picked === SETTLED_ROW })
+    if (input.settledOpen) for (const session of settled) sessionRow(session)
+  }
+  // A window over the rows that keeps the selected row (and its detail line) in view; the last row counts what is left out.
+  const room = Math.max(0, input.height - head.length)
+  const overflow = list.length > room
+  const shownRoom = overflow ? Math.max(0, room - 1) : room
+  const anchor = picked ?? input.current
+  const lastOfPicked = list.findLastIndex((entry) => entry.id === anchor)
+  const start = overflow && lastOfPicked >= 0 ? Math.max(0, Math.min(lastOfPicked - shownRoom + 1, list.length - shownRoom)) : 0
+  const windowed = list.slice(start, start + shownRoom)
+  const body: Array<{ line: Line; lead?: Line; fill?: boolean }> = head.map((line) => ({ line }))
+  const hits: Array<{ row: number; sessionId: string }> = []
+  for (const entry of windowed) {
+    if (entry.id) hits.push({ row: body.length, sessionId: entry.id })
+    body.push(entry)
+  }
+  if (overflow) {
+    const hidden = list.filter((entry, index) => (index < start || index >= start + windowed.length) && entry.id && !entry.detail).length
+    const [up, down] = input.ascii ? ["^", "v"] : ["↑", "↓"]
+    body.push({ line: [{ text: `${start > 0 ? `${up} ` : ""}${start + windowed.length < list.length ? `${down} ` : ""}${hidden} more`, fg: "muted" }] })
+  }
+  while (body.length < input.height) body.push({ line: [] })
+  const rows = body.slice(0, input.height).map(({ line, lead, fill }): Line => {
+    // The selected row's fill runs across the whole row, margin and the cell before the rule included.
+    const row: Line = [{ text: " " }, ...(lead ?? [{ text: " ".repeat(PAD_X) }]), ...fit(line, inner), { text: " ", fg: "muted" }]
+    return [...(fill ? row.map((span) => ({ ...span, bg: "element" as const })) : row), { text: "│", fg: "border" }]
+  })
+  return { rows, hits }
 }

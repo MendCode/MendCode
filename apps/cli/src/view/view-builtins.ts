@@ -9,7 +9,7 @@ import { promptFrame, renderDetailRow, renderStatusRow, withoutMargin, type Foot
 import { renderQueuePanel } from "./queue-panel"
 import { approvalOptionRows, renderApprovalPanel, type ApprovalChoice, type PanelRows } from "./request-panel"
 import { questionAnswerBlock, renderQuestionBatch, type QuestionCard, type QuestionDraft, type QuestionField } from "./question-batch"
-import { renderSessionSidebar, SIDEBAR_WIDTH } from "./sidebar"
+import { renderSessionSidebar, SETTLED_ROW, SIDEBAR_WIDTH } from "./sidebar"
 import { renderSlashMenu } from "./slash-menu"
 import type { StatusInput } from "./status-page"
 // Loaded on first use: the status page is a lazy page module and stays out of the startup graph (test/footprint.test.ts).
@@ -167,9 +167,10 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
     return { lines: card.rows, hits: questionHits(card, m.width) }
   },
   topbar: (m) => [renderTopbar({ ...(m as unknown as TopbarInput), width: m.width })],
-  "sessions.sidebar": (m) => {
-    const side = renderSessionSidebar({ sessions: m.sessions as never, current: m.current, ...(m.selected ? { selected: m.selected } : {}), focused: m.focused, height: m.height, now: m.now, ...(m.extra?.header === false ? { header: false } : {}) })
-    return { lines: side.rows, hits: side.hits.map((hit) => ({ row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "open", arg: hit.sessionId })) }
+  "sessions.sidebar": (m, g) => {
+    const side = renderSessionSidebar({ sessions: m.sessions as never, current: m.current, ...(m.selected ? { selected: m.selected } : {}), focused: m.focused, height: m.height, now: m.now, ...(m.extra?.header === false ? { header: false } : {}), ...(m.unread ? { unread: m.unread } : {}), ...(m.spinner ? { spinner: m.spinner } : {}), ...(m.blink !== undefined ? { blink: m.blink } : {}), ...(m.settledOpen ? { settledOpen: true } : {}), ascii: m.ascii, glyphs: g })
+    // The Settled row folds or unfolds the settled sessions; every other row opens its session.
+    return { lines: side.rows, hits: side.hits.map((hit) => hit.sessionId === SETTLED_ROW ? { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "toggle" } : { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "open", arg: hit.sessionId }) }
   },
   notice: (m, g) => {
     if (m.kind === "toast" && m.inline) return [renderToastRow({ variant: m.variant, ...(m.title ? { title: m.title } : {}), message: m.message, ...(m.hint ? { hint: m.hint } : {}) }, m.width, 2)]

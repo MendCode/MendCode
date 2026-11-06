@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { Settings } from "@mendcode/protocol"
+import { DEFAULT_THEME } from "../src/themes"
 import { glyphs, setTheme } from "../src/ui/theme"
 import { createSettingsPageState, formatTokens, parseDays, parseTokens, renderSettingsPage, settingsPageKey, settingsRows, SETTINGS_GROUPS, type SettingsValues } from "../src/view/settings-page"
 import { textWidth } from "../src/view/wrap"
@@ -9,7 +10,7 @@ const made: Array<ReturnType<typeof scratch>> = []
 afterEach(() => {
   for (const item of made.splice(0)) item.cleanup()
   // Theme edits apply process-wide; later tests start from the default.
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
 })
 
 const RIGHT = "\x1b[C"
@@ -51,7 +52,7 @@ describe("/settings page", () => {
     for (const title of ["Appearance", "Behavior", "Models", "Memory", "Storage", "More", "Subagents", "Queue"]) expect(text).toContain(title)
     for (const row of ["at once        ‹ default (4) ›", "whole tree     ‹ default (16) ›"]) expect(text).toContain(row)
     for (const label of ["theme", "view", "motion", "pet", "footer", "permission", "compact at", "idle compact", "cache ttl", "claude ttl", "areas", "trusted tools", "disabled pkgs", "onboarded", "roles", "dream at", "retention", "customize", "extensions"]) expect(text).toContain(label)
-    for (const value of ["‹ mend ›", "‹ balanced ›", "‹ normal ›", "codex:luna", "2 segments", "‹ edits ›", "‹ 200k ›", "work", "2 directories", "1 off", "‹ on ›", "gpt-6 · 1 more role", "‹ 04:15 ›", "‹ 90 days ›"]) expect(text).toContain(value)
+    for (const value of [`‹ ${DEFAULT_THEME} ›`,"‹ balanced ›", "‹ normal ›", "codex:luna", "2 segments", "‹ edits ›", "‹ 200k ›", "work", "2 directories", "1 off", "‹ on ›", "gpt-6 · 1 more role", "‹ 04:15 ›", "‹ 90 days ›"]) expect(text).toContain(value)
     expect(text).toContain(`${SETTINGS_GROUPS.flatMap((group) => group.rows).length} settings`)
     expect(h.rows()).toHaveLength(50)
   })
@@ -85,7 +86,7 @@ describe("/settings page", () => {
     await key(RIGHT)
     const fromSetup = sent.filter((command) => command.type === "settings.set")
     // The theme applies process-wide (the setup page previews it); start the second run from the same one.
-    setTheme("mend")
+    setTheme(DEFAULT_THEME)
 
     const h = await open({})
     await h.key(RIGHT)
@@ -105,7 +106,7 @@ describe("/settings page", () => {
     expect(fromSettings.every((command) => Object.keys(command).sort().join() === "patch,type")).toBe(true)
     expect(merged(fromSettings)).toEqual(merged(fromSetup))
     expect(fromSettings).toHaveLength(fromSetup.length)
-    expect(merged(fromSettings)).toEqual({ theme: "matrix", view: "full", reducedMotion: true, defaultPermission: "edits", dreamAt: "04:15", retentionDays: 30 })
+    expect(merged(fromSettings)).toEqual({ theme: "mend", view: "full", reducedMotion: true, defaultPermission: "edits", dreamAt: "04:15", retentionDays: 30 })
   })
 
   test("each row cycles like the setup page: theme previews, permission, dream and retention presets, onboarded toggles", async () => {

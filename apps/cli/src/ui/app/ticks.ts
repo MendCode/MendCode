@@ -10,10 +10,11 @@ import { sessionDisplayTitle } from "./display-title"
 export function createTicks(ctx: AppContext, actions: {
   chatWidth: () => number
   sessionTitle: () => string
+  sidebarShown: (width: number) => boolean
   render: () => void
 }) {
   const { state, schedule } = ctx
-  const { chatWidth, sessionTitle, render } = actions
+  const { chatWidth, sessionTitle, sidebarShown, render } = actions
 
   function syncPulse() {
     const busy =BUSY.has(state.transcript.foreground) || state.transcript.foreground === "waiting_approval" || state.turnState.retry !== undefined
@@ -28,7 +29,9 @@ export function createTicks(ctx: AppContext, actions: {
     // A PR review of the open session's watch: its activity status and running step move until the run ends (nothing at rest).
     // `/reviews` with a review running turns the same spinner on its running rows.
     const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
-    const wanted = (busy || preview || agents || home || thread || reviewing) && !state.reducedMotion
+    // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
+    const listed = state.page === "chat" && (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval") && s.directory === (ctx.input.directory ?? "")) && sidebarShown(ctx.input.screen.size.width)
+    const wanted = (busy || preview || agents || home || thread || reviewing || listed) && !state.reducedMotion
     if (wanted && !state.pulse)
       state.pulse = setInterval(() => {
         state.spinFrame++

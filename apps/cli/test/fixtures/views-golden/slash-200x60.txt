@@ -1,5 +1,5 @@
-bcbcfa1eb8baa3b3
-  Sessions                   ← focus │   git /work/app
+d3b3500e617ef606
+   Sessions                  ← focus │   git /work/app
                                      │
                                      │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
                                      │

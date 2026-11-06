@@ -619,6 +619,10 @@ export type AppState = {
   sidebarFocus?: boolean
   sidebarSelected?: string | undefined
   sidebarHits?: Array<{ row: number; sessionId: string }>
+  /** The `updatedAt` each listed session had when the sessions sidebar last showed it as seen; memory only, filled as the list draws. A later one is an unread reply. */
+  sidebarSeen?: Map<string, number>
+  /** The sidebar's Settled row is unfolded. */
+  sidebarSettledOpen?: boolean
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined
