@@ -392,8 +392,10 @@ export function createSession(ctx: AppContext, actions: {
     await changeSession({ type: "rename", sessionId: state.sessionId, title: title.trim() })
   }
 
+  /** "This project" asks for the folder's own sessions with their children (nested under them); all projects, the top ones of each. */
   async function reloadSessions() {
-    const reply = await input.send({ type: "session.list", limit: 200, archived: true, hideEmpty: true })
+    const folder = state.page === "sessions" && state.sessionList.scope === "project" ? state.sessionList.directory : undefined
+    const reply = await input.send({ type: "session.list", limit: 200, archived: true, hideEmpty: true, ...(folder ? { directory: folder, roots: false } : {}) })
     if (!reply.ok) fail(reply.error.message)
     else state.sessions = (reply.result?.sessions as SessionSummary[]) ?? []
     requestFrame()
@@ -402,7 +404,7 @@ export function createSession(ctx: AppContext, actions: {
   async function openSessions(archived = false) {
     state.renameFromChat = false
     state.page = "sessions"
-    state.sessionList = createSessionListState()
+    state.sessionList = createSessionListState(input.remote ? undefined : input.directory)
     if (archived) state.sessionList.archived = true
     requestFrame()
     await reloadSessions()

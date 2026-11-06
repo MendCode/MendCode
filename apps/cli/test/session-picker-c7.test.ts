@@ -110,6 +110,35 @@ describe("picker keys", () => {
     expect(viewOf(state)).toEqual({ sort: "name", scope: "all", named: true })
   })
 
+  test("opened in a folder it starts on that folder's sessions, even before the open session is listed, and ctrl+l asks the daemon again", () => {
+    const opened = createSessionListState("/tmp/b")
+    expect(opened).toMatchObject({ scope: "project", directory: "/tmp/b" })
+    expect(orderSessions(all, "", "ses_not_listed", false, viewOf(opened)).map((s) => s.title)).toEqual(["billing export"])
+    // A folder inside it is another project.
+    const inner = make({ title: "inner", directory: "/tmp/b/inner" })
+    expect(orderSessions([...all, inner], "", undefined, false, viewOf(opened)).map((s) => s.title)).toEqual(["billing export"])
+    const toggled = sessionListKey(opened, "\x0c", all, docs.sessionId)
+    expect(toggled).toMatchObject({ state: { scope: "all", directory: "/tmp/b" }, action: { type: "reload" } })
+    expect(sessionListKey(toggled.state, "\x0c", all, docs.sessionId)).toMatchObject({ state: { scope: "project" }, action: { type: "reload" } })
+    // The folder's group comes first under all projects too.
+    expect(groupSessions(all, "", undefined, false, viewOf(toggled.state)).map((g) => g.directory)[0]).toBe("/tmp/b")
+  })
+
+  test("a child session is listed right under its parent and drawn indented", () => {
+    const parent = make({ title: "parent run", updatedAt: NOW - 8000 })
+    const child = make({ title: "child task", parentId: parent.sessionId, updatedAt: NOW - 100 })
+    const grandchild = make({ title: "grandchild task", parentId: child.sessionId, updatedAt: NOW - 50 })
+    const loose = make({ title: "newest top", updatedAt: NOW - 10 })
+    const sessions = [grandchild, loose, child, parent]
+    expect(orderSessions(sessions, "", undefined, false, { scope: "project", directory: "/tmp/a" }).map((s) => s.title)).toEqual(["newest top", "parent run", "child task", "grandchild task"])
+    const rows = renderSessionList({ sessions, state: createSessionListState("/tmp/a"), width: 120, height: 34, now: NOW }).map((line) => line.map((span) => span.text).join(""))
+    const at = (title: string) => rows.find((row) => row.includes(title))!
+    expect(at("parent run")).not.toContain("↳")
+    expect(at("child task")).toMatch(/↳ \S+ child task/)
+    expect(at("grandchild task")).toMatch(/ {2}↳ \S+ grandchild task/)
+    expect(rows.join("\n")).toContain("this project")
+  })
+
   test("ctrl+f turns message search on (asking the daemon), typing asks again, turning it off drops the hits", () => {
     const on = key(createSessionListState(), "\x06")
     expect(on.state.content).toBe(true)
@@ -202,6 +231,31 @@ describe("picker in the app", () => {
     await h.app.onKey("\r")
     expect(h.sentOf("session.agent-view.metadata.patch").at(-1)).toEqual({ type: "session.agent-view.metadata.patch", sessionId: id, patch: { tags: ["review"], color: "cyan" } })
     expect(h.text().join("\n")).toContain("#review")
+  })
+
+  test("/sessions in the home folder asks for the home's own sessions with their children; ctrl+l lists all projects", async () => {
+    const home = "/Users/someone"
+    const own = make({ title: "home chat", directory: home })
+    const child = make({ title: "home child", directory: home, parentId: own.sessionId })
+    const lane = make({ title: "lane under home", directory: `${home}/Code/lane` })
+    const h = appHarness({ sessionId: own.sessionId, dataDir: tempDir(), directory: home, reply: (command) => {
+      if (command.type !== "session.list") return undefined
+      const listed = command.directory ? [own, child, lane].filter((s) => s.directory === command.directory) : [own, lane]
+      return { ok: true, result: { sessions: command.roots === false ? listed : listed.filter((s) => !s.parentId) } }
+    } })
+    h.app.applySettings({ onboarded: true })
+    conversation(own.sessionId, h.app.onEvent).exchange("hello", "hi")
+    await h.type("/sessions\r")
+    expect(h.sentOf("session.list").at(-1)).toMatchObject({ directory: home, roots: false })
+    let out = h.text().join("\n")
+    expect(out).toContain("home chat")
+    expect(out).toMatch(/↳ \S+ home child/)
+    expect(out).not.toContain("lane under home")
+    await h.app.onKey("\x0c")
+    expect(h.sentOf("session.list").at(-1)).not.toHaveProperty("directory")
+    out = h.text().join("\n")
+    expect(out).toContain("all projects")
+    expect(out).toContain("lane under home")
   })
 
   test("ctrl+f asks the daemon to look in messages, scoped to the listed sessions, and the hits filter the list", async () => {

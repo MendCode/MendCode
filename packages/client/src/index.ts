@@ -765,9 +765,9 @@ export function createClient(options: {
       const reply = await request({ type: "loop.events", loopId, limit, id: ids("command"), clientId }, true)
       return reply.ok ? { ok: true, events: reply.result?.events as import("@mendcode/protocol").LoopJournalEvent[] } : reply
     },
-    async searchSession(sessionId: SessionId, input: import("@mendcode/protocol").SessionRecallSearchInput): Promise<{ ok: true; page: import("@mendcode/protocol").SessionRecallPage } | { ok: false; error: ErrorPayload }> {
+    async searchSession(sessionId: SessionId, input: import("@mendcode/protocol").SessionRecallSearchInput): Promise<{ ok: true; page: import("@mendcode/protocol").SessionRecallPage | import("@mendcode/protocol").SessionRecallFound } | { ok: false; error: ErrorPayload }> {
       const reply = await request({ type: "session.recall.search", sessionId, input, id: ids("command"), clientId }, true)
-      return reply.ok ? { ok: true, page: reply.result as unknown as import("@mendcode/protocol").SessionRecallPage } : reply
+      return reply.ok ? { ok: true, page: reply.result as unknown as import("@mendcode/protocol").SessionRecallPage | import("@mendcode/protocol").SessionRecallFound } : reply
     },
     async readSession(sessionId: SessionId, input: import("@mendcode/protocol").SessionRecallReadInput = {}): Promise<{ ok: true; recall: import("@mendcode/protocol").SessionRecallPage | import("@mendcode/protocol").SessionRecallMessage } | { ok: false; error: ErrorPayload }> {
       const reply = await request({ type: "session.recall.read", sessionId, input, id: ids("command"), clientId }, true)

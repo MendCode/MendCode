@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { rmSync } from "node:fs"
 import { openStore } from "@mendcode/store"
-import { SessionNotesReport, SessionRecallMessage, SessionRecallPage } from "@mendcode/protocol"
+import { SessionNotesReport, SessionRecallFound, SessionRecallMessage, SessionRecallPage } from "@mendcode/protocol"
 import { createSessionRecall, localTime } from "../src/session-recall"
 import { recallFixture } from "./session-recall-fixture"
 
@@ -40,6 +40,54 @@ test("only current and linked descendants in the same project are accessible", (
   history.store.createSession({ id: cycle, parentId: cycle, directory: history.dir, title: "Cycle" })
   expect(() => history.port.read({ session_id: cycle })).toThrow("outside")
   expect(() => history.recall.port(history.ids("session")).read({})).toThrow("Unknown session")
+})
+
+test("a project search finds another session of this project by its messages, and only then may it be read", () => {
+  const history = fixture()
+  history.enabled()
+  const sibling = history.session()
+  const outside = history.session(undefined, `${history.dir}/other`)
+  history.message("We moved the invoice export to a nightly job", { sessionId: sibling })
+  history.message("The invoice export lives in another project", { sessionId: outside })
+  history.message("Where did the invoice export go?")
+  expect(() => history.port.read({ session_id: sibling })).toThrow("outside")
+  const found = SessionRecallFound.parse(history.port.find!({ query: "invoice export", scope: "project" }))
+  expect(found.sessions.map((session) => session.session_id)).toEqual([sibling])
+  expect(found.sessions[0]).toMatchObject({ title: "Recall", snippet: "We moved the invoice export to a nightly job" })
+  expect(found.sessions[0]!.at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/)
+  expect(found.more).toBe(false)
+  // Found, it can be read and searched; the other project's session stays refused, and so does a sibling that was not found.
+  expect(SessionRecallPage.parse(history.port.read({ session_id: sibling })).messages.map((message) => message.text)).toEqual(["We moved the invoice export to a nightly job"])
+  expect(history.port.search({ query: "nightly", session_id: sibling }).messages).toHaveLength(1)
+  expect(() => history.port.read({ session_id: outside })).toThrow("outside")
+  const unseen = history.session()
+  expect(() => history.port.read({ session_id: unseen })).toThrow("outside")
+  // What one session found is not another session's grant.
+  expect(() => history.recall.port(unseen).read({ session_id: sibling })).toThrow("outside")
+  // A session moved to another folder after it was found is refused again.
+  history.store.sessionSink.append({ type: "session.workspace.changed", sessionId: sibling, directory: `${history.dir}/other`, workspaceID: null })
+  expect(() => history.port.read({ session_id: sibling })).toThrow("outside")
+  expect(() => history.port.find!({ query: "x", scope: "project", cursor: "-1" })).toThrow("cursor")
+  expect(() => history.port.find!({ query: "   ", scope: "project" })).toThrow("query")
+  history.enabled(false)
+  expect(() => history.port.find!({ query: "invoice", scope: "project" })).toThrow("disabled")
+})
+
+test("a project search pages with its cursor and caps each page", () => {
+  const history = fixture()
+  history.enabled()
+  const made = Array.from({ length: 13 }, (_, index) => {
+    const id = history.session()
+    history.message(`deploy note ${index}`, { sessionId: id })
+    return id
+  })
+  const first = SessionRecallFound.parse(history.port.find!({ query: "deploy note", scope: "project", limit: 50 }))
+  expect(first.sessions).toHaveLength(10)
+  expect(first.more).toBe(true)
+  const second = SessionRecallFound.parse(history.port.find!({ query: "deploy note", scope: "project", cursor: first.next_cursor }))
+  expect(second.more).toBe(false)
+  expect(new Set([...first.sessions, ...second.sessions].map((session) => session.session_id))).toEqual(new Set(made))
+  for (const session of second.sessions) expect(session.snippet.length).toBeLessThanOrEqual(200)
 })
 
 test("scanned pages are bounded, chronological and preserve empty search cursors", () => {

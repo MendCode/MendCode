@@ -1056,7 +1056,7 @@ External engines keep their own tool catalogs; these tools are not injected into
 
 | Model tool | Input and result |
 |---|---|
-| `session_search` | `query`, optional `session_id`, `before`, `limit`; returns `{ session_id, messages, next_cursor?, more }` |
+| `session_search` | `query`, optional `session_id`, `before`, `limit`; returns `{ session_id, messages, next_cursor?, more }`. With `scope: "project"` (optional `cursor`, `limit`) it finds other sessions of this project instead: `{ scope: "project", sessions: [{ session_id, title, at, snippet }], next_cursor?, more }` |
 | `session_read` | the same paging fields without a required query; `message_id` and optional `offset` read one message as `{ session_id, message_id, at, text, next_offset? }` |
 | `session_notes` | `action: "read"` with optional `version`, or `action: "write"` with current `version` and replacement `text`; returns `{ version, text, current_version }` |
 
@@ -1067,6 +1067,24 @@ Recall defaults to the calling session.
 An explicit target must be that session or a linked descendant, with every ancestor in the same canonical project directory.
 
 Siblings, ancestors, unrelated projects and cycles are refused; message IDs and cursors must belong to the selected session.
+
+The one widening is a project search: a session that `session_search { scope: "project" }` returned may then be read (and
+searched) by the session that searched, while it stays in the same canonical project directory. The daemon keeps those ids in
+memory only (32 searching sessions, 200 ids each, oldest dropped first) until it restarts; another project's session is
+refused as before, and a remote or peer client cannot run a project search (`forbidden`).
+
+### Find another session of this project
+
+`session_search` with `scope: "project"` answers "which session did we do X in?" without guessing titles. It reads the
+existing rows on demand (no index, table or background work): the sessions whose folder is this session's folder (archived
+and child sessions too, the calling session left out), newest first, and for each its title, then its newest 300 user and
+assistant messages inside the last 3000 events (never tool output), as the picker's message search does. A page holds at most
+10 sessions with one snippet each (about 120 characters around the match, redacted) and reads at most 40 sessions within
+250 ms; `next_cursor` (pass it as `cursor`) continues with the next sessions, even when a page found nothing.
+
+Measured on a synthetic store (`packages/store/test/synthetic-data.ts`) of 1,000 compressed sessions in one folder, six turns
+each and the phrase in none of them: a page that reads its 40 sessions took 7.5 ms (median, 9.1 ms at most), and paging
+through the whole folder (25 pages) took 0.19 s in all. Nothing is held between calls but the cursor the model passes back.
 
 This is the conservative isolation boundary for the audit's pending policy decision: broader access is not enabled or configurable without user approval.
 
@@ -1193,6 +1211,11 @@ The grant lives in daemon memory (64 sessions) and ends on restart.
 
 ### Filter and sort the session picker
 
+`/sessions` opens on **this project**: the sessions whose folder is the one MendCode runs in, each child session nested right
+under its parent (`session.list { directory, roots: false }`). A folder inside it is another project, and the user's home is a
+folder like any other: started in `~`, the list shows the sessions started in `~`, not every project under it. Ctrl+L switches
+to **all projects** (the top sessions of every folder, grouped by folder) and back; the summary line names the scope.
+
 `/sessions` filters with a small query language:
 
 | Query | Matches |
@@ -1206,7 +1229,7 @@ The grant lives in daemon memory (64 sessions) and ends on restart.
 | Key | Cycles |
 |---|---|
 | Ctrl+S | sort: recent, created, name |
-| Ctrl+L | scope: all projects, the open session's project |
+| Ctrl+L | scope: this project (the default), all projects |
 | Ctrl+E | named-only filter: sessions the user titled (`SessionSummary.named`) |
 
 The summary line names every non-default toggle.

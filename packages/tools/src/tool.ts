@@ -80,6 +80,8 @@ export type WebfetchResources = {
 
 export type SessionRecallPort = {
   search(input: import("@mendcode/protocol").SessionRecallSearchInput): import("@mendcode/protocol").SessionRecallPage
+  /** `session_search` with `scope: "project"`: the other sessions of this project that hold the phrase; they may then be read. */
+  find?(input: import("@mendcode/protocol").SessionRecallSearchInput): import("@mendcode/protocol").SessionRecallFound
   read(input: import("@mendcode/protocol").SessionRecallReadInput): import("@mendcode/protocol").SessionRecallPage | import("@mendcode/protocol").SessionRecallMessage
   notes(input: import("@mendcode/protocol").SessionNotesInput): import("@mendcode/protocol").SessionNotesReport
   /** `auto_recall`: the earlier turns of this session that the latest compaction packed away and that best match `query`, newest context first. */

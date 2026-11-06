@@ -10,14 +10,18 @@ function result(name: string, context: ToolContext, run: (port: NonNullable<Tool
 export const SESSION_RECALL_TOOLS = [
   defineTool({
     name: "session_search",
-    description: "Search one bounded page of historical messages, including before compaction. Follow next_cursor for older pages, even when this page has no matches. Only the current session or linked descendants in this project. Reasoning is never returned.",
+    description: "Search one bounded page of historical messages, including before compaction. Follow next_cursor for older pages, even when this page has no matches. Only the current session or linked descendants in this project. scope \"project\" finds other sessions of this project by title or text, newest first; next_cursor goes in cursor; session_read may read them. Reasoning is never returned.",
     permission: "read",
     args: SessionRecallSearchInput,
-    execute: async (input, context) => result("session_search", context, (port) => port.search(input)),
+    execute: async (input, context) => result("session_search", context, (port) => {
+      if (input.scope !== "project") return port.search(input)
+      if (!port.find) throw new Error("Project search is not available here")
+      return port.find(input)
+    }),
   }),
   defineTool({
     name: "session_read",
-    description: "Read one bounded page of session history, including before compaction. Only the current session or linked descendants in this project. message_id reads one message in 16,000-character chunks; follow next_offset. Each message has `at`, when it was sent (local time with offset). Reasoning is never returned.",
+    description: "Read one bounded page of session history, including before compaction. Only the current session, linked descendants or a session a project search returned, in this project. message_id reads one message in 16,000-character chunks; follow next_offset. Each message has `at`, when it was sent (local time with offset). Reasoning is never returned.",
     permission: "read",
     args: SessionRecallReadInput,
     execute: async (input, context) => result("session_read", context, (port) => port.read(input)),

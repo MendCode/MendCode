@@ -18,10 +18,11 @@ function homeApp(directory: string, sessions: SessionSummary[]) {
 const summary = (title: string, directory: string, state: SessionSummary["state"], updatedAt = NOW - 60_000): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 1, state, queued: 0 })
 
 describe("home Agent View scope", () => {
-  test("sessions already running or waiting in other terminals show from the start, from the project's folders only", async () => {
+  test("sessions already running or waiting in other terminals show from the start, from this folder only", async () => {
     const h = homeApp("/work/app", [
-      summary("Asks for approval", "/work/app/packages/api", "waiting_approval"),
+      summary("Asks for approval", "/work/app", "waiting_approval"),
       summary("Builds the docs", "/work/app", "generating"),
+      summary("Package run", "/work/app/packages/api", "generating"),
       summary("Other project run", "/work/other", "generating"),
     ])
     await h.app.start()
@@ -31,18 +32,26 @@ describe("home Agent View scope", () => {
     expect(screen).toContain("Asks for approval")
     expect(screen).toContain("Builds the docs")
     expect(screen).toMatch(/1 wait · 0 loop · 1 work/)
+    // A folder inside the project is another project.
+    expect(screen).not.toContain("Package run")
     expect(screen).not.toContain("Other project run")
   })
 
-  test("from the user's home every project's finished sessions are under Completed", async () => {
-    const h = homeApp(homedir(), [summary("Wakefold browser", `${homedir()}/Code/Wakefold`, "idle"), summary("Scratch notes", "/private/tmp/notes", "idle")])
+  test("the user's home is a folder like any other: only the sessions started there, not every project under it", async () => {
+    const h = homeApp(homedir(), [
+      summary("Home chores", homedir(), "idle"),
+      summary("Lane in a worktree", `${homedir()}/Code/lanes/one`, "generating"),
+      summary("Wakefold browser", `${homedir()}/Code/Wakefold`, "idle"),
+      summary("Scratch notes", "/private/tmp/notes", "idle"),
+    ])
     await h.app.start()
     await Bun.sleep(5)
     h.app.render()
     const rows = h.text()
     const completed = rows.findIndex((row) => row.includes("Completed"))
     expect(completed).toBeGreaterThanOrEqual(0)
-    expect(rows.slice(completed).join("\n")).toContain("Wakefold browser")
-    expect(rows.slice(completed).join("\n")).toContain("Scratch notes")
+    expect(rows.slice(completed).join("\n")).toContain("Home chores")
+    const screen = rows.join("\n")
+    for (const other of ["Lane in a worktree", "Wakefold browser", "Scratch notes"]) expect(screen).not.toContain(other)
   })
 })

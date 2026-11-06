@@ -13,6 +13,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - MendGirl, with neko ears and her little robot, ships as a built-in pet beside MendAscii: choose her in `/pet` or as the start screen's mascot with `/mascot mendgirl`.
 - Workflow scripts can pass text to a check's standard input with `check(command, { stdin })`.
+- With session recall on, an agent can find the session where something was done: `session_search` with `scope: "project"` looks through the titles and messages of this project's other sessions, newest first, and `session_read` can then open the ones it found.
 
 ### Changed
 
@@ -25,6 +26,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on, then the daemon really restarts; anything it still has to stop is listed by command line to that session when the daemon starts again. A restart command that goes away during the wait leaves the sessions unpaused and interrupts nothing.
+- Started in your home folder, `/sessions`, the home's Agent View and its Completed list no longer show every project under it: like any folder, they show the sessions started there. `/sessions` now opens on this folder's sessions with each child session nested under its parent; Ctrl+L still shows all projects.
 
 ## v0.0.4-beta.5 - 2026-11-06
 

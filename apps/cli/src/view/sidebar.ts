@@ -166,7 +166,9 @@ export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], m
 
 export function projectSessions(sessions: readonly SessionSummary[], directory: string) {
   const section = (session: SessionSummary) => session.archivedAt !== undefined ? 2 : session.lifecycle?.pinnedAt !== undefined ? 0 : 1
-  return sessions.filter((session) => session.directory === directory).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
+  // The top sessions only: a child listed with its parent (as /sessions lists a folder) stays under it there, not here.
+  const listed = new Set(sessions.map((session) => session.sessionId))
+  return sessions.filter((session) => session.directory === directory && !(session.parentId && listed.has(session.parentId))).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
 }
 
 /** The collapsed Settled row's stop among the hits and the keyboard's rows; never a session id (those are ULID-like). */

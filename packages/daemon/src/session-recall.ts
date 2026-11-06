@@ -1,7 +1,10 @@
-import { redactSecrets, type ErrorCode, type SessionId, type SessionRecallPage, type SessionRecallReadInput } from "@mendcode/protocol"
+import { redactSecrets, type ErrorCode, type SessionId, type SessionRecallFound, type SessionRecallPage, type SessionRecallReadInput, type SessionRecallSearchInput } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { canonicalDir, type SessionRecallPort } from "@mendcode/tools"
 import { rankTurns } from "./turn-recall"
+
+const FOUND_SEARCHERS = 32
+const FOUND_PER_SEARCHER = 200
 
 export class SessionRecallError extends Error {
   constructor(readonly code: ErrorCode, message: string) { super(message) }
@@ -50,9 +53,44 @@ export function createSessionRecall(store: Store) {
     if (!session) throw new SessionRecallError("unknown_session", "Unknown session")
     return session
   }
+  /**
+   * The sessions a project search showed each searching session, which it may then read: kept in memory only, bounded
+   * (FOUND_SEARCHERS searchers, FOUND_PER_SEARCHER ids each, oldest dropped first), empty until a project search runs.
+   */
+  const found = new Map<SessionId, Set<SessionId>>()
+  function remember(sessionId: SessionId, ids: readonly SessionId[]) {
+    if (!ids.length) return
+    const known = found.get(sessionId) ?? new Set<SessionId>()
+    found.delete(sessionId)
+    found.set(sessionId, known)
+    for (const id of ids) { known.delete(id); known.add(id) }
+    while (known.size > FOUND_PER_SEARCHER) known.delete(known.values().next().value!)
+    while (found.size > FOUND_SEARCHERS) found.delete(found.keys().next().value!)
+  }
+  function projectSearch(sessionId: SessionId, input: SessionRecallSearchInput): SessionRecallFound {
+    const origin = enabled(sessionId)
+    const text = input.query.trim()
+    if (!text) throw new SessionRecallError("invalid_command", "Search requires query")
+    const offset = input.cursor === undefined ? 0 : Number(input.cursor)
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new SessionRecallError("invalid_command", "Unknown project search cursor")
+    const limit = Number.isFinite(input.limit) ? Math.floor(input.limit!) : 10
+    const page = store.sessionSearch.find({ text, directory: origin.directory, exclude: sessionId, offset, limit })
+    remember(sessionId, page.hits.map((hit) => hit.sessionId))
+    return {
+      scope: "project",
+      sessions: page.hits.map((hit) => ({ session_id: hit.sessionId, title: redactSecrets(hit.title.slice(0, 200)).text, at: localTime(hit.updatedAt), snippet: redactSecrets(hit.snippet).text.slice(0, 200) })),
+      more: page.next !== undefined,
+      ...(page.next !== undefined ? { next_cursor: String(page.next) } : {}),
+    }
+  }
   function target(sessionId: SessionId, requested?: SessionId) {
     const origin = enabled(sessionId)
     const id = requested ?? sessionId
+    // A session a project search returned: still only while it is in this project.
+    if (requested && found.get(sessionId)?.has(requested)) {
+      const session = store.sessionInfo(requested)
+      if (session && canonicalDir(session.directory) === canonicalDir(origin.directory)) return id
+    }
     let cursor = id
     const seen = new Set<SessionId>()
     while (!seen.has(cursor)) {
@@ -87,6 +125,7 @@ export function createSessionRecall(store: Store) {
     port(sessionId: SessionId): SessionRecallPort {
       return {
         search: (input) => page(sessionId, input, true),
+        find: (input) => projectSearch(sessionId, input),
         read: (input) => {
           if (!input.message_id) return page(sessionId, input, false)
           const id = target(sessionId, input.session_id)

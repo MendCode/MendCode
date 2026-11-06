@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { reviewActivityView } from "../lazy-pages"
 import { HOME_RECENT_MS, HOME_WORKING, inProject } from "../../view/project-scope"
 import { featureOn, ideSelectionKey } from "@mendcode/protocol/wire"
@@ -534,8 +533,8 @@ export function createChatRows(ctx: AppContext, actions: {
 
   /** The running sessions as the home's Agent View lists them. */
   const homeSessions = (): HomeSession[] => {
-    // This project and the folders inside it (another project's sessions belong to its own home); from the user's home every project, as in v1.
-    const scope = input.directory === homedir() ? undefined : input.directory
+    // This folder's sessions only (another folder's belong to its own home), the user's home included.
+    const scope = input.directory
     const sessions: HomeSession[] = [...state.agentSessions.values()].filter((s) => HOME_WORKING.has(s.state) && inProject(s.directory, scope)).map((s) => ({
       id: s.sessionId, title: s.title || s.sessionId, state: s.state === "waiting_approval" ? "needs_input" : "working", updatedAt: s.updatedAt,
       ...(s.since !== undefined ? { startedAt: s.since } : {}), ...(s.tool || s.pending ? { detail: s.tool ?? s.pending! } : {}),
@@ -548,7 +547,7 @@ export function createChatRows(ctx: AppContext, actions: {
     }
     // v1 lists the project's last finished conversations under Completed: root sessions of the last 30 days, not archived.
     const since = now() - HOME_RECENT_MS
-    // What changed since attach (`sessions`, kept current by activity) wins over the list read at attach (`homeRecent`, every project).
+    // What changed since attach (`sessions`, kept current by activity) wins over the list read at attach (`homeRecent`, every project, filtered here).
     const known = new Map([...state.homeRecent, ...state.sessions].map((s) => [s.sessionId, s]))
     for (const s of known.values()) {
       if (!inProject(s.directory, scope) || s.parentId || s.archivedAt !== undefined || s.sessionId === state.sessionId || s.updatedAt < since || sessions.some((session) => session.id === s.sessionId)) continue

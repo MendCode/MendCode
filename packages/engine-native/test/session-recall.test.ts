@@ -59,6 +59,22 @@ test("search and read dispatch through the current session's bound port", async 
   expect(results(script.requests).map((message) => message.role === "tool" && message.isError)).toEqual([false, false])
 })
 
+test("a project-scoped search goes to the port's project search, without asking, and fails plainly where there is none", async () => {
+  const mock = port()
+  const found: unknown[] = []
+  const withFind: SessionRecallPort = { ...mock.recall, find: (input) => (found.push(input), { scope: "project", sessions: [], more: false }) }
+  const script = scriptedProvider([callTool("session_search", { query: "invoice export", scope: "project", cursor: "40" }), stop("Found")])
+  const engine = createNativeEngine({ provider: script.provider, tools: [], history: memoryHistory(), cwdFor: () => "/tmp", system: () => "SYS", compactionPrompt: "C", recall: () => withFind, permissionPolicy: () => active })
+  const current = turn({ text: "Which session moved the invoice export?" })
+  await engine.runTurn(current.input)
+  expect(found).toEqual([{ query: "invoice export", scope: "project", cursor: "40" }])
+  expect(mock.calls).toEqual([])
+  expect(current.asked).toEqual([])
+  const none = scriptedProvider([callTool("session_search", { query: "x", scope: "project" }), stop("None")])
+  await createNativeEngine({ provider: none.provider, tools: [], history: memoryHistory(), cwdFor: () => "/tmp", system: () => "SYS", compactionPrompt: "C", recall: () => mock.recall, permissionPolicy: () => active }).runTurn(turn({ text: "Find" }).input)
+  expect(JSON.stringify(results(none.requests))).toContain("Project search is not available here")
+})
+
 test("notes can be read in plan mode but writes require write authority", async () => {
   const mock = port()
   const script = scriptedProvider([callTool("session_notes", { action: "read" }), callTool("session_notes", { action: "write", version: 0, text: "Denied" }), stop("Proposed")])

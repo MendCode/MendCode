@@ -7,7 +7,7 @@ import { pickerFrame } from "./picker-frame"
 import { readablePreview } from "./reply-comments"
 import { kvList } from "./page"
 import { draftSizeLabel, labelString, sessionActivityAt, sessionLabel } from "./session-label"
-import { nextSort, parseSessionQuery, parseTagDraft, selectSessions, sortSessions, type SessionScope, type SessionSort, type SessionView } from "./session-query"
+import { nestingDepths, nextSort, parseSessionQuery, parseTagDraft, selectSessions, sortSessions, type SessionScope, type SessionSort, type SessionView } from "./session-query"
 import { cells, shortenMiddle, takeCellSlice as takeCells, textWidth, truncateEnd, wrap } from "./wrap"
 
 export { shortenMiddle, truncateEnd } from "./wrap"
@@ -23,6 +23,8 @@ export type SessionListState = {
   archived?: boolean
   sort?: SessionSort
   scope?: SessionScope
+  /** The folder MendCode runs in: the picker opens on its sessions ("this project"); Ctrl+L shows all projects. */
+  directory?: string
   named?: boolean
   /** Also look in the messages (asked of the daemon); `hits` are its answers for the current filter, session id to a snippet. */
   content?: boolean
@@ -51,8 +53,9 @@ const MARK_COLORS: Record<SessionColor, ColorName> = { red: "error", orange: "wa
 const WIDE_HEIGHT = 30
 const MAX_TITLE = 200
 
-export function createSessionListState(): SessionListState {
-  return { selected: 0, filter: "" }
+/** A picker opened in `directory` starts on that folder's sessions; without one it lists every project, as before. */
+export function createSessionListState(directory?: string): SessionListState {
+  return directory ? { selected: 0, filter: "", directory, scope: "project" } : { selected: 0, filter: "" }
 }
 
 /** The query language of the picker (words, "phrases", `re:`, `tag:`, `color:`; see session-query.ts); every part must match. */
@@ -62,7 +65,7 @@ export function filterSessions(sessions: SessionSummary[], filter: string, view:
 
 /** The picker's view options held in its state. */
 export function viewOf(state: SessionListState): SessionView {
-  return { ...(state.sort ? { sort: state.sort } : {}), ...(state.scope ? { scope: state.scope } : {}), ...(state.named ? { named: true } : {}), ...(state.content && state.hits ? { hits: state.hits } : {}) }
+  return { ...(state.sort ? { sort: state.sort } : {}), ...(state.scope ? { scope: state.scope } : {}), ...(state.directory ? { directory: state.directory } : {}), ...(state.named ? { named: true } : {}), ...(state.content && state.hits ? { hits: state.hits } : {}) }
 }
 
 export type SessionGroup = { directory: string; sessions: SessionSummary[]; section?: string }
@@ -72,7 +75,7 @@ export type SessionGroup = { directory: string; sessions: SessionSummary[]; sect
  * recent activity (or creation, or name); newest first inside each group unless sorted by name. This is also the selection order.
  */
 export function groupSessions(sessions: SessionSummary[], filter: string, currentSessionId?: string, archived = false, view: SessionView = {}): SessionGroup[] {
-  const currentDirectory = sessions.find((session) => session.sessionId === currentSessionId)?.directory
+  const currentDirectory = view.directory ?? sessions.find((session) => session.sessionId === currentSessionId)?.directory
   const byDirectory = new Map<string, SessionSummary[]>()
   for (const session of selectSessions(sessions, filter, view, currentDirectory)) {
     if (!archived && session.archivedAt !== undefined) continue
@@ -184,7 +187,8 @@ function browseKey(state: SessionListState, key: string, sessions: SessionSummar
     return { state: { ...state, edit: { mode: "tag", sessionId: target.sessionId, draft: own } }, action: { type: "changed" } }
   }
   if (key === "\x13") return toggled({ sort: nextSort(state.sort) })
-  if (key === "\x0c") return toggled({ scope: state.scope === "project" ? "all" : "project" })
+  // The folder's list holds its child sessions too, every project's only the top ones: the daemon is asked again.
+  if (key === "\x0c") return state.directory ? { state: { ...state, selected: 0, scope: state.scope === "project" ? "all" : "project" }, action: { type: "reload" } } : toggled({ scope: state.scope === "project" ? "all" : "project" })
   if (key === "\x05") return toggled({ named: !state.named })
   if (key === "\x06") {
     const { hits: _hits, ...kept } = state
@@ -267,9 +271,11 @@ function groupHeader(group: SessionGroup, width: number, home?: string): Line {
   return clampLine([{ text: name, fg: "heading", bold: true }, { text: count, fg: "muted" }], width)
 }
 
-type RowInput = { session: SessionSummary; selected: boolean; current: boolean; width: number; now: number; glyphs: Glyphs }
+type RowInput = { session: SessionSummary; selected: boolean; current: boolean; width: number; now: number; glyphs: Glyphs; depth?: number }
 
-function sessionRow({ session, selected, current, width, now, glyphs }: RowInput): Line {
+function sessionRow({ session, selected, current, width, now, glyphs, depth = 0 }: RowInput): Line {
+  // A child session sits under its parent: two cells per level, then the branch mark.
+  const nest: Span[] = depth > 0 ? [{ text: `${"  ".repeat(Math.min(depth, 4) - 1)}↳ `, fg: "muted" }] : []
   const marker: Span = selected ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " }
   const dot = stateDot(session, glyphs)
   const time = relativeTime(now, sessionActivityAt(session))
@@ -277,7 +283,7 @@ function sessionRow({ session, selected, current, width, now, glyphs }: RowInput
   const label = session.archivedAt !== undefined ? "archived" : session.state === "waiting_approval" ? "needs approval" : ""
   const right = `${label ? `${label} ` : ""}${queued ? `${queued.trim()} ` : ""}${time}`
   const mark: Span[] = session.color ? [{ text: "● ", fg: MARK_COLORS[session.color] }] : []
-  const prefixWidth = 2 + textWidth(dot.text) + 1 + mark.length * 2
+  const prefixWidth = 2 + (nest[0] ? textWidth(nest[0].text) : 0) + textWidth(dot.text) + 1 + mark.length * 2
   const room = Math.max(0, width - prefixWidth - textWidth(right) - 1)
   const named = sessionLabel(session, { untitled: "untitled", marker: "draft" })
   const rawTitle = `${labelString(named)}${session.lifecycle?.pr ? ` #${session.lifecycle.pr.number}` : ""}`
@@ -291,7 +297,7 @@ function sessionRow({ session, selected, current, width, now, glyphs }: RowInput
   // A draft's marker is muted and its words are the row's text; cut short, the words give way first.
   const lead = named.marker ? `${named.marker} · ` : ""
   const titleSpans: Span[] = lead && title.startsWith(lead) ? [{ text: lead, fg: "muted", bold: selected }, { text: title.slice(lead.length), fg: "text", bold: selected }] : [{ text: title, fg: named.placeholder || lead ? "muted" : "text", bold: selected }]
-  const line: Line = [marker, dot, { text: " " }, ...mark, ...titleSpans]
+  const line: Line = [marker, ...nest, dot, { text: " " }, ...mark, ...titleSpans]
   if (showSuffix) line.push({ text: suffix, fg: "muted" })
   if (showTags) line.push({ text: tagText, fg: "info" })
   line.push({ text: " ".repeat(pad) })
@@ -354,7 +360,8 @@ export function renderSessionList(input: {
     return pickerFrame(edit.mode === "tag" ? "Tag session" : "Rename session", `ctrl+u clear · ${hints}`, width, height, panelGrid({ width, compact: false, padding: true, maxColumns: 1, heights: [Math.max(0, height - 2)], rows: [[{ title: edit.mode === "tag" ? "Tags and color" : "Session title", active: true, body: (w): Line[] => [[{ text: prompt, fg: "muted" }, { text: takeCells([...cells(edit.draft)], Math.max(0, w - prompt.length - 1), true), fg: "text", bold: true }, { text: "▏", fg: "primary" }], ...(edit.mode === "tag" ? [[{ text: state.note ?? `colors: ${SESSION_COLORS.join(" ")}`, fg: "muted" }] as Line] : [])] }]] }), session?.directory ?? "")
   }
 
-  const included = sessions.filter((session) => (state.archived || session.archivedAt === undefined) && (!state.named || session.named) && (state.scope !== "project" || session.directory === sessions.find((entry) => entry.sessionId === currentSessionId)?.directory))
+  const project = state.directory ?? sessions.find((entry) => entry.sessionId === currentSessionId)?.directory
+  const included = sessions.filter((session) => (state.archived || session.archivedAt === undefined) && (!state.named || session.named) && (state.scope !== "project" || project === undefined || session.directory === project))
   const working = included.filter((session) => WORKING.has(session.state)).length
   const approval = included.filter((session) => session.state === "waiting_approval").length
   const invalid = parseSessionQuery(state.filter).invalid
@@ -395,9 +402,10 @@ export function renderSessionList(input: {
       for (const group of groups) {
         const head = groupHeader(group, rowWidth, input.home)
         items.push({ line: head, header: true, selected: false, head })
+        const depths = nestingDepths(group.sessions)
         for (const session of group.sessions) {
           const isSelected = position++ === selected
-          items.push({ line: sessionRow({ session, selected: isSelected, current: session.sessionId === currentSessionId, width: rowWidth, now, glyphs }), header: false, selected: isSelected, head })
+          items.push({ line: sessionRow({ session, selected: isSelected, current: session.sessionId === currentSessionId, width: rowWidth, now, glyphs, depth: depths.get(session.sessionId) ?? 0 }), header: false, selected: isSelected, head })
         }
       }
       const capacity = Math.max(1, bodyRoom - editRows.length)

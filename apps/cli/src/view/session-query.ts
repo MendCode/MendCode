@@ -17,6 +17,8 @@ export type SessionScope = "all" | "project"
 export type SessionView = {
   sort?: SessionSort
   scope?: SessionScope
+  /** The folder MendCode runs in: "this project" means it (else the open session's folder). */
+  directory?: string
   /** Only sessions the user titled (`/rename`). */
   named?: boolean
   /** Message matches by session id, from the daemon; sessions in it match whatever their metadata says. */
@@ -87,11 +89,12 @@ export function matchesQuery(session: SessionSummary, query: SessionQuery, hits?
 /** The sessions left by the filter, the named-only switch and the scope; order is the caller's. */
 export function selectSessions(sessions: SessionSummary[], filter: string, view: SessionView, currentDirectory?: string): SessionSummary[] {
   const query = parseSessionQuery(filter)
+  const project = view.directory ?? currentDirectory
   return sessions.filter((session) => {
     // A session that holds only an unsent draft was never worked in: /drafts lists it, this list does not.
     if (isDraftOnly(session)) return false
     if (view.named && !session.named) return false
-    if (view.scope === "project" && currentDirectory !== undefined && session.directory !== currentDirectory) return false
+    if (view.scope === "project" && project !== undefined && session.directory !== project) return false
     return matchesQuery(session, query, view.hits)
   })
 }
@@ -102,10 +105,52 @@ const SORT_KEYS: Record<SessionSort, (session: SessionSummary) => number> = {
   name: () => 0,
 }
 
-/** Orders sessions inside a project: newest activity, newest creation, or title A-Z. */
+/** Orders sessions inside a project: newest activity, newest creation, or title A-Z; a child session right under its parent. */
 export function sortSessions(sessions: SessionSummary[], sort: SessionSort = "recent"): SessionSummary[] {
   const key = SORT_KEYS[sort]
-  return [...sessions].sort((a, b) => sort === "name" ? a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || b.updatedAt - a.updatedAt : key(b) - key(a))
+  const sorted = [...sessions].sort((a, b) => sort === "name" ? a.title.toLowerCase().localeCompare(b.title.toLowerCase()) || b.updatedAt - a.updatedAt : key(b) - key(a))
+  return nestChildren(sorted)
+}
+
+/** `sessions` in their order with every child moved right under its parent (when listed), so a tree reads top-down. */
+export function nestChildren(sessions: SessionSummary[]): SessionSummary[] {
+  const listed = new Set(sessions.map((session) => session.sessionId))
+  const children = new Map<string, SessionSummary[]>()
+  for (const session of sessions) {
+    if (!session.parentId || !listed.has(session.parentId) || session.parentId === session.sessionId) continue
+    const siblings = children.get(session.parentId)
+    if (siblings) siblings.push(session)
+    else children.set(session.parentId, [session])
+  }
+  if (!children.size) return sessions
+  const out: SessionSummary[] = []
+  const placed = new Set<string>()
+  const place = (session: SessionSummary) => {
+    if (placed.has(session.sessionId)) return
+    placed.add(session.sessionId)
+    out.push(session)
+    for (const child of children.get(session.sessionId) ?? []) place(child)
+  }
+  for (const session of sessions) if (!session.parentId || !listed.has(session.parentId) || session.parentId === session.sessionId) place(session)
+  // A cycle of parents has no top: its sessions keep their order at the end.
+  for (const session of sessions) place(session)
+  return out
+}
+
+/** How deep each listed session sits under listed parents (0 for a top row), for indenting a nested list. */
+export function nestingDepths(sessions: readonly SessionSummary[]): Map<string, number> {
+  const byId = new Map(sessions.map((session) => [session.sessionId, session]))
+  const depths = new Map<string, number>()
+  for (const session of sessions) {
+    let depth = 0
+    let parent = session.parentId
+    while (parent && byId.has(parent) && depth < 8 && parent !== session.sessionId) {
+      depth++
+      parent = byId.get(parent)!.parentId
+    }
+    depths.set(session.sessionId, depth)
+  }
+  return depths
 }
 
 export const nextSort = (sort: SessionSort = "recent"): SessionSort => SESSION_SORTS[(SESSION_SORTS.indexOf(sort) + 1) % SESSION_SORTS.length]!
