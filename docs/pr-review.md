@@ -116,11 +116,21 @@ When a diff is too large for its parts, the code files cut from them go to reade
 
 **A large pull request is not refused for its size.** The diff is not read whole: `git diff --numstat` lists the files and their
 sizes first, a file triage names from that alone (an asset, a lockfile, a data format, a generated file) is read only as a sample
-for its reader (at most about 1.5 MB), and the rest is read in a few calls. The safety bound, 4 MiB, is on that reviewable rest.
-Past it the review stops before any model call, and the failure says how large the reviewable part is and how many data files were
-set aside, for example `the reviewable part of the diff is 9.0 MiB in 41 files, more than the 4.0 MiB a review reads`; split the
-pull request or mark generated files in `.gitattributes`. With readers off nothing is set aside, so a data file is a sample the
-token budget cuts.
+for its reader (at most about 1.5 MB), and code is counted through bounded per-file streams. In balanced and full tiers with
+readers enabled, code beyond 4 MiB no longer stops the review: the main pass keeps higher-risk files within that bound and its
+existing token cap, preferring source over tests/docs, files imported by other changed files, then more changed lines. The rest
+goes to cheap readers, like code cut from the review's parts. Their diffs are fetched only when a funded reader needs them, in
+small per-file excerpts; the whole oversized code diff is never held in memory. Excerpts are explicitly partial, not full-file
+coverage. Readers return short summaries and concrete contract risks (changed signatures, exports, config keys, schemas or
+behaviour) with `file:line`. When `graft/` and the `graft` CLI exist, bounded `graft callers <symbol>` queries can supply callers
+of changed exports; absent or failing graft is skipped. These helpers load only during a review.
+
+The main reviewer sees full selected diffs, reader summaries and risks, and which files it did not read in full. Readers keep
+their existing share of the cap; if it is spent, or no reader can answer, remaining code files are listed as **not read** in
+the review note instead of failing or being called clean. A hard bound of 64 MiB of reviewable code or 20,000 changed files still
+stops before model calls, with the same `the reviewable part of the diff is …, more than the … MiB a review reads` failure and
+advice to split the pull request or mark generated files in `.gitattributes`. Minimalist and `readers.enabled: false` keep the
+4 MiB code failure. With readers off, a data file remains a bounded sample the token budget cuts.
 
 **Already-reviewed release pull requests.** On GitHub, a release PR (for example `beta` into `stable`) reuses the last
 contiguous reviewed tree from merged PRs in its range. The reviewer checks at most two pages of recently updated closed PRs,
@@ -128,7 +138,7 @@ and at most two pages of reviews per matching PR. Only its own account's latest 
 marker for exactly the head that was merged; a stale, partial, missing or unreadable review does not establish coverage.
 In first-parent order, an unreviewed PR or direct push stops coverage; merge-only changes remain to be reviewed. The summary
 says `Already reviewed in #82, #83, #84; this review covers only <baseline>..<head>`. If the trees are identical, it publishes
-a short note that nothing else changed, without calling a model. The same 4 MiB safety bound applies to the remainder, not
+a short note that nothing else changed, without calling a model. The size and reader rules above apply to the remainder, not
 the already-reviewed prefix. History outside the bounded lookup is reviewed normally; explicit full reviews still review
 the whole range. This lookup runs with the reviewer, never at start-up.
 
@@ -144,10 +154,11 @@ the file with its tools before it reports anything about it, and only findings t
   may name one of them; a model off the list, or of another provider, is refused with a note and the automatic pick is used.
 - **No cheap model, no model.** When the provider has none, or the readers' share is spent, or a reader fails or answers out of
   shape, the group gets a local summary instead: sizes, changed lines, JSON keys or CSV columns, record counts, and the rarities
-  found without a model (a secret's kind, never its value). A reader never falls back to a larger model. The hosted workflow
+  found without a model (a secret's kind, never its value). Code groups are instead marked **not read**, never locally called
+  reviewed. A reader never falls back to a larger model. The hosted workflow
   always uses local summaries.
-- **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, it follows the install tier: minimalist 1,
-  balanced 2, full 3.
+- **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, balanced uses 2 and full 3.
+  Minimalist does not enable readers for a review.
 - **Budget.** Readers may count up to a quarter of the review's cap, checked before each call; what they count comes off the cap
   of the review and verify passes, so the PR's total stays under `budget.tokens_per_pr`. Their turns are in the job's ledger as
   review work and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the

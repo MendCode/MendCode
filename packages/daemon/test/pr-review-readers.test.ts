@@ -257,7 +257,7 @@ describe("runPrReview with readers (a benchmark PR: many result JSON files, litt
     const review = reviewKids()
     const run = await runPrReview({
       repo: "acme/bench", number: 23, directory: repo.dir, base: repo.base, head: repo.head, state: emptyState(), sessionFactory: review.factory, publish: false,
-      readers: { tier: "minimalist", source: () => ({ ok: false, reason: "claude-opus's provider has no cheap reader model" }) },
+      readers: { tier: "balanced", source: () => ({ ok: false, reason: "claude-opus's provider has no cheap reader model" }) },
     })
     expect(review.prompts[0]).toContain("Reader summary (local scan, no model, unverified)")
     expect(review.prompts[0]).toContain("keys: model, seed, epochs")

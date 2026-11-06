@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PrTokenUsage } from "@mendcode/protocol"
 import { EMPTY_TREE, runAudit } from "../src/pr-review/audit"
-import { gitRun } from "../src/pr-review/context"
+import { gitRun, MAX_DIFF_BYTES, type GitRun } from "../src/pr-review/context"
 import { createEffectLedger } from "../src/pr-review/effects"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
@@ -93,6 +93,84 @@ function fakeGh(read?: (endpoint: string) => unknown) {
 
 const baseInput = (repo: { dir: string; base: string; head: string }, sessionFactory: ReviewSessionFactory) => ({
   repo: "acme/app", number: 12, directory: repo.dir, base: repo.base, head: repo.head, state: emptyState(), sessionFactory, publish: false,
+})
+
+describe("oversized code uses bounded cheap readers", () => {
+  async function largeRepo(config = "") {
+    const repo = await repository({ baseConfig: `enabled: true\nbudget:\n  tokens_per_pr: 1000000\n  context_tokens: 2000000\n${config}` })
+    const word = (i: number) => `f${Bun.hash(String(i)).toString(36)}`
+    const text = Array.from({ length: 1000 }, (_, i) => `export function ${word(i)}(${word(i + 1)}: string) { return ${word(i + 2)}.concat("${word(i + 3)}", ${word(i + 4)}) }\n`).join("")
+    expect(text.length * 54).toBeGreaterThan(6 * 1024 * 1024)
+    for (let i = 0; i < 54; i++) write(repo.dir, `src/code-${String(i).padStart(2, "0")}.ts`, text)
+    await git(repo.dir, "add", "-A"); await git(repo.dir, "commit", "-qm", "large release")
+    return { ...repo, head: await git(repo.dir, "rev-parse", "HEAD") }
+  }
+
+  for (const tier of ["balanced", "full"] as const) test(`${tier}: a six MiB code release reviews and publishes through the fake forge`, async () => {
+    const repo = await largeRepo()
+    const review = children({ findings: [] })
+    const forge = fakeGh()
+    const pieces: string[] = []
+    let reading = false
+    const runner: GitRun = async (...args) => {
+      const result = await gitRun(...args)
+      if (args[0][0] === "diff" && args[0].includes("-U3")) {
+        expect(Buffer.byteLength(result.out)).toBeLessThanOrEqual(MAX_DIFF_BYTES)
+        expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBe(1)
+        if (reading) pieces.push(args[0].at(-1)!)
+      }
+      return result
+    }
+    const readerPrompts: string[] = []
+    const factory: ReviewSessionFactory = async () => ({
+      async send(prompt) {
+        readerPrompts.push(prompt)
+        const groups = [...prompt.matchAll(/<group id="(g\d+)">([\s\S]*?)<\/group>/g)].map((match) => ({ id: match[1], contains: "changed exported helpers", risks: [{ path: /--- (src\/[^\n]+)/.exec(match[2]!)![1], line: 1, detail: "export contract risk" }] }))
+        return { text: JSON.stringify({ groups }), tokens: { input: 1000, output: 100 } }
+      }, async close() {},
+    })
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, git: runner, progress: (step) => { if (step.phase === "readers") reading = true }, readers: { tier, source: () => ({ ok: true, model: "claude-haiku", factory }) } })
+    expect(run.status).toBe("published")
+    expect(readerPrompts.length).toBeGreaterThan(0)
+    expect(pieces.length).toBeGreaterThan(1)
+    expect(review.turns.map((turn) => turn.prompt).join("\n")).toContain("export contract risk")
+    expect(forge.posts().length).toBeGreaterThan(0)
+    expect(run.info!.notes.join("\n")).toContain("Not read in full by the review pass")
+  }, 60_000)
+
+  test("spent reader share publishes with every remaining file listed as not read, without loading it", async () => {
+    const repo = await largeRepo("readers:\n  parallel: 1\n")
+    const review = children({ findings: [] })
+    let calls = 0
+    let loads = 0
+    const factory: ReviewSessionFactory = async () => ({ async send(prompt) {
+      calls++
+      const ids = [...prompt.matchAll(/<group id="(g\d+)">/g)].map((match) => match[1])
+      return { text: JSON.stringify({ groups: ids.map((id) => ({ id, contains: "helpers" })) }), tokens: { input: 100_000, output: 0 } }
+    }, async close() {} })
+    let reading = false
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, progress: (step) => { if (step.phase === "readers") reading = true }, git: async (...args) => {
+      if (reading && args[0].includes("-U3")) loads++
+      return gitRun(...args)
+    }, readers: { tier: "balanced", source: () => ({ ok: true, model: "claude-haiku", factory }) } })
+    expect(run.status).toBe("published")
+    expect(calls).toBe(2)
+    expect(loads).toBe(8)
+    expect(run.info!.notes.join("\n")).toContain("Not read: src/code-")
+    expect(forge.posts().map((post) => post.stdin ?? "").join("\n")).toContain("not read")
+  }, 60_000)
+
+  for (const mode of ["minimalist", "disabled"] as const) test(`${mode} keeps the four MiB failure before any model or publication`, async () => {
+    const repo = await largeRepo(mode === "disabled" ? "readers:\n  enabled: false\n" : "")
+    const review = children()
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, readers: { tier: mode === "minimalist" ? "minimalist" : "balanced", source: () => { throw new Error("must not pick a reader") } } })
+    expect(run.status).toBe("failed")
+    expect(run.reason).toContain("more than the 4.0 MiB a review reads")
+    expect(review.turns).toEqual([])
+    expect(forge.posts()).toEqual([])
+  }, 60_000)
 })
 
 describe("runPrReview: already reviewed merged pull requests", () => {

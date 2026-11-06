@@ -8,7 +8,7 @@ import { buildReviewContext, gitRun, type ContextReaders, type GitRun, type Revi
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
-import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { closeCheckpoint, resumeReview, REVIEW_PASS_SHARE, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
 import { fallbackUsed, newFallbackState, withFallbacks, type FallbackSource, type FallbackState } from "./fallback"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
@@ -416,7 +416,7 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
     return source
   }
-  const read: ContextReaders = async ({ data, cut, diffTokens }) => {
+  const read: ContextReaders = async ({ data, cut, diffTokens, load }) => {
     const groups = groupFiles({ data, cut })
     const cached = resume?.readers ?? []
     const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
@@ -427,14 +427,16 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
       const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
       const chosen = pick()
       tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
-      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance })
+      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
       total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      if (result.notRead?.length) (total.notRead ??= []).push(...result.notRead)
       total.model ??= result.model
       for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
     }
-    kept.push(...out)
+    // Job checkpoints already allow at most 500 summaries. Unread markers are rebuilt, not stored as successful coverage.
+    kept.push(...out.filter((summary) => summary.by !== "not read").slice(0, Math.max(0, 500 - kept.length)))
     return out
   }
   const note = () => [
@@ -479,9 +481,11 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${nothingLeft ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined
     const graph = nothingLeft ? undefined : await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
-    const readers = config.readers.enabled ? runReaders({ input, config, resume }) : undefined
+    const readers = config.readers.enabled && input.readers?.tier !== "minimalist" ? runReaders({ input, config, resume }) : undefined
     const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes })
+    // An oversized diff must also fit the pass's existing cap after readers and verification. Leave room for summaries/briefs.
+    const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - READER_SHARE) * REVIEW_PASS_SHARE * 0.9 * 4)
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes })
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
