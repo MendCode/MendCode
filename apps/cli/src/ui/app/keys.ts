@@ -30,7 +30,7 @@ import { createOptionKeys } from "./option-keys"
 import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
-import { queuePolicy } from "./queue-policy"
+import { queuePolicy, userQueue } from "./queue-policy"
 import { wheelStep } from "./page-wheel"
 
 export function createKeys(ctx: AppContext, actions: {
@@ -602,7 +602,7 @@ export function createKeys(ctx: AppContext, actions: {
     if (inline === "permission.next") return cyclePermission()
     if (inline === "view.next" && editor.isEmpty() && !pendingPanelRequest()) return void await runSlash("/view")
     if (inline === "queue.send" && editor.isEmpty() && state.transcript.visibleCount === 0 && !state.transcript.queue.length) return void await runSlash("/sessions")
-    if (inline === "queue.send" && (state.transcript.queue[0] || state.transcript.usageLimit)) return promoteQueued()
+    if (inline === "queue.send" && (userQueue(state.transcript.queue)[0] || state.transcript.usageLimit)) return promoteQueued()
     // Backspace on an empty prompt takes the last chip off the row (an attachment with a token in the text is removed with its token instead).
     const lastChip = (key === "\x7f" || key === "\b") && editor.isEmpty() ? chipRowAttachments(liveAttachments(state.attachments, editor.text), state.tuiProfile.attachmentChips).at(-1) : undefined
     if (lastChip) {
@@ -775,7 +775,7 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** The newest queued message is removed (ctrl+k on an empty prompt). */
   async function dropLastQueued() {
-    const last = state.transcript.queue.at(-1)
+    const last = userQueue(state.transcript.queue).at(-1)
     if (!last) return
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
     if (!reply.ok) fail(reply.error.message)
@@ -799,7 +799,7 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** Ctrl+S and the ` ↗ SEND ` chip: the first queued message goes now. */
   async function promoteQueued() {
-    const first = state.transcript.queue[0]
+    const first = userQueue(state.transcript.queue)[0]
     // Nothing queued but a turn paused by a usage limit: the key continues it (Resume at reset).
     if (!first) {
       if (await actions.limitKey()) requestFrame()

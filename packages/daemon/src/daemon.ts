@@ -943,6 +943,8 @@ export async function startDaemon(options: DaemonOptions) {
         emit: (draft) => void sessionSink.append(draft),
         mask: (sessionId, text) => secrets.mask(sessionId, text),
         notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+        queued: (launcher, queueId) => actors.get(launcher)?.snapshot().queue.includes(queueId) ?? false,
+        unqueue: (launcher, queueId) => void actors.get(launcher)?.handle({ id: ids("command"), clientId: taskClientId as never, type: "queue.remove", sessionId: launcher, queueId }).catch(() => undefined),
         announce: (waiting) => {
           const event: GlobalEvent = { type: "children.waiting", gseq: 0, at: clock.now(), ...waiting }
           for (const connection of connections) if (connection.clientId && isHumanTerminal(connection)) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })

@@ -31,6 +31,8 @@ export type HostedReviewInput = {
   gh: GhCall
   sessionFactory: ReviewSessionFactory
   publish: boolean
+  /** Publisher login when the runner already knows the token's identity. */
+  self?: string | undefined
   mentions?: readonly string[] | undefined
   git?: GitRun
   graph?: () => Promise<Graph | undefined>
@@ -55,8 +57,8 @@ async function trustedAuthors(gh: GhCall) {
 }
 
 /** The review state as GitHub shows it: each published finding read back from its comment, and the newest pause or resume. */
-export async function stateFromGithub({ gh, repo, number }: { gh: GhCall; repo: string; number: number }): Promise<ReviewState> {
-  const authors = await trustedAuthors(gh)
+export async function stateFromGithub({ gh, repo, number, authors: knownAuthors }: { gh: GhCall; repo: string; number: number; authors?: ReadonlySet<string> }): Promise<ReviewState> {
+  const authors = knownAuthors ?? await trustedAuthors(gh)
   const list = async (endpoint: string) => {
     const done = await gh({ argv: ["api", `${endpoint}?per_page=100`, "--paginate", "--jq", ".[]"] })
     if (done.code !== 0) throw new Error(`[PR_REVIEW]: gh could not list ${endpoint}`)
@@ -92,11 +94,15 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
   const head = String(obj(pr.head).sha ?? ""), base = String(obj(pr.base).sha ?? "")
   if (viewed.code !== 0 || !/^[0-9a-f]{40}$/.test(head) || !/^[0-9a-f]{40}$/.test(base)) throw new Error(`[PR_REVIEW]: gh could not read pull request #${number}`)
   const ensureCommits = async () => { for (const sha of [base, head]) if ((await git(["cat-file", "-e", `${sha}^{commit}`], input.directory)).code !== 0) throw new Error(`[PR_REVIEW]: the checkout lacks ${sha.slice(0, 12)}; check out the pull request with fetch-depth: 0`) }
+  let identities: Promise<ReadonlySet<string>> | undefined
+  const authors = () => identities ??= input.self ? Promise.resolve(new Set([ACTIONS_BOT, input.self])) : trustedAuthors(input.gh)
 
   async function reviewNow(full: boolean, state?: ReviewState): Promise<ReviewRun> {
     await ensureCommits()
+    const knownAuthors = await authors()
     return runPrReview({
-      repo, number: number!, directory: input.directory, base, head, state: state ?? await stateFromGithub({ gh: input.gh, repo, number: number! }), git, gh: input.gh, publish: input.publish, sessionFactory: input.sessionFactory,
+      repo, number: number!, directory: input.directory, base, head, state: state ?? await stateFromGithub({ gh: input.gh, repo, number: number!, authors: knownAuthors }), git, gh: input.gh, publish: input.publish, sessionFactory: input.sessionFactory,
+      self: input.self ?? [...knownAuthors].at(-1),
       force: true, full,
       pullRequest: await readPullRequestInfo({ gh: input.gh, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),
       checks: async (_directory, commands) => commands.map((command) => ({ command, code: -1, output: HOSTED_CHECKS_SKIPPED })),
@@ -134,7 +140,7 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
     ...(typeof raw.in_reply_to_id === "number" ? { inReplyTo: raw.in_reply_to_id } : {}),
     ...(str(raw.diff_hunk) ? { diffHunk: str(raw.diff_hunk) } : {}),
   }
-  const state = await stateFromGithub({ gh: input.gh, repo, number })
+  const state = await stateFromGithub({ gh: input.gh, repo, number, authors: await authors() })
   let reviewed: ReviewRun | undefined
   const outcome = await runPrCommand(command, {
     gh: input.gh, repo, number, comment: target, state,

@@ -215,3 +215,121 @@ describe("approvals that sessions started from another session wait for", () => 
     expect(single.questions).toBeUndefined()
   })
 })
+
+/** A launcher busy inside a long tool: its queue keeps what it is told until the test lets the model read it. */
+function busyLauncher() {
+  const queue = new Map<QueueId, string>()
+  const told: QueueId[] = []
+  const removed: QueueId[] = []
+  const answered: string[] = []
+  let n = 0
+  const events: SessionEventDraft[] = []
+  const approvals = createChildApprovals({
+    launcherOf: (child) => (child === kids.a || child === kids.b ? launcher : undefined),
+    humanSessions: () => [launcher],
+    title: (id) => `owner ${id}`,
+    turnOf: () => "turn_running" as TurnId,
+    requestId: () => `req_card${++n}` as RequestId,
+    turnId: () => "turn_new" as TurnId,
+    queueId: () => `que_${++n}` as QueueId,
+    emit: (event) => void events.push(event),
+    announce: () => {},
+    mask: (_id, text) => text,
+    notify: async (_target, text, queueId) => { told.push(queueId); queue.set(queueId, text); return queueId },
+    queued: (_target, queueId) => queue.has(queueId),
+    unqueue: (_target, queueId) => { removed.push(queueId); queue.delete(queueId) },
+    // As in the daemon, the child's answer is seen as its request resolving; a held one is still on its way.
+    resolveChild: async ({ child, requestId }) => {
+      answered.push(requestId)
+      if (!hold.has(requestId)) resolved(child, requestId)
+      else await new Promise(() => {})
+    },
+    delayMs: 5,
+  })
+  const hold = new Set<string>()
+  const ask = (child: SessionId, requestId: string) =>
+    approvals.observe({ type: "server.request", sessionId: child, requestId, turnId: "turn_c", kind: "approval", title: "Run command", detail: `sleep ${requestId}`, tool: "shell", seq: 1, at: 1 } as unknown as SessionEvent)
+  function resolved(child: SessionId, requestId: string) { approvals.observe({ type: "server.request.resolved", sessionId: child, requestId, resolution: "approved" } as unknown as SessionEvent) }
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30))
+  const cards = () => events.filter((event): event is Extract<SessionEventDraft, { type: "server.request" }> => event.type === "server.request")
+  const answer = (card: { requestId: RequestId; sessionId: SessionId }, label: string) =>
+    approvals.resolve({ v: 1, id: "cmd", clientId: "cli_user", type: "request.resolve", sessionId: card.sessionId, requestId: card.requestId, decision: { kind: "answer", text: label, answers: [[label]] } } as unknown as Extract<Command, { type: "request.resolve" }>, true)
+  return { approvals, queue, told, removed, answered, hold, events, ask, resolved, settle, cards, answer }
+}
+
+describe("the launcher's notice while it is busy", () => {
+  test("requests that keep arriving rewrite one queued notice instead of piling up, and it leaves the queue once none of them waits", async () => {
+    const h = busyLauncher()
+    h.ask(kids.a, "req_1")
+    await h.settle()
+    h.ask(kids.a, "req_2")
+    await h.settle()
+    h.ask(kids.b, "req_3")
+    await h.settle()
+    expect(h.queue.size).toBe(1)
+    expect(new Set(h.told).size).toBe(1)
+    const [text] = [...h.queue.values()]
+    expect(text).toContain("3 sessions you started are")
+    expect(text).toContain("sleep req_1")
+    expect(text).toContain("sleep req_3")
+    h.resolved(kids.a, "req_1")
+    expect([...h.queue.values()][0]).not.toContain("sleep req_1")
+    h.resolved(kids.a, "req_2")
+    expect(h.queue.size).toBe(1)
+    h.resolved(kids.b, "req_3")
+    expect(h.queue.size).toBe(0)
+    expect(h.removed).toEqual(h.told.slice(0, 1))
+  })
+
+  test("a notice the model already read is not rewritten: what arrives next is a new notice", async () => {
+    const h = busyLauncher()
+    h.ask(kids.a, "req_1")
+    await h.settle()
+    const [first] = h.told
+    h.queue.clear()
+    h.ask(kids.a, "req_2")
+    await h.settle()
+    expect(h.told.at(-1)).not.toBe(first)
+    expect([...h.queue.values()][0]).toContain("A session you started is")
+    expect([...h.queue.values()][0]).not.toContain("sleep req_1")
+    h.resolved(kids.a, "req_1")
+    expect(h.removed).toEqual([])
+  })
+})
+
+describe("answering a card that was just replaced", () => {
+  test("Allow all on the replaced card answers what it listed that still waits, with no error", async () => {
+    const h = busyLauncher()
+    h.ask(kids.a, "req_1")
+    await h.settle()
+    const stale = h.cards()[0]!
+    h.ask(kids.b, "req_2")
+    await h.settle()
+    expect(h.cards()).toHaveLength(2)
+    expect(h.answer(stale, "Allow all (1)")).toEqual({ ok: true })
+    await h.settle()
+    expect(h.answered).toEqual(["req_1"])
+    // The card the user sees now lists only what still waits; answering the replaced one twice answers nothing twice.
+    const current = h.cards().at(-1)!
+    expect(current.detail).toContain("sleep req_2")
+    expect(current.detail).not.toContain("sleep req_1")
+    expect(h.answer(stale, "Allow all (1)")).toEqual({ ok: true })
+    await h.settle()
+    expect(h.answered).toEqual(["req_1"])
+  })
+
+  test("the card is not drawn again while its requests are unchanged, nor for requests whose answer is on its way", async () => {
+    const h = busyLauncher()
+    h.ask(kids.a, "req_1")
+    h.ask(kids.b, "req_2")
+    await h.settle()
+    h.approvals.observe({ type: "server.request", sessionId: kids.a, requestId: "req_1", turnId: "turn_c", kind: "approval", title: "Run command", detail: "sleep req_1", tool: "shell", seq: 2, at: 2 } as unknown as SessionEvent)
+    await h.settle()
+    expect(h.cards()).toHaveLength(1)
+    h.hold.add("req_2")
+    expect(h.answer(h.cards()[0]!, "Allow all (2)")).toEqual({ ok: true })
+    await h.settle()
+    expect(h.cards()).toHaveLength(1)
+    expect(h.answered).toEqual(["req_1", "req_2"])
+  })
+})

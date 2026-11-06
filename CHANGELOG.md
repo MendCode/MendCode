@@ -9,6 +9,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
+
+### Fixed
+
+- PR reviews retain deferred files' changed lines, withhold full coverage for unread files, and keep small diffs batched.
+- Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
+- A session whose child waits for approval gets one notice that disappears once answered and stays out of your queue, and answering a card that just changed no longer shows "request is not pending".
+
 ## v0.0.4 - 2026-11-05
 
 Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and

@@ -1,4 +1,5 @@
 import { estimateTokens } from "@mendcode/protocol"
+import { posix } from "node:path"
 import { parseDiffRows } from "@mendcode/protocol/wire"
 import type { Graph, GraphNode } from "@mendcode/codegraph"
 import { loc, traverseCalls } from "../../../codegraph/src/query"
@@ -15,11 +16,11 @@ import { diffLines, generatedRules, triageByStat, triageFiles, type TriagedFile,
  * read-only tools.
  */
 
-/** `maxBytes`: stop reading there and kill git; the result is then `cut` and `out` holds the first `maxBytes` bytes (a code of 0). */
-export type GitRun = (args: string[], cwd: string, maxBytes?: number) => Promise<{ code: number; out: string; cut?: true | undefined }>
+/** `maxBytes`: bound retained output; `count` drains a per-file diff, keeping its full coordinates up to the hard bound. */
+export type GitRun = (args: string[], cwd: string, maxBytes?: number, count?: boolean) => Promise<{ code: number; out: string; cut?: true | undefined; bytes?: number; coordinates?: Pick<FileDiff, "right" | "touched"> }>
 
 /** `git` without a shell; output bounded by `maxBytes` when the caller sets it. */
-export const gitRun: GitRun = async (args, cwd, maxBytes) => {
+export const gitRun: GitRun = async (args, cwd, maxBytes, count) => {
   try {
     const child = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } })
     const timer = setTimeout(() => child.kill(), 60_000)
@@ -31,17 +32,45 @@ export const gitRun: GitRun = async (args, cwd, maxBytes) => {
       const chunks: Uint8Array[] = []
       let size = 0
       let cut = false
+      // Per-file scans retain coordinates from the entire stream, not just the retained excerpt.
+      // Only a line's prefix is needed, so even a single enormous source line stays bounded.
+      const right = new Set<number>()
+      const touched = new Set<number>()
+      let prefix = ""
+      let nextNew = 0
+      let inHunk = false
+      const line = () => {
+        const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(prefix)
+        if (hunk) { nextNew = Number(hunk[1]); inHunk = true }
+        else if (inHunk) {
+          if (prefix[0] === "+" || prefix[0] === " ") { right.add(nextNew); if (prefix[0] === "+") touched.add(nextNew); nextNew++ }
+          else if (prefix[0] === "-") touched.add(nextNew)
+        }
+        prefix = ""
+      }
       const reader = child.stdout.getReader()
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
-        chunks.push(value)
+        if (count) {
+          let at = 0
+          while (at < value.length) {
+            const end = value.indexOf(10, at)
+            const until = end < 0 ? value.length : end
+            if (prefix.length < 128) prefix += Buffer.from(value.subarray(at, Math.min(until, at + 128 - prefix.length))).toString("ascii")
+            if (end < 0) break
+            line(); at = end + 1
+          }
+        }
+        if (size < maxBytes) chunks.push(value.subarray(0, maxBytes - size))
         size += value.length
-        if (size > maxBytes) { cut = true; child.kill(); break }
+        if (size > maxBytes) { cut = true; if (!count || size > HARD_DIFF_BYTES) { child.kill(); break } }
       }
-      const out = Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8")
-      if (cut) { await child.exited.catch(() => undefined); return { code: 0, out, cut: true } }
-      return { code: await child.exited, out }
+      if (count && prefix) line()
+      const coordinates = count ? { right, touched: [...touched].sort((a, b) => a - b) } : undefined
+      const out = new TextDecoder().decode(Buffer.concat(chunks), { stream: cut })
+      if (cut) { const code = await child.exited; return { code: count && size <= HARD_DIFF_BYTES ? code : 0, out, cut: true, bytes: size, ...(coordinates ? { coordinates } : {}) } }
+      return { code: await child.exited, out, bytes: size, ...(coordinates ? { coordinates } : {}) }
     } finally { clearTimeout(timer) }
   } catch { return { code: 127, out: "" } }
 }
@@ -51,13 +80,15 @@ export const GRAPH_DEPTH = 2
 /** The share of the PR's token budget the context may take; the rest is for the review answer and the verify pass. */
 export const CONTEXT_SHARE = 0.5
 const MAX_SYMBOLS = 40
-/** The most the reviewable part of a diff may be: data, generated and asset files are set aside first and are not counted. */
+/** The most full code diff text retained for the main review; without readers this remains the safety bound. */
 export const MAX_DIFF_BYTES = 4 * 1024 * 1024
+export const HARD_DIFF_BYTES = 64 * 1024 * 1024
+export const MAX_DIFF_FILES = 20_000
 /** The most of one data, generated or asset file's diff that is fetched: a sample for readers (with readers off, for the budget cut). */
 const SAMPLE_BYTES_READERS = 1_500_000
 const SAMPLE_BYTES_PLAIN = 256 * 1024
-/** Files read in one `git diff` call. */
-const FETCH_CHUNK = 100
+/** Counting/classification never retains a whole code diff. */
+const SCAN_BYTES = 64 * 1024
 
 export type FileDiff = {
   path: string
@@ -70,6 +101,9 @@ export type FileDiff = {
   deleted: boolean
   /** The whole change's size from `git diff --numstat`, set when `text` is only a sample of a data, generated or asset file's diff. */
   size?: { added: number; removed: number } | undefined
+  /** Exact streamed byte count; deferred code carries no diff text until a reader needs it. */
+  bytes?: number
+  deferred?: boolean
 }
 
 export type ChangedSymbol = { symbol: string; path: string; line: number; callers: string[]; callees: string[] }
@@ -100,13 +134,15 @@ export type ReviewContext = {
   readers?: { files: number } | undefined
   /** Estimated tokens of the diffs readers read instead of the review pass: the cap still grows with them (budget.ts `scaledBudget`). */
   readTokens?: number | undefined
+  /** Files omitted from the review's diffs without a successful model-reader summary. */
+  unread?: string[] | undefined
 }
 
 /**
  * Reads files for the review pass (readers.ts): the data files triage chose and the code files a large diff's parts cut, each
  * summary naming the paths it covers. run.ts binds it to the reader model, the parallel count and the readers' share of the cap.
  */
-export type ContextReaders = (input: { data: TriagedFile[]; cut: FileDiff[]; /** Estimated tokens of the whole diff, for the readers' share of the cap. */ diffTokens: number }) => Promise<ReaderSummary[]>
+export type ContextReaders = (input: { data: TriagedFile[]; cut: FileDiff[]; load?: ((file: FileDiff) => Promise<FileDiff>) | undefined; /** Estimated tokens of the whole diff, for the readers' share of the cap. */ diffTokens: number }) => Promise<ReaderSummary[]>
 
 /** One review call's share of a large diff: whole files (a file larger than a call by itself is a one-line note) and their symbols. */
 export type ReviewPart = { files: string[]; diff: string; symbols: ChangedSymbol[]; tokens: number }
@@ -214,7 +250,7 @@ export function readerTexts(files: readonly FileDiff[], summaries: readonly Read
       const found = files.find((entry) => entry.path === file)
       if (!found) return
       const stats = found.size ?? diffLines(found).stats
-      const head = `(+${stats.added.toLocaleString("en-US")} -${stats.removed.toLocaleString("en-US")} lines, not shown${index === 0 ? ": a reader read it" : ", summarized above"})`
+      const head = `(+${stats.added.toLocaleString("en-US")} -${stats.removed.toLocaleString("en-US")} lines, not shown${summary.by === "not read" ? ": not read" : index === 0 ? ": a reader read it" : ", summarized above"})`
       texts.set(file, `diff --git a/${file} b/${file}\n${head}\n${index === 0 ? summaryLine(summary) : ""}`)
     })
   }
@@ -258,7 +294,7 @@ export function splitIntoParts({ files, symbols, limit, summaries }: { files: re
 }
 
 /** Characters of a file's whole diff: its text, or for a sample the text scaled up to the whole change. */
-const chars = (file: FileDiff) => file.size ? Math.round(file.text.length * (file.size.added + file.size.removed) / Math.max(1, file.text.split("\n").length)) : file.text.length
+const chars = (file: FileDiff) => file.bytes ?? (file.size ? Math.round(file.text.length * (file.size.added + file.size.removed) / Math.max(1, file.text.split("\n").length)) : file.text.length)
 
 type NumstatRow = { path: string; added: number; removed: number; binary: boolean }
 
@@ -280,24 +316,28 @@ const MiB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1)
 /**
  * The files of `base...head` with their diffs, without ever holding a data file's whole diff. `git diff --numstat` lists the files
  * and their sizes first; what triage names from that alone (a lockfile, an asset, a data format, what the base marks generated) is
- * fetched as a sample for readers, and only the rest is fetched whole, in a few calls. The safety bound (`MAX_DIFF_BYTES`) is on
- * that reviewable rest. A git that does not answer `--numstat` (a test double) falls back to the one whole diff.
+ * fetched as a sample for readers. Code fitting the bound is fetched in batches; larger code is counted through a bounded stream,
+ * then the highest-risk files are fetched whole up to MAX_DIFF_BYTES. The rest has metadata only and a per-file loader.
  */
-async function fetchDiff({ directory, base, head, git, ignore, readers, attributes }: { directory: string; base: string; head: string; git: GitRun; ignore: (path: string) => boolean; readers: boolean; attributes: string | undefined }): Promise<{ files: FileDiff[]; triage: { code: FileDiff[]; data: TriagedFile[] } }> {
+async function fetchDiff({ directory, base, head, git, ignore, readers, attributes, graph, mainBytes }: { directory: string; base: string; head: string; git: GitRun; ignore: (path: string) => boolean; readers: boolean; attributes: string | undefined; graph?: Graph | undefined; mainBytes?: number | undefined }): Promise<{ files: FileDiff[]; triage: { code: FileDiff[]; data: TriagedFile[] }; load?: (file: FileDiff) => Promise<FileDiff> }> {
   const range = `${base}...${head}`
   const failed = () => new Error(`[PR_REVIEW]: git diff ${range} failed in ${directory}`)
   const diffArgs = ["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3", range, "--"]
-  const stat = await git(["diff", "--no-renames", "--numstat", "-z", range, "--"], directory)
+  const stat = await git(["diff", "--no-renames", "--numstat", "-z", range, "--"], directory, MAX_DIFF_BYTES)
   if (stat.code !== 0) throw failed()
+  const bound = readers ? HARD_DIFF_BYTES : MAX_DIFF_BYTES
+  const tooLarge = (bytes: number, count: number, data: number) => new Error(`[PR_REVIEW]: the reviewable part of the diff is ${MiB(bytes)} MiB in ${count} files, more than the ${MiB(bound)} MiB a review reads (${readers ? `${data} data, generated or asset files set aside for readers and not counted` : "readers are off, so data files are not set aside"}; at most ${MAX_DIFF_FILES.toLocaleString("en-US")} files); split the pull request or mark generated files in .gitattributes`)
+  if (stat.cut) throw tooLarge(bound + 1, MAX_DIFF_FILES + 1, 0)
   const rows = parseNumstat(stat.out)
   if (!rows) {
-    const whole = await git(diffArgs, directory)
+    const whole = await git(diffArgs, directory, MAX_DIFF_BYTES)
     if (whole.code !== 0) throw failed()
-    if (whole.out.length > MAX_DIFF_BYTES) throw new Error(`[PR_REVIEW]: the diff is larger than ${MAX_DIFF_BYTES / 1024 / 1024} MiB`)
+    if (whole.cut || Buffer.byteLength(whole.out) > MAX_DIFF_BYTES) throw new Error(`[PR_REVIEW]: the diff is larger than ${MAX_DIFF_BYTES / 1024 / 1024} MiB`)
     const files = parseUnifiedDiff(whole.out).filter((file) => !ignore(file.path))
     return { files, triage: readers ? triageFiles(files, attributes) : { code: files, data: [] } }
   }
   const listed = rows.filter((row) => !ignore(row.path))
+  if (listed.length > MAX_DIFF_FILES) throw tooLarge(0, listed.length, 0)
   const rules = generatedRules(attributes)
   const named = new Map<string, TriageReason>()
   for (const row of listed) { const reason = triageByStat(row, rules); if (reason) named.set(row.path, reason) }
@@ -305,70 +345,120 @@ async function fetchDiff({ directory, base, head, git, ignore, readers, attribut
   const literal = (path: string) => `:(literal)${path}`
   const sized = new Map(listed.map((row) => [row.path, row]))
   /** One file's diff, up to `maxBytes`: a cut one ends at its last whole line and carries the whole change's size. */
-  const one = async (row: NumstatRow, maxBytes: number): Promise<{ file: FileDiff | undefined; cut: boolean }> => {
-    const done = await git(diffArgs.concat(literal(row.path)), directory, maxBytes)
+  const one = async (row: NumstatRow, maxBytes: number, count = false): Promise<{ file: FileDiff | undefined; bytes: number }> => {
+    const done = await git(diffArgs.concat(literal(row.path)), directory, maxBytes, count)
     if (done.code !== 0) throw failed()
     const text = done.cut ? done.out.slice(0, done.out.lastIndexOf("\n") + 1) : done.out
     const file = parseUnifiedDiff(text)[0]
+    if (file && done.coordinates && !file.deleted) Object.assign(file, done.coordinates)
     if (file && done.cut) file.size = { added: row.added, removed: row.removed }
-    return { file, cut: done.cut === true }
+    return { file, bytes: done.bytes ?? Buffer.byteLength(done.out) }
   }
   const found = new Map<string, FileDiff>()
-  const oversized = new Set<string>()
   const aside = listed.filter((row) => named.has(row.path))
   for (let at = 0; at < aside.length; at += 4) {
     await Promise.all(aside.slice(at, at + 4).map(async (row) => { const { file } = await one(row, sampleBytes); if (file) found.set(row.path, file) }))
   }
   const rest = listed.filter((row) => !named.has(row.path))
-  for (let at = 0; at < rest.length; at += FETCH_CHUNK) {
-    const chunk = rest.slice(at, at + FETCH_CHUNK)
-    const done = await git(diffArgs.concat(chunk.map((row) => literal(row.path))), directory, MAX_DIFF_BYTES + 1)
-    if (done.code !== 0) throw failed()
-    if (!done.cut && done.out.length <= MAX_DIFF_BYTES) { for (const file of parseUnifiedDiff(done.out)) if (sized.has(file.path)) found.set(file.path, file); continue }
-    // These files together are large: each is read on its own, so the data among them is a sample and the rest counts toward the bound.
-    for (const row of chunk) {
-      const { file, cut } = await one(row, MAX_DIFF_BYTES + 1)
-      if (!file) continue
-      found.set(row.path, file)
-      if (cut) oversized.add(row.path)
+  // The common case needs only numstat and one diff per hundred paths, never a per-file scan.
+  // Probe actual bytes (numstat counts lines, not bytes), retaining no more than the main bound.
+  {
+    const batched: FileDiff[] = []
+    let bytes = 0
+    let fits = true
+    for (let at = 0; at < rest.length; at += 100) {
+      const done = await git(diffArgs.concat(rest.slice(at, at + 100).map((row) => literal(row.path))), directory, MAX_DIFF_BYTES - bytes)
+      if (done.code !== 0) throw failed()
+      bytes += done.bytes ?? Buffer.byteLength(done.out)
+      if (done.cut || bytes > MAX_DIFF_BYTES) { fits = false; break }
+      batched.push(...parseUnifiedDiff(done.out))
+    }
+    if (fits) {
+      for (const file of batched) found.set(file.path, file)
+      const files = listed.flatMap((row) => found.get(row.path) ?? [])
+      if (!readers) return { files, triage: { code: files, data: [] } }
+      // Set-aside files keep what their full numstat row named them: a bounded sample can hold too few lines to be named again.
+      const scanned = triageFiles(files.filter((file) => !named.has(file.path)), attributes)
+      const data = [
+        ...files.flatMap((file) => { const row = sized.get(file.path)!, reason = named.get(file.path); return reason ? [{ file, reason, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } }] : [] }),
+        ...scanned.data,
+      ]
+      // Diff order, by a position table: a many-file review must not search the list on every comparison.
+      const position = new Map(files.map((file, index) => [file, index]))
+      data.sort((a, b) => position.get(a.file)! - position.get(b.file)!)
+      return { files, triage: { code: scanned.code, data } }
     }
   }
-  const files = listed.flatMap((row) => found.get(row.path) ?? [])
-  const withStats = (entry: TriagedFile): TriagedFile => { const row = sized.get(entry.file.path); return row && entry.file.size ? { ...entry, stats: { ...entry.stats, added: row.added, removed: row.removed } } : entry }
-  const restFiles = rest.flatMap((row) => found.get(row.path) ?? [])
-  const triaged = readers ? triageFiles(restFiles, attributes) : { code: restFiles, data: [] }
-  const data = [
-    ...aside.flatMap((row) => { const file = found.get(row.path); return file ? [withStats({ file, reason: named.get(row.path)!, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } })] : [] }),
-    ...triaged.data.map(withStats),
-  ].sort((a, b) => files.indexOf(a.file) - files.indexOf(b.file))
-  const reviewable = triaged.code
-  const dataPaths = new Set(data.map((entry) => entry.file.path))
-  const bytes = reviewable.reduce((sum, file) => sum + file.text.length, 0)
-  const tooBig = [...oversized].filter((path) => !dataPaths.has(path))
-  if (bytes > MAX_DIFF_BYTES || tooBig.length) {
-    const set = readers ? `${data.length} data, generated or asset file${data.length === 1 ? "" : "s"} set aside for readers and not counted` : "readers are off, so data files are not set aside"
-    throw new Error(`[PR_REVIEW]: the reviewable part of the diff is ${tooBig.length ? `larger than ${MiB(MAX_DIFF_BYTES)} MiB in ${tooBig.slice(0, 3).join(", ")} alone` : `${MiB(bytes)} MiB in ${reviewable.length} file${reviewable.length === 1 ? "" : "s"}`}, more than the ${MiB(MAX_DIFF_BYTES)} MiB a review reads (${set}); split the pull request or mark generated files in .gitattributes`)
+  let bytes = 0
+  const imported = new Map<string, Set<string>>()
+  for (const row of rest) {
+    const scanned = await one(row, SCAN_BYTES, true)
+    const file = scanned.file
+    if (!file) continue
+    const data = readers ? triageFiles([file], attributes).data[0] : undefined
+    if (data) { named.set(row.path, data.reason); found.set(row.path, file); continue }
+    bytes += scanned.bytes
+    if (bytes > bound) throw tooLarge(bytes, rest.length, named.size)
+    // Relative imports from changed files still provide a useful risk signal without an index.
+    for (const match of [...file.text.matchAll(/(?:from\s*|import\s*\(|require\s*\()["'](\.[^"']+)["']/g)].slice(0, MAX_SYMBOLS)) {
+      const target = posix.normalize(posix.join(posix.dirname(row.path), match[1]!)).replace(/\.(?:[cm]?[jt]sx?)$/, "").replace(/\/index$/, "")
+      const sources = imported.get(target) ?? new Set<string>(); sources.add(row.path); imported.set(target, sources)
+    }
+    found.set(row.path, { ...file, text: "", size: { added: row.added, removed: row.removed }, bytes: scanned.bytes, deferred: true })
   }
-  return { files, triage: { code: reviewable, data } }
+  let files = listed.flatMap((row) => found.get(row.path) ?? [])
+  const withStats = (entry: TriagedFile): TriagedFile => { const row = sized.get(entry.file.path); return row && entry.file.size ? { ...entry, stats: { ...entry.stats, added: row.added, removed: row.removed } } : entry }
+  const data = [
+    ...listed.filter((row) => named.has(row.path)).flatMap((row) => { const file = found.get(row.path); return file ? [withStats({ file, reason: named.get(row.path)!, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } })] : [] }),
+  ].sort((a, b) => files.indexOf(a.file) - files.indexOf(b.file))
+  const reviewable = files.filter((file) => !named.has(file.path))
+  const changed = new Set(listed.map((row) => row.path))
+  const lowRisk = (file: FileDiff) => /(^|\/)(tests?|__tests__|docs?|examples?)\/|\.(test|spec)\.|\.(md|mdx|txt)$/i.test(file.path)
+  const fanIn = (file: FileDiff) => new Set([...(graph?.importers.get(file.path) ?? []).filter((path) => changed.has(path)), ...(imported.get(file.path.replace(/\.(?:[cm]?[jt]sx?)$/, "").replace(/\/index$/, "")) ?? [])]).size
+  const fanIns = new Map(reviewable.map((file) => [file.path, fanIn(file)]))
+  const ranked = [...reviewable].sort((a, b) => Number(lowRisk(a)) - Number(lowRisk(b)) || fanIns.get(b.path)! - fanIns.get(a.path)! || (b.size!.added + b.size!.removed) - (a.size!.added + a.size!.removed) || a.path.localeCompare(b.path))
+  let held = 0
+  const holdBound = bytes > MAX_DIFF_BYTES ? Math.min(MAX_DIFF_BYTES, mainBytes ?? MAX_DIFF_BYTES) : MAX_DIFF_BYTES
+  for (const file of ranked) {
+    if (held + file.bytes! > holdBound) continue
+    const full = await one(sized.get(file.path)!, MAX_DIFF_BYTES)
+    if (!full.file) throw failed()
+    held += full.bytes
+    Object.assign(file, full.file, { deferred: false, size: undefined })
+  }
+  if (bytes > MAX_DIFF_BYTES) files = [...ranked, ...data.map((entry) => entry.file)]
+  const load = async (file: FileDiff) => {
+    if (!file.deferred) return file
+    const loaded = (await one(sized.get(file.path)!, SCAN_BYTES)).file
+    if (!loaded) throw failed()
+    // Loading a bounded excerpt must never replace the full scan's line coordinates.
+    return loaded
+  }
+  return { files, triage: { code: reviewable, data }, load }
 }
 
 /**
  * The diff of `base...head` in `directory` and the graph context of what it touches, within `budgetTokens * CONTEXT_SHARE`.
  * `ignore` drops paths the repository config excludes. Without a graph the review proceeds on the diff alone and the notes say so.
  */
-export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes, compress = true }: { directory: string; base: string; head: string; budgetTokens: number; compress?: boolean; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined }): Promise<ReviewContext> {
+export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes, compress = true, mainBytes }: { directory: string; base: string; head: string; budgetTokens: number; compress?: boolean; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined; mainBytes?: number | undefined }): Promise<ReviewContext> {
   for (const ref of [base, head]) if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,199}$/.test(ref) || ref.includes("..")) throw new Error(`[PR_REVIEW]: invalid ref ${JSON.stringify(ref.slice(0, 80))}`)
-  const fetched = await fetchDiff({ directory, base, head, git, ignore, readers: !!readers, attributes })
+  const fetched = await fetchDiff({ directory, base, head, git, ignore, readers: !!readers, attributes, graph, mainBytes })
   const files = fetched.files
   // Data and generated files go to readers (when the run has them): the review pass gets their summaries in place of their diffs.
   const triage = readers ? fetched.triage : { code: files, data: [] }
   const diffTokens = estimateTokens(files.reduce((sum, file) => sum + chars(file), 0))
-  const read = triage.data.length ? await readers!({ data: triage.data, cut: [], diffTokens }) : []
+  const overflow = triage.code.filter((file) => file.deferred)
+  const read = readers && (triage.data.length || overflow.length) ? await readers({ data: triage.data, cut: overflow, load: fetched.load, diffTokens }) : []
+  for (const file of overflow) if (!read.some((summary) => summary.paths.includes(file.path))) read.push({ id: "unread", paths: [file.path], text: "not read: no reader summary available", by: "not read" })
   const placeholders = readerTexts(files, read)
   const shownFiles = files.map((file) => placeholders.has(file.path) ? { ...file, text: placeholders.get(file.path)! } : compress ? { ...file, text: withoutDeletionHunks(file.text) } : file)
   const main = compress ? mainLanguage({ graph, files }) : undefined
-  const readTokens = triage.data.filter((entry) => placeholders.has(entry.file.path)).reduce((sum, entry) => sum + estimateTokens(chars(entry.file)), 0)
+  const readTokens = [...triage.data.map((entry) => entry.file), ...overflow].filter((file) => placeholders.has(file.path)).reduce((sum, file) => sum + estimateTokens(chars(file)), 0)
   const notes: string[] = []
+  if (overflow.length) notes.push(`The review pass kept higher-risk code within ${MiB(MAX_DIFF_BYTES)} MiB (source before tests/docs, imports by changed files, then changed lines). Not read in full by the review pass: ${overflow.map((file) => file.path).join(", ")}.`)
+  const unread = read.filter((summary) => summary.by === "not read").flatMap((summary) => summary.paths)
+  if (unread.length) notes.push(`Not read: ${unread.join(", ")}. The readers' share was unavailable, spent, or the reader failed; these files have no model review.`)
   let symbols: ChangedSymbol[] = []
   if (!graph) notes.push("No code graph index: reviewed from the diff alone.")
   else {
@@ -382,7 +472,8 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   }
   const limit = Math.max(1_000, Math.floor(budgetTokens * CONTEXT_SHARE))
   const whole = tokensOf(shownFiles.map((file) => file.text).join(""), symbols)
-  const layout = (summaries?: ReadonlyMap<string, string>) => {
+  const layout = (extra?: ReadonlyMap<string, string>) => {
+    const summaries = new Map([...placeholders, ...(extra ?? [])])
     const single = singleView({ files: shownFiles, symbols, limit, summaries, main })
     // Callers and callees are cut first; a diff that still does not fit one call is reviewed in parts of whole files rather than
     // with the largest diffs left out.
@@ -394,13 +485,18 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   // Code files a large diff could not fit are read by readers too, so the review pass gets what they hold instead of only their names.
   const cutFiles = readers ? laid.cut.flatMap((file) => { const found = files.find((entry) => entry.path === file); return found && !placeholders.has(file) ? [found] : [] }) : []
   const cutRead = cutFiles.length ? await readers!({ data: [], cut: cutFiles, diffTokens }) : []
+  const cutUnread = cutRead.filter((summary) => summary.by === "not read").flatMap((summary) => summary.paths)
+  if (cutUnread.length) notes.push(`Not read: ${cutUnread.join(", ")}. The readers' share was unavailable, spent, or the reader failed.`)
   if (cutRead.length) laid = layout(new Map(cutRead.flatMap((summary) => summary.paths.map((file) => [file, summaryLine(summary)] as const))))
   const readCount = new Set([...read, ...cutRead].flatMap((summary) => summary.paths)).size
-  const extra = { ...(readCount ? { readers: { files: readCount } } : {}), ...(readTokens ? { readTokens } : {}) }
   const { single, parts, cut } = laid
+  const summaries = [...read, ...cutRead]
+  const covered = new Set(summaries.filter((summary) => summary.by !== "not read" && summary.by !== "local").flatMap((summary) => summary.paths))
+  const notRead = [...new Set([...unread, ...cutUnread, ...[...overflow.map((file) => file.path), ...cut].filter((path) => !covered.has(path))])]
+  const extra = { ...(readCount ? { readers: { files: readCount } } : {}), ...(readTokens ? { readTokens } : {}), ...(notRead.length ? { unread: notRead } : {}) }
   if (!parts) {
     notes.push(...single.notes)
-    return { directory, base, head, diff: single.diff, files, changedSymbols: single.symbols, truncated: single.truncated, notes, tokens: tokensOf(single.diff, single.symbols), ...extra }
+    return { directory, base, head, diff: single.diff, files, changedSymbols: single.symbols, truncated: single.truncated || !!overflow.length, notes, tokens: tokensOf(single.diff, single.symbols), ...extra }
   }
   notes.push(`The diff (about ${whole.toLocaleString("en-US")} tokens) is larger than one review call (${limit.toLocaleString("en-US")}), so it was reviewed in ${parts.length} parts of whole files.`)
   if (cut.length) notes.push(`The diffs of ${cut.length} file${cut.length === 1 ? "" : "s"} did not fit a part and were left out${cutRead.length ? " (readers summarized them)" : ""}: ${cut.slice(0, 8).join(", ")}${cut.length > 8 ? ", …" : ""}.`)

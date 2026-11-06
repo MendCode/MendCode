@@ -418,3 +418,18 @@ test("a notice whose news the model already read is dropped unread: at the bound
   expect(s.manual.last().input.text).toBe("[while the session was stopped, this happened]\n[background task bg_5 exited 0]\n\n[the user's message]\nand now")
   expect(noticeItems(s)).toHaveLength(1)
 })
+
+test("a notice told again with its queueId while it still waits is rewritten in place, and queue.remove takes it back", async () => {
+  const s = setup()
+  await s.submit("first")
+  const input = s.manual.last().input
+  const queueId = s.h.ids("queue")
+  expect(await s.actor.notify("[child waits: one]", queueId, false, "steer")).toBe(queueId)
+  // Inside a long tool the turn has not reached a boundary yet: the second telling replaces the first instead of queueing beside it.
+  expect(await s.actor.notify("[child waits: one, two]", queueId, false, "steer")).toBe(queueId)
+  expect(lastQueue(s)).toMatchObject([{ queueId, preview: "[child waits: one, two]", kind: "notice" }])
+  expect(s.h.events.findLast((e) => e.type === "queue.edited")).toMatchObject({ queueId, text: "[child waits: one, two]" })
+  expect(await s.command({ type: "queue.remove", queueId })).toMatchObject({ ok: true })
+  expect(lastQueue(s)).toEqual([])
+  expect(await input.takeQueued?.()).toBeUndefined()
+})
