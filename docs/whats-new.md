@@ -20,7 +20,7 @@ English to paste into any MendCode session. On a release page it also updates an
 
 ```text
 MendCode v0.0.3 is out. The changes are on https://github.com/MendCode/MendCode/releases/tag/v0.0.3.
-If the MendCode I run is older (`mendcode --version`), update it first with `mendcode upgrade`.
+If the MendCode I run is older (`mendcode --version`), update it first with `mendcode upgrade --channel stable`.
 From my memories, my past sessions and my MendCode settings, tell me which of these changes I should use, know about or configure, given what I usually do.
 Read only: do not change any setting unless I ask. Be brief.
 Answer in my language.
