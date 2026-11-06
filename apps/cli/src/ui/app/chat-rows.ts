@@ -9,6 +9,8 @@ import { goalSpans } from "../../view/goal"
 
 /** How the daemon opens the notice of a background task that ended or printed (packages/daemon/src/background-notice.ts): the notices that ride with the next message. */
 const BACKGROUND_NOTICE = /^\[(background task|monitor) /
+/** The daemon's own notes for the agent (a session it started waits for approval): hidden from the queue panel. */
+const INTERNAL_NOTICE = /^Internal notification\. /
 import { modelLabel, sessionModelId } from "../../view/model-label"
 import { renderHeaderSlot } from "../../view/topbar"
 import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
@@ -191,7 +193,7 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Rows the question card takes in the prompt's place, besides the one prompt row the room sums below already count. */
     const cardRows = asking ? Math.max(0, request!.rows.length - 1) : 0
     const shellQueued = new Set(state.transcript.queue.flatMap((entry, index) => (state.turnState.isShellQueued(entry.queueId) ? [index] : [])))
-    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
+    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (entry.notice && INTERNAL_NOTICE.test(entry.preview) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
     const sendHit = queueDrawn.hits.find((hit) => hit.action === "send")
     const queue = { rows: queueDrawn.lines, sendChip: sendHit ? { row: sendHit.row, from: sendHit.from, to: sendHit.to } : undefined }
     // A turn paused by the provider's usage limit: the bar offers Resume at reset and Snooze until reset (docs/usage-limit.md).

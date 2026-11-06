@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
+- A session whose child waits for approval gets one notice that disappears once answered and stays out of your queue, and answering a card that just changed no longer shows "request is not pending".
 
 ## v0.0.4 - 2026-11-05
 
