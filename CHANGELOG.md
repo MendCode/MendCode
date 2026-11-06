@@ -18,6 +18,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- MendCode's license is now Apache 2.0: still open source, and copies and forks must keep the notice that credits MendCode and its author. Earlier versions keep their MIT license. The MendCode name and logo are not licensed to forks.
 - MendAscii takes the theme's colors: under the default Ink theme it is a black and white robot with pink cheeks; the Mend theme and the others keep the mint and teal one.
 - Every notice is now one short row in words with the same look and place: a severity mark, the message and what to do next, with `F4 details` for the full text (`/tier` says the tier, its prompt and how many features are on, instead of a list of flag ids); errors stay until your next prompt or command.
 - `/profiles` → `o` groups what a profile overrides with plain names and before → after values, shows the selected one in a detail and tags the ones you kept `yours`; `k` there keeps your value, and the list's header shows a few keys with `?` for the rest.
@@ -27,6 +28,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A compaction threshold written as a fraction (such as 0.8 for 80%) now compacts at that share of the context window instead of right away on an almost empty session; the threshold is a percent of the window, and a new value above 100 or not above 0 is refused with a message saying so.
 - The agent gives a session's full id (`ses_…`), which `mendcode attach` takes, instead of a short code, and `/sessions` finds a session by its full id or the short end of it.
 - In `/sessions`, typing `/` no longer adds a slash to the search (which made "/glass" find nothing), and the selection no longer jumps to another session while other sessions are working, so scrolling down a long list stays where you are.
 - `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on, then the daemon really restarts; anything it still has to stop is listed by command line to that session when the daemon starts again. A restart command that goes away during the wait leaves the sessions unpaused and interrupts nothing.

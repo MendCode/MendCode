@@ -149,7 +149,7 @@ on save and gone when the extension is: see [extensions](extensions.md#providers
 | `models` | `{ id, name?, context?, inputLimit?, outputLimit?, effort?, reasoning_options?, images?, variants?, compaction? }`. `effort: true` shows low/medium/high in `/model`; `reasoning_options` (models.dev's shape) names the levels instead ([below](#reasoning-levels-from-the-catalog)). Replaces the built-in list. |
 | `models[].compoundPricing` | Optional `{inputUsdPer1M, outputUsdPer1M, cacheReadUsdPer1M, cacheWriteUsdPer1M, source}` for compound USD reservations. Record the price source; missing/all-zero prices stay unknown. See [Compound](compound.md). |
 | `enabled` | `false` hides the provider's models and refuses its calls. |
-| `compaction` | `{ token_limit?, threshold? }` applies to the provider; a model's `compaction` overrides it. `providers.set` accepts `null` to clear the provider override. |
+| `compaction` | `{ token_limit?, threshold? }` (`threshold` is a percent of the window, more than 0 and at most 100: `80` for 80%) applies to the provider; a model's `compaction` overrides it. `providers.set` accepts `null` to clear the provider override. |
 | `npm` | An already installed SDK profile, absolute module path or local `file://` URL. Adding/changing it disables the provider until `enabled: true` is explicitly set. No automatic installation. |
 
 The file is written with mode 0600 (atomic rename); a file with wider permissions is tightened when read. Unknown fields survive a rewrite.

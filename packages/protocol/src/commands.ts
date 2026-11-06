@@ -33,7 +33,7 @@ import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelive
 import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
 import { LedgerQuery } from "./automation-ledger"
-import { CompactionOverride } from "./compaction"
+import { CompactionOverrideInput } from "./compaction"
 import { LspInput } from "./lsp"
 import { ReviewRead, ReviewChange } from "./review"
 import { PromptFocusChoice, PromptMode } from "./prompt"
@@ -1327,7 +1327,7 @@ export const ProvidersSet = lazySchema(() => z.strictObject({
   headers: z.record(z.string().min(1).max(100), z.string().max(2048)).optional(),
   enabled: z.boolean().optional(),
   models: z.array(ProviderModel).max(1000).optional(),
-  compaction: CompactionOverride.nullable().optional(),
+  compaction: CompactionOverrideInput.nullable().optional(),
 }))
 
 /** Removes a provider's entry from providers.json (a preset enabled by an environment key stays until the key goes). Ack: `{ providers: ProviderInfo[] }`. */

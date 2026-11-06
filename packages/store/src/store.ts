@@ -34,6 +34,7 @@ import {
   EvolutionReceipt,
   SessionEvent,
   Settings,
+  CompactionPatch,
   WorkflowRun,
   type BlobRef,
   type ItemId,
@@ -646,6 +647,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
     patch = currentSettingKeys(patch)
+    if ("compaction" in patch) CompactionPatch.parse(patch)
     delete next.acpAgents
     const saveAcp = "acpAgents" in patch ? acpSettings.prepare(patch.acpAgents) : undefined
     for (const [key, value] of Object.entries(patch)) {
