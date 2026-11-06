@@ -241,6 +241,12 @@ export function createWorkflowService(options: {
     return false
   }
 
+  /** The ready tasks minus script checks still waiting for their stdin (the replay brings it). */
+  function startable(run: WorkflowRun, now?: number): string[] {
+    const ready = readyTasks(run, directoryBusy(run), now)
+    return run.script ? ready.filter((taskId) => !scripts.waitingForStdin(run, taskId)) : ready
+  }
+
   /** Starts every task that may start; called after each change. */
   function pump(workflowId: WorkflowId) {
     if (disposed) return
@@ -258,7 +264,7 @@ export function createWorkflowService(options: {
         put(advanced)
         run = advanced
       }
-      const [next] = readyTasks(run, directoryBusy(run), clock.now())
+      const [next] = startable(run, clock.now())
       if (!next) break
       const spec = taskSpec(run, next)!
       if (spec.kind === "map") continue
@@ -279,7 +285,7 @@ export function createWorkflowService(options: {
       else startAgent(run, next, taskExecution(run, spec))
     }
     // A work task ending may free the directory for another run.
-    for (const other of runs.values()) if (other.workflowId !== workflowId && (readyTasks(other, directoryBusy(other)).length || other.state === "queued" && !(other.queuedAfter ?? (other.queuedBehind ? [other.queuedBehind] : [])).some((id) => runs.has(id) && !FINISHED.has(runs.get(id)!.state)))) queueMicrotask(() => pump(other.workflowId))
+    for (const other of runs.values()) if (other.workflowId !== workflowId && (startable(other).length || other.state === "queued" && !(other.queuedAfter ?? (other.queuedBehind ? [other.queuedBehind] : [])).some((id) => runs.has(id) && !FINISHED.has(runs.get(id)!.state)))) queueMicrotask(() => pump(other.workflowId))
     arm()
   }
 
@@ -384,7 +390,8 @@ export function createWorkflowService(options: {
     const current = prepared ? run : startTask(run, taskId, { at: clock.now() })
     put(execution ? { ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, execution } : task) } : current)
     const run$ = options.runCheck
-    const gates = run$ ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: run$, timeouts: [timeoutSeconds] }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
+    const stdin = run.script ? scripts.stdinOf(run, taskId) : undefined
+    const gates = run$ ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: run$, timeouts: [timeoutSeconds], ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
     void gates.then(([gate]) => {
       if (checks.get(key) !== controller) return
       checks.delete(key)

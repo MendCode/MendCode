@@ -158,7 +158,7 @@ The first statement is `export const meta = { ... }`, a pure literal read withou
 | `await agent(prompt, opts)` | one sub-agent; resolves with its final text, or the parsed object when `schema` is given |
 | `await parallel([() => ..., ...], { settled })` | runs the thunks together; results keep their order; `settled: true` yields `{ ok, value \| error }` per entry |
 | `await pipeline(items, stage1, stage2, ...)` | every item moves to its next stage as soon as its own previous stage ends; a stage returning `undefined` drops the item |
-| `await check(command, { label, timeoutSeconds, in })` | runs a command on the host through the existing check runner; resolves `{ ok, detail }` and never throws for a failing command; `in` runs it inside the worktree of an earlier `detail` agent |
+| `await check(command, { label, timeoutSeconds, in, stdin })` | runs a command on the host through the existing check runner; resolves `{ ok, detail }` and never throws for a failing command; `in` runs it inside the worktree of an earlier `detail` agent; `stdin` (a string, at most 1024 KB of UTF-8) is written to the command's standard input, which is then closed (without it stdin is ignored). The text is never stored: only its size is kept, the task is labelled "with N KB on stdin", and calls that differ only by stdin stay separate on replay; a larger or non-string `stdin` rejects the call without running anything |
 | `await ask(question, options?)` | the question dialog (`y`/`n` on the human task, or answer with an option) |
 | `await merge(results, { strategy, message })` | combines the results of `worktree: true, detail: true` agents on a reviewed integration branch, see below |
 | `await memo(key, fn)` | runs `fn` once per run; replays reuse the journaled value |

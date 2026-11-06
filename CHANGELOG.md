@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- Workflow scripts can pass text to a check's standard input with `check(command, { stdin })`.
+
 ### Changed
 
 - `/profiles` → `o` groups what a profile overrides with plain names and before → after values, shows the selected one in a detail and tags the ones you kept `yours`; `k` there keeps your value, and the list's header shows a few keys with `?` for the rest.

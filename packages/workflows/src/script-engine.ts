@@ -73,13 +73,17 @@ type HostRuntime = { handle: ScriptHostHandle; waiters: Map<number, Waiter>; occ
 
 /** The journal entry of a finished call; `value` is what the script receives (parsed JSON with a schema, else the text). */
 type CallEntry = { kind: "agent" | "check" | "ask" | "merge"; ok: boolean; value?: unknown; text?: string; detail?: string; taskId: string; workspace?: string; diff?: WorktreeSummary; label?: string; at: number }
-type SpecEntry = { spec: WorkflowTaskSpec; key: string; cwd?: string }
+/** `stdinBytes`: the call writes that many bytes to the command's stdin; the text itself stays in memory only (the replay supplies it again). */
+type SpecEntry = { spec: WorkflowTaskSpec; key: string; cwd?: string; stdinBytes?: number }
 
 export const MAX_SCRIPT_TASKS = 250
 const TEXT_LIMIT = 32_000
 const MEMO_LIMIT = 16 * 1024
 const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "model", "effort", "engine", "agent", "retry", "timeoutMinutes", "budget", "detail", "allowedTools"])
-const CHECK_KEYS = new Set(["label", "phase", "timeoutSeconds", "in"])
+const CHECK_KEYS = new Set(["label", "phase", "timeoutSeconds", "in", "stdin"])
+/** The most text `check(command, { stdin })` writes to the command (UTF-8 bytes). */
+export const CHECK_STDIN_LIMIT = 1_048_576
+const kilobytes = (bytes: number) => Math.max(1, Math.ceil(bytes / 1024))
 
 const stable = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`
@@ -158,6 +162,8 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
 export function createScriptEngine(ctx: Context) {
   const hosts = new Map<WorkflowId, HostRuntime>()
   const specs = new Map<string, SpecEntry>()
+  /** The stdin text of check calls by `workflowId/taskId`; never journaled. */
+  const stdins = new Map<string, string>()
   const journal = ctx.journal
 
   const read = <T>(workflowId: string, key: string): T | undefined => {
@@ -293,10 +299,11 @@ export function createScriptEngine(ctx: Context) {
     })
   }
 
-  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; cwd?: string }) {
+  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; cwd?: string; stdinBytes?: number }) {
     const routed = spec.kind === "agent" ? { ...(spec.engine ? { engine: spec.engine } : {}), ...(spec.model ? { modelId: spec.model.model } : {}) } : {}
-    write(workflowId, `spec:${spec.id}`, { spec, key, ...(extra.cwd ? { cwd: extra.cwd } : {}) } satisfies SpecEntry)
-    specs.set(`${workflowId}/${spec.id}`, { spec, key, ...(extra.cwd ? { cwd: extra.cwd } : {}) })
+    const entry: SpecEntry = { spec, key, ...(extra.cwd ? { cwd: extra.cwd } : {}), ...(extra.stdinBytes !== undefined ? { stdinBytes: extra.stdinBytes } : {}) }
+    write(workflowId, `spec:${spec.id}`, entry)
+    specs.set(`${workflowId}/${spec.id}`, entry)
     scriptSpecRegistry.set(workflowId, spec)
     ctx.update(workflowId, (run) => addScriptTask(run, { id: spec.id, title: spec.title, kind: spec.kind, ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.label ? { label: extra.label } : {}), ...(extra.phase ? { phase: extra.phase } : {}), ...(extra.isolated ? { isolated: true } : {}), ...routed }, ctx.clock.now()))
   }
@@ -341,21 +348,31 @@ export function createScriptEngine(ctx: Context) {
       cwd = wanted === undefined ? undefined : journal?.list(workflowId, "call:").map((row) => JSON.parse(row.payload) as CallEntry).find((entry) => entry.workspace !== undefined && (entry.taskId === wanted || entry.workspace === wanted))?.workspace
       if (cwd === undefined) return reply(runtime, id, { ok: false, error: "check: `in` must be the result of an agent({ worktree: true, detail: true }) call of this run" })
     }
-    const key = nextKey(runtime, { kind: "check", command, cwd, timeoutSeconds: opts.timeoutSeconds })
+    if (opts.stdin !== undefined && typeof opts.stdin !== "string") return reply(runtime, id, { ok: false, error: "check: stdin must be a string" })
+    const stdin = opts.stdin
+    const stdinBytes = stdin === undefined ? undefined : Buffer.byteLength(stdin, "utf8")
+    if (stdinBytes !== undefined && stdinBytes > CHECK_STDIN_LIMIT) return reply(runtime, id, { ok: false, error: `check: stdin is ${kilobytes(stdinBytes)} KB; the limit is ${CHECK_STDIN_LIMIT / 1024} KB` })
+    // Only a hash of stdin enters the call's identity, so calls that differ by stdin alone stay apart on replay.
+    const key = nextKey(runtime, { kind: "check", command, cwd, timeoutSeconds: opts.timeoutSeconds, ...(stdin !== undefined ? { stdin: createHash("sha256").update(stdin).digest("hex").slice(0, 16) } : {}) })
     const taskId = scriptTaskId(key)
-    const label = typeof opts.label === "string" ? clip(opts.label, 80) : clip(command, 80)
+    const note = stdinBytes === undefined ? "" : ` (with ${kilobytes(stdinBytes)} KB on stdin)`
+    const label = typeof opts.label === "string" ? clip(opts.label, 80) : `${clip(command, 80 - note.length)}${note}`
     const spec = WorkflowCheckTaskSpec.safeParse({ kind: "check", id: taskId, title: label, command, needs: [], ...(opts.timeoutSeconds !== undefined ? { timeoutSeconds: opts.timeoutSeconds } : {}) })
     if (!spec.success) return reply(runtime, id, { ok: false, error: `check options: ${spec.error.issues[0]?.path.join(".") || "(root)"} ${spec.error.issues[0]?.message ?? "invalid"}` })
     runtime.waiters.set(id, { kind: "check", key, taskId, detail: false })
     const run = ctx.get(workflowId)!
-    if (!run.tasks.some((task) => task.id === taskId) && !read(workflowId, `call:${key}`)) {
+    const exists = run.tasks.some((task) => task.id === taskId)
+    const finished = !!read(workflowId, `call:${key}`)
+    if (stdin !== undefined && !finished) stdins.set(`${workflowId}/${taskId}`, stdin)
+    if (!exists && !finished) {
       const reason = capReason(run, true)
       if (reason) {
         runtime.waiters.delete(id)
+        stdins.delete(`${workflowId}/${taskId}`)
         return pauseForCap(workflowId, reason)
       }
-      createTask(workflowId, spec.data, key, { label, ...(typeof opts.phase === "string" ? { phase: clip(opts.phase, 80) } : {}), ...(cwd ? { cwd } : {}) })
-    }
+      createTask(workflowId, spec.data, key, { label, ...(typeof opts.phase === "string" ? { phase: clip(opts.phase, 80) } : {}), ...(cwd ? { cwd } : {}), ...(stdinBytes !== undefined ? { stdinBytes } : {}) })
+    } else if (exists && !finished && stdin !== undefined) ctx.update(workflowId, (current) => current) // a check that waited for its stdin (after a restart) may start now
     deliver(workflowId)
   }
 
@@ -544,6 +561,7 @@ export function createScriptEngine(ctx: Context) {
 
   function recordCheck(run: WorkflowRun, taskId: string, ok: boolean, detail: string) {
     const entry = SPEC_KEY(run.workflowId, taskId)
+    stdins.delete(`${run.workflowId}/${taskId}`)
     if (!entry) return
     write(run.workflowId, `call:${entry.key}`, { kind: "check", ok, detail: clip(detail, 2_000), taskId, at: ctx.clock.now() } satisfies CallEntry)
   }
@@ -568,6 +586,20 @@ export function createScriptEngine(ctx: Context) {
 
   function cwdOf(run: WorkflowRun, taskId: string): string | undefined {
     return SPEC_KEY(run.workflowId, taskId)?.cwd
+  }
+
+  /** The text a check call writes to its command's stdin (undefined = stdin ignored). */
+  function stdinOf(run: WorkflowRun, taskId: string): string | undefined {
+    return stdins.get(`${run.workflowId}/${taskId}`)
+  }
+
+  function forgetStdins(workflowId: WorkflowId) {
+    for (const key of [...stdins.keys()]) if (key.startsWith(`${workflowId}/`)) stdins.delete(key)
+  }
+
+  /** A check call with stdin whose text is not in memory yet (after a restart, until the replay reaches the call again). */
+  function waitingForStdin(run: WorkflowRun, taskId: string): boolean {
+    return run.script !== undefined && SPEC_KEY(run.workflowId, taskId)?.stdinBytes !== undefined && !stdins.has(`${run.workflowId}/${taskId}`)
   }
 
   /** The caps again after usage was recorded. */
@@ -599,6 +631,7 @@ export function createScriptEngine(ctx: Context) {
     const script = { ...run.plan.script, source, hash: parsed.hash, meta: parsed.meta, ...(args ? { args } : {}) }
     const plan = { ...run.plan, script }
     ctx.cancelTasks(run, run.tasks.filter((task) => task.state === "running").map((task) => task.id))
+    forgetStdins(workflowId)
     const next = ctx.update(workflowId, (current) => {
       const kept = current.tasks.filter((task) => !["pending", "running", "needs_input"].includes(task.state))
       const { definitionId: _definitionId, revisionId: _revisionId, revision: _revision, ...rest } = current
@@ -617,6 +650,8 @@ export function createScriptEngine(ctx: Context) {
     recordCheck,
     recordAsk,
     cwdOf,
+    stdinOf,
+    waitingForStdin,
     checkCaps,
     setBudget,
     replaceScript,
@@ -629,12 +664,14 @@ export function createScriptEngine(ctx: Context) {
       stopHost(workflowId, "the run was deleted")
       scriptSpecRegistry.clear(workflowId)
       for (const key of [...specs.keys()]) if (key.startsWith(`${workflowId}/`)) specs.delete(key)
+      forgetStdins(workflowId)
       journal?.removeRun(workflowId)
     },
     hasHost: (workflowId: WorkflowId) => hosts.has(workflowId),
     dispose() {
       for (const workflowId of [...hosts.keys()]) stopHost(workflowId, "the daemon is stopping")
       specs.clear()
+      stdins.clear()
     },
   }
 }

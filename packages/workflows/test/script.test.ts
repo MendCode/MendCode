@@ -154,6 +154,66 @@ describe("script runs", () => {
     expect(h.ran).toHaveLength(2)
   })
 
+  test("check() with stdin hands exactly that text to the runner and stores only its size; without stdin nothing is passed", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const fed = await check("bun run lint", { stdin: ["MARK", "ER-stdin-text\\nline two"].join("") })
+      const plain = await check("bun test")
+      return { fed: fed.ok, plain: plain.ok }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ fed: true, plain: true })
+    expect(h.checkStdins).toEqual(["MARKER-stdin-text\nline two", undefined])
+    expect(done.tasks[0]!.title).toBe("bun run lint (with 1 KB on stdin)")
+    const stored = JSON.stringify([...h.rows.values(), ...h.saved.values()])
+    expect(stored).not.toContain("MARKER-stdin-text")
+    expect(stored).toMatch(/stdinBytes\\*":26/)
+  })
+
+  test("check() refuses stdin over 1024 KB or that is not a string, without running anything", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const errors = []
+      try { await check("bun test", { stdin: "x".repeat(1_048_577) }) } catch (error) { errors.push(error.message) }
+      try { await check("bun test", { stdin: 42 }) } catch (error) { errors.push(error.message) }
+      const exact = await check("bun test", { stdin: "é".repeat(524_288) })
+      return { errors, exact: exact.ok }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ errors: [expect.stringContaining("stdin is 1025 KB; the limit is 1024 KB"), expect.stringContaining("stdin must be a string")], exact: true })
+    expect(h.ran).toHaveLength(1)
+    expect(h.checkStdins[0]).toHaveLength(524_288)
+  })
+
+  test("two checks that differ only by stdin are two calls, and a restart feeds the unfinished one its stdin again", async () => {
+    const saved = new Map()
+    const rows = new Map<string, string>()
+    const source = wf(`
+      const a = await check("bun run verify", { stdin: "alpha" })
+      const b = await check("bun run verify", { stdin: "beta" })
+      return [a.ok, b.ok]
+    `)
+    const first = scriptHarness({ saved, rows, responder: () => "x", checkExit: (_argv, _cwd, stdin) => (stdin === "beta" ? new Promise<number>(() => {}) : 0) })
+    const run = first.start(source)
+    await settle(30)
+    expect(first.checkStdins).toEqual(["alpha", "beta"])
+    expect(first.get(run).tasks.map((task) => task.state)).toEqual(["done", "running"])
+    first.service.dispose()
+
+    const second = scriptHarness({ saved, rows, responder: () => "x", checkExit: (_argv, _cwd, stdin) => (stdin === "beta" ? 1 : 0) })
+    second.service.start()
+    await settle(40)
+    const resumed = second.get(run)
+    expect(resumed.state).toBe("completed")
+    expect(second.checkStdins).toEqual(["beta"])
+    expect(JSON.parse(resumed.script!.result!)).toEqual([true, false])
+    expect([...rows.values()].join("\n")).not.toMatch(/alpha|beta/)
+  })
+
   test("ask() waits for the user: an answer resumes the script, a bad option is refused, a rejection rejects the call", async () => {
     const h = scriptHarness({ responder: () => "x" })
     const run = h.start(wf(`
