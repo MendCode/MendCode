@@ -118,7 +118,7 @@ describe("release notes", () => {
     // Once in the short Fixes and once in the folded details, never twice in the same list.
     expect(notes.match(/run --format json/g)).toHaveLength(2)
     expect(notes).toContain("curl -fsSL https://github.com/MendCode/MendCode/releases/latest/download/install.sh | sh\n")
-    expect(notes).toContain("Already installed: `mendcode upgrade`.")
+    expect(notes).toContain("Already installed: `mendcode upgrade --channel stable`.")
   })
 
   test("a nightly lists the Unreleased items its previous release did not have, and fails when there are none", () => {
@@ -216,7 +216,7 @@ describe("release notes for a beta, a stable and a nightly", () => {
     const notes = releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable }))
     expect(notes).toContain("\nStable · since [v0.0.3]")
     expect(notes).toContain("## What's new")
-    expect(notes).toContain("Already installed: `mendcode upgrade`.")
+    expect(notes).toContain("Already installed: `mendcode upgrade --channel stable`.")
     expect(releaseTitle("v0.0.4")).toBe("MendCode v0.0.4")
   })
 
@@ -274,20 +274,23 @@ test("the command reads CHANGELOG.md and the commits from git and writes the tit
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
 
-describe("the copyable prompt ends every release page", () => {
-  test("a stable, a beta and the Nightly end with the prompt that names their own page", () => {
+describe("the copyable prompt sits under Install on every release page", () => {
+  test("a stable, a beta and the Nightly show the prompt before the folded details, naming their page and their upgrade command", () => {
     const stable = RICH.replace("## v0.0.4-beta.1", "## v0.0.4")
     const unreleased = "## Unreleased\n\nToday's build.\n\n### Fixed\n\n- A fixed thing.\n"
-    const pages: [string, string][] = [
-      [releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable })), "/releases/tag/v0.0.4"],
-      [releaseNotes(input("v0.0.4-beta.1", { releases: RICH_RELEASES, changelog: RICH, tagChangelog: RICH })), "/releases/tag/v0.0.4-beta.1"],
-      [releaseNotes(input("v0.0.4-nightly.20261105.7", { releases: [...RICH_RELEASES, release("v0.0.4-nightly.20261104.5")], changelog: unreleased, tagChangelog: unreleased, previousChangelog: "## Unreleased\n" })), "/releases/tag/nightly"],
+    const pages: [string, string, string][] = [
+      [releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable })), "/releases/tag/v0.0.4", "`mendcode upgrade --channel stable`"],
+      [releaseNotes(input("v0.0.4-beta.1", { releases: RICH_RELEASES, changelog: RICH, tagChangelog: RICH })), "/releases/tag/v0.0.4-beta.1", "`mendcode upgrade --channel beta`"],
+      [releaseNotes(input("v0.0.4-nightly.20261105.7", { releases: [...RICH_RELEASES, release("v0.0.4-nightly.20261104.5")], changelog: unreleased, tagChangelog: unreleased, previousChangelog: "## Unreleased\n" })), "/releases/tag/nightly", "`mendcode upgrade --channel nightly`"],
     ]
-    for (const [notes, page] of pages) {
-      const at = notes.lastIndexOf("## What fits you")
-      const block = notes.slice(at)
-      expect(at).toBeGreaterThan(notes.indexOf("**Changelog**"))
+    for (const [notes, page, upgrade] of pages) {
+      const at = notes.indexOf("## What fits you")
+      const block = notes.slice(at, notes.indexOf("<details>"))
+      expect(at).toBeGreaterThan(notes.indexOf("## Install"))
+      expect(at).toBeLessThan(notes.indexOf("<summary>Full details</summary>"))
       expect(block).toContain("Paste this into any MendCode session:")
+      expect(block).toContain("is out. The changes are on")
+      expect(block).toContain(`If the MendCode I run is older (\`mendcode --version\`), update it first with ${upgrade}.`)
       expect(block).toContain("Read only: do not change any setting unless I ask.")
       expect(block).toContain(page)
       expect(block.trimEnd().endsWith("```")).toBe(true)
