@@ -8,7 +8,7 @@ import { buildReviewContext, gitRun, type ContextReaders, type GitRun, type Revi
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
-import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { closeCheckpoint, resumeReview, REVIEW_PASS_SHARE, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
 import { fallbackUsed, newFallbackState, withFallbacks, type FallbackSource, type FallbackState } from "./fallback"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
@@ -83,6 +83,8 @@ export type RunPrReviewInput = {
   git?: GitRun
   graph?: () => Promise<Graph | undefined>
   gh?: GhCall
+  /** Known publisher identity, including installation-token bots that cannot call GET /user. */
+  self?: string | undefined
   /** The caller's consent to post (the repo config's `enabled` is checked here too). */
   publish: boolean
   /** Review the whole PR even when the head was reviewed before (`@mendcode review`). */
@@ -327,7 +329,7 @@ async function publishBlock({ input, config }: { input: RunPrReviewInput; config
  * only). Otherwise from the PR's base, or for a stacked PR from the parent's head; `full` (asked, or `coverage: full`) is the whole
  * range, else only the commits since the last reviewed head when it is still in the branch (and, stacked, still past the parent).
  */
-async function chooseRange({ input, git, full, resume }: { input: RunPrReviewInput; git: GitRun; full: boolean; resume?: ReviewCheckpoint | undefined }): Promise<{ base: string; head: string; incremental: boolean } | undefined> {
+async function chooseRange({ input, git, full, resume }: { input: RunPrReviewInput; git: GitRun; full: boolean; resume?: ReviewCheckpoint | undefined }): Promise<{ base: string; head: string; incremental: boolean; alreadyReviewed?: number[] } | undefined> {
   if (resume?.result) return { base: resume.result.base, head: input.head, incremental: !!input.state.lastHead && resume.result.base === input.state.lastHead }
   const start = input.stack?.base ?? input.base
   // `coverage: full` from the config re-reviews a new head whole; only an explicit request re-reviews the same head.
@@ -338,6 +340,13 @@ async function chooseRange({ input, git, full, resume }: { input: RunPrReviewInp
   const ancestor = last ? await isAncestor(git, input.directory, last, input.head) : false
   const range = reviewRange({ state: input.state, base: start, head: input.head, isAncestor: ancestor })
   if (range?.incremental && input.stack && last && !await isAncestor(git, input.directory, input.stack.base, last)) return { base: start, head: input.head, incremental: false }
+  const gh = input.gh ?? input.read
+  if (range && gh && !input.provider) {
+    const { alreadyReviewed } = await import("./already-reviewed")
+    const covered = await alreadyReviewed({ gh, git, directory: input.directory, repo: input.repo, number: input.number, base: range.base, head: range.head,
+      reviewer: input.publishAs?.reviewer ?? input.reviewer?.id, self: input.publishAs?.self ?? input.self ?? input.publisher?.login ?? input.reviewer?.login })
+    if (covered) return { base: covered.base, head: range.head, incremental: true, alreadyReviewed: covered.prs }
+  }
   return range
 }
 
@@ -409,7 +418,7 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
     return source
   }
-  const read: ContextReaders = async ({ data, cut, diffTokens }) => {
+  const read: ContextReaders = async ({ data, cut, diffTokens, load }) => {
     const groups = groupFiles({ data, cut })
     const cached = resume?.readers ?? []
     const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
@@ -420,14 +429,16 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
       const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
       const chosen = pick()
       tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
-      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance })
+      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
       total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      if (result.notRead?.length) (total.notRead ??= []).push(...result.notRead)
       total.model ??= result.model
       for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
     }
-    kept.push(...out)
+    // Job checkpoints already allow at most 500 summaries. Unread markers are rebuilt, not stored as successful coverage.
+    kept.push(...out.filter((summary) => summary.by !== "not read").slice(0, Math.max(0, 500 - kept.length)))
     return out
   }
   const note = () => [
@@ -468,18 +479,23 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (blocked) return { ...skipped(`${blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head` : blocked.why}; nothing was sent to a model`), notPublisher: true as const }
   }
   try {
-    const graph = await input.graph?.().catch(() => undefined)
+    const nothingLeft = !!range.alreadyReviewed && (await git(["diff", "--no-ext-diff", "--quiet", range.base, range.head, "--"], input.directory)).code === 0
+    const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${nothingLeft ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined
+    const graph = nothingLeft ? undefined : await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
-    const readers = config.readers.enabled ? runReaders({ input, config, resume }) : undefined
+    const readers = config.readers.enabled && input.readers?.tier !== "minimalist" ? runReaders({ input, config, resume }) : undefined
     const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes })
+    // An oversized diff must also fit the pass's existing cap after readers and verification. Leave room for summaries/briefs.
+    const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - READER_SHARE) * REVIEW_PASS_SHARE * 0.9 * 4)
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes })
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
-    if (incremental) context.notes.push(`Incremental review: only what changed since the last review at ${range.base.slice(0, 7)}; the rest of the pull request was reviewed then (read other files with your tools when a change depends on them).`)
+    if (coverageNote) context.notes.push(coverageNote)
+    else if (incremental) context.notes.push(`Incremental review: only what changed since the last review at ${range.base.slice(0, 7)}; the rest of the pull request was reviewed then (read other files with your tools when a change depends on them).`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
     // The cost phase: a subprocess with execution, outside the model's read-only pass; it never fails or blocks the review.
-    const perf: PerfOutcome | undefined = input.perf ? await measurePerf({ directory: input.directory, base: input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
+    const perf: PerfOutcome | undefined = input.perf && !nothingLeft ? await measurePerf({ directory: input.directory, base: range.alreadyReviewed ? range.base : input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
     if (perf) {
       context.perf = perfPrompt(perf)
       const note = perfNote(perf)
@@ -487,7 +503,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     }
     const plan = planPhases({ config: config.phases, facts: phaseFacts({ context, fixMode: config.fix.mode, stacked: !!input.stack }) })
     const files = context.files.map((file) => file.path)
-    const memory = input.memory ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
+    const memory = input.memory && !nothingLeft ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
     // The cap follows the change: the whole diff's size (all its parts), under `tokens_per_pr`.
     // The diffs readers read count too, so the cap is the same with or without them; what the readers counted comes off it.
     const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
@@ -507,7 +523,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     }
     const fallbackState = newFallbackState()
     const fallbacks = { sources: fallbackSources, state: fallbackState }
-    const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume, fallbacks })
+    const attempt: ReviewAttempt = nothingLeft ? { ok: true, outcome: {
+      result: { base: range.base, head: range.head, findings: [], dropped: 0, summary: coverageNote!, tokens: { input: 0, output: 0, cached: 0 }, budgetHit: false },
+      verified: true, folded: 0, candidates: [], validation: { ok: true, reason: "Already reviewed; no remaining changes." },
+    } } : await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume, fallbacks })
     // A stalled turn: a retryable failure with no stop, so the job keeps the checkpoint and is tried again with backoff.
     if (!attempt.ok && attempt.stalled) {
       const part = attempt.checkpoint.result ? parsePartPhase(attempt.checkpoint.phase) : undefined
@@ -531,7 +550,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const published = Object.values(input.state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : [])
     const previous = [...published, ...(input.recheck ?? []).filter((finding) => !published.some((known) => known.id === finding.id))]
     // An explicit full review re-checks the open findings too: otherwise asking again after a fix could never close their threads.
-    const rechecked = complete && (incremental || !!input.full)
+    const rechecked = complete && !nothingLeft && (incremental || !!input.full)
     const recheckFactory = (factory: ReviewSessionFactory) => meteredSessions({ factory, account: input.account, calling: input.calling, resuming: false, failures: [], language: config.template.language })
     const fixed = rechecked && previous.length ? await fixedFindings({ sessionFactory: withFallbacks({ primary: recheckFactory(input.sessionFactory), sources: fallbackSources.map((source) => ({ model: source.model, factory: recheckFactory(source.factory) })), state: fallbackState }), previous, context, language: config.template.language }) : []
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
@@ -539,6 +558,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const usedModel = fallbackUsed(fallbackState, fallbackSources)
     const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
+    if (complete && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
@@ -580,7 +600,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     }
     tell(input, { phase: "posting", label: "Posting review" })
     const report = await publishReview({
-      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
+      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info, self: input.self,
       ...(config.template.sections.length ? { template: config.template } : {}), ...(outcome.sections ? { sections: outcome.sections } : {}),
       ...(as ? { effects: as.effects, reviewer: as.reviewer, configKey: as.configKey, jobId: as.jobId, isCurrent: as.isCurrent, ...(as.self ? { self: as.self } : {}) } : {}),
     })

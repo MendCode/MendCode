@@ -48,8 +48,8 @@ describe("a review whose data files reached the model as reader summaries", () =
     expect(context.readers).toEqual({ files: 24 })
     const prompt = reviewPrompt(context, DEFAULT_ENGINE_CONFIG)
     expect(prompt).toContain("there is no shell")
-    expect(prompt).toContain("reviewing the rest of the change with those summaries is a complete review")
-    expect(prompt).toContain("Do not put the summarization in `incomplete`")
+    expect(prompt).toContain("reader summaries and file:line risks are unverified hints, not evidence")
+    expect(prompt).toContain("Do not put the intentional summarization or reader-budget omissions in `incomplete`")
     // Instructions plus the diff and the summaries: nothing else rides along, so the call the cap was sized for is the call that is sent.
     expect(estimateTokens(prompt.length) - context.tokens).toBeLessThan(2_500)
     expect(prompt).toContain("Reader summary (local scan, no model, unverified): benchmarks/experiments/results/layer_probe/ (24 .json files)")

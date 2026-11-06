@@ -20,6 +20,8 @@ export type ReviewInfo = {
   files: ReadonlyArray<{ path: string; touched: number }>; profile: string; cap: number; incremental: boolean; notes: readonly string[]
   /** The head the last review covered, for an incremental review: the summary says it covers what changed since it. */
   since?: string | undefined
+  /** The PR's own base, only when this completed review covered its whole range. */
+  fullBase?: string | undefined
   /** How many candidate findings the separate verify pass judged (0: the review pass raised none, so no verify pass ran). Unset: not known. */
   checked?: number | undefined
   /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
@@ -298,7 +300,8 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const order = [...listed.map((section) => section.id), ...BUILTIN_SECTIONS.filter((id) => !listed.some((section) => section.id === id))].filter((id) => !hidden.has(id))
   // A partial review is not a review of the head: it has neither the heading nor the head marker that say "reviewed" (`isMendCodeReview`,
   // another reviewer's stand-down, a hosted runner's state), so the rest is still asked for and done.
-  return [partial ? "## MendCode partial review" : "## MendCode review", ...order.map(render), language ? languageMarker(language) : "", partial ? "" : reviewMarker(result.head)].filter(Boolean).join("\n\n")
+  const full = !partial && !stop && !result.budgetHit && info?.fullBase ? `<!-- mendcode:full-review base=${info.fullBase} -->` : ""
+  return [partial ? "## MendCode partial review" : "## MendCode review", ...order.map(render), language ? languageMarker(language) : "", partial ? "" : reviewMarker(result.head), full].filter(Boolean).join("\n\n")
 }
 
 /** The built-in layout (`renderReviewBody` without a template): what `publish.ts` posts. */

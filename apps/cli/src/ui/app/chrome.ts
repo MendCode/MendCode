@@ -516,7 +516,7 @@ export function createChrome(ctx: AppContext, actions: {
       ...(featureOn(state.settingsNow, "jev") && !externalEngine(state.effectiveModel?.model ?? id, state.modelReport) ? { adaptive: true } : {}),
       ...(!border && usage?.contextTokens !== undefined && threshold > 0 ? { context: { tokens: usage.contextTokens, limit: threshold, ...(usage.contextApprox ? { approx: true } : {}) } } : {}),
       quotas: [...quotas.values()],
-      ...((reviewing) => (reviewing ? { reviewing } : {}))(state.reviewActivity.length ? reviewActivityView()?.reviewFooterWord(state.reviewActivity, state.sessionId) : undefined),
+      ...((reviewing) => (reviewing ? { reviewing } : {}))(state.reviewActivity.length ? reviewActivityView()?.reviewFooterWord(state.reviewActivity, state.sessionId, state.transcript.activeTurn !== undefined) : undefined),
       ...(state.transcript.sessionCost !== undefined ? { costMicros: state.transcript.sessionCost } : {}),
       jobs: state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length,
       loops: state.liveLoops.size,

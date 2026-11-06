@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
+
+### Fixed
+
+- Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
+
 ## v0.0.4 - 2026-11-05
 
 Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and
@@ -16,7 +24,26 @@ shows its progress, and a terminal that starts lighter by loading what a session
 
 ### Upgrade notes
 
-- Same code as v0.0.4-beta.2.
+- Same code as v0.0.4-beta.3.
+
+## v0.0.4-beta.3 - 2026-11-05
+
+Send now keeps going with your message, a running PR review takes one line, and release PRs review only what merged pull
+requests did not.
+
+### New
+
+- PR reviews reuse changes already reviewed in merged pull requests, reviewing only the remainder of release PRs and calling no model when nothing else changed.
+
+### Changed
+
+- A running PR review shows one live line above the prompt with its phase, current step and time, instead of a row per step.
+
+### Fixed
+
+- Send now continues with the promoted message exactly once after interrupting a running tool.
+- After a daemon restart with watched pull requests, resumed turns no longer fail because they started before the reviewer was ready.
+- Live answers of `mendcode docs` wait for a busy daemon as long as `mendcode usage --quota` does.
 
 ## v0.0.4-beta.2 - 2026-11-05
 
