@@ -108,8 +108,8 @@ test("/changelog lists the bundled entries and marks what is new since the last 
   await Bun.write(seenFile, `${JSON.stringify({ version: versions[1]!.name, unreleased: [] })}\n`)
   frame = (await open()).text().join("\n")
   expect(frame).toMatch(/\d+ new since your last look/)
-  expect(newItems(versions[0]!, { version: versions[1]!.name, unreleased: [] })).toBe(sectionItems(versions[0]!).length)
-  expect(newItems(versions[1]!, { version: versions[1]!.name, unreleased: [] })).toBe(0)
+  expect(newItems(versions[0]!, { version: versions[1]!.name, unreleased: [] }, entries)).toBe(sectionItems(versions[0]!).length)
+  expect(newItems(versions[1]!, { version: versions[1]!.name, unreleased: [] }, entries)).toBe(0)
   expect(readFileSync(seenFile, "utf8")).toContain(versions[0]!.name)
 })
 
