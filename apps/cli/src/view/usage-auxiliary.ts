@@ -17,7 +17,7 @@ export function auxiliaryTotals(entries: readonly UsageAuxiliary[]): AuxiliaryTo
     out.calls += entry.calls
     out.input += entry.input
     out.output += entry.output
-    out.tokens += entry.input + entry.output
+    out.tokens += entry.input + entry.output + entry.cacheRead + entry.cacheWrite
     out.costMicros += entry.costMicros
     out.unpriced += entry.costUnknownCalls
   }

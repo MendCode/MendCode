@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
+import { WORKFLOW_SCRIPT_MAX_BYTES } from "@mendcode/protocol"
 import { ACTIVATION_MAX_BYTES, activationProblems, moduleStem, PACKAGE_KINDS, unknownPackageEntries, versionRangeProblem, type Activation } from "@mendcode/protocol/wire"
 import { packageCapabilities } from "./capabilities"
 import { auditPackageTree, manifestCompatProblem, type PackageHost } from "./install"
@@ -89,6 +90,13 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
         errors.push(`${relative} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`)
       }
     }
+  }
+
+  // Workflow scripts: one larger than a run accepts installs fine and fails only when it runs.
+  const workflowsDir = path.join(dir, "workflows")
+  if (existsSync(workflowsDir)) for (const entry of readdirSync(workflowsDir).filter((name) => name.endsWith(".js")).sort()) {
+    const size = lstatSync(path.join(workflowsDir, entry)).size
+    if (size > WORKFLOW_SCRIPT_MAX_BYTES) errors.push(`workflows/${entry} is ${Math.ceil(size / 1024)} KB; a workflow script runs only up to ${WORKFLOW_SCRIPT_MAX_BYTES / 1024} KB`)
   }
 
   // The activation.

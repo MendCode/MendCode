@@ -296,6 +296,15 @@ export function promptRange(map: SelectionMap, selection: Selection): { start: n
   return range.end > range.start ? range : undefined
 }
 
+/**
+ * `span` in `look`: a colour the look sets replaces the span's own, its exact `fgHex`/`bgHex` included (they win over the theme roles
+ * when drawn), so a message, code block or view painted with its own background still shows the selection on top.
+ */
+function looked(span: Span, look: Partial<Span>): Span {
+  const { fgHex, bgHex, ...rest } = span
+  return { ...rest, ...(fgHex && look.fg === undefined && look.fgHex === undefined ? { fgHex } : {}), ...(bgHex && look.bg === undefined && look.bgHex === undefined ? { bgHex } : {}), ...look }
+}
+
 /** `line` with the cells `[from, to)` drawn as the selection (the prompt editor's selected look), or as `look` (the find bar's hits). */
 export function highlightLine(line: Line, from: number, to: number, look: Partial<Span> = { fg: "background", bg: "primary" }): Line {
   const out: Span[] = []
@@ -312,7 +321,7 @@ export function highlightLine(line: Line, from: number, to: number, look: Partia
       col = mid
     }
     if (before) out.push({ ...span, text: before })
-    if (inside) out.push({ ...span, ...look, text: inside })
+    if (inside) out.push({ ...looked(span, look), text: inside })
     if (after) out.push({ ...span, text: after })
   }
   return out

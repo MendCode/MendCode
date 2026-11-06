@@ -14,6 +14,7 @@ import path from "node:path"
 import type { ChangedFile, ChangesReport, Goal, MemoryEntry, MemoryGraphReport, MemoryLink, PackageInfo, SessionId } from "@mendcode/protocol"
 import { resolveActivation, type Activation } from "../packages/protocol/src/activation-data"
 import type { CommandReply } from "@mendcode/client"
+import { DEFAULT_THEME } from "../apps/cli/src/themes"
 import { activeTheme, setColorOverrides, setGlyphMode, setTheme, type Line } from "../apps/cli/src/ui/theme"
 import { createChangesPageState, renderChangesPage } from "../apps/cli/src/view/changes-page"
 import { createMemoryPageState, renderMemoryPage } from "../apps/cli/src/view/memory-page"
@@ -368,7 +369,7 @@ export async function renderImages(only: readonly string[] = []): Promise<Record
   const previousEnv = { glyphs: process.env.MENDCODE_GLYPHS, theme: process.env.MENDCODE_THEME }
   delete process.env.MENDCODE_GLYPHS
   delete process.env.MENDCODE_THEME
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   setGlyphMode("unicode")
   setColorOverrides({})
   try {

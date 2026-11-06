@@ -2,6 +2,7 @@ import type { PrReviewConfigView, PrReviewDashboard, SessionId } from "@mendcode
 import type { ReviewsData, ReviewsPageState } from "../../view/reviews-page"
 import type { ReviewsPageAction } from "../../view/reviews-keys"
 import type { Line } from "../theme"
+import { SPINNER_FRAMES } from "../../view/tool-card"
 import { createReviewsPageState, preload, renderReviewsPage, reviewsCommand, reviewsPageKey } from "../lazy-pages"
 import type { AppContext } from "./context"
 
@@ -9,6 +10,8 @@ import type { AppContext } from "./context"
 const POLL_MS = 5_000
 /** A dashboard holds at most this many jobs (the protocol's bound); a longer answer is cut, never grown. */
 const MAX_JOBS = 500
+
+type PullRequestRead = "cached" | "refresh"
 
 const clean = (message: string) => message.replace(/^\[[A-Z_-]+\]:\s*/, "")
 
@@ -33,20 +36,29 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
   /** The visit whose `status` request is in flight: a refresh never stacks a second request, a new visit does not wait for an old one. */
   let loadingVisit = -1
   let visit = 0
+  /** A pull request read asked for while another `status` was in flight. */
+  let wanted: PullRequestRead | undefined
 
   function stopPolling() {
     if (timer) clearInterval(timer)
     timer = undefined
   }
 
-  async function load() {
-    if (loadingVisit === visit) return
+  /**
+   * `pullRequests` also reads the PRs' GitHub state (open: `cached`, `r`: `refresh`); the 5 s poll only gets the last read state.
+   * Asked while a read is in flight, it runs right after it.
+   */
+  async function load(pullRequests?: PullRequestRead) {
+    if (loadingVisit === visit) {
+      if (pullRequests) wanted = pullRequests === "refresh" || wanted === "refresh" ? "refresh" : "cached"
+      return
+    }
     if (input.remote) { data = { status: "remote" }; return requestFrame() }
     if (!state.sessionId) { data = { ...data, status: "error", error: "no session yet: send a message first" }; return requestFrame() }
     const ticket = visit
     loadingVisit = ticket
     try {
-      const reply = await input.send({ type: "pr.review", sessionId: state.sessionId, action: "status" })
+      const reply = await input.send({ type: "pr.review", sessionId: state.sessionId, action: "status", ...(pullRequests ? { pullRequests } : {}) })
       if (ticket !== visit) return
       if (!reply.ok) data = { ...data, status: "error", error: clean(reply.error.message) }
       else {
@@ -58,6 +70,9 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
     } finally {
       if (loadingVisit === ticket) loadingVisit = -1
       if (ticket === visit && state.page === "reviews") requestFrame()
+      const next = wanted
+      wanted = undefined
+      if (next && ticket === visit && state.page === "reviews") void load(next)
     }
   }
 
@@ -70,7 +85,10 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
     state.page = "reviews"
     requestFrame()
     if (input.remote) return
+    wanted = undefined
+    // The jobs first, then the pull requests' GitHub state, so the page never waits on gh to show its list.
     await load()
+    void load("cached")
     timer = setInterval(() => {
       if (state.page !== "reviews") return stopPolling()
       void load()
@@ -116,7 +134,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   async function run(action: ReviewsPageAction) {
     if (action.type === "close") return close()
-    if (action.type === "refresh") return load()
+    if (action.type === "refresh") return load("refresh")
     if (action.type === "url") {
       const reply = await input.send({ type: "url.open", url: action.url })
       if (!reply.ok) fail(`not opened: ${clean(reply.error.message)}`)
@@ -137,7 +155,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   async function key(key: string) {
     if (!view) return
-    const result = reviewsPageKey(view, key, data.dashboard)
+    const result = reviewsPageKey(view, key, data.dashboard, state.reviewActivity)
     const changed = result.state !== view
     view = result.state
     if (changed || result.action.type !== "none") requestFrame()
@@ -147,7 +165,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   function render(width: number, height: number): Line[] {
     if (!view) return []
-    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs, activity: state.reviewActivity })
+    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs, activity: state.reviewActivity, spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]! })
   }
 
   return { open, openJob, key, render, close }

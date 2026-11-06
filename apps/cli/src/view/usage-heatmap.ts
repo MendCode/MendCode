@@ -41,7 +41,8 @@ export function clampDay(day: string, bounds: Bounds) {
   return day < bounds.from ? bounds.from : day > bounds.to ? bounds.to : day
 }
 
-export const dayTokens = (day: UsageDay) => day.input + day.output + day.reasoning + day.cacheRead + day.cacheWrite
+/** Every token the day's calls moved: input, output (reasoning is part of it, not added again), cache read and cache write. */
+export const dayTokens = (day: Pick<UsageDay, "input" | "output" | "cacheRead" | "cacheWrite">) => day.input + day.output + day.cacheRead + day.cacheWrite
 
 export function emptyDay(day: string): UsageDay {
   return { day, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, costMicros: 0, costUnknownCalls: 0, calls: 0, sessions: 0 }

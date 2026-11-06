@@ -4,6 +4,10 @@ import { streaks } from "./usage-insights"
 import { eventFromRow } from "./compress"
 
 type Range = { from: string; to: string; directories: string[] }
+export type HarnessRow = {
+  harness: string; child: number; calls: number; sessions: number; input: number; output: number; reasoning: number
+  cacheRead: number; cacheWrite: number; costMicros: number; costUnknownCalls: number
+}
 type Started = { turn?: number; items: Map<string, { at: number; kind: string; tool?: string }> }
 const ENDED = new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
 const VISIBLE = "session_id IN (SELECT id FROM sessions WHERE directory IN (SELECT value FROM json_each(?3)))"
@@ -116,7 +120,8 @@ export function createUsageScopes(input: { db: Database; dayOf(at: number): stri
   }
   function models(range: Range): UsageModel[] {
     return rows(`SELECT provider, model, SUM(input) AS input, SUM(output) AS output, SUM(calls) AS calls,
-      SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls
+      SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls,
+      SUM(reasoning) AS reasoning, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite
       FROM usage_scope_daily WHERE day BETWEEN ?1 AND ?2 AND ${VISIBLE} GROUP BY provider, model ORDER BY calls DESC, provider, model`, range)
   }
   function activities(range: Range): UsageActivityDay[] {
@@ -162,12 +167,33 @@ export function createUsageScopes(input: { db: Database; dayOf(at: number): stri
     }
   }
 
+  /**
+   * The range's turn usage by the harness that ran each session's calls, split by child sessions (`child` 1) and the rest. Claude
+   * Code and Codex report under their own provider ids, an ACP agent under `acp`; pi reports its model's provider, so a session
+   * bound to pi counts as pi. Read on demand from the per-session sums: deleted sessions are no longer here.
+   */
+  function harnesses(range: { from: string; to: string; directories?: readonly string[] | undefined }): HarnessRow[] {
+    const visible = range.directories ? ` AND ${VISIBLE.replace("session_id", "u.session_id")}` : ""
+    const bound = (engine: string) => `EXISTS (SELECT 1 FROM engine_bindings b WHERE b.session_id = u.session_id AND b.engine ${engine})`
+    return db.query<HarnessRow, string[]>(`SELECT harness, child, SUM(calls) AS calls, COUNT(DISTINCT session_id) AS sessions, SUM(input) AS input,
+        SUM(output) AS output, SUM(reasoning) AS reasoning, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite,
+        SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls
+      FROM (SELECT u.*, s.parent_id IS NOT NULL AS child, CASE
+          WHEN u.provider = 'claude' THEN 'claude-code'
+          WHEN u.provider = 'codex' THEN 'codex'
+          WHEN u.provider = 'acp' THEN COALESCE((SELECT b.engine FROM engine_bindings b WHERE b.session_id = u.session_id AND b.engine LIKE 'acp:%' ORDER BY b.engine LIMIT 1), 'acp')
+          WHEN ${bound("= 'pi'")} THEN 'pi'
+          ELSE 'native' END AS harness
+        FROM usage_scope_daily u JOIN sessions s ON s.id = u.session_id WHERE u.day BETWEEN ?1 AND ?2${visible})
+      GROUP BY harness, child ORDER BY harness, child`).all(range.from, range.to, ...(range.directories ? [JSON.stringify(range.directories)] : []))
+  }
+
   function sessionSavings(sessionId: string): Array<{ source: string; calls: number; tokens: number }> {
     return db.query<{ source: string; calls: number; tokens: number }, [string]>(`SELECT source, SUM(calls) AS calls, SUM(tokens) AS tokens
       FROM usage_scope_savings WHERE session_id = ? GROUP BY source ORDER BY tokens DESC, source LIMIT 20`).all(sessionId)
   }
 
-  return { record, daily, models, activity: activities, tools, savings, sessionSavings, sessions, insights,
+  return { record, daily, models, activity: activities, tools, savings, sessionSavings, sessions, insights, harnesses,
     directories: () => db.query<{ directory: string }, []>("SELECT DISTINCT directory FROM sessions ORDER BY directory").all().map((s) => s.directory),
   }
 }

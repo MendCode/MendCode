@@ -30,7 +30,7 @@ import { goalPromptCard } from "../../view/goal"
 import { returnPromptCard } from "../../view/return-card"
 import { fit } from "../../view/deck"
 import { paneChildren } from "./session-children"
-import { attachSidebar } from "../../view/sidebar"
+import { attachSidebar, SIDEBAR_WIDTH } from "../../view/sidebar"
 import { renderAcpPage, renderAgentPicker, renderThemePicker, themeEntries, filterPalette, composeOverlay, renderToolsPage, renderChangesPage, renderContextPage, renderLoopsPage, renderMcpsPage, renderTasksPage, renderMemoryPage, renderMemoryAssistant, memoryAssistantCursor, renderPalette, renderModelQuick, renderSetupPage, renderStoragePage, renderUsagePage, renderAgentsPage, renderPackagesPage, renderPetPicker, renderWorkflowsPage, renderCustomizePage, renderSettingsPage, renderExtensionsPage, renderHooksPage, renderConnectPage, renderProvidersPage, renderSecretsPage, renderPermissionsPage, reviewerStatus, renderDiagramView, renderSidebarEditor } from "../lazy-pages"
 import type { Settings } from "@mendcode/protocol"
 import { activeTheme, themeList, themeModeState, themeSelection } from "../theme"
@@ -223,7 +223,7 @@ export function createRender(ctx: AppContext, actions: {
       // An image under the palette, a card or a toast would cover them: it shows only on a clear prompt.
       if (state.scratchArea) state.scratchArea.left += chatOffset
       const shiftedCursor = state.sidebarFocus && sidebarOn
-        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 2 : width - 36 }
+        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 3 : width - SIDEBAR_WIDTH + 3 }
         : { ...cursor, col: cursor.col + chatOffset }
       const sideCursor = chat.open && chat.focused && (right.right || panel) ? { row: right.right ? ((state.rightChatArea?.top ?? 0) + (state.rightChatArea?.height ?? height) - 2) : panel!.top + panel!.height - 2, col: (right.right ? chatOffset + chatCols + 5 : chatOffset + 4) + sideInput(chat, right.right || chatCols).cursor } : shiftedCursor
 

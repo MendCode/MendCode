@@ -11,6 +11,7 @@ import { configureKeyLabels } from "../key-labels"
 import { keyboardWanted } from "../keyboard-protocol"
 import { themesFromFiles } from "../theme-files"
 import { DEFAULT_TOOL_DESIGN_NAME, registerToolDesignFiles } from "../../view/tool-design"
+import { DEFAULT_THEME } from "../../themes"
 import { registerFooterPacks } from "../../view/footer-pack"
 import type { ThemesReport } from "@mendcode/protocol"
 import type { Settings, PermissionMode } from "@mendcode/protocol"
@@ -134,7 +135,7 @@ export function createSettings(ctx: AppContext, actions: {
       if (!reply.ok) return
       registerThemes(themesFromFiles((reply.result as ThemesReport | undefined)?.themes ?? []).themes)
       registerDesigns(reply.result as ThemesReport | undefined)
-      setTheme(themeInForce(state.settingsNow) || "mend")
+      setTheme(themeInForce(state.settingsNow) || DEFAULT_THEME)
       registerFooterPacks((reply.result as ThemesReport | undefined)?.footerPacks ?? [])
       requestFrame()
     })
@@ -185,7 +186,7 @@ export function createSettings(ctx: AppContext, actions: {
       void input.send({ type: "settings.set", patch: { footer: [...state.customFooter] } })
     }
     if (patch.theme !== undefined) {
-      const theme = patch.theme || state.settingsNow.theme || "mend"
+      const theme = patch.theme || state.settingsNow.theme || DEFAULT_THEME
       setTheme(theme)
       if (options.layer) refreshThemes()
       if (!options.layer && input.directory && state.settingsNow.projectThemes?.[input.directory]) void input.send({ type: "settings.set", patch: { projectThemes: { ...state.settingsNow.projectThemes, [input.directory]: theme } } })

@@ -14,6 +14,7 @@ import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
 import { measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
+import { commitStatus } from "./commit-status"
 import { publishReview, publishThroughProvider, type GhCall, type PublishReport, type ReviewInfo } from "./publish"
 import type { PublishCheck } from "./publishers"
 import { reviewedBy, reviewedThrough } from "./publishers"
@@ -450,11 +451,16 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
 }
 
 export async function runPrReview(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
-  const run = await reviewRun(input)
+  // The head's commit status (commit-status.ts): GitHub only, set `pending` once the run is known to publish, closed here whatever happened.
+  const status = input.gh && input.publish && !input.provider
+    ? commitStatus({ gh: input.gh, repo: input.repo, number: input.number, head: input.head, reviewer: input.publishAs?.reviewer ?? input.reviewer?.id })
+    : undefined
+  const run = await reviewRun(input, status)
+  await status?.finish(run).catch(() => undefined)
   return { ...run, head: input.head }
 }
 
-async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
+async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof commitStatus>): Promise<ReviewRun & RunPlatformOutput> {
   const git = input.git ?? gitRun
   const policyRef = input.policy ?? input.base
   const configKey = runConfigKey({ policy: policyRef, layers: input.layers })
@@ -477,7 +483,8 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
     const blocked = await publishBlock({ input, config })
     if (blocked) return { ...skipped(`${blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head` : blocked.why}; nothing was sent to a model`), notPublisher: true as const }
-  }
+    if (status && config.status) await status.start()
+  } else if (status && config.enabled && config.status && (!input.publisher || !await publishBlock({ input, config }).catch(() => true))) await status.start()
   try {
     const nothingLeft = !!range.alreadyReviewed && (await git(["diff", "--no-ext-diff", "--quiet", range.base, range.head, "--"], input.directory)).code === 0
     const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${nothingLeft ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined

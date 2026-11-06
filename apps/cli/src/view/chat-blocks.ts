@@ -200,7 +200,7 @@ export function statusLine(end: TurnEnd, width: number, glyphs: Glyphs, indent =
   const parts: Span[][] = []
   if (end.agent) parts.push([{ text: end.agent, fg: "text" }])
   if (end.model) parts.push([{ text: end.model, fg: "muted" }])
-  if (end.usage) parts.push([{ text: `↑${compact(end.input)} ↓${compact(end.output + (end.reasoning ?? 0))}`, fg: "muted" }])
+  if (end.usage) parts.push([{ text: `↑${compact(end.input)} ↓${compact(end.output)}`, fg: "muted" }])
   if (end.costMicros !== undefined && end.costMicros > 0) parts.push([{ text: formatCost(end.costMicros), fg: "muted" }])
   if (end.calls !== undefined && end.calls > 1) parts.push([{ text: `${end.calls} calls`, fg: "muted" }])
   if (showReasoning && end.cached !== undefined && end.input > 0) parts.push([{ text: `${Math.round((end.cached / end.input) * 100)}% cached`, fg: "muted" }])

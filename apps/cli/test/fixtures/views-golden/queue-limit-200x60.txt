@@ -1,5 +1,5 @@
-a4205fcfd2a6de81
-  Sessions                   ← focus │   git /work/app
+61a1292cc641e676
+   Sessions                  ← focus │   git /work/app
                                      │      ⌕ Grep cache.get  3 matches in 2 files                                                                                                                   1s
                                      │      │ src/store.ts  2 matches
                                      │      │ 12  const hit = cache.get(name)

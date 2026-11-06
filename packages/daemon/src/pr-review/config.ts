@@ -143,6 +143,11 @@ export const ReviewConfig = z.strictObject({
    */
   commands: z.strictObject({ describe_title: z.boolean().default(false), approve: z.boolean().default(false) }).default({ describe_title: false, approve: false }),
   /**
+   * A publishing review sets the `MendCode review` commit status on the PR head (commit-status.ts): pending while it runs, then
+   * success, failure (a critical or major finding open) or error (stopped). `false` sets none. Base branch only.
+   */
+  status: z.boolean().default(true),
+  /**
    * Data and generated files (triage.ts) go to readers on a cheap model instead of the review pass whole (readers.ts). `parallel`:
    * readers at once (unset: by the install tier, minimalist 1, balanced 2, full 3). `model`: a cheap model of the reviewer's own
    * provider (reader-models.ts); one off that list is refused with a note and the automatic pick is used. `enabled: false` sends

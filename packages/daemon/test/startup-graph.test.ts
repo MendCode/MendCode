@@ -38,8 +38,10 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "computer", "computer-sessions", "computer-native", "computer-accessibility", "computer-program",
     "browser", "browser-cdp", "browser-scripts", "setup-import", "debug-db", "diagnostics",
     "git-commit", "git-init", "git-push", "git-publish", "git-pr",
-    "pr-review/already-reviewed",
+    "pr-review/already-reviewed", "pr-review/commit-status", "pr-review/pr-states",
     "pr-review/context", "pr-review/readers", "pr-review/readers-graft",
-    "extensions/plugin-adapter", "extensions/plugin-tool", "extensions/session-api", "extensions/dialogs",
+    "extensions/plugin-adapter", "extensions/plugin-tool", "extensions/session-api", "extensions/dialogs", "usage-breakdown",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
+  // /usage's breakdown views load with the page or the `usage`/`stats` command.
+  expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
 }, 20_000)

@@ -217,8 +217,13 @@ export type TopbarModel = Readonly<{
   stats?: readonly ViewSpan[]
 }>
 
-export type SessionRow = Readonly<{ sessionId: string; title: string; state: string; queued: number; updatedAt: number; archivedAt?: number; lifecycle?: Readonly<{ pinnedAt?: number | undefined; pr?: Readonly<{ number: number; state?: string | undefined }> | undefined }> | undefined }>
-export type SessionsSidebarModel = Readonly<{ sessions: readonly SessionRow[]; current: string; selected?: string; focused: boolean }>
+export type SessionRow = Readonly<{ sessionId: string; title: string; state: string; queued: number; updatedAt: number; archivedAt?: number; lifecycle?: Readonly<{ pinnedAt?: number | undefined; pr?: Readonly<{ number: number; state?: string | undefined }> | undefined }> | undefined; parentId?: string; tool?: string; paused?: boolean }>
+/**
+ * `unread`: sessions with a reply finished since this terminal last showed them (kept in memory only). `spinner`: the activity
+ * tick's frame for running rows and `blink` its on/off for approval rows, present only while the tick runs. `settledOpen`: the
+ * built-in list's Settled row is unfolded.
+ */
+export type SessionsSidebarModel = Readonly<{ sessions: readonly SessionRow[]; current: string; selected?: string; focused: boolean; unread?: readonly string[]; spinner?: string; blink?: boolean; settledOpen?: boolean }>
 
 export type LimitAction = "resume" | "schedule" | "cancel" | "snooze" | "dismiss"
 export type NoticeModel =

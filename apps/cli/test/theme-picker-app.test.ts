@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { ThemeFile } from "@mendcode/protocol"
 import { appHarness, cleanTemps, tempDir } from "./session-ui-harness"
+import { DEFAULT_THEME } from "../src/themes"
 import { activeTheme, registerThemes, setTerminalMode, setTheme, setThemeLock, sgr, themeModeState, themeSelection } from "../src/ui/theme"
 import { createTerminalMode } from "../src/ui/terminal-mode"
 import { readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
@@ -12,7 +13,7 @@ afterEach(() => {
   registerThemes([])
   setTerminalMode(undefined)
   setThemeLock(undefined)
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
 })
 
 const file: ThemeFile = { name: "Forest_Mode", file: "/tmp/themes/Forest_Mode.json", source: "project", json: legacyTheme }
@@ -52,7 +53,7 @@ describe("theme picker page", () => {
       expect(text).toContain("↑↓ preview · enter apply · ctrl+l lock · esc restore")
       expect(text).toContain("system")
       expect(text.indexOf("system")).toBeLessThan(text.indexOf("amber"))
-      expect(text).toContain("mend (current)")
+      expect(text).toContain(`${DEFAULT_THEME} (current)`)
       expect(h.sentOf("themes.list")).toHaveLength(1)
     }
   })
@@ -106,8 +107,8 @@ describe("theme picker page", () => {
     await h.type("vesper")
     expect(activeTheme().name).toBe("vesper")
     await h.type("\x7f".repeat(6))
-    expect(activeTheme().name).toBe("mend")
-    expect(h.text()).toContain("mend (current)")
+    expect(activeTheme().name).toBe(DEFAULT_THEME)
+    expect(h.text()).toContain(`${DEFAULT_THEME} (current)`)
   })
 
   test("Enter applies and persists the theme for the user and the terminal profile", async () => {

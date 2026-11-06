@@ -9,6 +9,26 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.4-beta.5 - 2026-11-06
+
+### New
+
+- PR reviews set a `MendCode review` commit status on the head, so a branch can require that its latest commit was reviewed and has nothing blocking.
+
+### Changed
+
+- Ink, the website's black and white, is the new default theme: if you never picked a theme you get Ink, and `/theme mend` brings the old look back.
+- The sessions sidebar shows one row per session with a state symbol (waiting for you, running, failed, unread reply, queued, idle), the age, child sessions and PR on the right, groups for pinned, today and earlier, and settled sessions folded into one row; only running and approval rows move.
+- Diagrams and charts no longer show art/copy labels; tables and code blocks keep copy.
+- `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
+- `/reviews` shows each pull request's GitHub state (merged, closed, draft, ready, failing checks or conflicts), and `f` can filter to ready, needs work or closed.
+- `/usage` totals count every call once (every harness, ACP agents, sub-agents, calls outside your turns, imported usage) with cache read and write, reasoning no longer counted twice (also in the sidebar, the footer and each turn's output figure), and show today, 7 and 30 days, a by-harness table and cache columns with hit rate per model; an unpriced cost says unknown.
+
+### Fixed
+
+- `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
+- Selecting text in a message drawn with its own background colour shows the highlight on that text again.
+
 ## v0.0.4-beta.4 - 2026-11-06
 
 Large pull requests get reviewed through cheap readers instead of failing, merged pull requests count as reviewed only after

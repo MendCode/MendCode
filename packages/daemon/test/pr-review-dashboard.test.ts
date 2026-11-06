@@ -109,12 +109,15 @@ describe("jobSummary", () => {
 describe("findingCounts", () => {
   test("confirmed and plausible come from verified verdicts, candidates from unverified ones, and rejected ones count nowhere", () => {
     const counts = findingCounts({ checkpoint: { completedPhases: [], candidates: [finding(1), finding(2)], verified: [finding(3, "confirmed"), finding(4, "confirmed"), finding(5, "plausible"), finding(6, "rejected")], rounds: [], decisions: [] } })
-    expect(counts).toEqual({ confirmed: 2, plausible: 1, candidates: 2, resolved: 0 })
+    expect(counts).toEqual({ confirmed: 2, plausible: 1, candidates: 2, resolved: 0, blocking: 2 })
   })
 
-  test("resolved counts confirmed findings the last fix round no longer lists as open", () => {
+  test("resolved counts confirmed findings the last fix round no longer lists as open; only the open major ones block", () => {
     const counts = findingCounts({ checkpoint: { completedPhases: [], candidates: [], verified: [finding(3, "confirmed"), finding(4, "confirmed"), finding(5, "confirmed")], rounds: [{ at: NOW - HOUR, open: [sha(3), sha(4), sha(5)] }, { at: NOW, open: [sha(5)], commit: "abc1234" }], decisions: [] } })
     expect(counts.resolved).toBe(2)
+    expect(counts.blocking).toBe(1)
+    const minor = findingCounts({ checkpoint: { completedPhases: [], candidates: [], verified: [{ ...finding(7, "confirmed"), severity: "minor" }], rounds: [], decisions: [] } })
+    expect("blocking" in minor).toBe(false)
   })
 })
 

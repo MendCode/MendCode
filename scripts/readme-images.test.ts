@@ -28,14 +28,14 @@ describe("README images", () => {
     expect(svg.match(/<circle /g)).toHaveLength(3)
     expect(svg).toContain(">mendcode — /memory</text>")
     expect(svg).toContain('aria-label="mendcode — /memory"')
-    expect(svg).toContain('fill="#08110d"')
+    expect(svg).toContain('fill="#0a0a0a"')
     expect(svg).toContain('font-weight="700"')
   })
 
   test("text is escaped, backgrounds become rects, wide characters take two cells", () => {
     const svg = renderSvg({ frame: [[{ text: "a<b & \"c\"", fg: "text" }, { text: "xy", bg: "diffAddedBg" }, { text: "漢", fg: "text" }]], title: "t", columns: 20, rows: 1 })
     expect(svg).toContain("a&lt;b &amp; &quot;c&quot;")
-    expect(svg).toContain('fill="#052e16"')
+    expect(svg).toContain('fill="#12261a"')
     expect(svg).toMatch(/textLength="16\.8"[^>]*>漢</)
   })
 

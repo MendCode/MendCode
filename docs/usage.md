@@ -125,8 +125,9 @@ provider did not serve from its cache; cached tokens are in `cacheRead`.
 
 `/btw` is not in the list: its side session runs turns, already counted as turn usage.
 
-They are not part of `days`, `models`, the stat tiles or the footer's today count, which stay the turns' own, so nothing is
-counted twice. `usage.query` returns them as `auxiliary` (per role and model, most tokens first, absent when there were none);
+They are not part of the report's `days` or `models`, nor of the footer's today count, which stay the turns' own. The
+`/usage` page and `mendcode usage`/`stats` add them to their totals from `auxiliaryDays` (see [Every harness](#every-harness)),
+so nothing is counted twice and nothing is left out. `usage.query` returns them as `auxiliary` (per role and model, most tokens first, absent when there were none);
 global shows all of them, a project or directory scope those made for its directories. The Models tab adds an "Auxiliary calls"
 panel, and `mendcode usage` and `mendcode stats` add the same rows; `--json` returns the field:
 
@@ -142,6 +143,38 @@ A call that fails or reports no usage counts as one call of its role with zero t
 bookkeeping in every tier: no request, no token and no chrome of its own; the panel appears only on /usage and only when there
 were such calls. The store keeps one row per day, role, model and directory (`usage_auxiliary_daily`), like the global daily sums:
 every session of a project that day adds to the same row. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
+
+## Every harness
+
+The page's totals (the header's token count, the tiles, the calendar, the Tokens tab) count every model call of the range once:
+
+- the turns of every harness: the native engine, Claude Code, Codex, pi and ACP agents (an ACP agent counts when it reports
+  `usage` in its `session/prompt` answer; its context comes from its last `usage_update`);
+- child sessions (sub-agents, the PR reviewer's children): each is a session of its own, counted in its own harness and never
+  again in its parent. Claude Code's own sub-agents are inside Claude Code's turn sums; the `/btw` side chat runs turns of a
+  session of its own and counts like one;
+- the calls outside turns ([Auxiliary calls](#auxiliary-calls)), from `auxiliaryDays`; `prReview` is left out there because its
+  turns are already in the days;
+- usage imported from a harness's own log (`usage recover`), already in `days`.
+
+Tokens are input + output + cache read + cache write. Reasoning is part of output in every engine's count, so it is shown as
+"of it reasoning" and never added again. Cache hit is cache read / (input + cache read + cache write).
+
+The Tokens tab shows **Totals** (today, 7 days, 30 days and the range, each ending today), **By harness** (one row per harness,
+"Outside turns", "Imported · engine", "Deleted sessions" for calls of sessions deleted since, and a Total row equal to the
+page's total; a note says how much of a harness's row came from sub-agent sessions), the token mix and calls and cost. The
+Models tab lists each model with input, output, cache read, cache write, hit rate, cost and calls, and a Total row; it counts
+turns only, like `models`, and the calls outside turns have their own panel below it.
+
+A cost is shown when every call of the row has a price, with `+` when only some do, and `unknown` when none does: Claude Code
+and Codex report no cost, so their rows are unknown unless `budgets.prices` prices their models. A price is never guessed and
+an unknown cost is never shown as $0.00.
+
+`usage.query` adds `harnesses` (per harness: calls, sessions, input, output, reasoning, cache read and write, cost, unpriced
+calls, and `subagents`) and `auxiliaryDays`, and `models[]` gains `reasoning`, `cacheRead` and `cacheWrite`. The harness of a
+call is read when the page asks: Claude Code and Codex report under their own provider ids, an ACP agent under `acp`, and a
+session bound to pi counts as pi. Nothing new is stored and nothing runs at start-up; the breakdown loads with the first
+`usage.query`. `mendcode usage` and `mendcode stats` print the same totals and a "By Harness" panel.
 
 ## Waste
 

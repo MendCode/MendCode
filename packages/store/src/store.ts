@@ -1792,8 +1792,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     },
     usageByModel(range: { from: string; to: string }) {
       return db
-        .query<{ provider: string; model: string; input: number; output: number; calls: number; costMicros: number; costUnknownCalls: number }, [string, string]>(`
-          SELECT provider, model, SUM(input) AS input, SUM(output) AS output, SUM(calls) AS calls, SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls
+        .query<{ provider: string; model: string; input: number; output: number; calls: number; costMicros: number; costUnknownCalls: number; reasoning: number; cacheRead: number; cacheWrite: number }, [string, string]>(`
+          SELECT provider, model, SUM(input) AS input, SUM(output) AS output, SUM(calls) AS calls, SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls,
+            SUM(reasoning) AS reasoning, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite
           FROM usage_daily WHERE day BETWEEN ? AND ? GROUP BY provider, model ORDER BY input + output DESC`)
         .all(range.from, range.to)
     },

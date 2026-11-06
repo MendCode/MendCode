@@ -168,8 +168,10 @@ for the whole header. Actions: none.
 ### sessions.sidebar
 
 The left session list, `height` rows by 38 cells. Input: `sessions` (`sessionId`, `title`, `state`, `queued`,
-`updatedAt`, `archivedAt?`, `lifecycle?`, `draft?`: `preview`, `chars`, `attachments`, `images`, `updatedAt` of the unsent
-draft; an untitled session with one reads `Draft · preview`), `current`, `selected?`, `focused`. Actions: `open` with `arg` = a listed
+`updatedAt`, `archivedAt?`, `lifecycle?`, `parentId?`, `tool?`, `paused?`, `draft?`: `preview`, `chars`, `attachments`,
+`images`, `updatedAt` of the unsent draft; an untitled session with one reads `Draft · preview`), `current`, `selected?`, `focused`,
+`unread?` (session ids with a reply finished since this terminal last showed them), `spinner?` and `blink?` (the activity
+tick's frame and on/off, present only while it runs), `settledOpen?`. Actions: `open` with `arg` = a listed
 `sessionId` (switches to it, like a click).
 
 ### notice
