@@ -478,7 +478,7 @@ The native `threads` tool has the same report as `action: "stats"` (no `sessionI
 
 `session get ID` reads metadata. `inspect ID [--limit N]` and `status ID` include progress, visible conversation turns, children, subagents, loops, pending questions/approvals and file changes.
 
-The derived state (`State:` line, `status` in JSON, `--state` of `session list`) is `idle`, `running`, `waiting_for_input`, `waiting_for_approval`, `completed`, `failed`, `cancelled` (a deliberate cancel) or `interrupted` (the daemon lost the turn: restart, transport or a stalled stream; daemons before this change reported it as `cancelled`).
+The derived state (`State:` line, `status` in JSON, `--state` of `session list`) is `idle`, `running`, `waiting_for_input`, `waiting_for_approval`, `completed`, `failed`, `cancelled` (a deliberate cancel) or `interrupted` (the daemon lost the turn: restart, transport or a stalled stream; daemons before this change reported it as `cancelled`). `--state waiting` matches both waiting states.
 
 Treat a value you do not know as "not running". `export ID` uses that snapshot with as much history as fits the wire limit.
 

@@ -9,6 +9,8 @@ import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
 import { normalizeTuiProfile } from "../../view/tui-profile"
+import { resolvePanel } from "../../view/sidebar-spec"
+import { profilePanel } from "./session-look"
 import type { FooterSegment } from "@mendcode/protocol/wire"
 import { createThresholds } from "../../view/threshold-notices"
 import { memoryToast } from "../../view/memory-notice"
@@ -223,8 +225,11 @@ export function createEvents(ctx: AppContext, actions: {
         if (reply.ok) {
           // The panel's file changed: a session that chose its own cards keeps them, and the bar opens only where a turn is running
           // (the agent that built it is working there); every other terminal keeps it as shown or hidden.
-          if (state.sessionLook.get(state.sessionId)?.sidebarWidgets) return
-          const widgets = (reply.result?.widgets ?? []) as typeof state.tuiProfile.sidebarWidgets
+          const own = state.sessionLook.get(state.sessionId)
+          state.panelSpec = (reply.result?.widgets ?? []) as typeof state.tuiProfile.sidebarWidgets
+          if (own?.sidebarWidgets) return
+          // A preset the session chose follows the profile's version of it: editing the custom galaxy changes the session's galaxy too.
+          const widgets = own?.panelPreset ? resolvePanel(own.panelPreset, profilePanel(state)).widgets : state.panelSpec
           const working = state.transcript.foreground !== "idle"
           state.tuiProfile = { ...state.tuiProfile, sidebarWidgets: widgets, ...(working && widgets.length ? { rightSidebar: true } : {}) }
           state.rightScroll = 0

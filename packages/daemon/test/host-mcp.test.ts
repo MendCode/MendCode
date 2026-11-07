@@ -95,7 +95,7 @@ describe("native tools bridge for another harness", () => {
   test("a session with no thread bridge is told its sub-agents on MendCode's other models are off and how they are turned on, not that they do not exist", () => {
     const told = hostInstructions(TOOLS, "codex", "codex")
     expect(told).toContain("full tier and /tier thread_mcp on codex")
-    expect(told).toContain("never that such a model does not exist")
+    expect(told).toContain("never that the model does not exist")
     expect(hostInstructions(TOOLS, "claude", "acp:gemini")).toContain("/tier thread_mcp on acp:gemini")
     expect(hostInstructions(TOOLS)).not.toContain("thread_mcp")
   })

@@ -91,6 +91,22 @@ export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; 
 }
 
 /**
+ * What the `claudeContext` level changes in a Claude Code process (each in Claude Code 2.1.319's `claude --help` or binary). `lean`:
+ * `--strict-mcp-config` keeps only the servers MendCode hands it with `--mcp-config` (its own tools), `CLAUDE_CODE_DISABLE_AUTO_MEMORY` its
+ * auto memory (MendCode's memory block still comes). Never `--disable-slash-commands`: it also turns off the `/compact` MendCode sends to
+ * compact a Claude session (2.1.319 answers "/compact isn't available in this environment"). `isolated`, as
+ * OpenCode runs it (anomalyco/opencode `claude-agent/claude/query-options.ts`): also `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, and in the flag layer
+ * `disableAllHooks` and the `default` output style. Settings files still load in every level, so permission rules and login stay.
+ */
+export type ClaudeContext = "full" | "lean" | "isolated"
+export function claudeContextArgs(level: ClaudeContext): { args: string[]; env?: Record<string, string> } {
+  if (level === "full") return { args: [] }
+  const lean = { args: ["--strict-mcp-config"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } }
+  if (level === "lean") return lean
+  return { args: [...lean.args, "--settings", JSON.stringify({ disableAllHooks: true, outputStyle: "default" })], env: { ...lean.env, CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } }
+}
+
+/**
  * Every `--settings <json object>` of `args` as one, the later keys winning: a process may get settings from several places (fast
  * mode, a run limit's language), and neither may depend on how Claude Code reads a repeated option. A value that is not a JSON
  * object (a settings file's path) is left where it is.
@@ -324,9 +340,27 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
    * shown live when a call's `message_delta` gives its cumulative figure (the other copies of it can lag the call, so they publish nothing).
    */
   function publishLive() {
-    if (reported || liveOutput <= liveSent) return
+    // A call that ends with the same sum still publishes it once: the figure then covers that call's streamed words (no estimate on top).
+    if (reported || (liveOutput <= liveSent && !callOpen)) return
+    callOpen = false
+    callThinking = 0
     liveSent = liveOutput
     input.emit({ type: "usage.live", output: liveOutput })
+  }
+
+  /** Whether a main-thread call started and its `message_delta` has not come yet, and its hidden reasoning so far by Claude Code's estimate. */
+  let callOpen = false
+  let callThinking = 0
+
+  /**
+   * Thinking the API streams without its words (Claude Code's `system`/`thinking_tokens` frames, whose `estimated_tokens_delta` adds to the
+   * block's running estimate): the call's sum is sent as an estimate, so a long silent think shows a growing `~` figure. Not billed figures.
+   */
+  function onThinkingTokens(message: ClaudeMessage) {
+    const added = count(message.estimated_tokens_delta)
+    if (reported || !added) return
+    callThinking += added
+    input.emit({ type: "usage.thinking", tokens: callThinking })
   }
 
   /** One call's usage arrives up to three times (`message_start`, `message_delta`, the whole `assistant` message), each repeating the same call: the figures are set, never added. */
@@ -352,6 +386,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       blocks.clear()
       if (typeof event.message?.model === "string") model = event.message.model
       noteCall(event.message?.id, event.message?.usage, event.message?.model, true)
+      callOpen = true
+      callThinking = 0
       return
     }
     if (event?.type === "message_delta") {
@@ -608,6 +644,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         return undefined
       }
       if (message.type === "stream_event") onStreamEvent(message.event)
+      else if (message.type === "system" && message.subtype === "thinking_tokens") onThinkingTokens(message)
       else if (message.type === "assistant") noteCall(message.message?.id, message.message?.usage, message.message?.model)
       else if (message.type === "user") onToolResults(message.message?.content, message.tool_use_result)
       else if (message.type === "result") {

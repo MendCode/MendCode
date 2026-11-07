@@ -29,6 +29,7 @@ export type SlashCommand = {
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "new", group: "session", aliases: [], summary: "Start a session" },
   { name: "sessions", group: "session", aliases: ["resume"], summary: "Switch session" },
+  { name: "today", group: "session", aliases: [], summary: "Show what needs you and what to pick up" },
   { name: "usage", group: "session", aliases: ["stats"], summary: "Show usage and quota" },
   { name: "view", group: "look", setting: "presentation", aliases: [], summary: "Change view" },
   { name: "model", group: "setup", aliases: ["models"], summary: "Switch model" },

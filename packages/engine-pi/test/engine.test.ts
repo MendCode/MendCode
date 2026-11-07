@@ -64,7 +64,7 @@ type Setup = {
   args?: string[]
   smartBash?: (input: { args: Record<string, unknown>; cwd: string }) => "allow" | "ask" | "deny"
   environment?: () => { values: Record<string, string>; note: string } | undefined
-  appendSystem?: (cwd: string) => string | undefined
+  appendSystem?: (cwd: string, sessionId: string) => string | undefined
   replyLanguage?: (sessionId: string, text: string) => string | undefined
 }
 
@@ -192,6 +192,15 @@ describe("live output tokens", () => {
     // The message's own usage is still the one record.
     expect(events.filter((event) => event.type === "usage")).toHaveLength(1)
   })
+
+  test("an update's exact count comes after its words, so the words it already counts are not estimated on top of it", () => {
+    const events: EngineEvent[] = []
+    const mapper = createPiMapper({ newItemId: () => ids("item"), emit: (event) => void events.push(event) })
+    mapper.accept({ type: "message_update", usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0 }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "a" } })
+    mapper.accept({ type: "message_update", usage: { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "b" } })
+    const order = events.flatMap((event) => (event.type === "item.delta" ? [`delta:${event.text}`] : event.type === "usage.live" ? [`live:${event.output}`] : []))
+    expect(order).toEqual(["delta:a", "delta:b", "live:12"])
+  })
 })
 
 describe("a normal turn", () => {
@@ -239,6 +248,13 @@ describe("a normal turn", () => {
     const bare = setup({ appendSystem: () => undefined })
     expect(await bare.engine.runTurn(turnInput({ sessionId: ids("session") }).input)).toEqual({ status: "ok" })
     expect(bare.spawned[0]).not.toContain("--append-system-prompt")
+  })
+
+  test("appendSystem is asked for the turn's own session, so the daemon can add that session's memory block", async () => {
+    const h = setup({ appendSystem: (_root, sessionId) => `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
+    const sessionId = ids("session")
+    expect(await h.engine.runTurn(turnInput({ sessionId }).input)).toEqual({ status: "ok" })
+    expect(h.spawned[0]).toEqual(expect.arrayContaining(["--append-system-prompt", `<mendcode_memory>for ${sessionId}</mendcode_memory>`]))
   })
 
   test("the process stays up between turns and the bridge file goes away with the engine", async () => {

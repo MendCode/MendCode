@@ -158,6 +158,7 @@ const PAGES: Record<string, { kind: "list"; search: "box" | "ahead" | "few" } | 
   marketplace: { kind: "list", search: "box" }, "ai-config": { kind: "list", search: "few" }, "release-channel": { kind: "list", search: "few" }, tsm: { kind: "list", search: "few" }, ide: { kind: "list", search: "few" }, mflow: { kind: "list", search: "few" },
   reviews: { kind: "list", search: "box" }, console: { kind: "list", search: "few" }, share: { kind: "list", search: "few" }, keymap: { kind: "list", search: "few" },
   whatsnew: { kind: "list", search: "box" },
+  today: { kind: "list", search: "few" },
 }
 
 describe("every page follows the standard", () => {
@@ -193,7 +194,7 @@ describe("every page follows the standard", () => {
   })
 
   test("every *-page.ts view is a known page", () => {
-    const known = new Set(["acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "sessions", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "whatsnew", "workflows", "worktrees"])
+    const known = new Set(["acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "sessions", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "today", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "whatsnew", "workflows", "worktrees"])
     const files = readdirSync(join(ROOT, "view")).filter((name) => name.endsWith("-page.ts")).map((name) => name.slice(0, -"-page.ts".length))
     expect(files.filter((name) => !known.has(name))).toEqual([])
   })

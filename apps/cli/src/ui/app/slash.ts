@@ -145,6 +145,7 @@ export function createSlash(ctx: AppContext, actions: {
   openDrafts: ReturnType<typeof createPrompt>["openDrafts"]
   sessionNav: ReturnType<typeof import("./session-nav").createSessionNav>
   whatsNew: { command(args: string): Promise<void> }
+  today: { command(args: string): Promise<void> }
   sessionTree: ReturnType<typeof import("./session-tree").createSessionTree>
   copyAnswer: ReturnType<typeof createPrompt>["copyAnswer"]
   rewind: ReturnType<typeof createSession>["rewind"]
@@ -822,6 +823,9 @@ export function createSlash(ctx: AppContext, actions: {
         break
       case "changelog":
         await actions.sessionNav.changelogCommand()
+        break
+      case "today":
+        await actions.today.command(parsed.args)
         break
       case "whatsnew":
         await actions.whatsNew.command(parsed.args)

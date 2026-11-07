@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -487,6 +487,38 @@ describe("claude engine turns", () => {
     engine.stop()
   })
 
+  test("thinking that streams no words sends Claude Code's thinking_tokens estimate for the call in flight; the call's end sends its exact count", async () => {
+    // The frames as Claude Code 2.1.319 sent them for a Haiku call at high effort: a running estimate per thinking block, its increment beside it.
+    const frame = (estimated: number, delta: number) => ({ type: "system", subtype: "thinking_tokens", estimated_tokens: estimated, estimated_tokens_delta: delta, session_id: "cc-session-1" })
+    const { engine } = engineWith([fakeClaude({ onUser: (api) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_a", model: "claude-haiku-4-5", usage: { input_tokens: 2, output_tokens: 2 } } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }, parent_tool_use_id: null })
+      api.push(frame(50, 50))
+      api.push({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "", estimated_tokens: 50 } }, parent_tool_use_id: null })
+      api.push(frame(325, 275))
+      api.push({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 470 } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_b", model: "claude-haiku-4-5", usage: { input_tokens: 2, output_tokens: 1 } } }, parent_tool_use_id: null })
+      api.push(frame(30, 30))
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } }, parent_tool_use_id: null })
+      api.push(result())
+      api.push(frame(99, 99))
+    } })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    const live = events.filter((event) => event.type === "usage.thinking" || event.type === "usage.live")
+    // The second call's count is the same sum: it is still sent once, so the estimate of that call ends with it. Nothing after the result.
+    expect(live).toEqual([
+      { type: "usage.thinking", tokens: 50 },
+      { type: "usage.thinking", tokens: 325 },
+      { type: "usage.live", output: 470 },
+      { type: "usage.thinking", tokens: 30 },
+      { type: "usage.live", output: 470 },
+    ])
+    engine.stop()
+  })
+
   test("a turn with no main-thread call on the stream reports no context rather than the cumulative totals", async () => {
     const { engine } = engineWith([fakeClaude({ onUser: (api) => { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })])
     const { input, events } = turnInput()
@@ -937,14 +969,18 @@ describe("claude thinking blocks", () => {
     stream({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "CAQS2AYKEAgSGAI4AUII" } }),
   ]
 
+  /** The item events alone: the thinking frame's live estimate (`usage.thinking`) is the activity line's, not the transcript's. */
+  const itemsOf = (events: EngineEvent[]) => events.filter((event) => event.type !== "usage.thinking")
+
   test("a text-less thinking block is a reasoning item from its start, without deltas, and ends with no text", () => {
     const { events, mapper } = mapped(TEXTLESS)
-    expect(events).toEqual([{ type: "item.started", itemId: expect.any(String), kind: "reasoning" }])
+    expect(itemsOf(events)).toEqual([{ type: "item.started", itemId: expect.any(String), kind: "reasoning" }])
+    expect(events.filter((event) => event.type === "usage.thinking")).toEqual([{ type: "usage.thinking", tokens: 50 }])
     mapper.accept(stream({ type: "content_block_stop", index: 0 }))
-    expect(events[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "ok", text: "" })
+    expect(itemsOf(events)[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "ok", text: "" })
     mapper.accept(stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }))
     mapper.accept(stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "**391" } }))
-    expect(events.slice(2).map((event) => event.type === "item.started" ? event.kind : event.type)).toEqual(["agent_message", "item.delta"])
+    expect(itemsOf(events).slice(2).map((event) => event.type === "item.started" ? event.kind : event.type)).toEqual(["agent_message", "item.delta"])
   })
 
   test("wordless thinking that goes on says the model is alive with an empty delta every 20 of its own", () => {
@@ -1093,7 +1129,7 @@ describe("claude thinking blocks", () => {
   test("a turn cut off while thinking closes the open item as interrupted", () => {
     const { events, mapper } = mapped(TEXTLESS)
     mapper.finish("interrupted")
-    expect(events[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "interrupted", text: "" })
+    expect(itemsOf(events)[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "interrupted", text: "" })
   })
 })
 
@@ -1119,6 +1155,17 @@ describe("the daemon's own tools inside claude code", () => {
     expect(other.behavior).toBe("deny")
     expect(asked).toEqual([])
     expect(events.filter((event) => event.type === "item.started").map((event) => (event as any).kind)).toEqual(["agent_message"])
+    engine.stop?.()
+  })
+})
+
+describe("text appended to Claude Code's system prompt", () => {
+  test("appendSystem is asked for the turn's own session, so the daemon can add that session's memory block", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine, spawned } = engineWith([fake], { appendSystem: (_cwd: string, sessionId: string) => `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
+    const { input } = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(spawned[0]!.args[spawned[0]!.args.indexOf("--append-system-prompt") + 1]).toContain(`for ${input.sessionId}`)
     engine.stop?.()
   })
 })
@@ -1163,8 +1210,39 @@ describe("MCP servers changed during a turn", () => {
     expect(closes).toEqual([])
     adds.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
     await Bun.sleep(5)
-    expect(closes).toEqual([["MCP servers changed", 0]])
+    expect(closes).toEqual([["a change waited for the background tasks (MCP servers, effort or fast)", 0]])
+    // The daemon hears that none runs, so it keeps no finished task registered for the ended process.
+    expect(reported.at(-1)).toEqual([])
     expect(spawned).toHaveLength(1)
+    engine.stop?.()
+  })
+
+  test("a new model or effort while a background agent runs keeps the process: the model switches live, the effort waits until the agent ends", async () => {
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (turns === 1) api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Long agent" }] })
+        streamText(api, 0, `turn ${turns}`)
+        api.push(result())
+      },
+    })
+    let choice: ClaudeModelChoice = { model: "sonnet", effort: "medium" }
+    const closes: string[] = []
+    const reported: unknown[] = []
+    const { engine, spawned } = engineWith([fake], { modelFor: () => choice, onClose: (_sessionId, reason) => void closes.push(reason), onBackground: (_sessionId, tasks) => void reported.push(tasks) })
+    const first = turnInput()
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    choice = { model: "opus", effort: "high" }
+    expect(await engine.runTurn(turnInput({ sessionId: first.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(1)
+    expect(closes).toEqual([])
+    expect(fake.written.filter((message) => message.type === "control_request").map((message) => message.request)).toContainEqual({ subtype: "set_model", model: "opus" })
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await Bun.sleep(5)
+    expect(closes).toEqual(["a change waited for the background tasks (MCP servers, effort or fast)"])
+    expect(reported.map((tasks) => (tasks as unknown[]).length)).toEqual([1, 0])
     engine.stop?.()
   })
 
@@ -1230,6 +1308,20 @@ describe("claude protocol helpers", () => {
     const args = claudeArgs({ permission: "ask", model: "sonnet", advisor: "opus" })
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 4)).toEqual(["--model", "sonnet", "--advisor", "opus"])
     expect(claudeArgs({ permission: "ask", model: "sonnet" })).not.toContain("--advisor")
+  })
+
+  test("claudeContext: full adds nothing; lean keeps only MendCode's MCP servers and drops auto memory; isolated also drops CLAUDE.md, hooks and output style; no level turns off /compact", () => {
+    expect(claudeContextArgs("full")).toEqual({ args: [] })
+    expect(claudeContextArgs("lean")).toEqual({ args: ["--strict-mcp-config"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    for (const level of ["lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--disable-slash-commands")
+    expect(claudeContextArgs("isolated")).toEqual({
+      args: ["--strict-mcp-config", "--settings", JSON.stringify({ disableAllHooks: true, outputStyle: "default" })],
+      env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" },
+    })
+    // Settings files keep loading in every level: permission rules and login never change.
+    for (const level of ["full", "lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--setting-sources")
+    // The flag-layer settings merge with fast mode's instead of one replacing the other.
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeContextArgs("isolated").args])).toContain(JSON.stringify({ fastMode: true, disableAllHooks: true, outputStyle: "default" }))
   })
 
   test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {

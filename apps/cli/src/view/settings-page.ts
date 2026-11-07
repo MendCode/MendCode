@@ -19,7 +19,7 @@ import type { TuiProfile } from "./tui-profile"
 
 export type SettingsRow =
   | "theme" | "view" | "reducedMotion" | "pet" | "footer"
-  | "defaultPermission" | "compactAtTokens" | "idleCompactAtTokens" | "compactNoticePercent" | "promptCacheTtl" | "claudeCacheTtl" | "areas" | "trustedToolDirs" | "disabledProfiles" | "onboarded"
+  | "defaultPermission" | "compactAtTokens" | "idleCompactAtTokens" | "compactNoticePercent" | "promptCacheTtl" | "claudeCacheTtl" | "claudeContext" | "areas" | "trustedToolDirs" | "disabledProfiles" | "onboarded"
   | "models" | "acp"
   | "dreamAt"
   | "retentionDays" | "worktreeGcDays" | "storage"
@@ -49,6 +49,7 @@ export const SETTINGS_GROUPS: ReadonlyArray<{ title: string; rows: readonly RowD
       { id: "idleCompactAtTokens", label: "idle compact", kind: "typed" },
       { id: "promptCacheTtl", label: "cache ttl", kind: "cycle" },
       { id: "claudeCacheTtl", label: "claude ttl", kind: "toggle" },
+      { id: "claudeContext", label: "claude context", kind: "cycle" },
       { id: "compactNoticePercent", label: "compact notice", kind: "cycle" },
       { id: "areas", label: "areas", kind: "readonly" },
       { id: "trustedToolDirs", label: "trusted tools", kind: "link" },
@@ -110,6 +111,7 @@ const PERMISSIONS = ["ask", "edits", "full"]
 const COMPACT_PRESETS = ["default", "100000", "200000", "400000", "800000", "1600000"]
 const IDLE_COMPACT_PRESETS = ["default", "50000", "100000", "200000", "400000"]
 const COMPACT_NOTICE_PRESETS = ["default", "50", "60", "70", "90", "off"]
+const CLAUDE_CONTEXTS = ["lean", "isolated", "full"] as const
 const DREAM_PRESETS = ["off", "03:00"]
 const RETENTION_PRESETS = ["off", "30", "90", "180", "365"]
 /** Children of one agent running at once (default 4) and in its whole tree (default 16): the daemon's admission limits. */
@@ -231,6 +233,11 @@ function choose(def: RowDef, values: SettingsValues, themes: readonly string[], 
       return { type: "set", patch: { promptCacheTtl: settings.promptCacheTtl === "1h" ? null : "1h" } }
     case "claudeCacheTtl":
       return { type: "set", patch: { claudeCacheTtl: settings.claudeCacheTtl !== true } }
+    case "claudeContext": {
+      // Lean is the unset default, so choosing it clears the setting.
+      const next = cycle(CLAUDE_CONTEXTS, settings.claudeContext ?? "lean", direction)
+      return { type: "set", patch: { claudeContext: next === "lean" ? null : next } }
+    }
     case "dreamAt": {
       const next = cycle(DREAM_PRESETS, settings.dreamAt ?? "off", direction)
       return { type: "set", patch: { dreamAt: next === "off" ? null : next } }
@@ -410,6 +417,12 @@ function shown(def: RowDef, values: SettingsValues, state: SettingsPageState): S
     }
     case "claudeCacheTtl":
       return { ...on(settings.claudeCacheTtl === true), note: settings.claudeCacheTtl === true && settings.promptCacheTtl !== "1h" ? "needs cache ttl 1h" : "1h also to Claude Code", arrows: true }
+    case "claudeContext": {
+      const level = settings.claudeContext ?? "lean"
+      return level === "full" ? { text: "full", fg: "text", note: "all of your setup", arrows: true }
+        : level === "isolated" ? { text: "isolated", fg: "text", note: "ignores your rules", arrows: true }
+        : { text: "lean", fg: "muted", note: "no own MCP or auto memory", arrows: true }
+    }
     case "areas":
       return { text: settings.areas?.length ? settings.areas.map((area) => area.name).join(", ") : "none", fg: settings.areas?.length ? "text" : "muted", note: "folder rules · not editable here", arrows: false }
     case "trustedToolDirs":
@@ -518,6 +531,7 @@ const SETTINGS_HELP: Record<SettingsRow, string> = {
   compactNoticePercent: "Default 80. When a call leaves the context at this share of the compaction point, the transcript says once how many tokens are left, about how many turns that is (from three turns of growth on) and that /compact packs it now. off never says it; compactNoticePercent in settings.json takes 10-99. /tier compact_notice on|off switches the feature.",
   promptCacheTtl: "5m (default) or 1h: how long Anthropic keeps what the native engine caches. 1h survives waits up to an hour; cache writes then cost 2x the input price instead of 1.25x. Anthropic API and Claude on Vertex only. At 5m, /tier wait_cache on|off (on in the full tier) switches a session to 1h once its calls were twice 5 to 60 minutes apart.",
   claudeCacheTtl: "off by default. on: a cache ttl of 1h is also given to Claude Code when it is the engine (CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, Claude Code 2.1.242 or later), from its next process on. At 5m nothing is passed and Claude Code keeps its own defaults.",
+  claudeContext: "How much of your own Claude Code setup a Claude Code session loads, from its next process on. lean (default): your CLAUDE.md, settings, permission rules and hooks, without your own MCP servers (MendCode's tools stay) and auto memory. full: everything, as Claude Code alone. isolated: nothing of yours: no CLAUDE.md, hooks, own MCP or output style, so the model does not follow your rules; permission rules and login stay.",
   areas: "Named folder rules select models and permissions. Read-only here; edit areas with `mendcode area`.",
   trustedToolDirs: "Open /tools to inspect local tool trust. Trusted directories allow their configured tools to load.",
   disabledProfiles: "Open /profiles to enable or disable installed extension profiles. Disabled profiles do not load.",

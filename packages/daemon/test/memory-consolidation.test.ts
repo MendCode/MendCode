@@ -46,4 +46,16 @@ describe("B19 deterministic consolidation", () => {
     expect(result).toMatchObject({ applied: 1, pendingAfter: 1 })
     expect(result.decisions.at(-1)).toMatchObject({ outcome: "failed", reason: "Proposal changed during consolidation" })
   })
+  test("a failed decision leaves the proposal exactly as it was: nothing is archived or applied for it", async () => {
+    const first = memory("First command for this project")
+    const second = memory("Second independent build procedure", { details: { confidence: .1 } })
+    const h = harness([first, second])
+    const archived: string[] = []
+    const apply = async (entry: MemoryEntry) => { await h.apply(entry); h.change(second.memoryId, { text: "Changed while applying" }) }
+    const result = await consolidateMemory({ ...h, apply, archive: (entry) => { archived.push(entry.memoryId); h.archive(entry) }, policy: "auto-consolidate", limit: 50 })
+    expect(result.decisions.at(-1)).toMatchObject({ memoryId: second.memoryId, outcome: "failed" })
+    expect(archived).toEqual([])
+    expect(result.archived).toBe(0)
+    expect(h.entries().find((entry) => entry.memoryId === second.memoryId)).toMatchObject({ status: "pending", text: "Changed while applying" })
+  })
 })

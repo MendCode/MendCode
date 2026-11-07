@@ -534,7 +534,8 @@ export const UsageToday = lazySchema(() => z.strictObject({
 }))
 
 /**
- * Output tokens the provider has reported so far for a running turn and no recorded usage holds yet, for the activity line.
+ * Output tokens a running turn has received that no recorded usage holds yet, for the activity line: the provider's count so far, plus
+ * an estimate of what streamed since when `estimated` (about 4 characters a token, or the engine's estimate of hidden thinking).
  * Ephemeral like session.activity: `gseq` is always 0 and nothing is stored. Throttled per session; `output` 0 says a usage record took them.
  */
 export const TurnTokens = lazySchema(() => z.strictObject({
@@ -544,6 +545,7 @@ export const TurnTokens = lazySchema(() => z.strictObject({
   sessionId: SessionId,
   turnId: TurnId,
   output: z.number().int().nonnegative(),
+  estimated: z.literal(true).optional(),
 }))
 
 /** MCP status changed; clients refresh mcp.status for this directory. */

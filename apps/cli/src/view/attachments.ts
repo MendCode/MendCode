@@ -38,7 +38,8 @@ export function attachmentLabel(pending: readonly PendingAttachment[], index: nu
 /** Cells a file name may take inside a token; a longer one keeps its start and its end (the extension). */
 const TOKEN_NAME_CELLS = 28
 
-function tokenName(name: string): string {
+/** The name as a token shows it: control characters and brackets turned to spaces, a name past `TOKEN_NAME_CELLS` cut in the middle. */
+export function tokenName(name: string): string {
   const clean = [...name.replace(/[\x00-\x1f\x7f\[\]]/g, " ").replace(/\s+/g, " ").trim()]
   const text = clean.length > TOKEN_NAME_CELLS ? `${clean.slice(0, TOKEN_NAME_CELLS - 11).join("")}…${clean.slice(-10).join("")}` : clean.join("")
   return text || "file"
@@ -132,7 +133,8 @@ export function pendingFromRefs(refs: readonly BlobRef[]): PendingAttachment[] {
 /**
  * Splits user.submit: image/PDF refs go to attachments; text files are fenced and put in the text. An attachment whose token is in
  * `text` is placed there: its ref carries the token and the offset right after it (`prefix` is what the caller puts before the text
- * afterwards), and a text file's block follows its token, so the model reads the sentence in the order it was written. An attachment
+ * afterwards), and a text file's block follows the line its token is on, so the model reads that sentence whole and the file right
+ * after it. An attachment
  * without a token, or whose token the text no longer holds, goes after the text as it always has. `text` is the final text before
  * `prefix`; the offsets are computed on what is returned.
  */
@@ -155,24 +157,42 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
   }
   placed.sort((a, b) => a.start - b.start)
 
-  const block = (item: PendingAttachment & { kind: "text" }) => `[attached file: ${item.name}]\n\`\`\`\n${item.content}\n\`\`\``
+  const block = (item: PendingAttachment & { kind: "text" }) => {
+    const fence = fileFence(item.content)
+    return `[attached file: ${item.name}]\n${fence}\n${item.content}\n${fence}`
+  }
   const refs = new Map<PendingAttachment, BlobRef>()
   let body = ""
   let cursor = 0
   let afterBlock = false
-  for (const { item, end } of placed) {
-    // Spaces after a block would indent the sentence that resumes under it.
-    const chunk = text.slice(cursor, end)
-    body += afterBlock ? chunk.replace(/^[ \t]+/, "") : chunk
+  // A text file's block waits for the end of its token's line: a sentence around a pasted file reaches the model whole.
+  const waiting: string[] = []
+  let waitingEnd = 0
+  const take = (to: number) => {
+    const chunk = text.slice(cursor, to)
+    body += afterBlock ? chunk.replace(/^\n/, "") : chunk
     afterBlock = false
-    cursor = end
+    cursor = to
+  }
+  const flush = () => {
+    if (!waiting.length) return
+    take(waitingEnd)
+    body += `\n\n${waiting.join("\n\n")}\n\n`
+    waiting.length = 0
+    afterBlock = true
+  }
+  for (const { item, start, end } of placed) {
+    if (waiting.length && start >= waitingEnd) flush()
+    take(end)
     if (item.kind === "text") {
-      body += `\n\n${block(item)}\n\n`
-      afterBlock = true
+      waiting.push(block(item))
+      const newline = text.indexOf("\n", end)
+      waitingEnd = newline < 0 ? text.length : newline
     } else refs.set(item, { ...refOf(item), at: prefix.length + body.length })
   }
+  flush()
   const tail = text.slice(cursor)
-  body += afterBlock ? tail.replace(/^[ \t]+/, "") : tail
+  body += afterBlock ? tail.replace(/^\n/, "") : tail
   if (afterBlock && !tail.trim()) body = body.replace(/\n+$/, "")
 
   const blocks: string[] = []
@@ -182,6 +202,13 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
     else blocks.push(block(item))
   }
   return { text: [body, ...blocks].filter(Boolean).join("\n\n"), attachments: pending.flatMap((item) => (refs.has(item) ? [refs.get(item)!] : [])) }
+}
+
+/** A file block's fence: three backticks, or one more than the longest backtick run in the file, so no fence inside it closes the block (CommonMark). */
+function fileFence(content: string): string {
+  let longest = 0
+  for (const run of content.matchAll(/`+/g)) longest = Math.max(longest, run[0].length)
+  return "`".repeat(Math.max(3, longest + 1))
 }
 
 /** A single line that looks like one local path: a quoted path (may contain spaces), or an unquoted `file://`, `~/` or absolute path with escaped spaces. */

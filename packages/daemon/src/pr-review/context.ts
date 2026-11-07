@@ -80,6 +80,12 @@ export const CALLER_CAP = 12
 export const GRAPH_DEPTH = 2
 /** The share of the PR's token budget the context may take; the rest is for the review answer and the verify pass. */
 export const CONTEXT_SHARE = 0.5
+/**
+ * A diff at most this much over one call's share is still one call (callers and callees cut first), not a second part: a part of a
+ * few files pays a whole child of its own (its start, its brief, its reading) for them. Seen live: #99's second part held 8 files
+ * and 4 K tokens of diff, and its call read 330 K input tokens. The share leaves half the call's window free, so the slack fits.
+ */
+export const ONE_CALL_SLACK = 1.05
 const MAX_SYMBOLS = 40
 /** The most full code diff text retained for the main review; without readers this remains the safety bound. */
 export const MAX_DIFF_BYTES = 4 * 1024 * 1024
@@ -490,7 +496,7 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   const whole = tokensOf(shownFiles.map((file) => file.text).join(""), symbols)
   const layout = (extra?: ReadonlyMap<string, string>) => {
     const summaries = new Map([...placeholders, ...(extra ?? [])])
-    const single = singleView({ files: shownFiles, symbols, limit, summaries, main })
+    const single = singleView({ files: shownFiles, symbols, limit: Math.floor(limit * ONE_CALL_SLACK), summaries, main })
     // Callers and callees are cut first; a diff that still does not fit one call is reviewed in parts of whole files rather than
     // with the largest diffs left out.
     const split = single.cut.length && shownFiles.length > 1 ? splitIntoParts({ files: shownFiles, symbols, limit, summaries }) : undefined

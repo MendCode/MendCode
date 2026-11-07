@@ -23,6 +23,15 @@ describe("theme files", () => {
     expect(themes[0]!.colors.panel).toMatch(/^#[0-9a-f]{6}$/)
   })
 
+  test("paintBackground keeps always or never; anything else is the default (auto)", () => {
+    const { themes } = themesFromFiles([
+      file("always", { background: "#0b1210", paintBackground: "always", colors }),
+      file("never", { background: "#0b1210", paintBackground: "never", colors }),
+      file("other", { background: "#0b1210", paintBackground: "yes", colors }),
+    ])
+    expect(themes.map((theme) => theme.paintBackground)).toEqual(["always", "never", undefined])
+  })
+
   test("bad files are problems, not crashes: read errors, wrong shape, missing or invalid colors", () => {
     const { themes, problems } = themesFromFiles([
       file("broken", undefined, { problem: "invalid JSON: Unexpected token" }),

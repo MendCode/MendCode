@@ -8,6 +8,7 @@ import type { PlatformHandle } from "../src/pr-review/contracts"
 import { createPlatformControl } from "../src/pr-review/control"
 import { createJobLedger } from "../src/pr-review/jobs"
 import { createPrStates, parsePrStates } from "../src/pr-review/pr-states"
+import { writeReviewState } from "../src/pr-review/state"
 import { release, takeOver } from "../src/pr-review/takeover"
 import type { GhRun } from "../src/pr-watch"
 
@@ -97,7 +98,7 @@ describe("status attaches the states", () => {
     const control = createPlatformControl(handle, { configControl: {} as ConfigControl, takeover: { takeOver, release }, now: () => 1_000, pullRequests: createPrStates({ run: gh.run }) })
     const add = (repo: string, number: number, provider: "github" | "gitlab" = "github") => jobs.upsert({ provider, repo, directory: dataDir, number, sessionId: "ses_w", reviewer: "global", scope: "global", trigger: "opened", coverage: "full", base: "b".repeat(40), head: `${number}`.padEnd(40, "c"), configKey: "k" })
     const status = (pullRequests?: "cached" | "refresh") => control.run({ sessionId: "ses_p", action: "status", directory: dataDir, ...(pullRequests ? { pullRequests } : {}) })
-    return { add, status }
+    return { add, status, dataDir }
   }
 
   test("several PRs of a repository cost one gh call; GitLab jobs and the plain poll fetch nothing; the answer stays schema-valid", async () => {
@@ -120,6 +121,30 @@ describe("status attaches the states", () => {
     const polled = await status()
     expect(gh.calls).toHaveLength(1)
     expect(polled.ok && polled.dashboard?.jobs.find((job) => job.number === 4 && job.repo === "acme/app")?.pullRequest?.state).toBe("merged")
+  })
+
+  test("a job whose own run found nothing still carries the blocker an earlier review published and nobody resolved", async () => {
+    const gh = fakeGh()
+    const { add, status, dataDir } = await setup(gh)
+    add("acme/app", 1)
+    add("acme/app", 2)
+    const finding = (id: string, severity: "critical" | "major" | "minor", verdict: "confirmed" | "plausible" = "confirmed") =>
+      ({ id, path: "a.ts", line: 1, side: "RIGHT" as const, severity, category: "correctness" as const, summary: `s ${id}`, detail: "d", evidence: ["a.ts:1"], verdict })
+    writeReviewState(dataDir, "acme/app", 1, { version: 1, lastHead: "1".padEnd(40, "c"), published: {
+      ["a".repeat(40)]: { commentId: 1, finding: finding("a".repeat(40), "critical") },
+      ["b".repeat(40)]: { commentId: 2, finding: finding("b".repeat(40), "minor") },
+      ["c".repeat(40)]: { commentId: 3, finding: finding("c".repeat(40), "major"), resolved: true },
+    } } as never)
+    const read = await status("cached")
+    if (!read.ok || !read.dashboard) throw new Error("no dashboard")
+    expect(PrReviewDashboard.parse(read.dashboard)).toEqual(read.dashboard)
+    const byNumber = (number: number) => read.dashboard!.jobs.find((job) => job.number === number)!
+    expect(byNumber(1).findings.blocking).toBeUndefined()
+    expect(byNumber(1).unresolved).toEqual({ open: 2, blocking: 1 })
+    expect(byNumber(2).unresolved).toEqual({ open: 0, blocking: 0 })
+    // The 5 s poll reads no state file.
+    const polled = await status()
+    expect(polled.ok && polled.dashboard?.jobs.some((job) => job.unresolved)).toBe(false)
   })
 
   test("gh failing leaves the state unknown and the page still gets its jobs", async () => {

@@ -237,13 +237,14 @@ describe("voice row", () => {
 })
 
 describe("hold space to talk", () => {
-  function holder(options: { ready?: boolean } = {}) {
+  function holder(options: { ready?: boolean; olderDaemon?: boolean } = {}) {
     let at = 1_000_000
     const h = appHarness({
       directory: tempDir("mendcode-voice-"),
       now: () => at,
       reply: (command: CommandInput) => {
         if (command.type !== "voice.control") return undefined
+        if (options.olderDaemon && "held" in command) return asReply({ ok: false, error: { code: "invalid_command", message: "daemon rejected voice.control · it may be an older build · /daemon restart" } })
         if (command.action === "stop") return asReply({ ok: true, result: { text: "run the tests", seconds: 2 } })
         return asReply({ ok: true, result: { enabled: true, recording: command.action === "start", ready: options.ready !== false, provider: "local", model: "macOS on-device", maxSeconds: 60, recorder: "macOS" } })
       },
@@ -266,6 +267,8 @@ describe("hold space to talk", () => {
     expect(voiceCalls(h)).toEqual(["status"])
     await space(40)
     expect(voiceCalls(h)).toEqual(["status", "start"])
+    // A held space asks for a recording that lasts until it is let go.
+    expect(h.sentOf("voice.control").find((command) => (command as { action: string }).action === "start")).toMatchObject({ held: true })
     expect(prompt(h)).toBe("fix")
     await h.app.onGlobal({ type: "voice.live", gseq: 1, at: 1, level: 0.9, text: "run the" })
     h.app.render()
@@ -276,6 +279,21 @@ describe("hold space to talk", () => {
     await Bun.sleep(400)
     await Bun.sleep(5)
     expect(voiceCalls(h)).toEqual(["status", "start", "stop"])
+    expect(prompt(h)).toBe("fix run the tests")
+  })
+
+  test("a daemon from before held recordings refuses the field: the start is asked again without it and dictation still works", async () => {
+    const { h, space } = holder({ olderDaemon: true })
+    await h.type("fix")
+    await space(500)
+    await space(40)
+    await space(40)
+    await space(40)
+    expect(voiceCalls(h)).toEqual(["status", "start", "start"])
+    h.app.render()
+    expect(screen(h)).not.toContain("older build")
+    await Bun.sleep(400)
+    await Bun.sleep(5)
     expect(prompt(h)).toBe("fix run the tests")
   })
 

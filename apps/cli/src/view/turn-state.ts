@@ -38,6 +38,8 @@ export function createTurnState() {
   let cached = 0
   /** Output tokens the engine reported for the turn in flight that no usage record holds yet (`turn.tokens`): shown, never stored; a record replaces it. */
   let liveOutput = 0
+  /** Part of `liveOutput` is the daemon's estimate of words streamed since the provider's last count (`turn.tokens` `estimated`). */
+  let liveEstimated = false
   let turnId: string | undefined
   let startedAt: number | undefined
   let retry: RetryState | undefined
@@ -73,6 +75,7 @@ export function createTurnState() {
 
   function endTurn() {
     liveOutput = 0
+    liveEstimated = false
     startedAt = undefined
     retry = undefined
     sent = undefined
@@ -98,6 +101,7 @@ export function createTurnState() {
           break
         case "usage.recorded":
           liveOutput = 0
+          liveEstimated = false
           // The session's totals keep the cache apart (as /usage does): `input` is what was not read from or written to it; output already holds the reasoning (every engine counts it there).
           totals.input += event.input
           totals.cacheRead += event.cacheRead
@@ -183,14 +187,20 @@ export function createTurnState() {
     get output() {
       return output
     },
-    /** The output so far: the finished calls' reported count plus what the engine has reported for the work no usage record holds yet. Never an estimate. */
+    /** The output so far: the finished calls' reported count plus the running figure for the work no usage record holds yet (`liveEstimated` says whether part of it is an estimate). */
     get outputLive() {
       return output + liveOutput
     },
-    /** `turn.tokens`: the engine's running output count for the turn in flight; a push for another turn, or between turns, is dropped. Returns whether it changed. */
-    noteLive(event: { turnId: string; output: number }) {
-      if (startedAt === undefined || event.turnId !== turnId || event.output === liveOutput) return false
+    /** Whether `outputLive` holds an estimate (words streamed since the provider's last count): the row marks it with `~`. */
+    get liveEstimated() {
+      return liveEstimated && liveOutput > 0
+    },
+    /** `turn.tokens`: the running output figure for the turn in flight; a push for another turn, or between turns, is dropped. Returns whether it changed. */
+    noteLive(event: { turnId: string; output: number; estimated?: boolean | undefined }) {
+      const estimated = event.estimated === true
+      if (startedAt === undefined || event.turnId !== turnId || (event.output === liveOutput && estimated === liveEstimated)) return false
       liveOutput = event.output
+      liveEstimated = estimated
       return true
     },
     /** Input tokens of this turn's finished calls (exact): what was sent, cache included. */

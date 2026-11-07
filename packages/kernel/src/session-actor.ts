@@ -17,6 +17,7 @@ import type { createIdFactory } from "@mendcode/protocol"
 import type { Clock, TimerHandle } from "./clock"
 import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
 import type { Scope } from "./scope"
+import { createLiveOutput } from "./live-output"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type ActorCommand = Extract<
@@ -63,6 +64,10 @@ type ActiveTurn = {
   compaction?: { reason: "auto" | "manual"; idle?: true; followUp: string }
   /** Started alone (send now, restart) or with an explicit model/agent selection or turn options: no message joins it after its answer. */
   alone?: true
+  /** The running output figure for the activity line (`onLiveOutput`), made at the turn's first count or streamed word. */
+  live?: ReturnType<typeof createLiveOutput>
+  /** The main agent's open answer and reasoning items: their words are what the live figure estimates. */
+  streaming?: Map<ItemId, "text" | "reasoning">
 }
 
 /** Open items a session's background sub-agents may hold at once after their turn ended. */
@@ -96,8 +101,11 @@ export type SessionActorOptions = {
   onForeground?(state: ForegroundState): void
   /** The pause flag changed (`pause`/`resume`), so panels can show it even when the foreground state did not move. */
   onPause?(paused: boolean): void
-  /** The running turn's output tokens not yet in a recorded usage (0 once one records them). Live only: nothing is stored. */
-  onLiveOutput?(turnId: TurnId, output: number): void
+  /**
+   * The running turn's output tokens not yet in a recorded usage (0 once one records them): the engine's count plus an estimate of what
+   * streamed since, then `estimated`. Live only: nothing is stored.
+   */
+  onLiveOutput?(turnId: TurnId, output: number, estimated?: boolean): void
   /** Queue recovered after a restart. It starts held: nothing runs until the user acts. */
   restoredQueue?: Array<{ queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; instructions?: string; notice?: true; shell?: true; local?: true; rides?: true }>
   /** Persisted mode of the session (default "ask"). */
@@ -454,13 +462,18 @@ export function createSessionActor(options: SessionActorOptions) {
     emit({ type: "compaction.updated", sessionId, turnId: turn.turnId, ...turn.compaction, state, ...(followUpQueueId ? { followUpQueueId } : {}), ...(note ? { note: note.slice(0, 500) } : {}) })
   }
 
+  function showLive(turnId: TurnId, figure: { output: number; estimated: boolean } | undefined) {
+    if (figure) options.onLiveOutput?.(turnId, figure.output, figure.estimated || undefined)
+  }
+
   function onEngineEvent(turnId: TurnId, event: EngineEvent) {
     if (!isLive(turnId) || !active) return
     const turn = active
-    if (event.type === "usage.live") return options.onLiveOutput?.(turnId, event.output)
+    if (event.type === "usage.live") return showLive(turnId, (turn.live ??= createLiveOutput()).exact(event.output))
+    if (event.type === "usage.thinking") return showLive(turnId, (turn.live ??= createLiveOutput()).thinking(event.tokens))
     if (event.type === "usage") {
       const { type: _type, ...usage } = event
-      options.onLiveOutput?.(turnId, 0)
+      showLive(turnId, turn.live?.recorded())
       emit({ type: "usage.recorded", sessionId, turnId, ...usage })
       return
     }
@@ -476,15 +489,21 @@ export function createSessionActor(options: SessionActorOptions) {
       emit({ type: "item.started", sessionId, turnId, itemId: event.itemId, kind: event.kind, ...(event.meta ? { meta: event.meta } : {}) })
       // A sub-agent's step is drawn in its thread: the turn's state follows the main agent only, and does not flip with each agent's tool.
       if (typeof event.meta?.agentParent === "string") turn.agentOpen.add(event.itemId)
-      else if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+      else {
+        if (event.kind === "agent_message" || event.kind === "reasoning") (turn.streaming ??= new Map()).set(event.itemId, event.kind === "agent_message" ? "text" : "reasoning")
+        if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+      }
       return
     }
     if (!turn.openItems.has(event.itemId)) return
     if (event.type === "item.delta") {
+      const streamed = turn.streaming?.get(event.itemId)
+      if (streamed && event.text) showLive(turnId, (turn.live ??= createLiveOutput()).streamed(streamed, event.text.length))
       emit({ type: "item.delta", sessionId, itemId: event.itemId, text: event.text, ...(event.input ? { input: event.input } : {}) })
       return
     }
     turn.openItems.delete(event.itemId)
+    turn.streaming?.delete(event.itemId)
     emit({
       type: "item.completed",
       sessionId,

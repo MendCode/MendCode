@@ -2,6 +2,25 @@ import type { Database } from "bun:sqlite"
 import { TaskRecord, ExtractionJob } from "@mendcode/protocol"
 
 const FAILED_KEPT = 20
+/** Rows of the review record kept (one per review job or skip); older ones are pruned on every insert. */
+export const REVIEW_LOG_KEPT = 300
+const DAY_MS = 86_400_000
+
+/** What one memory review did, or why it did not run. */
+export type MemoryReviewRow = {
+  at: number
+  sessionId: string
+  directory: string
+  /** What asked for it: `turns`, `idle`, `compaction`, `retry`. */
+  trigger: string
+  /** Substantive user turns the digest covered. */
+  turns: number
+  /** Extractor calls made (attempts). */
+  calls: number
+  proposed: number
+  outcome: "ran" | "failed" | "skipped"
+  reason: string
+}
 
 /** The daemon is the only writer. Claims and admission never cross an await. */
 export function createParityRecords(db: Database) {
@@ -11,6 +30,10 @@ export function createParityRecords(db: Database) {
   db.run(`CREATE TABLE IF NOT EXISTS memory_extractions (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     turn_id TEXT NOT NULL, payload TEXT NOT NULL, UNIQUE(session_id, turn_id)
+  )`)
+  db.run(`CREATE TABLE IF NOT EXISTS memory_reviews (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, session_id TEXT NOT NULL, directory TEXT NOT NULL, trigger TEXT NOT NULL,
+    turns INTEGER NOT NULL, calls INTEGER NOT NULL, proposed INTEGER NOT NULL, outcome TEXT NOT NULL, reason TEXT NOT NULL
   )`)
   db.run(`CREATE TABLE IF NOT EXISTS detached_sessions (
     id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE
@@ -28,7 +51,24 @@ export function createParityRecords(db: Database) {
         db.query("INSERT OR REPLACE INTO child_tasks VALUES (?, ?)").run(task.taskId, JSON.stringify(TaskRecord.parse(task)))
       },
     },
+    /** The bounded record of memory reviews: yield per call (`proposed` over `calls`) and the reasons for skips. */
+    reviews: {
+      add(row: MemoryReviewRow) {
+        db.query("INSERT INTO memory_reviews (at, session_id, directory, trigger, turns, calls, proposed, outcome, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(row.at, row.sessionId, row.directory, row.trigger, row.turns, row.calls, row.proposed, row.outcome, row.reason.slice(0, 200))
+        // A row that spent calls in the last day stays even past the kept count: it is the daily cap's counter (capped at 500 a day).
+        db.query("DELETE FROM memory_reviews WHERE id <= (SELECT MAX(id) FROM memory_reviews) - ? AND (calls = 0 OR at < ?)").run(REVIEW_LOG_KEPT, row.at - DAY_MS)
+      },
+      list(limit = REVIEW_LOG_KEPT): Array<MemoryReviewRow & { id: number }> {
+        return db.query<MemoryReviewRow & { id: number }, [number]>("SELECT id, at, session_id AS sessionId, directory, trigger, turns, calls, proposed, outcome, reason FROM memory_reviews ORDER BY id DESC LIMIT ?").all(limit)
+      },
+      /** Extractor calls made at or after `since`. */
+      callsSince(since: number): number {
+        return db.query<{ calls: number | null }, [number]>("SELECT SUM(calls) AS calls FROM memory_reviews WHERE at >= ?").get(since)?.calls ?? 0
+      },
+    },
     extraction: {
+      remove(jobId: string) { db.query("DELETE FROM memory_extractions WHERE id = ?").run(jobId) },
       list(): ExtractionJob[] {
         return db.query<{ payload: string }, []>("SELECT payload FROM memory_extractions ORDER BY rowid").all().map((row) => ExtractionJob.parse(JSON.parse(row.payload)))
       },

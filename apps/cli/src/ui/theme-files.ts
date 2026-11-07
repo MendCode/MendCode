@@ -8,7 +8,7 @@ export type ThemeProblem = { name: string; file: string; message: string }
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 
 /**
- * Theme files from the extension layers (`themes/<name>.json`): `{ label?, dark?, background, colors }` with the same
+ * Theme files from the extension layers (`themes/<name>.json`): `{ label?, dark?, background, paintBackground?, colors }` with the same
  * roles as a built-in theme (primary, text, body, muted, border, heading, code, link, success, warning, error
  * required; the rest derived). The file name is the theme name. Invalid files become problems, never throw.
  */
@@ -40,6 +40,7 @@ export function themesFromFiles(files: readonly ThemeFile[]): { themes: Theme[];
         label: typeof json.label === "string" && json.label.trim() ? json.label.trim().slice(0, 40) : file.name,
         dark: typeof json.dark === "boolean" ? json.dark : true,
         background: json.background,
+        ...(json.paintBackground === "always" || json.paintBackground === "never" ? { paintBackground: json.paintBackground } : {}),
         colors: json.colors as Parameters<typeof defineTheme>[0]["colors"],
       })
       themes.push(withReadableContrast(theme))

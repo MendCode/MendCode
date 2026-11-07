@@ -25,7 +25,7 @@ import { createSession } from "./app/session"
 import { createSessionNav } from "./app/session-nav"
 import { createSessionTree } from "./app/session-tree"
 import { createTranscriptActions } from "./app/transcript-actions"
-import { readSessionLook, switchSessionLook } from "./app/session-look"
+import { appliedLook, readSessionLook, switchSessionLook } from "./app/session-look"
 import { createScratch } from "./app/scratch"
 import { createGoal } from "./app/goal"
 import { createUsageLimit } from "./app/usage-limit"
@@ -469,7 +469,8 @@ export function createApp(input: AppInput) {
   // What slash commands showed or hid in each session is that session's (session-look.ts): the one this terminal opens on gets its own back.
   appState.sessionLook = input.profile ? new Map() : readSessionLook(input.dataDir)
   const ownLook = appState.sessionLook.get(appState.sessionId)
-  if (ownLook) appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...ownLook })
+  // A preset the session chose is drawn as the profile's own version of it when the profile has one (session-look.ts `appliedLook`).
+  if (ownLook) appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...appliedLook(ownLook, appState.profileBase.sidebarWidgets) })
   applyGlyphMode({ state: appState, glyphs: g, pinned: input.glyphs, env: input.env ?? process.env })
   // What key hints call Alt: Option on a Mac. The platform is the caller's (main.ts passes process.platform; a test that passes none gets canonical `alt`).
   configureKeyLabels({ setting: appState.tuiProfile.altLabel, platform: input.platform, altWorks: false })
@@ -732,6 +733,11 @@ export function createApp(input: AppInput) {
   let whatsNewController: Promise<ReturnType<typeof import("./app/whats-new").createWhatsNew>> | undefined
   const loadWhatsNew = () => (whatsNewController ??= import("./app/whats-new").then((module) => module.createWhatsNew(ctx)))
   const whatsNew = { command: async (args: string) => (await loadWhatsNew()).command(args), key: async (key: string) => (await loadWhatsNew()).key(key) }
+  // `/today` too (docs/today.md): its controller and the page load with the first command, and nothing runs before.
+  let todayController: Promise<ReturnType<typeof import("./app/today").createToday>> | undefined
+  let todayLoaded: ReturnType<typeof import("./app/today").createToday> | undefined
+  const loadToday = () => (todayController ??= import("./app/today").then((module) => (todayLoaded = module.createToday(ctx, { switchSession: (sessionId) => switchSession(sessionId), runSlash: (text) => runSlash(text).then(() => {}) }))))
+  const today = { command: async (args: string) => (await loadToday()).command(args), key: async (key: string) => (await loadToday()).key(key), rows: (width: number, height: number) => todayLoaded?.render(width, height) ?? [] }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
@@ -763,7 +769,7 @@ export function createApp(input: AppInput) {
     }
     else await runSlash("/tools")
     requestFrame()
-  }, (patch) => changeProfile(patch, { session: true }))
+  }, (patch, panel) => changeProfile(patch, { session: true, panel }))
   const { askAside, openFetch, scrollAside, asideKey, loadAside } = createAside(ctx)
   const { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, returnFromConnect, openIntro, finishIntro } = createSetup(ctx, { loadRecipes, loadPage: (...args) => loadPage(...args), applySettings: (...args) => applySettings(...args), changeProfile: (...args) => changeProfile(...args), openConnect: (...args) => openConnect(...args) })
   const { openConnect, connectAction, loadProviders, providersAction } = createProviders(ctx, { takeModels, loadPage: (...args) => loadPage(...args), runSlash: (...args) => runSlash(...args), returnFromConnect })
@@ -887,6 +893,7 @@ export function createApp(input: AppInput) {
     openDrafts,
     sessionNav,
     whatsNew,
+    today,
     sessionTree,
     copyAnswer,
     rewind,
@@ -916,6 +923,7 @@ export function createApp(input: AppInput) {
     slashCommands: () => editableCatalog(suggestionPool(), appState.settingsNow),
     sessionNav,
     whatsNewKey: whatsNew.key,
+    todayKey: today.key,
     sessionTree,
     tasksKey: subagents.tasksKey,
     controlSession,
@@ -1167,6 +1175,7 @@ export function createApp(input: AppInput) {
     planReviewFrame,
     peerCommandRows: peerCommands.render,
     reviewsRows: reviews.render,
+    todayRows: today.rows,
     agentMetadata,
     psItems: ps.items,
     dropRevealedSecret,

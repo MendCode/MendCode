@@ -1,6 +1,6 @@
 ---
 summary: what changed in a version and which changes fit you
-docs: whats-new, release, tiers
+docs: whats-new, release, tiers, today
 aliases: whatsnew, changelog, release-notes, new-version, what-changed, update-notes
 ---
 For: "MendCode vX.Y.Z is installed ... tell me which of these changes I should use" (the prompt on every release page), "what is new in MendCode", "what changed in this version".
@@ -15,3 +15,5 @@ The user types: /whatsnew (the changes since their last look and one model call 
 What /whatsnew sends: this project's saved memories, the settings in effect with secrets hidden and recent session titles, only to the provider of the model the call runs on (the aside role, else the session's model). Local terminals only. Counted in /usage as the whatsNew role.
 
 Not possible: a changelog of a version newer than the running build (it is packed into the build), applying a pick without its preview and confirmation, or changing settings from the pasted prompt alone.
+
+Coming back after time away: /today (the user types it) is one read-only page of what waits for them (approvals, PR reviews, workflows, contradicting memories), sessions worth picking up and Dream's pending memory proposals; Enter jumps to a row.

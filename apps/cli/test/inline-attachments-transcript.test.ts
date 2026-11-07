@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { messageRows, outsideText } from "../src/view/chat-blocks"
+import { foldAttachedFiles, messageRows, outsideText } from "../src/view/chat-blocks"
+import { attachmentToken, composeSubmission, tokenName, type PendingAttachment } from "../src/view/attachments"
 import { textWidth } from "../src/view/wrap"
 import { conversation } from "./session-ui-harness"
 import { bench } from "./inline-attachments-helpers"
@@ -34,6 +35,39 @@ describe("messageRows", () => {
   test("a folder or text file token (no ref, its block follows it) is a secondary chip too", () => {
     const rows = messageRows("lee [notes.txt]\n\n[attached file: notes.txt]\n```\nx\n```\n\nya [a] b", [], 80, [])
     expect(rows.flatMap((row) => row.filter((span) => span.bg))).toEqual([expect.objectContaining({ text: "[notes.txt]", bg: "secondary" })])
+  })
+
+  test("a text file's token is a chip when its block comes after the line, and the block folds to its name and size", () => {
+    const sent = 'pregunta es el " [launch.html] "?\n\n[attached file: launch.html]\n```\n<html>\n<body></body>\n</html>\n```'
+    const folded = foldAttachedFiles(sent)
+    expect(folded).toBe('pregunta es el " [launch.html] "?\n\n[attached file: launch.html] · 3 lines · ctrl-o')
+    const rows = messageRows(folded, [], 80, [])
+    expect(rows.flatMap((row) => row.filter((span) => span.bg))).toEqual([expect.objectContaining({ text: "[launch.html]", bg: "secondary" })])
+  })
+
+  test("a Markdown file with its own fences is wrapped in a longer fence and folds whole", () => {
+    const readme = "# Title\n```ts\nconst a = 1\n```\nmore prose\n````\nquad\n````\nend"
+    const sent = composeSubmission("lee [README.md]", [{ kind: "text", name: "README.md", content: readme, label: "[README.md]" }]).text
+    expect(sent).toBe(`lee [README.md]\n\n[attached file: README.md]\n\`\`\`\`\`\n${readme}\n\`\`\`\`\``)
+    expect(foldAttachedFiles(sent)).toBe("lee [README.md]\n\n[attached file: README.md] · 9 lines · ctrl-o")
+  })
+
+  test("a text file's token is a chip when it is shortened, sanitized or numbered #2", () => {
+    const long = "a-very-long-file-name-for-the-quarterly-report.md"
+    const files = [
+      { kind: "text" as const, name: "notes.txt", content: "a" },
+      { kind: "text" as const, name: "notes.txt", content: "b" },
+      { kind: "text" as const, name: long, content: "c" },
+      { kind: "text" as const, name: "odd [draft].txt", content: "d" },
+    ]
+    const pending: PendingAttachment[] = []
+    for (const file of files) pending.push({ ...file, label: attachmentToken(pending, file) })
+    expect(pending.map((item) => item.label)).toEqual(["[notes.txt]", "[notes.txt #2]", `[${tokenName(long)}]`, "[odd draft .txt]"])
+    const sent = composeSubmission(pending.map((item) => item.label).join(" "), pending).text
+    for (const text of [sent, foldAttachedFiles(sent)]) {
+      const chips = messageRows(text, [], 200, []).flatMap((row) => row.filter((span) => span.bg).map((span) => span.text))
+      expect(chips).toEqual(pending.map((item) => item.label!))
+    }
   })
 
   test("no label anywhere: the plain wrap it always was", () => {

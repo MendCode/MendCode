@@ -47,6 +47,44 @@ const sameCards = (a: readonly SidebarWidget[], b: readonly SidebarWidget[]) => 
 /** The preset a spec equals, or `custom` for a genuinely edited list (an empty list is not a preset). */
 export const presetOf = (widgets: readonly SidebarWidget[]): PanelPreset | "custom" => (widgets.length ? PANEL_PRESETS.find((preset) => sameCards(widgets, SIDEBAR_PRESETS[preset])) : undefined) ?? "custom"
 
+/**
+ * The preset a spec is built on: the one it equals, or the longest one its first cards are (the galaxy and the cards added after it is
+ * a custom galaxy). Undefined for a list that starts like no preset.
+ */
+export function basePresetOf(widgets: readonly SidebarWidget[]): PanelPreset | undefined {
+  let best: PanelPreset | undefined
+  for (const preset of PANEL_PRESETS) {
+    const cards = SIDEBAR_PRESETS[preset]
+    if (widgets.length >= cards.length && sameCards(widgets.slice(0, cards.length), cards) && (!best || cards.length > SIDEBAR_PRESETS[best].length)) best = preset
+  }
+  return best
+}
+
+/** A per-session panel choice as `session-look.json` keeps it: only the preset's id, `:default` when the built-in one was asked for. */
+export type PanelChoice = PanelPreset | `${PanelPreset}:default`
+export const panelChoiceOf = (value: unknown): PanelChoice | undefined => {
+  if (typeof value !== "string") return undefined
+  const [name, variant, ...rest] = value.split(":")
+  const preset = PANEL_PRESETS.find((candidate) => candidate === name)
+  return preset && !rest.length && (variant === undefined || variant === "default") ? (value as PanelChoice) : undefined
+}
+
+/**
+ * The cards a preset resolves to: the profile's own version when the stored panel is that preset with changes (`profile`), else the
+ * built-in list (`default`). `:default` always takes the built-in one. Choosing a preset never copies a list into the session.
+ */
+export function resolvePanel(choice: PanelChoice, profile: readonly SidebarWidget[]): { preset: PanelPreset; source: "profile" | "default"; widgets: SidebarWidget[] } {
+  const [name, variant] = choice.split(":") as [PanelPreset, string | undefined]
+  const custom = variant !== "default" && profile.length > 0 && basePresetOf(profile) === name && presetOf(profile) === "custom"
+  return { preset: name, source: custom ? "profile" : "default", widgets: structuredClone(custom ? [...profile] : [...SIDEBAR_PRESETS[name]]) as SidebarWidget[] }
+}
+
+/** The presets the profile has its own version of (at most one: the one its stored panel is built on). */
+export const customPresetsOf = (profile: readonly SidebarWidget[]): PanelPreset[] => {
+  const base = presetOf(profile) === "custom" ? basePresetOf(profile) : undefined
+  return base ? [base] : []
+}
+
 /** The preset after `current` among `available`, wrapping; a custom or empty spec starts the cycle at its first preset. */
 export function nextPreset(current: PanelPreset | "custom", available: readonly PanelPreset[]): PanelPreset {
   const from = current === "custom" ? -1 : PANEL_PRESETS.indexOf(current)

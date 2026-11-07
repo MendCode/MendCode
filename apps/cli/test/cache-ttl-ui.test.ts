@@ -106,3 +106,32 @@ describe("cache miss note: the lifetime of the call before", () => {
     expect(long.apply(usage({ at: NOW + 70 * 60_000, cacheWrite: 6_000, cacheTtl: "1h" }))[0]!.text).toContain("idle 61m, past the cache lifetime")
   })
 })
+
+describe("/settings: the claude context row", () => {
+  const at = rowOf("claudeContext")
+  const at120 = (settings: Settings) => renderSettingsPage({ state: at, values: values(settings), width: 120, height: 46 }).map((line) => line.map((span) => span.text).join("")).join("\n")
+
+  test("sits under claude ttl and reads lean when unset", () => {
+    const behavior = SETTINGS_GROUPS.find((group) => group.title === "Behavior")!.rows
+    expect(behavior[behavior.findIndex((row) => row.id === "claudeCacheTtl") + 1]).toEqual({ id: "claudeContext", label: "claude context", kind: "cycle" })
+    expect(valueOf("claudeContext", {})).toBe("lean")
+    expect(valueOf("claudeContext", { claudeContext: "full" })).toBe("full")
+    expect(valueOf("claudeContext", { claudeContext: "isolated" })).toBe("isolated")
+  })
+
+  test("each level says what it leaves out, whole at 120 columns; isolated warns that the user's rules are not followed", () => {
+    // Skills stay on in lean (they go only with /compact): the note must not say otherwise.
+    expect(at120({})).toContain("no own MCP or auto memory")
+    expect(at120({})).not.toContain("skills")
+    expect(at120({ claudeContext: "full" })).toContain("all of your setup")
+    expect(at120({ claudeContext: "isolated" })).toContain("ignores your rules")
+    expect(detail(at, { claudeContext: "isolated" })).toContain("so the model does not follow your rules")
+  })
+
+  test("arrows cycle lean, isolated, full; lean clears the setting", () => {
+    expect(key(at, "\x1b[C").action).toEqual({ type: "set", patch: { claudeContext: "isolated" } })
+    expect(key(at, "\x1b[C", { claudeContext: "isolated" }).action).toEqual({ type: "set", patch: { claudeContext: "full" } })
+    expect(key(at, "\x1b[C", { claudeContext: "full" }).action).toEqual({ type: "set", patch: { claudeContext: null } })
+    expect(key(at, "\x1b[D").action).toEqual({ type: "set", patch: { claudeContext: "full" } })
+  })
+})

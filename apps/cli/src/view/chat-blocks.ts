@@ -1,4 +1,5 @@
 import type { ColorName, Glyphs, Line, Span } from "../ui/theme"
+import { tokenName } from "./attachments"
 import { clip as clipRow } from "./deck"
 import { compact } from "./format"
 import { formatCost } from "./stat-parts"
@@ -28,6 +29,15 @@ export function panelRow(line: Line, width: number, bar?: Span): Line {
 }
 
 /** The first `USER_MAX_LINES` lines / `USER_MAX_CHARS` characters of a message, and what was left out. */
+/** A sent text file's fenced block as its header and its size on one line: the model got the whole file, the transcript names it (ctrl+o opens it). */
+export function foldAttachedFiles(text: string): string {
+  // The block closes at a line that is its own fence: composeSubmission makes it longer than any backtick run in the file.
+  return text.replace(/^(\[attached file: .+\])\n(`{3,})\n([\s\S]*?)\n\2$/gm, (_all, header: string, _fence: string, body: string) => {
+    const lines = body.split("\n").length
+    return `${header} · ${lines} line${lines === 1 ? "" : "s"} · ctrl-o`
+  })
+}
+
 export function truncateMessage(text: string, limits: { lines?: number; chars?: number } = {}) {
   const maxLines = limits.lines ?? USER_MAX_LINES
   const maxChars = limits.chars ?? USER_MAX_CHARS
@@ -78,8 +88,11 @@ export function messageRows(text: string, attachments: readonly Attachment[], wi
       }
     }
   }
-  // A text file or folder is not a ref: its fenced block sits in the text right after its token, which is how the token is known.
-  for (const match of text.matchAll(/\[[^\[\]\n]+\](?=\n\n\[attached file: )/g)) {
+  // A text file or folder is not a ref: its block in the text names it (`[attached file: name]`), which is how its token is known.
+  // The header holds the raw name; the token holds it as attachmentToken wrote it (sanitized, shortened, ` #2` for a repeated name).
+  const named = new Set(Array.from(text.matchAll(/^\[attached file: (.+?)\](?: · \d+ lines? · ctrl-o)?$/gm), (match) => tokenName(match[1]!).replace(/\/$/, "")))
+  for (const match of text.matchAll(/\[([^\[\]\n]+?)\/?\]/g)) {
+    if (!named.has(match[1]!.replace(/ #\d+$/, "").replace(/\/$/, "")) || text.startsWith("[attached file: ", match.index!)) continue
     const start = match.index!
     const end = start + match[0].length
     if (!hits.some((hit) => hit.start < end && start < hit.end)) hits.push({ start, end, bg: "secondary" })
@@ -138,7 +151,7 @@ function chipRows(files: Attachment[], width: number, expanded: boolean): Line[]
 export function userBlock(input: { text: string; time: string; attachments: Attachment[]; width: number; expanded: boolean; glyphs: Glyphs; queued?: boolean; username?: string; header?: Line }): Line[] {
   const { width, glyphs } = input
   const inner = Math.max(4, width - 2 - 4)
-  const shown = input.expanded ? { text: input.text, hiddenChars: 0, hiddenLines: 0 } : truncateMessage(input.text)
+  const shown = input.expanded ? { text: input.text, hiddenChars: 0, hiddenLines: 0 } : truncateMessage(foldAttachedFiles(input.text))
   const left: Line = input.header ?? [{ text: INDENT }, { text: glyphs.dot, fg: "primary" }, { text: ` ${input.username || "You"}`, fg: "muted" }]
   const right: Line = input.time ? [{ text: input.time, fg: "muted" }] : []
   const gap = Math.max(1, width - 2 - 2 - widthOf(left) - widthOf(right))

@@ -31,6 +31,8 @@ export type VoiceSettings = z.infer<typeof VoiceSettings>
 /** Local clients only. `start` opens the microphone, `stop` ends the recording and returns its transcript, `cancel` discards it, `status` reports readiness. */
 export const VoiceControlInput = lazySchema(() => z.strictObject({
   action: z.enum(["start", "stop", "cancel", "status"]),
+  /** `start` while space is held: it records until let go, with no time limit on-device and the upload size's limit otherwise. */
+  held: z.boolean().optional(),
 }))
 
 export const VoiceReport = lazySchema(() => z.strictObject({

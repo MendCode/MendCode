@@ -37,9 +37,9 @@ describe("detection to recommended model", () => {
     expect(out.options.filter((option) => option.source === "claude")).toEqual([])
     expect(out.usable).toBe(false)
     const max = harness({ id: "claude", installed: true, signedIn: true, plan: "max" })
-    expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan" })
+    expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan · context: /settings claude context" })
     expect(max.options[0]).toMatchObject({ source: "claude", line: expect.stringContaining("runs in Claude Code, hosted by MendCode") })
-    expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported")
+    expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported · context: /settings claude context")
     expect(harness({ id: "claude", installed: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not confirmed")
     // Without the daemon's report (an older daemon) a listed Claude Code is never called signed in.
     expect(detect({ claude: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not checked")
@@ -495,6 +495,58 @@ describe("the wizard in the app", () => {
     await Bun.sleep(5)
     h.app.render()
     expect(h.text().join("\n")).toContain("Sonnet")
+  })
+  describe("the first focus of a first run", () => {
+    const hold = (info: Record<string, unknown> = {}) => {
+      let answer: (value: never) => void = () => {}
+      const pending = new Promise<never>((resolve) => { answer = resolve })
+      return { pending, release: () => answer({ ok: true, result: { engine: "native", dataDir: "/d", pid: 1, ...info } } as never) }
+    }
+    const open = async (machine: Machine, info?: Record<string, unknown>) => {
+      const gate = hold(info)
+      const h = onboardingHarness(machine, { width: 100, height: 30, reply: ((command: { type: string }) => command.type === "daemon.info" ? gate.pending : undefined) as never })
+      const opened = h.app.openSetupIfFirstRun({})
+      await Bun.sleep(10)
+      const loading = h.text().join("\n")
+      gate.release()
+      await opened
+      h.app.render()
+      return { h, loading, loaded: h.text().join("\n") }
+    }
+    test("nothing connected: checking opens on no model, then on the first way to run", async () => {
+      const { loading, loaded } = await open({})
+      expect(loading).toContain("checking this machine")
+      expect(loading).not.toContain("❯ Model")
+      expect(loaded).not.toContain("Model ")
+      expect(loaded).toContain("❯ Add an API key")
+    })
+    test("an external harness that is not signed in keeps the focus on a way to run", async () => {
+      const { loading, loaded } = await open({}, { harnesses: [{ id: "claude", installed: true, signedIn: false, login: "claude auth login" }] })
+      expect(loading).not.toContain("❯ Model")
+      expect(loaded).not.toContain("❯ Model")
+      expect(loaded).toContain("Claude Code")
+    })
+    test("a connected provider still opens on the Model row once checked", async () => {
+      const { loading, loaded } = await open({ keys: ["anthropic"] })
+      expect(loading).not.toContain("❯ Model")
+      expect(loaded).toContain("❯ Model")
+    })
+    test("a reopened /setup keeps its Model row while checking", async () => {
+      const gate = hold()
+      const h = onboardingHarness({ keys: ["anthropic"] }, { width: 100, height: 30, reply: ((command: { type: string }) => command.type === "daemon.info" ? gate.pending : undefined) as never })
+      const opened = h.app.openSetup({ firstRun: false })
+      await Bun.sleep(10)
+      expect(h.text().join("\n")).toContain("❯ Model")
+      gate.release()
+      await opened
+    })
+  })
+  test("focusAfterCheck: the first check of a first run puts a moved focus back under the new Model row", () => {
+    const state = { ...createOnboardingState({ current: {}, firstRun: true }), row: 1 }
+    expect(focusAfterCheck(state, detect({ keys: ["anthropic"] })).row).toBe(2)
+    expect(focusAfterCheck({ ...state, row: 0 }, detect({ keys: ["anthropic"] })).row).toBe(0)
+    expect(onboardingRows(undefined, state)).not.toContain("model")
+    expect(onboardingRows(undefined, { ...state, firstRun: undefined })).toContain("model")
   })
   test("nothing usable: esc or the explicit skip row does not end the first run, so the next launch opens setup again instead of a chat no model answers", async () => {
     // The focus opens on the first way to run; down past the ways reaches the choices, and the last row is "skip for now".

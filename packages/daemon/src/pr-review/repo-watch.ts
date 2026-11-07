@@ -910,7 +910,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
     }
     if (!outage.told && outage.awakeMs >= OUTAGE_LIMIT_MS) {
       outage.told = true
-      options.notify(watch.sessionId, `The PR review watch of ${watch.directory} could not list its pull requests for ${Math.round(outage.awakeMs / 60_000)} minutes (${reason}). It keeps trying, at most ${Math.round(outageGap(Infinity, interval) / 60_000)} minutes apart, and resumes by itself; the pull requests, pushes and @mendcode comments of the outage are read then.`)
+      // Said so it cannot be read as an end (seen live: a session told the user the watch "stopped after 15 minutes").
+      options.notify(watch.sessionId, `The PR review watch of ${watch.directory} is waiting for ${forgeName(watch.provider)}: it could not list its pull requests for ${Math.round(outage.awakeMs / 60_000)} minutes (${reason}). The watch has not stopped and needs nothing from you: it keeps trying, at most ${Math.round(outageGap(Infinity, interval) / 60_000)} minutes apart, and resumes by itself; the pull requests, pushes and @mendcode comments of the outage are read then, once.`)
     }
   }
   /** A listing worked again: the outage is over, and the next listing catches up the work the provider shows (as after a pause). */

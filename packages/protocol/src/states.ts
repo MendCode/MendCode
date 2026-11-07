@@ -27,6 +27,7 @@ export {
   MEMORY_CATEGORY_IDS,
   MEMORY_POLICIES,
   memoryCategoryId,
+  checkMemoryCategory,
   memoryPolicyFor,
   MODEL_ROLES,
   ADVISOR_CHECKPOINTS,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { gitRun } from "../src/pr-review/context"
@@ -113,6 +113,33 @@ describe("measurePerf", () => {
     expect(thrown).toMatchObject({ status: "not-measured", reason: expect.stringContaining("spawn bun ENOENT") })
   })
 
+  test("an uncaught error is reported by its error line, not by bun's version footer", () => {
+    const result = { code: 1, out: "", err: "error: Cannot find module '@mendcode/store' from '/x/scripts/perf-attrib.ts'\n\nBun v1.3.13 (macOS arm64)\n", timedOut: false }
+    expect(perfOutcome({ result, from: "a", head: "b", timeoutMs: 1 })).toEqual({ status: "not-measured", reason: "perf-attrib failed (exit 1): error: Cannot find module '@mendcode/store' from '/x/scripts/perf-attrib.ts'" })
+  })
+
+  test("the real runner installs a checkout's missing dependencies from the lockfile first, then removes them", async () => {
+    const { perfAttribProcess } = await import("../src/pr-review/perf")
+    const bin = temp()
+    const checkout = temp()
+    const log = path.join(bin, "calls.log")
+    // A stand-in bun: install creates node_modules; the script answers only when they exist, as the real one does.
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\necho "$*" >> "${log}"\nif [ "$1" = install ]; then mkdir -p node_modules; exit 0; fi\n[ -d node_modules ] || { echo "error: Cannot find module '@mendcode/store'" >&2; exit 1; }\necho "**perf-attrib: same**"\n`, { mode: 0o755 })
+    const saved = process.env.PATH
+    process.env.PATH = `${bin}:${saved}`
+    try {
+      const result = await perfAttribProcess({ directory: checkout, base: "a", head: "b", cacheDir: temp(), tmpDir: temp(), timeoutMs: 30_000 })
+      expect(result).toMatchObject({ code: 0, out: "**perf-attrib: same**\n" })
+      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["install --frozen-lockfile", expect.stringContaining("scripts/perf-attrib.ts --base a --cand b --markdown --cache")])
+      expect(existsSync(path.join(checkout, "node_modules"))).toBe(false)
+      // A checkout that has them is left as it is: no install, nothing removed.
+      mkdirSync(path.join(checkout, "node_modules"))
+      await perfAttribProcess({ directory: checkout, base: "a", head: "b", cacheDir: temp(), tmpDir: temp(), timeoutMs: 30_000 })
+      expect(readFileSync(log, "utf8").split("\n").filter((line) => line.startsWith("install"))).toHaveLength(1)
+      expect(existsSync(path.join(checkout, "node_modules"))).toBe(true)
+    } finally { process.env.PATH = saved }
+  })
+
   test("without bun the phase says so", async () => {
     const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
     const outcome = await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), hasBun: () => false } })
@@ -190,5 +217,54 @@ describe("the review of a MendCode pull request", () => {
     const run = await review(repo, undefined, kids)
     expect(kids.prompts[0]).not.toContain("perf_attrib")
     expect(run.info?.perf).toBeUndefined()
+  })
+})
+
+/**
+ * A measured rise is the cost phase's finding, not a model's: on a later head the measurement decides whether it still holds, and no
+ * verifier is asked about it again (a model re-reading code to judge a number it cannot measure is spent for nothing).
+ */
+describe("a measured rise on a later head", () => {
+  async function later(headline: string, { forcePush = false } = {}) {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const first = await review(repo, { dir: temp(), run: runner({ code: 1, out: TABLE(RISE) }).run }, child())
+    const rise = first.outcome!.result.findings.find((item) => item.category === "performance")!
+    writeFileSync(path.join(repo.dir, "apps/cli/src/a.ts"), "export const a = 2\n")
+    // A force push rewrites the reviewed head away, so the next review is a whole-PR one (incremental false, no explicit full).
+    if (forcePush) await git(repo.dir, "commit", "-q", "--amend", "-am", "smaller")
+    else await git(repo.dir, "commit", "-q", "-am", "smaller")
+    const head = await git(repo.dir, "rev-parse", "HEAD")
+    const kids = child()
+    const run = await runPrReview({
+      repo: "MendCode/MendCode", number: 7, directory: repo.dir, base: repo.base, head, publish: false, sessionFactory: kids.factory,
+      state: { version: 1, lastHead: repo.head, published: { [rise.id]: { commentId: 1, finding: rise } } },
+      perf: { dir: temp(), run: runner({ code: headline === RISE ? 1 : 0, out: TABLE(headline) }).run },
+    } as Parameters<typeof runPrReview>[0])
+    return { run, rise, prompts: kids.prompts }
+  }
+
+  test("a head measured without the rise fixes it, and no verifier is asked about it", async () => {
+    const { run, rise, prompts } = await later(SAME)
+    expect(run.incremental).toBe(true)
+    expect(run.fixed).toEqual([rise.id])
+    expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
+  })
+
+  test("after a force push, a whole-PR review measured without the rise fixes it too", async () => {
+    const { run, rise } = await later(SAME, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed).toEqual([rise.id])
+  })
+
+  test("after a force push, a head that still rises keeps it open", async () => {
+    const { run, rise } = await later(RISE, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed ?? []).not.toContain(rise.id)
+  })
+
+  test("a head that still rises keeps it open, and no verifier is asked about it either", async () => {
+    const { run, prompts } = await later(RISE)
+    expect(run.fixed).toEqual([])
+    expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
   })
 })

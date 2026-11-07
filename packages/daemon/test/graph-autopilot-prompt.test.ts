@@ -123,6 +123,6 @@ describe("Claude Code, Codex and ACP agents", () => {
     // `harness.instructions()` is what both receive; it is `hostInstructions` with the session's tools and the feature's state.
     const told = hostInstructions(graph, "claude", undefined, true)
     expect(told).toContain("BEFORE")
-    expect(told).toContain("MendCode builds and refreshes this graph itself")
+    expect(told).toContain("MendCode builds and refreshes the graph, so never skip it")
   })
 })

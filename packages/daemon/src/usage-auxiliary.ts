@@ -9,7 +9,7 @@ import type { BudgetUsage } from "./budgets"
  * sessions whose turns `usage.recorded` already counted in the days and models (and whose per-call rows go with the session), so
  * this row says how much of those totals the reviewer spent; reports leave it out of "outside turns" sums.
  */
-export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret", "prReview", "whatsNew"] as const
+export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret", "prReview", "whatsNew", "todayTriage"] as const
 export type AuxiliaryRole = (typeof AUXILIARY_ROLES)[number]
 export type AuxiliaryCall = { role: AuxiliaryRole; sessionId?: SessionId | undefined; directory?: string | undefined }
 /** The daemon's budgeted completion for calls outside a turn: `auxiliary` says whose call it is. */

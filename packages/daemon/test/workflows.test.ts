@@ -276,3 +276,35 @@ describe("B21 definitions", () => {
     expect((await workflowSaveTool.execute({ plan: WorkflowPlan.parse(plan()) }, { cwd: project, signal: ctx.signal })).isError).toBe(true)
   })
 })
+
+describe("a workflow started from a session inherits its mode", () => {
+  test("plan and smart sessions start plan and smart runs; --permission only lowers; a read task stays read-only", async () => {
+    expect(appliedPermission(undefined, "smart", true)).toBe("smart")
+    expect(appliedPermission(undefined, "plan", true)).toBe("plan")
+    expect(appliedPermission("full", "smart", true)).toBe("smart")
+    expect(appliedPermission("ask", "smart", true)).toBe("ask")
+    expect(appliedPermission("edits", "plan", true)).toBe("plan")
+    // Without a session, the default permission still grants at most ask for plan and smart.
+    expect(appliedPermission(undefined, "smart")).toBe("ask")
+    const dir = tempDir()
+    const project = tempDir()
+    const { daemon, client } = await boot(dir)
+    const started: Record<string, string> = {}
+    for (const mode of ["smart", "plan", "edits"] as const) {
+      const project = tempDir()
+      const sessionId = createIdFactory()("session")
+      daemon.store.createSession({ id: sessionId, directory: project, title: `chat ${mode}` })
+      expect((await client.send({ type: "session.permission.set", sessionId, mode })).ok).toBe(true)
+      const editing = WorkflowPlan.parse(plan({ name: `inherit-${mode}`, tasks: [{ kind: "agent", id: "a", title: "a", prompt: "p", mode: "work" }, { kind: "agent", id: "r", title: "r", prompt: "p", mode: "read", needs: ["a"] }] }))
+      const reply = await client.send({ type: "workflow.start", directory: project, plan: editing, originSessionId: sessionId, ...(mode === "edits" ? { permission: "full" as const } : {}) } as never)
+      expect(reply).toMatchObject({ ok: true })
+      const run = daemon.store.workflows.all().find((entry) => entry.originSessionId === sessionId)!
+      started[mode] = run.permission
+      const { taskExecution } = await import("@mendcode/workflows")
+      expect(taskExecution(run, run.plan.tasks.find((task) => task.id === "r")!)).toMatchObject({ readOnly: true })
+      expect(taskExecution(run, run.plan.tasks.find((task) => task.id === "a")!).permission).toBe(run.permission)
+    }
+    // An explicit --permission above the session's grant is lowered to it.
+    expect(started).toEqual({ smart: "smart", plan: "plan", edits: "edits" })
+  })
+})

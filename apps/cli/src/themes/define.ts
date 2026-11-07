@@ -58,8 +58,13 @@ export type Theme = {
   name: string
   label: string
   dark: boolean
-  /** Reference background for contrast checks; the terminal draws its own. */
+  /** The theme's background: painted behind every cell when the terminal's own is of the other lightness (see `paintBackground`), and the reference for contrast checks. */
   background: string
+  /**
+   * `auto` (the default) paints `background` only when the terminal reported a background of the other lightness;
+   * `always` paints it whatever the terminal is (also one that never reported); `never` keeps the terminal's.
+   */
+  paintBackground?: "auto" | "always" | "never"
   colors: Palette
   /** Terminal-owned palette indices; default preserves the host's foreground/background. */
   ansi?: Readonly<Record<ColorName, number | "default">>

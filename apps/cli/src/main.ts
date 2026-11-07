@@ -1074,6 +1074,8 @@ if (saved.ok) {
 // Raw mode before the screen asks the terminal anything: a terminal still echoing prints the answer to the keyboard query (`^[[?1;2;4c`) as text.
 process.stdin.setRawMode?.(true)
 if (!leaving) screen.enter() // a close during start has already left: entering now would strand the alternate screen
+// The terminal's background decides whether the theme paints its own (a light theme in a dark terminal); inline output keeps the terminal's.
+if (!leaving && altScreen) screen.requestTerminalMode()
 // An error nobody caught shows the crash screen (the draft saved, the terminal restored on leaving) instead of a stack trace over the alternate screen.
 const crash = createCrashGuard({ screen, now: Date.now, version: CLI_VERSION, env: process.env, home: process.env.HOME, saveDrafts: draftsSaved, exit: (code) => (leaving ? undefined : exit(code)), resume: () => app?.render() })
 // With the daemon in this process an error nobody caught can come from either side. The process survives it (a separate daemon would have died with its turn):

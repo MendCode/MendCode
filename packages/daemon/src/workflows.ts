@@ -1,6 +1,6 @@
 import type { ExtensionLayer } from "@mendcode/packages"
 import path from "node:path"
-import { redactSecrets, summarizeWorkflow, type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
+import { redactSecrets, summarizeWorkflow, WORKFLOW_PERMISSION_RANK,type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
 import type { CheckRunner } from "@mendcode/loops"
 import type { WorkflowPort } from "@mendcode/tools"
 import type { ScriptHostPort, ScriptJournalPort, ScriptMergePort, WorkflowDefinitionsPort, WorkflowService, WorkflowStorePort } from "@mendcode/workflows"
@@ -32,11 +32,15 @@ export type WorkflowCommand =
 
 /** Leading + trailing push per run (P12): a burst of task changes reaches clients as at most two events per window. */
 export const WORKFLOW_CHANGED_COALESCE_MS = 250
-const RANK: Record<Permission, number> = { ask: 0, edits: 1, full: 2 }
+const RANK: Record<Permission, number> = WORKFLOW_PERMISSION_RANK
 
-/** min(what the plan asks, what the user granted); `plan` mode grants nothing beyond ask. */
-export function appliedPermission(requested: Permission | undefined, granted: PermissionMode | undefined): Permission {
-  const grant: Permission = granted === "edits" || granted === "full" ? granted : "ask"
+/**
+ * min(what the plan or the user's `--permission` asks, what the user granted). `inherit`: the grant is a session's own mode,
+ * kept as it is (a plan session's run stays plan, a smart one smart); otherwise the default permission, where plan and smart
+ * grant nothing beyond ask.
+ */
+export function appliedPermission(requested: Permission | undefined, granted: PermissionMode | undefined, inherit = false): Permission {
+  const grant: Permission = inherit && granted ? granted : granted === "edits" || granted === "full" ? granted : "ask"
   if (!requested) return grant
   return RANK[requested] <= RANK[grant] ? requested : grant
 }
@@ -206,7 +210,7 @@ export function createWorkflowsHost(options: {
       tasks: plan.tasks.map((entry) => {
         if (entry.kind === "human") return { id: entry.id, kind: entry.kind, prompt: entry.prompt, needs: entry.needs }
         const task = entry.kind === "map" ? { ...entry.map.taskTemplate, kind: "agent" as const } : entry
-        return { id: entry.id, kind: entry.kind, ...(task.kind !== "check" ? { mode: task.mode, output: task.output, inputs: task.inputs, routing: { model: task.model ?? plan.model, agent: task.agent ?? plan.agent, permission: appliedPermission(task.permission, permission), workflowPolicy: plan.permissions, taskPolicy: task.permissions, allowedTools: task.allowedTools, workflowBudget: plan.budget, taskBudget: task.budget } } : { command: task.command }), ...(entry.kind === "map" ? { map: { source: entry.map.source, maxItems: entry.map.maxItems, prompt: entry.map.taskTemplate.prompt } } : {}), workspace: task.workspace ?? entry.workspace ?? plan.workspace, ...(task.retry ? { retry: task.retry } : {}), needs: entry.needs }
+        return { id: entry.id, kind: entry.kind, ...(task.kind !== "check" ? { mode: task.mode, output: task.output, inputs: task.inputs, routing: { model: task.model ?? plan.model, agent: task.agent ?? plan.agent, permission: appliedPermission(task.permission, permission, true), workflowPolicy: plan.permissions, taskPolicy: task.permissions, allowedTools: task.allowedTools, workflowBudget: plan.budget, taskBudget: task.budget } } : { command: task.command }), ...(entry.kind === "map" ? { map: { source: entry.map.source, maxItems: entry.map.maxItems, prompt: entry.map.taskTemplate.prompt } } : {}), workspace: task.workspace ?? entry.workspace ?? plan.workspace, ...(task.retry ? { retry: task.retry } : {}), needs: entry.needs }
       }),
       ...(plan.retention ? { retention: plan.retention } : {}),
       ...(plan.phases ? { phases: plan.phases } : {}),
@@ -220,7 +224,7 @@ export function createWorkflowsHost(options: {
 
   function workflowPermission(plan: WorkflowPlan, command: Extract<WorkflowCommand, { type: "workflow.start" | "workflow.preview" }>): Permission {
     const session = command.originSessionId ? options.sessionPermission?.(command.originSessionId) : undefined
-    if (session !== undefined) return appliedPermission(command.permission, session)
+    if (session !== undefined) return appliedPermission(command.permission, session, true)
     if (command.permission) return command.permission
     return appliedPermission(plan.permission, options.defaultPermission(command.directory))
   }

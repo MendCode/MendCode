@@ -8,7 +8,8 @@ Its fixed header names the current preset and `/panel`, including in the narrow 
 
 ## Panel commands
 
-- `/panel <preset>` switches to a curated list; `/panel next` cycles the available presets (skips galaxy outside full tier). `/panel off` hides the panel and retains its list.
+- `/panel <preset>` switches to a curated list; `/panel next` cycles the available presets (skips galaxy outside full tier). `/panel off` hides the panel and retains its list. When your saved panel is a preset with your own changes (see [Your version of a preset](#your-version-of-a-preset)), `/panel <preset>` shows yours; `/panel <preset> default` shows the built-in one.
+- `/panel profile` drops this session's choice and shows your saved panel again.
 - `/panel edit` opens the widget editor; its keys are below.
 - `/panel reset` empties the effective spec and hides it. The next `/panel` starts with pulse again.
 - `/panel width 32..80|auto` sets the bar's cells (`sidebarWidth`; automatic is 48, 56 from 150 columns).
@@ -40,7 +41,7 @@ These commands affect the session where you type them, not every terminal:
 
 Another terminal, or another session in the same terminal, keeps its own screen.
 
-The session's choices are kept in `<dataDir>/tui/session-look.json` for the newest 200 sessions. It shows them again after `/restart` or in any terminal that opens it.
+The session's choices are kept in `<dataDir>/tui/session-look.json` for the newest 200 sessions. It shows them again after `/restart` or in any terminal that opens it. A preset chosen in a session is kept as its name only (`"panelPreset": "galaxy"`, or `"galaxy:default"` for the built-in one), never as a copy of its cards, so it always shows the current version of your panel. A session that an older build left holding a built-in preset's cards is read as that preset's name.
 
 The defaults every terminal starts from are the config files: `/customize`, `tui/profile.json` and the panel's spec. `/panel edit` and `/panel reset` edit that spec, reaching every session that has no cards of its own.
 
@@ -54,11 +55,19 @@ Quota cards show observation age. Readings older than 15 minutes show one muted 
 
 A card with nothing to show is one muted line (`No timed turns yet`, `Nothing queued`). Cards keep their height while a turn starts and ends; todos list every item, up to six.
 
+### Your version of a preset
+
+A saved panel that starts with a preset's cards is your version of that preset: the galaxy followed by your own cards is your galaxy. Choosing that preset in any session shows your version, and editing the saved panel changes it there too.
+
+The `/panel` menu says which one you get: `Show galaxy · custom (profile)` for yours, `Show pulse · default` for a built-in one. Typing a space after a preset offers `default`, the built-in list. The line after a choice names it as well (`panel: galaxy (4 cards) · custom (profile) · this session`).
+
+If a session shows the built-in one where you expected yours, run `/panel galaxy` or `/panel profile` in it. If the saved panel itself lost your cards, `/customize restore` brings back an earlier copy of the profile.
+
 ### Preset identity and refusals
 
 The header names the preset whenever the spec has the same cards in the same order; priorities and key order do not matter. `custom` means an edited list.
 
-`/panel next` continues from the current preset. A custom or empty spec starts at `pulse`; it skips `galaxy` outside the full tier.
+`/panel next` continues from the current preset, or from the preset your version is built on. Any other custom or empty spec starts at `pulse`; it skips `galaxy` outside the full tier.
 
 A refused preset changes nothing and says why in one line:
 

@@ -4,6 +4,8 @@ MendCode reviews pull requests with your own model: one pass finds candidate def
 
 No SaaS, no GitHub App, no webhook server and no stored token.
 
+The reviewer only reads: a pull request's text cannot make it write files, run commands or reach the network. [What a malicious pull request can do](pr-review-security.md) has the details and how to make it stricter.
+
 Open `/pr repos` to see your repository watches. The scrollable page shows directory, state, role, open PRs and publish setting in columns, with ended watches below active ones and the full daemon report below the table.
 
 | Key | Does |
@@ -48,6 +50,8 @@ On a large test PR of 24 files, 12 of them deleted, the diff went from about 40,
 
 A diff that still does not fit one call is reviewed in parts of whole files, at most 12, one review call each. Their candidates are merged before one verify pass; a stopped job's checkpoint names its progress (`analysis 3/5`).
 
+A diff at most 5% over one call's share stays one call, with callers cut first: a part of a few files would pay a whole review child of its own (its start, its brief and its reading) for them. The share leaves half the call's window free, so the slack fits.
+
 Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go to the review pass whole. The [readers](#data-files-and-readers) on a cheap model summarize them first. In balanced and full tiers the readers also [read the changed code](#readers-read-the-code) first, and the review pass gets their summaries and only the hunks of the risk spots they cite, not the whole diff.
 
 The pull request's title and description go in as untrusted data for the pre-merge checks. So do issues it closes with GitHub's keywords (`Fixes #12`): at most three, each read with one `gh api` call.
@@ -57,6 +61,7 @@ The pull request's title and description go in as untrusted data for the pre-mer
 One child session in plan mode, the read-only `explore` agent with no edits, answers with findings as JSON: path, line on the diff's new side, severity, category, summary, detail, `file:line` evidence and an optional suggestion.
 
 - An invalid answer gets one repair turn, then the review fails (`[PR_REVIEW]: invalid findings`). Prose never becomes a finding.
+- An answer that holds the asked JSON object is used as it is, even with prose after it that contains a brace, the object written twice, or a string with a stray backslash or a raw line break. Only an answer without the object (prose, a cut answer) costs the repair turn.
 - A finding on a line the diff does not show on its new side is dropped.
 
 The same answer carries the **walkthrough**:
@@ -80,7 +85,7 @@ A fresh child, never the one that found them, tries to refute each finding, at m
 
 A verifier that fails publishes nothing, and the summary says so. Its answer gets one repair turn.
 
-If it is still unusable, or the child crashed, the attempt fails with the verifier's words and the start of its answer in the job's error. Candidates stay in the checkpoint; a backoff retry verifies them again without a second review pass.
+If it is still unusable, or the child crashed, the attempt fails with the verifier's words and the start of its answer in the job's error. Candidates stay in the checkpoint; a backoff retry verifies them again without a second review pass, and without asking the readers again: no review pass runs to read what they would say.
 
 A review pass with no candidates has nothing to verify and is published as no findings.
 
@@ -190,7 +195,7 @@ and `readers.code: all` (the default), the cheap readers read all the changed co
 3. Every range is checked against the diff: both ends must be new-side lines of that file. Invalid ranges are dropped and counted in the review note.
 4. The review pass gets the PR title and description, the list of changed files with their sizes, each file's summary and risk spots, the exact hunks the risk spots touch, and the code graph's callers and callees of the changed symbols. A small file (about 2,400 characters of diff or less) is shown whole. It never gets the whole diff by default, and it can open any file with its own read-only tools, which its prompt tells it to do for anything that matters.
 
-A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent, the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
+A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent (or, on a small diff whose scaled cap gives the readers less than one call's fixed cost, it never covered a call; the note then says the diff is small), the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
 
 Summaries are hints and can miss a defect: a risk spot a reader did not flag is a hunk the review pass does not see unless it opens the file. That is the trade for a much smaller review prompt. It is bounded by what comes after: a finding is published only after the verify pass confirms it against the real code, so a miss costs a missed finding, never a false one. Nothing a reader says is published.
 
@@ -268,7 +273,8 @@ A summary is a hint: the review pass reads the file with its tools before it rep
   checked before each call; what they count comes off the cap of the review and verify passes, so the PR's total stays under
   `budget.tokens_per_pr`. Their turns are in the accounting ledger as the `read` purpose (files written before it existed still
   load) and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
-  same head does not read the files again.
+  same head does not read the files again. A resume that only verifies (the review pass is already in the checkpoint) calls no
+  reader at all.
 - **What you see.** The summary and the session notice say how many files went to readers and on which model, for example
   `Readers: 106 files went to readers instead of the review pass whole: 106 files by claude-haiku (1 call, up to 2 at once, …)`.
 - `readers.enabled: false` sends every diff to the review pass as before; `readers.code: overflow` does so for code only.
@@ -421,6 +427,11 @@ The only other way, a separate `CODEX_HOME`, needs your login copied or moved, w
 A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings in the files it changed, whether their lines were rewritten, moved, or left as they were while code next to
 them changed (a fix often inserts the missing call above the flagged line): one that no longer reproduces gets its thread resolved.
+A finding in a file the push did not touch is not asked about again. A measured cost rise ([Performance of MendCode's own pull
+requests](#performance-of-mendcodes-own-pull-requests)) is never re-checked by a model: the new head's measurement decides, and a
+head measured without a rise resolves it, on an incremental review or a whole-PR one (after a force push, or with `coverage: full`).
+A head with nothing to review costs no model call: the same files as the reviewed head (an empty commit, a reworded or re-signed
+commit, a force push that changed nothing), or only files the config ignores. Its summary says so, and nothing new is posted.
 The last reviewed head is the saved state's, or, when this device has none (another device reviewed, the data directory was wiped),
 the head marker of this login's newest review on the PR. The summary says `only the commits since the last review at `0afbdcd``.
 GitHub lets only writers and the PR author resolve a thread; where it refuses (a publisher with read access), one reply in the
@@ -446,7 +457,7 @@ A laptop asleep with its lid closed adds nothing, including dark wakes without n
 
 | Failure | Watch behavior |
 |---|---|
-| Network or forge outage: no route, DNS, timeouts, 5xx, rate limits | Never ends the watch. After 15 awake minutes, the session hears of it once, and again when PR listing works. |
+| Network or forge outage: no route, DNS, timeouts, 5xx, rate limits | Never ends the watch. After 15 awake minutes, the session hears once that the watch is waiting for the forge and has not stopped, and again when PR listing works. A `gh` call the forge never answers is stopped after 15 s and counts as a timeout. |
 | An error that says neither | Same: never ends the watch. |
 | Permanent error for 15 awake minutes in a row | Ends the watch with that error in the notice. `/pr watch-repo` starts it again. |
 
@@ -1206,10 +1217,15 @@ When the repository under review is MendCode itself (the checkout's root package
 the daemon measures the pull request before the model pass: it runs `bun scripts/perf-attrib.ts --base <merge base> --cand <head>
 --markdown` as a separate subprocess (the review model stays read-only and builds nothing), on the offline faux engine, so it uses no
 model and no login. The table goes into the review's details and to the model as input, so a finding can cite its numbers; the only
-model cost is the table's text.
+model cost is the table's text. A review checkout without installed dependencies gets them from the lockfile first
+(`bun install --frozen-lockfile`, as the script does for each build) and loses them again afterwards; a run that still fails is
+reported by its error line.
 
-- A metric that rose above the measured noise (the script exits 1) adds a critical `performance` finding on the first changed line
-  of the code that can change cost. Within the noise is no difference.
+- A total that rose above the measured noise (a process's footprint, CPU in a phase, or the bytes a session stores; the script exits
+  1) adds a critical `performance` finding on the first changed line of the code that can change cost. Within the noise is no difference.
+  On a later head no model re-checks that finding: the new measurement decides, and a head measured without a rise resolves it.
+- An inner count that rose while no total did (JS heap objects, protected objects, heap bytes, JIT code, the binary's size) is a
+  `nota`: it shows in the table and the model may cite it, but it is never a finding on its own.
 - Without a table, the model is told so and reports a major finding when the change adds start-up, per-turn or per-frame work, a
   timer, a stored row or column, a dependency or an embedded asset and the pull request gives no before/after numbers.
 - It runs only when the diff touches code, manifests or build scripts (`apps/`, `packages/`, `features/`, `package.json`, the lockfile,

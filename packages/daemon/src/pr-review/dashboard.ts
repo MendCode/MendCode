@@ -1,5 +1,6 @@
-import { PrReviewDashboard, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
+import { PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { JobState, ReviewJob } from "./contracts"
+import type { ReviewState } from "./state"
 
 /**
  * The TUI's reviews page data (`pr.review` action `status`, docs/pr-review.md): the watches, the reviewers and the newest jobs of
@@ -52,6 +53,25 @@ export function findingCounts(job: Pick<ReviewJob, "checkpoint">): PrJobSummary[
   const resolved = open ? confirmed.filter((finding) => !open.has(finding.id)).length : 0
   const blocking = confirmed.filter((finding) => (finding.severity === "critical" || finding.severity === "major") && (!open || open.has(finding.id))).length
   return { confirmed: confirmed.length, plausible, candidates: candidates.length, resolved, ...(blocking ? { blocking } : {}) }
+}
+
+/**
+ * The findings open on the pull request after this job, as the commit status counts them (commit-status.ts `openFindings`): the job's
+ * own confirmed findings a fix round left open, plus earlier published ones (`ReviewState.published`) not resolved. An incremental or
+ * unchanged-tree job holds only its own run's findings, so its checkpoint alone would read an open blocker as answered.
+ */
+export function unresolvedCounts(job: Pick<ReviewJob, "checkpoint">, state: Pick<ReviewState, "published">): NonNullable<PrJobSummary["unresolved"]> {
+  const { verified, rounds } = job.checkpoint
+  const lastOpen = rounds.at(-1)?.open
+  const stillOpen = lastOpen ? new Set(lastOpen) : undefined
+  // As the commit status: every published finding not resolved (a plausible one a strict review posted included) except those a fix
+  // round of this job closed, plus this job's confirmed findings still open.
+  const fixed = new Set(stillOpen ? verified.filter((finding) => !stillOpen.has(finding.id)).map((finding) => finding.id) : [])
+  const open = new Map<string, PrFinding>()
+  for (const [id, entry] of Object.entries(state.published)) if (entry.finding && !entry.resolved && !fixed.has(id)) open.set(id, entry.finding)
+  for (const finding of verified) if (finding.verdict === "confirmed" && !fixed.has(finding.id)) open.set(finding.id, finding)
+  const list = [...open.values()]
+  return { open: list.length, blocking: list.filter((finding) => finding.severity === "critical" || finding.severity === "major").length }
 }
 
 /** One ledger job as the page shows it: `sessionId` is the review session (not the watch's), strings cut to the protocol's bounds. */

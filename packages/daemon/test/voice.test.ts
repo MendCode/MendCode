@@ -139,6 +139,21 @@ describe("dictation service", () => {
     expect(await h.voice.start(h.owner)).toMatchObject({ ok: false })
   })
 
+  test("a terminal that closes while the recorder starts drops the clip at once, not at the held limit", async () => {
+    const h = service({ voice: { enabled: true } })
+    let open!: () => void
+    const opened = new Promise<void>((resolve) => (open = resolve))
+    const start = h.recorder.recorder.start
+    h.recorder.recorder.start = async (file) => { await opened; return start(file) }
+    const starting = h.voice.start(h.owner, true)
+    h.voice.forget(h.owner)
+    open()
+    expect(await starting).toMatchObject({ ok: false, message: "[VOICE]: cancelled" })
+    expect(h.recorder.calls.kills).toBe(1)
+    expect(h.files()).toEqual([])
+    expect(h.clock.pendingTimers()).toBe(0)
+  })
+
   test("the recording ends at the limit and an unclaimed clip is dropped a minute later", async () => {
     const h = service({ voice: { enabled: true, max_seconds: 5 } })
     await h.voice.start(h.owner)
@@ -153,6 +168,16 @@ describe("dictation service", () => {
     expect(h.files()).toEqual([])
     expect(h.clock.pendingTimers()).toBe(0)
     expect(await h.voice.stop(h.owner)).toMatchObject({ ok: false, message: "[VOICE]: not recording" })
+  })
+
+  test("a held space records an uploaded clip up to the upload size, not max_seconds", async () => {
+    const h = service({ voice: { enabled: true, max_seconds: 5 } })
+    const started = await h.voice.start(h.owner, true)
+    expect(started.ok && started.value.maxSeconds).toBe(780)
+    h.clock.advance(5_000)
+    expect(h.recorder.calls.stops).toBe(0)
+    h.clock.advance(775_000)
+    expect(h.recorder.calls.stops).toBe(1)
   })
 
   test("an empty clip is reported as no audio and nothing is uploaded", async () => {
@@ -198,10 +223,51 @@ describe("on-device dictation", () => {
     const http = fakeFetch()
     const mic = options.device ?? device()
     const heard: Array<{ owner: object; update: LocalLive }> = []
-    const voice = createVoice({ dir, clock: createVirtualClock(), recorder: recorder.recorder, fetch: http.fetcher, settings: () => ({ voice: options.voice }) as Settings, credentials: () => ({ baseUrl: "https://api.openai.test/v1", headers: { authorization: "Bearer sk-secret" } }), local: mic.local, ...(options.allowed !== undefined ? { allowed: () => options.allowed! } : {}), live: (owner, update) => heard.push({ owner, update }) })
+    const clock = createVirtualClock()
+    const voice = createVoice({ dir, clock, recorder: recorder.recorder, fetch: http.fetcher, settings: () => ({ voice: options.voice }) as Settings, credentials: () => ({ baseUrl: "https://api.openai.test/v1", headers: { authorization: "Bearer sk-secret" } }), local: mic.local, ...(options.allowed !== undefined ? { allowed: () => options.allowed! } : {}), live: (owner, update) => heard.push({ owner, update }) })
     cleanups.push(() => voice.dispose())
-    return { voice, recorder, http, mic, heard, owner: {} }
+    return { voice, recorder, http, mic, heard, clock, owner: {} }
   }
+
+  test("a held space records on-device with no limit: minutes past max_seconds it still listens, and a closed terminal ends it", async () => {
+    const h = onDevice({ voice: { max_seconds: 60 } })
+    const started = await h.voice.start(h.owner, true)
+    expect(started.ok && started.value.maxSeconds).toBe(0)
+    h.clock.advance(10 * 60_000)
+    expect(h.mic.calls.kills).toBe(0)
+    expect(h.clock.pendingTimers()).toBe(0)
+    const stopped = await h.voice.stop(h.owner)
+    expect(stopped.ok && stopped.value).toMatchObject({ text: "hola mundo", seconds: 600 })
+    await h.voice.start(h.owner, true)
+    h.voice.forget(h.owner)
+    expect(h.mic.calls.kills).toBe(1)
+  })
+
+  test("a terminal that closes or cancels while the microphone opens leaves nothing recording", async () => {
+    for (const leave of ["forget", "cancel"] as const) {
+      const mic = device()
+      let open!: () => void
+      const opened = new Promise<void>((resolve) => (open = resolve))
+      const slow: LocalDictation = { ...mic.local, async start(input) { await opened; return mic.local.start(input) } }
+      const h = onDevice({ device: { ...mic, local: slow } })
+      const starting = h.voice.start(h.owner, true)
+      if (leave === "forget") h.voice.forget(h.owner)
+      else h.voice.cancel(h.owner)
+      open()
+      expect(await starting).toMatchObject({ ok: false, message: "[VOICE]: cancelled" })
+      expect(mic.calls.kills).toBe(1)
+      expect(h.voice.status()).toMatchObject({ ok: true, value: { recording: false } })
+      expect(await h.voice.start({}, true)).toMatchObject({ ok: true })
+    }
+  })
+
+  test("a toggled recording (not held) keeps max_seconds", async () => {
+    const h = onDevice({ voice: { max_seconds: 60 } })
+    const started = await h.voice.start(h.owner)
+    expect(started.ok && started.value.maxSeconds).toBe(60)
+    h.clock.advance(60_000 + 60_000)
+    expect(h.mic.calls.kills).toBe(1)
+  })
 
   test("where it runs it is the default and on without a setting: no key, no recorder program, no upload", async () => {
     const h = onDevice()

@@ -70,6 +70,7 @@ export function createRender(ctx: AppContext, actions: {
   agentMetadata: ReturnType<typeof createAgents>["agentMetadata"]
   peerCommandRows: (width: number, height: number) => Line[]
   reviewsRows: (width: number, height: number) => Line[]
+  todayRows: (width: number, height: number) => Line[]
   dropRevealedSecret: ReturnType<typeof createSecrets>["dropRevealedSecret"]
   syncPulse: () => void
   syncCompactionLive: () => void
@@ -449,6 +450,7 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "tutorial" && state.tutorialState) body = renderTutorialPage({ view: state.tutorialState.view(), bindings: state.bindings, sandbox: (w, h) => state.tutorialState!.sandbox.rows(w, h), width, height: bodyHeight, glyphs: ctx.glyphs, accessible: state.accessible })
     else if (state.page === "mflow" && state.mflow) body = renderMflowPage({ state: state.mflow, width, height: bodyHeight, now: now() })
     else if (state.page === "reviews") body = actions.reviewsRows(width, bodyHeight)
+    else if (state.page === "today") body = actions.todayRows(width, bodyHeight)
     else if ((state.page === "worktrees" || state.page === "warp") && state.worktrees) {
       const framed = actions.git.framed()
       body = renderWorktreesPage({ state: state.worktrees, width, height: framed ? bodyHeight - 1 : bodyHeight })

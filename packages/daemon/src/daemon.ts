@@ -41,9 +41,9 @@ import { createMessageMutations } from "./message-mutations"
 import { createSessionHttpApi, validateSessionHttpListener } from "./session-http"
 import { createDebug } from "./debug"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
-import { createMemoryModel } from "./memory-model"
+import { createMemoryModel, type MemoryOrigin } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
-import { consolidationCategories, memorySettings } from "./memory-config"
+import { consolidationCategories, fullMemoryTier, memorySettings } from "./memory-config"
 import { daemonLogs } from "./daemon-logs"
 import { consolidateMemory } from "./memory-consolidation"
 import { createSemanticConsolidator } from "./memory-consolidator"
@@ -101,7 +101,7 @@ import { createSelfPackages } from "./self-packages"
 import { createCommandExecution } from "./command-execution"
 import { createInlineShellTable, type InlineShell } from "./inline-shell"
 import { expandMcpMentions, expandMcpPrompt, type McpContentPort } from "./mcp-content"
-import { createRunLimitsStore, type RunLimitsStore } from "./run-limits"
+import { createRunLimitsStore, reviewIneligible, type RunLimitsStore } from "./run-limits"
 import { createSessionPermissionRules } from "./session-permission-rules"
 import { createGrantStore, type AgentPort, type EngineHooks, type GoalPort, type GrantStore, type SecretsPort } from "@mendcode/engine-native"
 import { createGoalPrompts } from "./goal-prompts"
@@ -112,8 +112,9 @@ import type { CodegraphStatus, CodegraphStatusHub } from "./codegraph-status"
 import { graphIndexMode } from "./graph-gate"
 import { normalizeQuotaRefresh, type QuotaRefreshProvider } from "@mendcode/protocol/wire"
 import { capPermission, declaredRoots, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
-import { memoryMaintenance } from "./memory-maintenance"
-import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
+import { expiredPending, memoryMaintenance } from "./memory-maintenance"
+import { findDuplicate } from "./memory-duplicates"
+import type { createMemoryExtraction, ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
 import { createTaskOwnerWake } from "./task-owner-wake"
 import { createRestartResume } from "./restart-resume"
@@ -250,6 +251,7 @@ import { createAutomationLedgerHost } from "./automation-ledger"
 import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
 import { memoryGraph } from "./memory-graph"
 import { checkWindow, dateKey, nextCheckIn, windows } from "./dream-schedule"
+import { dreamMachinery, dreamProjectSkip, hasNewMaterial } from "./dream-projects"
 import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
@@ -278,7 +280,7 @@ import { searchFiles } from "./files-index"
 import { createInteractiveProcesses } from "./interactive-processes"
 import { createBackgroundTasks, type BackgroundPort, type InteractivePort, type LoopPort, type PeerPort, type ReviewPort, type WorkflowPort } from "@mendcode/tools"
 import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-notice"
-import { catalogId, catalogModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
+import { catalogId, catalogModel, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
 import { createLiveTokens } from "./live-tokens"
@@ -475,6 +477,8 @@ export type DaemonOptions = RemoteListenerOptions & {
    */
   extractMemory?(job: import("@mendcode/protocol").ExtractionJob, signal: AbortSignal, onUsage?: (usage: BudgetUsage) => void): Promise<ExtractedMemory[]>
   dream?: { complete(prompt: string, signal: AbortSignal, model?: ModelChoice): Promise<Completion> }
+  /** Whether the schedule and the recovery may run Dream for a folder; the default skips temporary folders, missing folders, linked worktrees and the data directory. */
+  dreamEligible?(directory: string): boolean
   /** One tool-less model call (`/btw` side questions); without it they are refused. */
   complete?(input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice; onText?(text: string): void }): Promise<string>
   /** Setup helper completion with observed usage when the adapter exposes it. */
@@ -516,7 +520,7 @@ export type DaemonOptions = RemoteListenerOptions & {
  * propose new ones. A proposal follows its category's policy: review (pending, the default), auto (saved) or never (dropped).
  */
 export type MemoryAccess = {
-  request(directory: string, input: import("@mendcode/protocol").MemoryModelInput): Record<string, unknown>
+  request(directory: string, input: import("@mendcode/protocol").MemoryModelInput, sessionId?: string): Record<string, unknown>
   saved(directory: string): MemoryEntry[]
   /** Saved memories visible to a session: its profile's user memories, its project's and (with `sessionId`) its own. */
   visible(input: { directory: string; sessionId?: SessionId }): MemoryEntry[]
@@ -1132,10 +1136,13 @@ export async function startDaemon(options: DaemonOptions) {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
     await budgets.guard({ model: model.model, signal })
     let usage: BudgetUsage | undefined
+    let failed = false
     try { return await options.extractMemory!(job, signal, (value) => { usage = value }) }
+    catch (error) { failed = true; throw error }
     finally {
       budgets.record(usage)
-      auxiliaryUsage.record({ role: "memoryExtractor", sessionId: job.sessionId, directory: job.directory }, usage, model.model)
+      // A request the provider refused or that was cut short used no tokens: it is a failed job (the extraction ledger has it), not a call.
+      if (!failed || usage) auxiliaryUsage.record({ role: "memoryExtractor", sessionId: job.sessionId, directory: job.directory }, usage, model.model)
     }
   } : undefined
   const debug = createDebug({ options, store, agents, extensions: manager, customTools, skills, id: () => ids("session"), paths: (directory) => systemReport("config-paths", { dir: options.dir, directory, socketPath: options.socketPath, engine: options.info?.engine ?? "unknown", settings: store.settings.get(), catalog }).facts.paths })
@@ -1338,7 +1345,7 @@ export async function startDaemon(options: DaemonOptions) {
     inlineShell: (text) => inlineShells.find(text),
     emitGlobal: (event) => void globalSink.append(event),
     memory: {
-      request: (directory, input) => modelMemory.request(directory, input),
+      request: (directory, input, sessionId) => modelMemory.request(directory, input, sessionId ? originOf(sessionId as SessionId) : undefined),
       saved: (directory) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory) }),
       visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
       related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
@@ -1567,8 +1574,11 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Loops and workflows observe every session event (a map lookup per event each). */
   let extractedNotices: MemoryEntry[] = []
-  const extraction = createMemoryExtraction({
+  const extractionOptions: Parameters<typeof createMemoryExtraction>[0] = {
     store, now: () => clock.now(), settings: (directory) => memorySettings(store.settings.get(), directory), extract: extractBudgeted,
+    // A scripted run (headless, eval, replay, PR review child) configures run limits: it is not a conversation to learn from.
+    ineligible: (sessionId) => reviewIneligible(runLimits, sessionId as SessionId),
+    ...(options.dreamEligible ? { eligibleDirectory: options.dreamEligible } : {}), dataDir: options.dir,
     commit: (job, memories) => {
       let proposed = 0
       const notices: MemoryEntry[] = []
@@ -1577,10 +1587,8 @@ export async function startDaemon(options: DaemonOptions) {
       const asked = job.text.split("\n").filter((line) => line.startsWith("user:")).map((line) => line.slice(5)).join(" ")
       for (const memory of memories.slice(0, 20)) {
         if (!memory.text.trim() || memory.text.length > 2_000) continue
-        const entries = store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) })
-        const normalized = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()
-        if (entries.some((entry) => normalized(entry.text) === normalized(memory.text) && entry.status !== "archived")) continue
-        const result = proposeMemory({ ...memory, directory: job.directory, forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
+        if (findDuplicate(store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) }), memory.text)) continue
+        const result = proposeMemory({ ...memory, directory: job.directory, origin: originOf(job.sessionId), forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
         if (result.outcome !== "dropped") proposed++
         if (result.outcome === "saved" && result.memoryId) {
           const written = store.memories.get(result.memoryId as MemoryId)
@@ -1600,13 +1608,50 @@ export async function startDaemon(options: DaemonOptions) {
         sessionSink.append({ type: "item.completed", sessionId: job.sessionId, itemId, status: "ok", text: memoryNoticeText(notice), meta: memoryNoticeMeta(notice) })
       }
     },
-  })
+  }
+  /**
+   * Memory review loads at its first real use: a finished turn or a compaction where generation is on, a job left queued by an earlier
+   * run, or the Extraction tab. A terminal whose tier never reviews memory never evaluates it. Events that arrive while it loads are
+   * kept in order and handed to it once it exists.
+   */
+  type MemoryExtraction = ReturnType<typeof createMemoryExtraction>
+  let extractionReady: MemoryExtraction | undefined
+  let extractionLoad: Promise<MemoryExtraction> | undefined
+  const extractionBacklog: SessionEvent[] = []
+  const loadExtraction = () => (extractionLoad ??= import("./memory-extraction").then(({ createMemoryExtraction }) => {
+    const created = createMemoryExtraction(extractionOptions)
+    for (const event of extractionBacklog.splice(0)) created.observe(event)
+    return (extractionReady = created)
+  }))
+  const generationOn = (directory: string | undefined) => { const settings = memorySettings(store.settings.get(), directory); return settings.memoryEnabled !== false && settings.memoryGenerate === true }
+  const extraction = {
+    observe(event: SessionEvent) {
+      if (extractionReady) return extractionReady.observe(event)
+      if (event.type !== "turn.completed" && !(event.type === "compaction.updated" && event.state === "writing")) return
+      const directory = store.sessionDirectory(event.sessionId)
+      if (!directory || !generationOn(directory)) return
+      extractionBacklog.push(event)
+      void loadExtraction()
+    },
+    /** A waiting job (also one a previous run left) needs the worker; with none and nothing loaded there is nothing to wake. */
+    wake() {
+      if (extractionReady) return extractionReady.wake()
+      if (extractionLoad) return
+      if (store.extraction.list().some((job) => job.state === "queued" || job.state === "running")) void loadExtraction().then((loaded) => loaded.wake())
+    },
+    async stop() { if (extractionLoad) await (await extractionLoad).stop() },
+  }
   function maintainMemory(directory?: string) {
     const settings = memorySettings(store.settings.get(), directory)
     const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), settings.memoryMaintenance)
     if (report.policy === "auto-consolidate" && settings.memoryEnabled !== false) for (const duplicate of report.duplicates) {
       store.memories.update(duplicate.memoryId, { status: "archived" })
       globalSink.append({ type: "memory.changed", memoryId: duplicate.memoryId, change: "updated" })
+    }
+    // A proposal nobody decided in `memoryPendingDays` leaves Pending: restorable from Archived, never silently saved.
+    if (settings.memoryEnabled !== false) for (const expired of expiredPending(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), { now: clock.now(), days: settings.memoryPendingDays })) {
+      if (expired.action === "delete") { const before = store.memories.get(expired.memoryId); store.memories.delete(expired.memoryId); announceMemory(expired.memoryId, "deleted", before) }
+      else { store.memories.update(expired.memoryId, { status: "archived" }); announceMemory(expired.memoryId, "updated") }
     }
     return report
   }
@@ -1904,6 +1949,17 @@ export async function startDaemon(options: DaemonOptions) {
    * Dream for one project as a P5 background job: it yields to foreground work and never touches a
    * session actor (FC-01). One run per project at a time.
    */
+  /** A run the user did not ask for needs something new: a session of the project touched, or a memory saved or proposed, since the project's last finished run. */
+  function dreamHasNewMaterial(directory: string) {
+    const last = store.dreamRuns.lastFinished(directory)
+    if (!last) return true
+    return hasNewMaterial({
+      lastStartedAt: last.startedAt,
+      lastEndedAt: last.endedAt,
+      sessionsUpdatedAt: store.listSessions({ directory, limit: 12, hideEmpty: true }).map((session) => session.updatedAt),
+      memoriesUpdatedAt: store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }).filter((memory) => memory.status !== "archived" && !memory.details?.action).map((memory) => memory.updatedAt),
+    })
+  }
   function startDream(directory: string, trigger: DreamTrigger = "manual", policy?: "disabled" | "preview" | "auto-consolidate", deterministic = false): { runId: number; completion: Promise<import("@mendcode/protocol").DreamRun> } | { error: string; code: ErrorCode } {
     const dream = options.dream
     if (!dream) return { error: "[DAEMON]: Dream needs the native engine", code: "invalid_command" }
@@ -1924,6 +1980,7 @@ export async function startDaemon(options: DaemonOptions) {
           const { runDream } = await import("@mendcode/dream")
           const result = await runDream({
             directory,
+            ...(trigger !== "manual" && !dreamHasNewMaterial(directory) ? { skip: "Nothing new since the last run" } : {}),
             // Newest events of each session, and its last event number: an unchanged session reuses its cached digest without reading them.
             sessions: (dir) =>
               store.listSessions({ directory: dir, limit: 12 }).map((s) => ({ sessionId: s.sessionId, title: s.title, seq: s.lastSeq, events: () => visibleEvents(store.readAfter(s.sessionId, Math.max(0, s.lastSeq - 2_000), 2_000)) })),
@@ -1932,17 +1989,18 @@ export async function startDaemon(options: DaemonOptions) {
               const model = resolveModel({ role: "dream", roles: rolesFor(store.settings.get(), directory), catalog })
               await budgets.guard({ model: model.model, signal })
               let used: BudgetUsage | undefined
+              let failedCall = false
               try {
                 const completion = await dream.complete(prompt, signal, model)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                used = usage ? { provider: model.model.split(":")[0]!, model: model.model, ...usage } : undefined
+                used = usage ? { provider: model.model.split(":")[0]!, ...usage, model: model.model } : undefined
                 budgets.record(used)
                 return completion
-              } catch (error) { budgets.record(); throw error }
-              finally { auxiliaryUsage.record({ role: "dream", directory }, used, model.model) }
+              } catch (error) { failedCall = true; budgets.record(); throw error }
+              finally { if (!failedCall || used) auxiliaryUsage.record({ role: "dream", directory }, used, model.model) }
             },
             // A user-scope proposal belongs to the profile of the project Dream read; the category's policy decides what becomes of it.
-            propose: (entry) => proposeMemory({ ...entry, directory: entry.directory ?? directory, ...(consolidationPolicy === "preview" ? { forceReview: true } : {}) }).outcome,
+            propose: (entry) => proposeMemory({ ...entry, directory: entry.directory ?? directory, origin: { originEngine: "dream" }, ...(consolidationPolicy === "preview" ? { forceReview: true } : {}) }).outcome,
             revise: (entry) => void addRevision(entry),
             signal: job.signal,
             checkpoint: job.checkpoint,
@@ -1968,16 +2026,17 @@ export async function startDaemon(options: DaemonOptions) {
             const meter = usable ? (await import("@mendcode/dream")).createMeter({ limit: Math.max(0, (settings.dreamMaxTokens ?? DREAM_DEFAULT_MAX_TOKENS) - result.report.budget.used), signal: job.signal, complete: async (prompt, signal) => {
               await budgets.guard({ model: usable.model, signal })
               let used: BudgetUsage | undefined
+              let failedCall = false
               try {
                 const completion = await dream.complete(prompt, signal, usable)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                used = usage ? { provider: usable.model.split(":")[0]!, model: usable.model, ...usage } : undefined
+                used = usage ? { provider: usable.model.split(":")[0]!, ...usage, model: usable.model } : undefined
                 budgets.record(used)
                 return completion
-              } catch (error) { budgets.record(); throw error }
-              finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
+              } catch (error) { failedCall = true; budgets.record(); throw error }
+              finally { if (!failedCall || used) auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
-            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
+            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && fullMemoryTier(store.settings.get()),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
               archive: (memory) => { store.memories.update(memory.memoryId, { status: "archived" }); globalSink.append({ type: "memory.changed", memoryId: memory.memoryId, change: "updated" }) },
               ...(meter ? { semantic: createSemanticConsolidator({ call: meter.call }) } : {}),
@@ -2019,18 +2078,26 @@ export async function startDaemon(options: DaemonOptions) {
    * already built are cached, so the resumed run only does what is left. A project with a newer run is not listed.
    */
   function interruptedDreams(): string[] {
-    const since = clock.now() - 36 * 3_600_000
-    return [...new Set(store.dreamRuns.list().filter((run) => run.status === "failed" && run.startedAt >= since && run.error?.startsWith(DREAM_INTERRUPTED)).map((run) => run.directory))]
-      .filter((directory) => store.dreamRuns.list(directory)[0]?.error?.startsWith(DREAM_INTERRUPTED))
+    return store.dreamRuns.interrupted({ since: clock.now() - 36 * 3_600_000, errorPrefix: DREAM_INTERRUPTED, limit: 200 }).filter(dreamEligible).slice(0, MAX_RECOVERED_DREAMS)
   }
+  /** Why Dream may not run by itself on a folder (see `dreamProjectSkip`), or undefined. */
+  const dreamSkip = (directory: string) => options.dreamEligible ? (options.dreamEligible(directory) ? undefined : "not eligible") : dreamProjectSkip(directory, { dataDir: options.dir })
+  const dreamEligible = (directory: string) => dreamSkip(directory) === undefined
+  /** At most this many interrupted projects are resumed per check; the rest wait for the next one (every 15 minutes while scheduled). */
+  const MAX_RECOVERED_DREAMS = 5
   let dreamTimer: TimerHandle | undefined
-  /** `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. */
-  function armDreamSchedule(reset = false): { status: string; reason: string; runs: Array<{ runId: number }> } {
+  /**
+   * `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. `explicit`: a
+   * tick someone asked for (`dream.control tick`, `daemon.tick`); only that runs on a development daemon, which never arms a timer.
+   * `skipped` lists the active folders the window left out and why.
+   */
+  function armDreamSchedule(reset = false, explicit = false): { status: string; reason: string; runs: Array<{ runId: number }>; skipped?: Array<{ directory: string; reason: string }> } {
     dreamTimer?.cancel()
     dreamTimer = undefined
     const at = store.settings.get().dreamAt
     const runs: Array<{ runId: number }> = []
-    if (!at || !options.dream || options.dev) return { status: "skipped", reason: options.dev ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
+    const skipped: Array<{ directory: string; reason: string }> = []
+    if (!at || !options.dream || options.dev && !explicit) return { status: "skipped", reason: options.dev && at && options.dream ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
     const handled = store.meta.get(DREAM_WINDOW_KEY)
     if (reset || handled === undefined) store.meta.set(DREAM_WINDOW_KEY, dateKey(windows(clock.now(), at).last))
     else {
@@ -2038,7 +2105,12 @@ export async function startDaemon(options: DaemonOptions) {
       if (verdict.action === "run") {
         store.meta.set(DREAM_WINDOW_KEY, verdict.day)
         const since = clock.now() - 86_400_000
-        const active = new Set(store.listSessions({ limit: 500 }).filter((s) => s.updatedAt >= since && !s.title.startsWith("loop · ") && !s.title.startsWith("workflow · ")).map((s) => s.directory))
+        // Real projects only: a session with a user turn, not machinery, in a folder that exists and is not a temporary or linked worktree.
+        const active = new Set(store.listSessions({ limit: 500, since, hideEmpty: true }).filter((s) => !dreamMachinery(s.title)).map((s) => s.directory))
+        for (const directory of active) {
+          const why = dreamSkip(directory)
+          if (why) { active.delete(directory); if (skipped.length < 50) skipped.push({ directory, reason: why }) }
+        }
         for (const directory of active) {
           const started = startDream(directory, verdict.trigger)
           if (!("error" in started)) runs.push({ runId: started.runId })
@@ -2049,8 +2121,8 @@ export async function startDaemon(options: DaemonOptions) {
       const started = startDream(directory, "recovered")
       if (!("error" in started)) runs.push({ runId: started.runId })
     }
-    dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
-    return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs }
+    if (!options.dev) dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
+    return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs, ...(skipped.length ? { skipped } : {}) }
   }
 
   /**
@@ -2225,20 +2297,29 @@ export async function startDaemon(options: DaemonOptions) {
    * the caller allows nothing beyond review (Evolution's suggest mode). The agent only knows markers, but a proposal is
    * stored for long: a secret it still carries (read from a file) is redacted.
    */
-  function proposeMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; forceReview?: boolean; cap?: "review"; details?: MemoryEntry["details"] }): { memoryId?: string; outcome: "pending" | "saved" | "dropped" } {
+  function proposeMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; forceReview?: boolean; cap?: "review"; details?: MemoryEntry["details"]; origin?: MemoryOrigin }): { memoryId?: string; outcome: "pending" | "saved" | "dropped" } {
     const safe = redactSecrets(entry.text)
     const settings = memorySettings(store.settings.get(), entry.directory)
     if (settings.memoryEnabled === false) return { outcome: "dropped" }
-    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
+    const all = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) })
+    // Repeating a memory (saved, pending or archived, any scope here) proposes nothing: an archived one stays archived until the user restores it.
+    if (findDuplicate(all, safe.text)) return { outcome: "dropped" }
+    const entries = all.filter((memory) => memory.status !== "archived")
     if (entries.length >= (settings.memoryMaxEntries ?? 50)) return { outcome: "dropped" }
     if (entry.scope === "project" && entries.filter((memory) => memory.scope === "project").length >= (settings.memoryProjectMaxEntries ?? 3)) return { outcome: "dropped" }
     const policy = memoryPolicyFor(entry.category, settings.memoryPolicies)
     if (policy === "never") return { outcome: "dropped" }
     if (entry.scope === "session" && !(entry.sessionId && store.hasSession(entry.sessionId))) return { outcome: "dropped" }
     const review = policy === "review" || safe.count > 0 || entry.forceReview === true || entry.cap === "review"
-    const { forceReview: _forceReview, cap: _cap, ...rest } = entry
-    const memoryId = addMemory({ ...rest, text: safe.text, source: "agent", status: review ? "pending" : "saved" })
+    const { forceReview: _forceReview, cap: _cap, origin, ...rest } = entry
+    const memoryId = addMemory({ ...rest, ...(origin ? { details: { ...rest.details, ...origin } } : {}), text: safe.text, source: "agent", status: review ? "pending" : "saved" })
     return { memoryId, outcome: review ? "pending" : "saved" }
+  }
+
+  /** Where a memory a session produced came from: the session and the engine that ran its turns (`native`, `claude`, `codex`, `pi`, `acp:<agent>`). */
+  function originOf(sessionId: SessionId): MemoryOrigin {
+    const model = resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(sessionId)), catalog })
+    return { originSessionId: sessionId, originEngine: (engineKeyOf(model) ?? options.info?.engine ?? "native").slice(0, 40) }
   }
 
   /** Every category with the policy in force. */
@@ -2313,7 +2394,7 @@ export async function startDaemon(options: DaemonOptions) {
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },
-      onLiveOutput: (turnId, output) => liveTokens.push(sessionId, turnId, output),
+      onLiveOutput: (turnId, output, estimated) => liveTokens.push(sessionId, turnId, output, estimated),
       onPause: () => publishActivity(sessionId, actors.get(sessionId)?.snapshot().foreground ?? "idle", true),
     })
     actors.set(sessionId, actor)
@@ -4504,7 +4585,7 @@ export async function startDaemon(options: DaemonOptions) {
           const at = store.settings.get().dreamAt
           return reply(connection, command.id, { ok: true, result: { schedule: { enabled: Boolean(at), at: at ?? null, handled: store.meta.get(DREAM_WINDOW_KEY) ?? null, next: at ? windows(clock.now(), at).next : null }, runs: store.dreamRuns.list(command.directory).slice(0, 5), service: { kind: "integrated", configured: Boolean(options.dream) }, consolidator: { mode: options.models?.selectable && rolesFor(store.settings.get(), command.directory).memoryConsolidator ? "semantic" : "deterministic", model: rolesFor(store.settings.get(), command.directory).memoryConsolidator?.model ?? null }, callsProviders: false, readsSecrets: false } })
         }
-        if (command.input.operation === "tick") return reply(connection, command.id, { ok: true, result: armDreamSchedule() })
+        if (command.input.operation === "tick") return reply(connection, command.id, { ok: true, result: armDreamSchedule(false, true) })
         const started = startDream(command.directory, "manual", command.input.policy ?? memorySettings(store.settings.get(), command.directory).dreamConsolidationPolicy ?? "auto-consolidate", command.input.deterministic === true)
         if ("error" in started) return reply(connection, command.id, { ok: false, code: started.code, message: started.error })
         const run = await started.completion
@@ -4567,6 +4648,20 @@ export async function startDaemon(options: DaemonOptions) {
           const answer = await completeBudgeted({ system: LOOP_INTERPRET_SYSTEM, prompt: loopInterpretRequest(redactSecrets(command.text).text), signal: AbortSignal.timeout(LOOP_INTERPRET_TIMEOUT_MS), ...(model ? { model } : {}), auxiliary: { role: "loopInterpret", ...(directory ? { directory } : {}) } })
           const read = readInterpretation(answer)
           return read ? reply(connection, command.id, { ok: true, result: read }) : reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: the model did not return a schedule; write it as /loop every 30m <what to do>" })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
+        }
+      }
+      case "today.triage": {
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: triage needs the native engine" })
+        const directory = command.directory ?? options.defaultDirectory
+        const model = cheapAuxiliaryModel({ roles: rolesFor(store.settings.get(), directory), catalog })
+        if (!model) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: no cheap model is available for triage; set the small role in /model" })
+        const { TODAY_TRIAGE_SYSTEM, TODAY_TRIAGE_TIMEOUT_MS, readTriage, todayTriageRequest } = await import("./today-triage")
+        try {
+          const answer = await completeBudgeted({ system: TODAY_TRIAGE_SYSTEM, prompt: todayTriageRequest(command.items.map((item) => ({ ...item, title: redactSecrets(item.title).text, why: redactSecrets(item.why).text }))), signal: AbortSignal.any([...(connection.signal ? [connection.signal] : []), AbortSignal.timeout(TODAY_TRIAGE_TIMEOUT_MS)]), model, auxiliary: { role: "todayTriage", ...(directory ? { directory: canonicalDir(directory) } : {}) } })
+          const groups = readTriage(answer, command.items)
+          return groups ? reply(connection, command.id, { ok: true, result: { model: model.model, groups } }) : reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${model.model} did not return groups; try again` })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
         }
@@ -4668,10 +4763,12 @@ export async function startDaemon(options: DaemonOptions) {
           const thread = action === "archive" ? memoryAssistant.archive(directory) : action === "restore" ? memoryAssistant.restore(directory, archiveId!) : memoryAssistant.get(directory)
           return reply(connection, command.id, { ok: true, result: { thread, archives: memoryAssistant.archives(directory) } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
-      case "memory.extraction.list":
-        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+      case "memory.extraction.list": {
+        const extractions = await loadExtraction()
+        return reply(connection, command.id, { ok: true, result: { jobs: extractions.list(command.directory), reviews: extractions.reviews(), ineligible: extractions.ineligible(), status: extractions.status(command.directory), configured: extractions.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+      }
       case "memory.extraction.retry":
-        try { extraction.retry(command.jobId); return reply(connection, command.id, { ok: true }) }
+        try { (await loadExtraction()).retry(command.jobId); return reply(connection, command.id, { ok: true }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error) }) }
       case "memory.workspaces":
         return reply(connection, command.id, { ok: true, result: workspaceMemory.list(command.directory) })
@@ -6132,7 +6229,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "voice.control": {
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[VOICE]: dictation is local only" })
-        const result = command.action === "start" ? await voice.start(connection) : command.action === "stop" ? await voice.stop(connection) : command.action === "cancel" ? voice.cancel(connection) : voice.status()
+        const result = command.action === "start" ? await voice.start(connection, command.held === true) : command.action === "stop" ? await voice.stop(connection) : command.action === "cancel" ? voice.cancel(connection) : voice.status()
         return reply(connection, command.id, result.ok ? { ok: true, result: result.value } : { ok: false, code: result.code, message: result.message })
       }
       case "pet.manage": {
@@ -6200,7 +6297,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "daemon.tick": {
         if (command.scheduler === "dream") {
           if (!command.execute) return reply(connection, command.id, { ok: true, result: { scheduler: "dream", execute: false, enabled: Boolean(store.settings.get().dreamAt), handled: store.meta.get(DREAM_WINDOW_KEY) ?? null } })
-          return reply(connection, command.id, { ok: true, result: armDreamSchedule() })
+          return reply(connection, command.id, { ok: true, result: armDreamSchedule(false, true) })
         }
         const due = loops.list().filter((loop) => loop.state === "active" && loop.nextWakeAt !== undefined && loop.nextWakeAt <= clock.now()).slice(0, command.limit ?? 10)
         const started = command.execute ? due.filter((loop) => loops.runNow(loop.loopId)).map((loop) => loop.loopId) : []

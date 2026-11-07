@@ -1,7 +1,10 @@
-import { MEMORY_CATEGORY_IDS, MemoryAssistantAction, MemoryModelInput, redactSecrets } from "@mendcode/protocol"
+import { MEMORY_CATEGORY_IDS, MemoryAssistantAction, checkMemoryCategory, MemoryModelInput, redactSecrets } from "@mendcode/protocol"
 import type { MemoryAssistantSettings, MemoryCategoryId, MemoryDetails, MemoryEntry, MemoryId, MemoryModelInput as ModelInput, MemoryPolicyValue, MemoryScope } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { memoryGraph } from "./memory-graph"
+
+/** Where a memory came from (stored in its details): the session and the engine that ran it. */
+export type MemoryOrigin = { originSessionId?: string; originEngine?: string }
 
 /** What an approved policy/category/Dream draft may change; the daemon owns each effect (settings, schedule, Dream run). */
 export type MemoryAssistantControl = {
@@ -13,7 +16,18 @@ export type MemoryAssistantControl = {
   dryRun(directory: string): { runId: number } | { error: string }
 }
 
-const CONTROL_KINDS = new Set(["propose-policy", "edit-category", "delete-category", "create-category", "dream-dry-run", "dream-service-start"])
+const WRITE_ACTIONS = new Set(["propose", "add", "update", "upsert_fact"])
+/** A write's category must be a known one (a near miss such as `category conventions` becomes its id); otherwise the call fails with the list. */
+function knownCategories(args: ModelInput): ModelInput {
+  if (!WRITE_ACTIONS.has(args.action)) return args
+  const check = (category: string) => {
+    const checked = checkMemoryCategory(category)
+    if ("error" in checked) throw new RangeError(checked.error)
+    return checked.category
+  }
+  return { ...args, ...(args.category !== undefined ? { category: check(args.category) } : {}), ...(args.categoryIDs !== undefined ? { categoryIDs: args.categoryIDs.map(check).filter(Boolean) } : {}) }
+}
+const CONTROL_KINDS =new Set(["propose-policy", "edit-category", "delete-category", "create-category", "dream-dry-run", "dream-service-start"])
 const FIXED_CATEGORIES = "v2 keeps a fixed category list; change a category's policy with edit-category instead"
 
 /** The first local time in free text as `HH:MM` (a window such as 18:00-23:00 gives its start). */
@@ -29,7 +43,7 @@ export function createMemoryModel(input: {
   categories(): unknown
   /** `entry` is the memory as it was, for a deletion (the store no longer has it). */
   changed(memoryId: MemoryId, change: "added" | "updated" | "deleted" | "linked", entry?: MemoryEntry): void
-  propose(entry: { scope: MemoryScope; directory: string; text: string; category: string }): { memoryId?: string; outcome: string }
+  propose(entry: { scope: MemoryScope; directory: string; text: string; category: string; origin?: MemoryOrigin }): { memoryId?: string; outcome: string }
   control?: MemoryAssistantControl
 }) {
   const { store } = input
@@ -47,12 +61,12 @@ export function createMemoryModel(input: {
     }))
     return JSON.parse(redactSecrets(JSON.stringify({ ...current, ...patch, ...(args.scope === "workspace" || args.scope === "group-view" ? { graphScope: args.scope } : {}) })).text) as MemoryDetails
   }
-  function add(directory: string, args: ModelInput, pending = false, action?: MemoryAssistantAction) {
+  function add(directory: string, args: ModelInput, pending = false, action?: MemoryAssistantAction, origin?: MemoryOrigin) {
     if (!args.text?.trim()) throw new Error("text is required")
     const memoryId = args.id ?? input.id()
     if (store.memories.get(memoryId)) throw new Error("Memory id already exists")
     const scope = scopeOf(args.scope)
-    store.memories.add({ memoryId, scope, ...(scope === "user" ? { profile: input.profile(directory) } : { directory }), text: redactSecrets(args.text).text, category: args.category ?? args.categoryIDs?.[0] ?? "", details: { confidence: .8, sensitivity: "low", ...details(args), ...(action ? { action, originDirectory: directory } : {}) }, source: "agent", status: pending ? "pending" : "saved" })
+    store.memories.add({ memoryId, scope, ...(scope === "user" ? { profile: input.profile(directory) } : { directory }), text: redactSecrets(args.text).text, category: args.category ?? args.categoryIDs?.[0] ?? "", details: { confidence: .8, sensitivity: "low", ...details(args), ...origin, ...(action ? { action, originDirectory: directory } : {}) }, source: "agent", status: pending ? "pending" : "saved" })
     input.changed(memoryId, "added")
     return store.memories.get(memoryId)!
   }
@@ -60,8 +74,8 @@ export function createMemoryModel(input: {
     const saved = entries(directory).filter((entry) => entry.status === "saved" && !entry.details?.action)
     return memoryGraph(saved, store.memories.links(saved.map((entry) => entry.memoryId)))
   }
-  function request(directory: string, value: ModelInput): Record<string, unknown> {
-    const args = MemoryModelInput.parse(value)
+  function request(directory: string, value: ModelInput, origin?: MemoryOrigin): Record<string, unknown> {
+    const args = knownCategories(MemoryModelInput.parse(value))
     const visible = entries(directory).filter((entry) => !entry.details?.action)
     const saved = visible.filter((entry) => entry.status === "saved")
     const scoped = args.scope ? saved.filter((entry) => entry.scope === scopeOf(args.scope)) : saved
@@ -88,9 +102,9 @@ export function createMemoryModel(input: {
     }
     if (args.action === "propose") {
       if (!args.text) throw new Error("text is required")
-      const proposed = input.propose({ scope: scopeOf(args.scope), directory, text: args.text, category: args.category ?? args.categoryIDs?.[0] ?? "" })
+      const proposed = input.propose({ scope: scopeOf(args.scope), directory, text: args.text, category: args.category ?? args.categoryIDs?.[0] ?? "", ...(origin ? { origin } : {}) })
       if (proposed.memoryId) {
-        store.memories.update(proposed.memoryId as MemoryId, { details: details(args) })
+        store.memories.update(proposed.memoryId as MemoryId, { details: { ...details(args), ...origin } })
         input.changed(proposed.memoryId as MemoryId, "updated")
       }
       return proposed
@@ -99,7 +113,7 @@ export function createMemoryModel(input: {
       const normalize = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()
       const existing = visible.find((entry) => entry.scope === scopeOf(args.scope) && entry.status === "saved" && normalize(entry.text) === normalize(redactSecrets(args.text ?? "").text))
       if (existing) return { memory: existing, written: false }
-      return { memory: add(directory, args), written: true, change: "added" }
+      return { memory: add(directory, args, false, undefined, origin), written: true, change: "added" }
     }
     if (args.action === "update" || args.action === "upsert_fact") {
       const current = target(directory, args.id)

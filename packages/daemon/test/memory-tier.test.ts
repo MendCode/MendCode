@@ -4,7 +4,8 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIdFactory, type MemoryEntry, type Settings } from "@mendcode/protocol"
 import { openStore } from "@mendcode/store"
-import { consolidationCategories, FULL_MEMORY_DEFAULTS, memorySettings } from "../src/memory-config"
+import { BALANCED_MEMORY_DEFAULTS, consolidationCategories, FULL_MEMORY_DEFAULTS, fullMemoryTier, memorySettings, reviewPolicy } from "../src/memory-config"
+import { createMemoryExtraction } from "../src/memory-extraction"
 import { consolidateMemory } from "../src/memory-consolidation"
 import { createResumeSource, resumeNote, RESUME_MAX_CHARS } from "../src/memory-resume"
 import { ROLE_FALLBACKS } from "../src/models"
@@ -13,15 +14,43 @@ const ids = createIdFactory()
 const memory = (text: string, patch: Partial<MemoryEntry> = {}): MemoryEntry => ({ memoryId: ids("memory"), scope: "project", directory: "/repo", category: "preferences", source: "agent", status: "pending", createdAt: 0, updatedAt: 0, text, details: { confidence: .95, durability: .9, changeRisk: .1 }, ...patch })
 
 describe("memory by tier", () => {
-  test("only the full tier fills unset memory switches, and a switch the user set wins", () => {
+  test("balanced and full fill unset memory switches, minimalist fills none, and a switch the user set wins", () => {
     expect(memorySettings({} as Settings, "/repo")).toEqual({})
-    expect(memorySettings({ tier: "balanced" } as Settings).memoryUse).toBeUndefined()
+    expect(memorySettings({ tier: "minimalist" } as Settings)).toEqual({ tier: "minimalist" })
+    expect(memorySettings({ tier: "minimalist" } as Settings).memoryUse).toBeUndefined()
     expect(memorySettings({ tier: "minimalist" } as Settings).memoryGenerate).toBeUndefined()
+    const balanced = memorySettings({ tier: "balanced" } as Settings)
+    expect(balanced).toMatchObject(BALANCED_MEMORY_DEFAULTS)
+    expect(balanced).toMatchObject({ memoryUse: true, memoryGenerate: true, memoryProjectMaxEntries: 10, memoryMaxEntries: 50 })
+    // Dream and consolidation are untouched in balanced, and approval stays on.
+    expect(balanced.dreamConsolidationPolicy).toBeUndefined()
+    expect(balanced.memoryMaintenance).toBeUndefined()
+    expect(balanced.memoryRequireApproval).toBeUndefined()
     const full = memorySettings({ tier: "full" } as Settings)
     expect(full).toMatchObject(FULL_MEMORY_DEFAULTS)
+    expect(full.memoryReviewEveryTurns).toBe(6)
+    expect(balanced.memoryReviewEveryTurns).toBe(10)
     expect(memorySettings({ tier: "full", memoryUse: false } as Settings).memoryUse).toBe(false)
+    expect(memorySettings({ tier: "balanced", memoryGenerate: false } as Settings).memoryGenerate).toBe(false)
+    expect(memorySettings({ tier: "balanced", memoryProjects: { "/repo": { memoryGenerate: false } } } as Settings, "/repo").memoryGenerate).toBe(false)
     expect(memorySettings({ tier: "full", memoryProjects: { "/repo": { memoryGenerate: false } } } as Settings, "/repo").memoryGenerate).toBe(false)
     expect(memorySettings({ tier: "full", features: { memory_auto: false } } as Settings).memoryUse).toBeUndefined()
+    expect(memorySettings({ tier: "balanced", features: { memory_auto: false } } as Settings).memoryGenerate).toBeUndefined()
+    // Minimalist keeps exactly what the user set, and the user can turn the feature on there.
+    expect(memorySettings({ tier: "minimalist", memoryGenerate: true } as Settings)).toMatchObject({ memoryGenerate: true })
+    expect(memorySettings({ tier: "minimalist", memoryGenerate: true } as Settings).memoryUse).toBeUndefined()
+    expect(memorySettings({ tier: "minimalist", features: { memory_auto: true } } as Settings).memoryUse).toBe(true)
+  })
+  test("the review policy follows the tier, a setting wins, and a bare generate switch gets the balanced figures", () => {
+    expect(reviewPolicy(memorySettings({ tier: "balanced" } as Settings))).toEqual({ everyTurns: 10, idleMs: 600_000, dailyCap: 12 })
+    expect(reviewPolicy(memorySettings({ tier: "full" } as Settings))).toEqual({ everyTurns: 6, idleMs: 600_000, dailyCap: 30 })
+    expect(reviewPolicy(memorySettings({ tier: "full", memoryReviewEveryTurns: 4, memoryReviewIdleMinutes: 3, memoryReviewDailyCap: 5 } as Settings))).toEqual({ everyTurns: 4, idleMs: 180_000, dailyCap: 5 })
+    expect(reviewPolicy(memorySettings({ tier: "minimalist", memoryGenerate: true } as Settings))).toEqual({ everyTurns: 10, idleMs: 600_000, dailyCap: 12 })
+  })
+  test("the extra full-tier behaviour (scores, standing categories) stays full only", () => {
+    expect(fullMemoryTier({ tier: "full" } as Settings)).toBe(true)
+    expect(fullMemoryTier({ tier: "balanced" } as Settings)).toBe(false)
+    expect(fullMemoryTier({ tier: "minimalist" } as Settings)).toBe(false)
   })
   test("nightly consolidation saves preferences in full, and holds back what needs a person instead of archiving it", async () => {
     expect(consolidationCategories({ tier: "balanced" } as Settings)).not.toContain("preferences")
@@ -52,6 +81,39 @@ describe("dream interruption and the resume note", () => {
     stores.push(store)
     return store
   }
+  test("changing tier never deletes or archives a memory, and a minimalist tier makes no review", () => {
+    const store = open()
+    const sessionId = ids("session")
+    store.createSession({ id: sessionId, directory: "/work/app", title: "Work" })
+    const saved = memory("Use bun", { status: "saved", directory: "/work/app" })
+    const pending = memory("Prefer small commits", { directory: "/work/app" })
+    store.memories.add(saved)
+    store.memories.add(pending)
+    let jobs = 0
+    const worker = createMemoryExtraction({ store, settings: (directory) => memorySettings(store.settings.get(), directory), now: Date.now, eligibleDirectory: () => true, commit: () => 0, extract: async () => { jobs++; return [] } })
+    const say = (text: string) => {
+      const turnId = ids("turn"), itemId = ids("item")
+      store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+      store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind: "user_message" })
+      store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text })
+      worker.observe(store.sessionSink.append({ type: "turn.completed", sessionId, turnId }))
+    }
+    for (const tier of ["full", "balanced", "minimalist"] as const) {
+      store.settings.set({ tier, memoryReviewEveryTurns: 2 })
+      expect(store.memories.get(saved.memoryId)?.status).toBe("saved")
+      expect(store.memories.get(pending.memoryId)?.status).toBe("pending")
+      if (tier === "minimalist") {
+        for (let index = 0; index < 12; index++) say(`Always rule number ${index} applies`)
+        expect(store.extraction.list()).toEqual([])
+        expect(store.memoryReviews.list()).toEqual([])
+        expect(jobs).toBe(0)
+      }
+    }
+    store.settings.set({ tier: "minimalist", memoryGenerate: true, memoryReviewEveryTurns: 2 })
+    say("Always rule A applies"); say("Always rule B applies")
+    expect(store.extraction.list()).toHaveLength(1)
+    void worker.stop()
+  })
   test("runs a stopped daemon left running are closed as interrupted", () => {
     const store = open()
     const run = store.dreamRuns.start("/repo", "scheduled")

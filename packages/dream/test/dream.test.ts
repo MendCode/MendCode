@@ -77,3 +77,16 @@ describe("dream", () => {
     expect(await runDream({ ...base, sessions: () => [session([["a", "b"]])], complete: async () => Promise.reject(new Error("429")) })).toMatchObject({ status: "failed", error: "429" })
   })
 })
+
+test("a run's record names the model that answered, the cached prompt tokens and a cost only when the provider gave one", async () => {
+  const { createMeter } = await import("../src/meter")
+  const meter = createMeter({ limit: 100_000, signal: new AbortController().signal, complete: async () => ({ text: "{}", usage: { input: 900, output: 40, cacheRead: 600, model: "gpt-6-luna" } }) })
+  await meter.call("prompt", "proposals")
+  await meter.call("prompt", "proposals")
+  expect(meter.snapshot().model).toEqual({ calls: 2, inputTokens: 1_800, outputTokens: 80, estimated: false, name: "gpt-6-luna", cacheReadTokens: 1_200 })
+  const priced = createMeter({ limit: 100_000, signal: new AbortController().signal, complete: async () => ({ text: "{}", usage: { input: 10, output: 1, costMicros: 25 } }) })
+  await priced.call("prompt", "proposals")
+  expect(priced.snapshot().model.costMicros).toBe(25)
+  // No call: nothing is claimed.
+  expect(createMeter({ limit: 1, signal: new AbortController().signal, complete: async () => "" }).snapshot().model).toEqual({ calls: 0, inputTokens: 0, outputTokens: 0, estimated: false })
+})

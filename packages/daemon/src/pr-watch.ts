@@ -24,6 +24,8 @@ export const ghProcess: GhRun = async ({ argv, cwd }) => {
   try {
     const result = await captureOutput(["gh", ...argv], { cwd, stderr: "capture", env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" }, limit: OUTPUT_LIMIT, timeoutMs: GH_TIMEOUT_MS })
     if (result.truncated) throw new Error("gh output is too large")
+    // Stopped at the time limit: GitHub did not answer, which the outage rules read as a network outage, never as gh's own exit code.
+    if (result.stopped) return { code: 124, out: "", err: `gh timed out after ${GH_TIMEOUT_MS / 1000} s waiting for GitHub` }
     return { code: result.code, out: result.out.trim(), err: result.err.trim() }
   } catch (error) {
     return { code: 127, out: "", err: error instanceof Error ? error.message : String(error) }
@@ -341,7 +343,7 @@ export function createPrWatch(options: PrWatchOptions) {
     }
     if (!outage.told && outage.awakeMs >= OUTAGE_LIMIT_MS) {
       outage.told = true
-      watch.pending.push(options.mask(watch.sessionId, `Could not read this pull request through gh for ${Math.round(outage.awakeMs / 60_000)} minutes (${reason}). The watch keeps trying, at most ${Math.round(outageGap(Infinity, interval) / 60_000)} minutes apart, and wakes you as before once gh reads it again; this is said once.`))
+      watch.pending.push(options.mask(watch.sessionId, `Waiting for GitHub: could not read this pull request through gh for ${Math.round(outage.awakeMs / 60_000)} minutes (${reason}). The watch has not stopped: it keeps trying, at most ${Math.round(outageGap(Infinity, interval) / 60_000)} minutes apart, and wakes you as before once gh reads it again; this is said once.`))
       watch.pendingOther = true
     }
   }

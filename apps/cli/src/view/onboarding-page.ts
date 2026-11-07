@@ -54,6 +54,8 @@ export type OnboardingState = {
   models?: ModelPicker
   /** Where the preview is a key away (see `STACKED_PREVIEW_HEIGHT`): it is shown in place of the choices. */
   preview?: boolean
+  /** First run: until the check answers there is no Model row, so the focus never opens on a model before any way to run is known. */
+  firstRun?: true
   /** The focused sign-in row (an index into `connectRows`), while the focus is up in Ready instead of on a choice. */
   ready?: number
 }
@@ -81,12 +83,12 @@ const LEFT = new Set(["\x1b[D", "\x1bOD", "h"])
 const RIGHT = new Set(["\x1b[C", "\x1bOC", "l", " "])
 
 /** No Model row while nothing can run: a model means something only once a harness or an account is chosen above it. */
-export const onboardingRows = (detected: Detected | undefined, state?: Pick<OnboardingState, "look" | "glyphs" | "style">): OnboardingRow[] => [...(detected && !detected.usable ? [] : ["model" as const]), "tier", "permission", ...(state?.look !== undefined ? ["look" as const] : []), ...(state?.glyphs !== undefined ? ["glyphs" as const] : []), ...(state?.style ? STYLE_ROWS : []), ...(detected?.importRow ? ["import" as const] : []), "start"]
+export const onboardingRows = (detected: Detected | undefined, state?: Pick<OnboardingState, "look" | "glyphs" | "style" | "firstRun">): OnboardingRow[] => [...(detected ? (detected.usable ? ["model" as const] : []) : state?.firstRun ? [] : ["model" as const]), "tier", "permission", ...(state?.look !== undefined ? ["look" as const] : []), ...(state?.glyphs !== undefined ? ["glyphs" as const] : []), ...(state?.style ? STYLE_ROWS : []), ...(detected?.importRow ? ["import" as const] : []), "start"]
 
 /** First-run values start at the recommendation; a reopened page starts at what is saved, so Enter changes nothing by itself. */
 export function createOnboardingState(input: { current: OnboardingCurrent; firstRun: boolean }): OnboardingState {
   const { current } = input
-  return { row: 0, ...(current.model ? { model: current.model } : {}), tier: current.tier ?? (input.firstRun ? "balanced" : "none"), permission: current.permission ?? "ask", ...(current.theme ? { look: current.theme } : {}), ...(current.glyphs ? { glyphs: current.glyphs } : {}), ...(current.style ? { style: current.style } : {}), imports: [] }
+  return { row: 0, ...(current.model ? { model: current.model } : {}), tier: current.tier ?? (input.firstRun ? "balanced" : "none"), permission: current.permission ?? "ask", ...(input.firstRun ? { firstRun: true as const } : {}), ...(current.theme ? { look: current.theme } : {}), ...(current.glyphs ? { glyphs: current.glyphs } : {}), ...(current.style ? { style: current.style } : {}), imports: [] }
 }
 
 /** The profile keys a style row's value stands for. */
@@ -159,6 +161,8 @@ export function focusAfterCheck(state: OnboardingState, detected: Detected, befo
     return detected.usable || !rows.length ? { ...choosing, row: 0 } : { ...state, ready: 0 }
   }
   if (!detected.usable) return rows.length && state.ready === undefined && state.row === 0 ? { ...state, ready: 0 } : state
+  // The first check of a first run: the Model row appears above the choices that were focused without it.
+  if (!before && state.firstRun) return state.row > 0 ? { ...state, row: state.row + 1 } : state
   if (before && !before.usable) return { ...choosing, row: 0 }
   return state
 }

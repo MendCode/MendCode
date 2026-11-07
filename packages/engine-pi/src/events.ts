@@ -95,6 +95,35 @@ export function createPiMapper(input: { newItemId(): ItemId; emit(event: EngineE
     })
   }
 
+  /** The words of one `message_update`: an answer's or a thought's start, delta or end. */
+  function streamUpdate(update: unknown) {
+    if (!isRecord(update)) return
+    const index = update.contentIndex
+    switch (update.type) {
+      case "text_start":
+        return delta("agent_message", index, "")
+      case "text_delta":
+        return delta("agent_message", index, typeof update.delta === "string" ? update.delta : "")
+      case "text_end": {
+        const key = `agent_message:${String(index ?? 0)}`
+        if (!open.get(key)?.text && typeof update.content === "string" && update.content) delta("agent_message", index, update.content)
+        return close(key)
+      }
+      case "thinking_start":
+        return delta("reasoning", index, "")
+      case "thinking_delta":
+        return delta("reasoning", index, typeof update.delta === "string" ? update.delta : "")
+      case "thinking_end": {
+        const key = `reasoning:${String(index ?? 0)}`
+        if (!open.get(key)?.text && typeof update.content === "string" && update.content) delta("reasoning", index, update.content)
+        return close(key)
+      }
+      default:
+        // toolcall_*: the card starts with tool_execution_start, which carries the finished arguments.
+        return
+    }
+  }
+
   return {
     /** The item of a tool call pi announced, so an approval can point at it. */
     itemOf(toolCallId: unknown): ItemId | undefined {
@@ -109,38 +138,15 @@ export function createPiMapper(input: { newItemId(): ItemId; emit(event: EngineE
     accept(event: Json) {
       switch (event.type) {
         case "message_update": {
-          // The record's `usage` is the call's cumulative figure so far as the provider reports it (zero until the end for a provider that sends nothing sooner).
+          streamUpdate(event.assistantMessageEvent)
+          // The record's `usage` is the call's cumulative figure so far as the provider reports it (zero until the end for a provider that
+          // sends nothing sooner). It already counts this update's words, so it goes after them: the exact figure replaces their estimate.
           const streamed = isRecord(event.usage) ? number(event.usage.output) : 0
           if (streamed > 0 && streamed !== liveOutput) {
             liveOutput = streamed
             input.emit({ type: "usage.live", output: streamed })
           }
-          const update = event.assistantMessageEvent
-          if (!isRecord(update)) return
-          const index = update.contentIndex
-          switch (update.type) {
-            case "text_start":
-              return delta("agent_message", index, "")
-            case "text_delta":
-              return delta("agent_message", index, typeof update.delta === "string" ? update.delta : "")
-            case "text_end": {
-              const key = `agent_message:${String(index ?? 0)}`
-              if (!open.get(key)?.text && typeof update.content === "string" && update.content) delta("agent_message", index, update.content)
-              return close(key)
-            }
-            case "thinking_start":
-              return delta("reasoning", index, "")
-            case "thinking_delta":
-              return delta("reasoning", index, typeof update.delta === "string" ? update.delta : "")
-            case "thinking_end": {
-              const key = `reasoning:${String(index ?? 0)}`
-              if (!open.get(key)?.text && typeof update.content === "string" && update.content) delta("reasoning", index, update.content)
-              return close(key)
-            }
-            default:
-              // toolcall_*: the card starts with tool_execution_start, which carries the finished arguments.
-              return
-          }
+          return
         }
         case "message_end": {
           const message = event.message

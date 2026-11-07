@@ -2,7 +2,7 @@ import type { ColorName, Line, Span } from "../ui/theme"
 import { clip, fit } from "./deck"
 import { tipLine } from "./home-tips"
 import { DEFAULT_LOGO_FONT, DEFAULT_LOGO_TEXT, logoRowsFor, rowsWidth, type LogoFont } from "./logo-fonts"
-import { isShippedWordmark, logoLockup } from "./logo-mark"
+import { isShippedWordmark, logoLockup, logoLockups } from "./logo-mark"
 import { relativeTime, shortenMiddle } from "./session-list"
 import { defaultHomeMascot } from "./mascot"
 import type { TuiProfile } from "./tui-profile"
@@ -323,13 +323,18 @@ function actionsPanel(width: number, room = 5): Line[] {
   return rows
 }
 
-/** The wordmark (or, where it cannot be drawn, the plain name) as rows: `art` is undefined when the plain name is all there is. */
-function logoArt(input: { look: HomeLook | undefined; product: string; allowArt: boolean; width: number; center: (spans: Span[]) => Line }): { art?: Line[]; plain: Line[] } {
-  const wordmark = homeIdentity(input.look)
-  const tagline = input.look?.tagline ? [input.center([{ text: shortenMiddle(input.look.tagline, input.width), fg: "muted" }])] : []
-  const plain = input.look?.logoKind === "none" ? [] : [input.center([{ text: input.product, fg: "text" }]), ...tagline]
-  const art = input.allowArt && input.width >= rowsWidth(wordmark) + 12 ? wordmark.map((row) => input.center([{ text: row + " ".repeat(rowsWidth(wordmark) - textWidth(row)), fg: "text" }])) : undefined
-  return { ...(art ? { art: [...art, ...tagline] } : {}), plain }
+/**
+ * The identities the centered home tries, largest first: the shipped logo's mark over the big title, then the mark over the
+ * name (`logoLockups`), or the one identity a look draws; `plain` is the name alone, the last resort. Each art fits `width`.
+ */
+function logoArt(input: { look: HomeLook | undefined; product: string; allowArt: boolean; width: number; center: (spans: Span[]) => Line }): { arts: Line[][]; plain: Line[] } {
+  const look = input.look
+  const identities = (look?.logoKind ?? "wordmark") === "wordmark" && isShippedWordmark(look) ? logoLockups(look?.productName ?? PRODUCT, look?.ascii === true) : [homeIdentity(look)]
+  const tagline = look?.tagline ? [input.center([{ text: shortenMiddle(look.tagline, input.width), fg: "muted" }])] : []
+  const plain = look?.logoKind === "none" ? [] : [input.center([{ text: input.product, fg: "text" }]), ...tagline]
+  const fitting = input.allowArt ? identities.filter((rows) => input.width >= rowsWidth(rows) + 12) : []
+  const arts = fitting.map((rows) => [...rows.map((row) => input.center([{ text: row + " ".repeat(rowsWidth(rows) - textWidth(row)), fg: "text" }])), ...tagline])
+  return { arts, plain }
 }
 
 /**
@@ -392,11 +397,11 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
   if (size === "tiny") return [...header, ...(below.length > 0 ? [[], ...below] : [])].slice(0, Math.max(0, height))
 
   const center = (spans: Span[], within = width): Line => centerIn(spans, within)
-  const { art, plain } = logoArt({ look: input.look, product, allowArt: size === "full" || input.look?.logoFont === "compact" || ["mascot", "custom"].includes(input.look?.logoKind ?? ""), width, center })
+  const { arts, plain } = logoArt({ look: input.look, product, allowArt: size === "full" || input.look?.logoFont === "compact" || ["mascot", "custom"].includes(input.look?.logoKind ?? ""), width, center })
   // The pixel mascot needs v1's full density (24 rows, 65 columns) before its own size is even considered.
   const pixel = size === "full" ? pixelIdentity({ look: input.look, mascot: input.mascot, width }) : []
   // A taller identity gives way to the plain name before the Agent View does.
-  const candidates: Array<Line[] | undefined> = art ? [art, plain] : [plain]
+  const candidates: Array<Line[] | undefined> = [...arts, plain]
 
   const panelWidth = Math.min(54, Math.max(30, width - pad * 2 - 6), width)
   const inset = Math.floor((width - panelWidth) / 2)

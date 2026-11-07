@@ -7,7 +7,8 @@ import { boxPanel, fit } from "../../view/deck"
 import { renderMarkdown } from "../../view/markdown"
 import { modelLabel, servedByProvider, sessionModelId } from "../../view/model-label"
 import { latestTodos } from "../../view/plan-row"
-import { sidebarSpec, SIDEBAR_PRESETS, WIDGET_TYPES, PANEL_PRESETS, NEAREST_PRESET, nextPreset, panelPreset, presetOf } from "../../view/sidebar-spec"
+import { sidebarSpec, WIDGET_TYPES, PANEL_PRESETS, NEAREST_PRESET, basePresetOf, customPresetsOf, nextPreset, panelPreset, presetOf, resolvePanel, type PanelChoice } from "../../view/sidebar-spec"
+import { noteCustomPanels } from "../../view/slash-arguments"
 import { panelCard, facts, sparkline, sparkRows, labelValue } from "../../view/panel-card"
 import { panelSession } from "../../view/panel-session"
 import { forecastTurns } from "../../view/context-forecast"
@@ -25,7 +26,7 @@ import { dropForHeight } from "../../view/sidebar-priority"
 import { callSpeed } from "../../view/usage-notes"
 import { statsCard, statsCardParts } from "../../view/stats-card"
 import { readTuiProfile, type TuiProfile } from "../../view/tui-profile"
-import { writeSessionLook } from "./session-look"
+import { profilePanel, writeSessionLook } from "./session-look"
 import { actionHint } from "../keymap"
 import { sideChat, sideChatRows } from "./aside"
 import type { AppContext } from "./context"
@@ -40,7 +41,7 @@ import type { createFileOpen } from "./file-open"
  * `look` puts a change on screen for this session of this terminal only (session-look.ts): showing, hiding, presets, an added card and
  * the width. `/panel edit` and `/panel reset` edit the panel's file, every terminal's default.
  */
-export function createRightSidebar(ctx: AppContext, slotContext: (width: number, height: number) => SlotContext, fileOpen: ReturnType<typeof createFileOpen>, openNode: (node: OrbitNode) => Promise<void>, look: (patch: Partial<TuiProfile>) => void) {
+export function createRightSidebar(ctx: AppContext, slotContext: (width: number, height: number) => SlotContext, fileOpen: ReturnType<typeof createFileOpen>, openNode: (node: OrbitNode) => Promise<void>, look: (patch: Partial<TuiProfile>, panel?: PanelChoice | null) => void) {
   const { input, state, now, requestFrame, fail } = ctx
   let loadedKey = ""
   let scope: "user" | "project" = "user"
@@ -160,12 +161,16 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const reply = await input.send({ type: "sidebar.get", directory })
     if (directory !== (input.directory ?? process.cwd())) return
     if (reply.ok && Array.isArray(reply.result?.widgets)) {
+      state.panelSpec = sidebarSpec(reply.result.widgets)
       // The cards of an enabled profile are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
       // Saving or editing from here is the user's own change, which then wins over the layer.
-      // A session that chose its own cards (`/panel <preset>`) keeps them.
-      if (!("sidebarWidgets" in state.profileApplied) && !state.sessionLook.get(state.sessionId)?.sidebarWidgets) state.tuiProfile.sidebarWidgets = sidebarSpec(reply.result.widgets)
+      // A session that built its own list (`/panel widget`) keeps it; one that chose a preset gets the profile's version of it now.
+      const own = state.sessionLook.get(state.sessionId)
+      if (own?.panelPreset) state.tuiProfile.sidebarWidgets = resolvePanel(own.panelPreset, profilePanel(state)).widgets
+      else if (!("sidebarWidgets" in state.profileApplied) && !own?.sidebarWidgets) state.tuiProfile.sidebarWidgets = state.panelSpec
       scope = reply.result?.scope === "project" ? "project" : "user"
     }
+    noteCustomPanels(customPresetsOf(profilePanel(state)))
     requestFrame()
   }
 
@@ -625,12 +630,14 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       return false
     }
     state.tuiProfile.sidebarWidgets = sidebarSpec(reply.result?.widgets ?? widgets)
+    state.panelSpec = state.tuiProfile.sidebarWidgets
+    noteCustomPanels(customPresetsOf(profilePanel(state)))
     state.tuiProfile.rightSidebar = widgets.length > 0
     state.rightScroll = 0
     // The edited file is what this session shows now: it has no cards of its own any more.
     const own = state.sessionLook.get(state.sessionId)
-    if (own && ("sidebarWidgets" in own || "rightSidebar" in own)) {
-      const { sidebarWidgets: _cards, rightSidebar: _shown, ...rest } = own
+    if (own && ("sidebarWidgets" in own || "rightSidebar" in own || "panelPreset" in own)) {
+      const { sidebarWidgets: _cards, rightSidebar: _shown, panelPreset: _preset, ...rest } = own
       state.sessionLook.set(state.sessionId, rest)
       if (input.dataDir) writeSessionLook(input.dataDir, state.sessionLook)
     }
@@ -643,14 +650,32 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
   const refusedView = () => state.mode === "minimal" || !featureOn(state.settingsNow, "panel") ? "Right bar presets need the balanced or full view" : undefined
 
   /** Writes a curated spec, using the same daemon permissions as the editor. */
-  async function applyPreset(name: string | undefined) {
+  /**
+   * `/panel <preset>` for this session: the session keeps only the preset's id, and the preset is the profile's own version of it when
+   * the profile has one (a custom galaxy stays the galaxy). `builtIn` (`/panel <preset> default`) shows the built-in list instead.
+   */
+  async function applyPreset(name: string | undefined, builtIn = false) {
     const refusal = refusedView()
     if (refusal) return ctx.say(refusal, "info")
     const chosen = panelPreset(name || "pulse")
     if (!chosen) return ctx.say(`Presets: ${PANEL_PRESETS.join(", ")}`, "info")
     if (chosen === "galaxy" && !orbitAllowed()) return ctx.say(`Galaxy needs full tier (/tier full) · try /panel ${NEAREST_PRESET.galaxy}`, "info")
-    showOwn(structuredClone(SIDEBAR_PRESETS[chosen]) as SidebarWidget[])
-    ctx.say(`panel: ${chosen} (${SIDEBAR_PRESETS[chosen].length} card${SIDEBAR_PRESETS[chosen].length === 1 ? "" : "s"}) · this session`)
+    const choice: PanelChoice = builtIn ? `${chosen}:default` : chosen
+    const panel = resolvePanel(choice, profilePanel(state))
+    state.rightScroll = 0
+    look({ sidebarWidgets: panel.widgets, rightSidebar: panel.widgets.length > 0 }, choice)
+    const cards = `${panel.widgets.length} card${panel.widgets.length === 1 ? "" : "s"}`
+    const other = panel.source === "profile" ? ` · /panel ${chosen} default for the built-in one` : customPresetsOf(profilePanel(state)).includes(chosen) ? ` · /panel ${chosen} for yours` : ""
+    ctx.say(`panel: ${chosen} (${cards}) · ${panel.source === "profile" ? "custom (profile)" : "default"} · this session${other}`)
+  }
+
+  /** `/panel profile`: this session drops its own panel and shows the profile's again. */
+  async function profileView() {
+    await loadSpec()
+    const widgets = [...profilePanel(state)]
+    state.rightScroll = 0
+    look({ sidebarWidgets: widgets, rightSidebar: widgets.length > 0 }, null)
+    ctx.say(widgets.length ? `panel: your profile's (${presetOf(widgets) === "custom" ? `custom${basePresetOf(widgets) ? ` ${basePresetOf(widgets)}` : ""}` : presetOf(widgets)}, ${widgets.length} card${widgets.length === 1 ? "" : "s"}) · this session` : "panel: your profile has no panel · /panel <preset> or /panel edit", "info")
   }
 
   /** These cards, shown, for this session only. */
@@ -675,11 +700,20 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       const refusal = refusedView()
       if (refusal) return ctx.say(refusal, "info"), true
       await loadSpec()
-      await applyPreset(nextPreset(presetOf(state.tuiProfile.sidebarWidgets), PANEL_PRESETS.filter((preset) => preset !== "galaxy" || orbitAllowed())))
+      const own = state.sessionLook.get(state.sessionId)?.panelPreset
+      const current = own ? panelPreset(own.split(":")[0]!) ?? "custom" : presetOf(state.tuiProfile.sidebarWidgets) === "custom" ? basePresetOf(state.tuiProfile.sidebarWidgets) ?? "custom" : presetOf(state.tuiProfile.sidebarWidgets)
+      await applyPreset(nextPreset(current, PANEL_PRESETS.filter((preset) => preset !== "galaxy" || orbitAllowed())))
       return true
     }
     if (panel && first && panelPreset(first)) {
-      await applyPreset(first)
+      if (rest[0] && rest[0].toLowerCase() !== "default") return ctx.say(`Use /panel ${first} or /panel ${first} default`, "warning"), true
+      await applyPreset(first, rest[0]?.toLowerCase() === "default")
+      return true
+    }
+    if (panel && first === "profile") {
+      const refusal = refusedView()
+      if (refusal) return ctx.say(refusal, "info"), true
+      await profileView()
       return true
     }
     if (first === "widget") {
@@ -710,7 +744,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     }
     const verb = args.trim().toLowerCase() || (panel ? "toggle" : "")
     if (!["right", "edit", "reset", ...(panel ? ["toggle", "off"] : [])].includes(verb)) {
-      if (panel) ctx.say("Use /panel [pulse|crew|ledger|focus|full|galaxy|next|off|edit|reset|width|widget]", "warning")
+      if (panel) ctx.say("Use /panel [pulse|crew|ledger|focus|full|galaxy|profile|next|off|edit|reset|width|widget] · <preset> default for the built-in one", "warning")
       return panel
     }
     const refusal = refusedView()

@@ -121,3 +121,12 @@ test("the daemon's modules never validate a command through the full union", asy
   const roots = ["../../daemon/src/http.ts", "../../daemon/src/session-http.ts", "../../daemon/src/daemon.ts"]
   for (const file of roots) expect(await Bun.file(path.join(import.meta.dir, file)).text()).not.toMatch(/\bCommand\.(safeParse|parse)\(/)
 })
+
+test("bounded whole-number settings keep their bounds and messages with one schema per field", () => {
+  const cap = (memoryReviewDailyCap: unknown) => protocol.Settings.safeParse({ memoryReviewDailyCap })
+  expect([cap(0).success, cap(500).success, cap(undefined).success]).toEqual([true, true, true])
+  expect([cap(-1).success, cap(501).success, cap(2.5).success, cap("3").success]).toEqual([false, false, false, false])
+  expect(cap(501).error?.issues[0]).toMatchObject({ code: "too_big", maximum: 500, path: ["memoryReviewDailyCap"] })
+  // Settings is built at start: a `.min().max()` chain on a setting costs three more schemas than one check with both bounds.
+  expect(Bun.file(path.join(import.meta.dir, "../src/queries.ts")).text()).resolves.not.toMatch(/z\.number\(\)\.int\(\)\.min\([^)]+\)\.max\(/)
+})

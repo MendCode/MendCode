@@ -33,6 +33,18 @@ test("retired engine overrides preserve other saved security settings without ex
   }
 })
 
+test("a saved claude_lean switch, now the claudeContext setting, drops out and leaves the unset lean default and the other overrides", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "mend-retired-claude-lean-"))
+  try {
+    const { store } = openWithSavedSettings(dir, { tier: "balanced", defaultPermission: "edits", features: { claude_lean: true, mcp: false } })
+    expect(store.settings.get()).toEqual({ tier: "balanced", defaultPermission: "edits", features: { mcp: false } })
+    expect(store.settings.get().claudeContext).toBeUndefined()
+    store.close()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 function openWithSavedSettings(dir: string, payload: Record<string, unknown>) {
   openStore({ dir }).close()
   const db = new Database(path.join(dir, "mendd.db"))

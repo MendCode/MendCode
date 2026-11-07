@@ -1,6 +1,6 @@
 import type { AssistantMessageModel, ReasoningModel, UserMessageModel } from "@mendcode/extension-api/views"
 import type { Glyphs, Line } from "../ui/theme"
-import { messageRows, outsideText, reasoningBlock, shellUserBlock, truncateMessage, userBlock, type Attachment } from "./chat-blocks"
+import { foldAttachedFiles, messageRows, outsideText, reasoningBlock, shellUserBlock, truncateMessage, userBlock, type Attachment } from "./chat-blocks"
 import { renderMarkdown, wrapSpans, type MarkdownStyle } from "./markdown"
 import { fit } from "./deck"
 import { carryMeta } from "./line-meta"
@@ -46,7 +46,7 @@ export function userRows(m: Sized<UserMessageModel>, g: Glyphs): Line[] {
   // A set of comments on an answer: the typed message, then the numbered quote and comment pairs; ctrl+o opens the quotes (docs/editor.md).
   if (m.comments) return sentRows({ parsed: m.comments, width, style, expanded: m.expanded }, g)
   if (style.layout !== "classic") {
-    const shortened = m.expanded ? { text: m.text, hiddenChars: 0 } : truncateMessage(m.text)
+    const shortened = m.expanded ? { text: m.text, hiddenChars: 0 } : truncateMessage(foldAttachedFiles(m.text))
     const attachments: Attachment[] = m.attachments ? [...m.attachments] : []
     const rows = quietRows("user", style, width, shortened.text, (room) => attachments.some((file) => file.label) || shortened.text.includes("\n\n[attached file: ") ? messageRows(shortened.text, attachments, room, []) : shortened.text.split("\n").flatMap((line) => wrapSpans([{ text: line, fg: "text" }], room)))
     if (shortened.hiddenChars) rows.push([{ text: `  ▸ ${shortened.hiddenChars} more characters · ctrl-o`, fg: "muted" }])

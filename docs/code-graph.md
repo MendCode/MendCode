@@ -262,6 +262,10 @@ Relative script imports support extension substitution (`.js` → `.ts`, `.mjs` 
 
 Skipped: `node_modules`, `.git`, `dist`, `build`, `graft`, `__pycache__`, `coverage`, hidden directories, `target` next to a `Cargo.toml`, `*.min.*`, files over 512 KB, files with NUL bytes, symlinks, and `.gitignore` matches. Root and nested ignore files support ordered `!` negations, directory-relative anchors, globs and escaped leading `#`/`!`. Like Git, negating a child cannot reinclude it while its parent directory remains ignored. Hard-skipped directories cannot be re-enabled. This is a bounded source walker, not a full Git implementation (no global excludes or tracked-file overrides).
 
+### Pruning
+
+A cache is useful only while its folder exists and the project asks for it, so the daemon deletes the others: a cache whose folder is gone (a finished PR review's worktree, a lane), one not loaded for 30 days, and a leftover `.tmp` file from a write that failed. It runs a minute after the graph is first used in a daemon process, then daily, looks at no more than 200 files each time (oldest first) and reads only the first 4 KB of a cache. Loading a cache renews its age, and a PR review removes its worktree's cache with the worktree. A daemon that never uses the graph does nothing.
+
 ### Cache
 
 `cacheDir/<first 16 hex of sha1(cwd)>.json`, written atomically (temp file and rename) whenever something changed:

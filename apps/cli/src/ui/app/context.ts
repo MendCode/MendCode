@@ -143,7 +143,7 @@ export type AppInput = {
   env?: Record<string, string | undefined>
 }
 
-export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew"
+export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today"
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
@@ -543,7 +543,9 @@ export type AppState = {
   /** The stored profile as this run knows it; `tuiProfile` is this with the layers over it (profile-layers.ts). */
   profileBase: TuiProfile
   /** What slash commands showed or hid in each session of this terminal (session-look.ts); over the profile, never saved. */
-  sessionLook: Map<string, Partial<TuiProfile>>
+  sessionLook: Map<string, import("./session-look").SessionLook>
+  /** The panel's file (user or project) as `sidebar.get` last answered; what a session's preset choice resolves against. */
+  panelSpec?: import("@mendcode/protocol").SidebarWidget[]
   /** What enabled profiles' activations currently ask for (extensions/activation.ts, loaded only when one exists). */
   activation: import("../../extensions/activation").TuiActivation | undefined
   /** The keys a profile overlay or a running extension holds right now, with the value each put there. */

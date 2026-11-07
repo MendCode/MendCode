@@ -12,7 +12,12 @@ export type WorkflowSlug = z.infer<typeof WorkflowSlug>
 export const WorkflowName = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,39}$/)
 export type WorkflowName = z.infer<typeof WorkflowName>
 
+/** What a plan or a task may ask for: only lowers the grant (a read-only task uses `mode: read`). */
 const Permission = z.enum(["ask", "edits", "full"])
+/** A run's applied permission: a session's own modes, so a run started from a plan or smart session keeps that mode. */
+const RunPermission = z.enum(["plan", "ask", "smart", "edits", "full"])
+/** Authority order, the same as an agent's cap (`capPermission`): a lower permission never gains from a higher request. */
+export const WORKFLOW_PERMISSION_RANK = { plan: 0, ask: 1, smart: 2, edits: 3, full: 4 } as const satisfies Record<z.infer<typeof RunPermission>, number>
 // Queries also refer to workflow summaries through events; defer this shared schema across that cycle.
 // A wrapper schema (lazy, pipe, optional) stays eager: JSON Schema generation finds it by identity, which a stand-in breaks (lazy.ts).
 const WorkflowModelChoice = z.lazy(() => ModelChoice)
@@ -57,7 +62,7 @@ export type WorkflowTaskUsage = z.infer<typeof WorkflowTaskUsage>
 export const WorkflowTaskExecution = lazySchema(() => z.strictObject({
   directory: z.string().min(1).max(4096),
   workspace: WorkflowWorkspacePolicy,
-  permission: Permission,
+  permission: RunPermission,
   readOnly: z.boolean(),
   model: WorkflowModelChoice.optional(),
   engine: WorkflowEngineId.optional(),
@@ -469,7 +474,7 @@ export const WorkflowRun = lazySchema(() => z.strictObject({
   plan: WorkflowAnyPlan,
   planHash: z.string().length(64),
   /** Applied permission: min(plan request, what the user granted). */
-  permission: Permission,
+  permission: RunPermission,
   state: WorkflowRunState,
   reason: z.string().max(500).optional(),
   rootSessionId: SessionId,
@@ -490,7 +495,7 @@ export const WorkflowRun = lazySchema(() => z.strictObject({
   queuedAfter: z.array(WorkflowId).max(16).optional(),
   permissionMode: WorkflowPermissionPolicy.shape.mode.unwrap().optional(),
   permissionReason: z.string().max(500).optional(),
-  sessionPermission: Permission.optional(),
+  sessionPermission: RunPermission.optional(),
   startKey: z.string().min(1).max(200).optional(),
   loopId: z.string().min(1).max(200).optional(),
   loopRunId: z.string().min(1).max(200).optional(),

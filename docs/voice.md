@@ -81,7 +81,7 @@ Only one recording runs at a time, owned by the connection that started it. A di
 | `model` | `gpt-4o-mini-transcribe` | transcription model (`whisper-1`, Groq `whisper-large-v3`, ...) |
 | `base_url` | provider's | custom endpoint (HTTPS or loopback HTTP, no credentials/query), e.g. a local whisper server. Provider credentials go to it only if `provider` is also set; otherwise no auth header is sent |
 | `language` | auto | ISO 639 code such as `es`, or two (`es,en`) heard at once on this Mac; an API gets the first as its hint |
-| `max_seconds` | 60 | 5..300 |
+| `max_seconds` | 60 | 5..300; for `/voice` and `ctrl+x v`. A held space records until it is let go: with no limit on-device, and up to 13 minutes (the upload size) with an API |
 | `timeout_ms` | 60000 | upload timeout |
 
 ## Telegram voice messages

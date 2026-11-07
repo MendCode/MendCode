@@ -91,6 +91,30 @@ The drawing text helps the model use a diagram or chart when useful:
 
 Codex, pi and ACP agents get the same two additions ([pi](pi-engine.md#how-a-turn-runs), [ACP](acp-engine.md#agent-transport)). Codex receives them as its thread's `developerInstructions`, a developer message after its own instructions.
 
+### Context level
+
+`/settings` → `claude context` sets how much of your own Claude Code setup each session loads (`claudeContext`). `/setup` names it on the Claude Code row once you are signed in.
+
+| Level | What a session loads |
+|---|---|
+| `lean` (default) | your `CLAUDE.md`, settings, permission rules and hooks; not your own MCP servers (MendCode's tools stay) or Claude Code's auto memory |
+| `full` | everything, as Claude Code alone |
+| `isolated` | none of your setup: no `CLAUDE.md`, hooks, own MCP servers or output style. The model does not follow your rules |
+
+Skills and commands stay listed at every level: Claude Code turns them off only together with `/compact`, which MendCode uses to compact a Claude session.
+
+- Settings files load at every level, so your permission rules and login never change.
+- MendCode's memory still comes at every level.
+- A change applies to the session's next Claude Code process.
+- `/tier claude_lean on` from an earlier version reads as `lean`.
+
+How each level runs `claude`:
+
+| Level | Flags and variables |
+|---|---|
+| `lean` | `--strict-mcp-config`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` |
+| `isolated` | the same, plus `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` and `--settings` with `disableAllHooks` and the `default` output style |
+
 ### Login and process lifetime
 
 Claude Code uses its own login. MendCode never reads, copies or forwards Claude credentials. There is no proxy or relay.
@@ -325,7 +349,7 @@ Background agents live inside the `claude` process and end with it.
 | Cause | Restart behavior |
 |---|---|
 | MCP change (`claude mcp add`, `.mcp.json`) | wait until no background task is running |
-| New model or effort | restart the process |
+| New model or effort | restart the process; while a background task runs, the model switches live and a new effort or fast mode waits until none runs |
 | Idle process | restart after 10 min with nothing in the background |
 | `/env` credentials | wait like an MCP change |
 

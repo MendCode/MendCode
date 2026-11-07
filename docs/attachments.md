@@ -118,8 +118,9 @@ only the attachments the sentence does not show.
 The terminal sends the text with the tokens in it. Each image or PDF ref carries two additive fields: `label` (the token,
 at most 80 characters) and `at` (the offset in the sent text right after the token). `user.submit` refuses an `at`
 without a `label`, past the end of the text, before the end of its label, or on a token another ref already holds.
-A text file or folder is not a ref: its fenced block (`[attached file: name]`) is placed after its token, so the sentence
-reads in order, and the text after it resumes on a fresh paragraph. Refs without `label` and `at` (the `above` setting,
+A text file or folder is not a ref: its fenced block (`[attached file: name]`) is placed at the end of the line its token
+is on, so a sentence around a pasted file reaches the model whole, and the next line resumes on a fresh paragraph. The
+transcript folds each block to its name and line count; ctrl+o shows it whole. Refs without `label` and `at` (the `above` setting,
 an old client, an old draft or queue entry) are sent after the text exactly as before; a request for a message without
 attachments is byte for byte unchanged.
 

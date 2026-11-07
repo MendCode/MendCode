@@ -206,7 +206,7 @@ export function createClaudeEngine(options: {
   /** An applied plan: the session moves to the plan's destination agent (the reviewer's choice, else the configured one), as the native engine does. */
   planApplied?(sessionId: SessionId, destination: string | undefined): void
   /** Text added after Claude Code's own system prompt for a project directory: what MendCode draws that Claude Code's terminal does not. */
-  appendSystem?(cwd: string): string | undefined
+  appendSystem?(cwd: string, sessionId: SessionId): string | undefined
   /**
    * What each of Claude Code's own sub-agents is told when it starts (its `SubagentStart` hook): they get a system prompt of
    * their own, without the main one's, so MendCode's tools (the code graph first) would otherwise go unused by them.
@@ -489,14 +489,15 @@ export function createClaudeEngine(options: {
         })
       connection.background = tasks.length
       for (const task of tasks) connection.tasks.add(task.id)
-      if (tasks.length) connection.idle?.cancel()
-      // An MCP change waited for the background tasks; with none left and no turn open, the process restarts now.
-      else if (!connection.turn && connection.reload) { close(connection, "MCP servers changed"); return }
-      else if (!connection.turn) keepIdle(connection)
+      // The new list is reported first, also when the process closes right after: close reports nothing once the count is zero.
       options.onBackground?.(connection.sessionId, tasks, async (taskId) => {
         if (connection.closed) throw new Error("[CLAUDE]: the Claude Code process has ended")
         await control(connection, { subtype: "stop_task", task_id: taskId })
       })
+      if (tasks.length) connection.idle?.cancel()
+      // An MCP, effort, fast or advisor change waited for the background tasks; with none left and no turn open, the process restarts now.
+      else if (!connection.turn && connection.reload) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
+      else if (!connection.turn) keepIdle(connection)
       return
     }
     if (agentTask(connection, message)) return
@@ -635,7 +636,7 @@ export function createClaudeEngine(options: {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
     // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
-    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
@@ -672,16 +673,30 @@ export function createClaudeEngine(options: {
     return connection
   }
 
+  async function keepForBackground(connection: Connection, model: ClaudeModelChoice) {
+    if ((connection.model.model ?? "") !== (model.model ?? "")) {
+      await connection.ready
+      await control(connection, { subtype: "set_model", model: model.model ?? "default" })
+      connection.model = { ...connection.model, model: model.model }
+    }
+    if (!sameModel(connection.model, model)) connection.reload = true
+  }
+
   async function connectionFor(input: TurnInput): Promise<Connection> {
     const model = options.modelFor(input.sessionId, input.selection?.model)
     // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: Claude Code runs it in its
     // default mode, so its own plan-mode reminders never reach the run, and every tool that would change something is refused here.
     const mode = input.readOnlyRun === true && input.permissionMode() === "plan" ? "ask" : input.permissionMode()
     let connection = connections.get(input.sessionId)
+    // Background agents live in the process: while any runs, a new model is switched live (`set_model`) and what only a start sets
+    // (effort, fast, advisor) waits until they end (`reload`), so a model change never ends them. A bridged turn's kept process is not
+    // reused this way: its bridge went with the turn that started it, so it starts again with the joining turn's bridge.
+    const bridged = options.processArgs !== undefined
+    if (connection && !bridged && !connection.closed && connection.background > 0 && !sameModel(connection.model, model)) await keepForBackground(connection, model)
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.
     // An MCP change that waited for background tasks is made before a turn once none runs.
-    if (connection && (!sameModel(connection.model, model) || (connection.background === 0 && (connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
+    if (connection && ((bridged && !sameModel(connection.model, model)) || (connection.background === 0 && (!sameModel(connection.model, model) || connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
       close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }) ? "compaction point changed" : "credentials changed")
       connection = undefined
     }

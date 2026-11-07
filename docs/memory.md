@@ -29,6 +29,7 @@ Use `/` to filter by text, category, scope, or the word `pinned`. The list inclu
 | key | tab | does |
 |---|---|---|
 | `a` / `x` | Pending | approve / reject |
+| `A` / `X` | Pending | approve / reject every proposal the list shows (after a `/` filter, only those). Asks first: `y` or the same key confirms, anything else cancels |
 | `x` | Saved | archive |
 | `r` | Archived | restore |
 | `e` | all | edit the text in the prompt (`enter` saves, `esc` cancels) |
@@ -105,7 +106,7 @@ The list refreshes when a Dream run ends.
 
 Settings are independent: `memoryEnabled` gates generated proposals and retrieval; `memoryUse` gates prompt injection; `memoryGenerate` enables post-turn extraction; `memoryRequireApproval` forces extraction proposals into Pending.
 
-Prompt use and generation default off; approval defaults on. Enable use explicitly to inject saved facts; the v2 enabled switch retains its existing default on.
+Without a tier that fills them, prompt use and generation default off and approval defaults on (see [Memory by tier](#memory-by-tier): balanced and full fill the switches you never set, minimalist fills none). The v2 enabled switch retains its existing default on.
 
 Category `never` still drops proposals, `review` still requires review, and secrets always require review. Manual additions remain explicit user actions.
 
@@ -119,21 +120,57 @@ Category `never` still drops proposals, `review` still requires review, and secr
 
 `/remember [--user] <text>` saves one fact at once (this project, or every project with `--user`) without a proposal; it answers `remembered (this project)` or the error.
 
+### When extraction runs
+
+MendCode does not call a model after every turn. It reviews a session's memory at checkpoints, from the stored events, so the review is the same for every engine (native, Claude Code, Codex, pi, ACP agents):
+
+| checkpoint | when |
+|---|---|
+| turns | after every N substantive user turns since the last review (`memoryReviewEveryTurns`: 10 in balanced, 6 in full) |
+| idle | the session has been quiet for `memoryReviewIdleMinutes` (default 10) with unreviewed turns |
+| compaction | just before the session's history is compacted |
+
+A review is one redacted digest (at most 64 000 characters, no tool or reasoning output) of the turns since the last review. Each session has one review slot: a review still waiting is replaced by a newer one that also covers its turns, and a checkpoint that arrives while a review runs is made again when it ends. Greetings and acknowledgements without a tool call are not substantive. With fewer than two substantive unreviewed turns nothing is sent.
+
+These sessions are never reviewed: temporary folders, folders that no longer exist, linked git worktrees (lanes), the data directory, child and task sessions, loop, workflow and PR review sessions, and scripted runs. They use the same filter as Dream's scheduled runs.
+
+A daily cap (`memoryReviewDailyCap`: 12 in balanced, 30 in full, `0` stops automatic extraction) bounds the calls in 24 hours. Turns reviewed or skipped are not carried over: a capped review is dropped. Saving a fact yourself (`/remember`, the `memory` tool, "remember this") is immediate and never waits for a checkpoint.
+
+The checkpoints' state survives a restart: each session with unreviewed turns keeps one small row (turn count, where the unreviewed turns start, the range of a review still waiting), rewritten in place and deleted once reviewed. After a restart those turns are still reviewed (their idle checkpoint is armed again on the daemon's first memory activity) and reviewed turns are never sent again. Rows of sessions quiet for 14 days are dropped, and at most 512 are kept.
+
+### Review record
+
+Every review job and every skip except "too little to review yet" leaves one row (`memory.extraction.list` returns the newest in `reviews`): when, session, folder, trigger (`turns`, `idle`, `compaction`, `retry`), substantive turns covered, extractor calls made, proposals made, `ran`, `failed` or `skipped`, and the reason for a skip (`daily cap`, `generation disabled`, `empty digest`). Ineligible sessions (temp, missing or worktree folders, child, task, loop, workflow and review sessions, scripted runs) write nothing: the same reply counts them per reason (`ineligible`) since the daemon started. The table keeps the newest 300 rows, so yield per call (`proposed` over `calls`) can be checked later without growing.
+
 ### Post-turn jobs
 
-Completed ordinary user turns enqueue one redacted digest (at most 64 000 characters), excluding tool/reasoning output and child task turns.
-
-One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs retained; a job that finished leaves no row, and only the newest 20 failed or skipped ones stay to be retried.
+A review is one durable job per session. One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs retained; a job that finished leaves no row, and only the newest 20 failed or skipped ones stay to be retried.
 
 A call times out after 45 seconds, retries twice with backoff, and never applies a late result after timeout or shutdown.
 
 Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason.
 
-The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then the main model's cheaper peer such as Luna for Sol, then main; titles, summaries and Dream follow the same rule, from the session's own model when the daemon runs it); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+
+### Pending that nobody decides
+
+An agent proposal that waits in Pending longer than `memoryPendingDays` (default 14; `0` keeps them until you decide) is archived, where it can still be restored; a pending Dream revision (update or archive) is dropped instead. Proposals you made yourself and assistant drafts never expire. The check runs with the maintenance after each turn, so it needs no timer.
+
+### Repeated proposals
+
+A proposal whose text matches a memory you already have is not proposed again. Case, spacing, punctuation and accents are ignored, the user and project scopes are compared together, and archived memories count: something you rejected or Dream archived stays archived until you restore it.
+
+### Where a memory came from
+
+A memory made by the agent, the post-turn extractor or Dream records the session and the engine behind it (`originSessionId`, `originEngine`: `native`, `claude`, `codex`, `pi`, `acp:<agent>` or `dream`) in its details, so you can tell a Claude Code origin from a native one. Memories you add yourself carry none.
+
+### Extraction calls
+
+A turn that only greets or acknowledges ("hi", "thanks", "ok") and calls no tool does not count toward a review. Digests are cut on a character boundary so a request is never malformed. A call that failed without a reply is a failed job (shown in Extraction), not a call in the usage totals.
 
 ### Duplicate maintenance
 
-Maintenance defaults disabled. Preview reports exact generated duplicates within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected.
+Maintenance defaults disabled. Preview reports exact generated duplicates (text compared without case, spacing or punctuation) within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected.
 
 Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
 
@@ -147,15 +184,31 @@ The agent does not get every saved memory, only the ones that matter for what yo
 
 The score of a memory is its match, its recency (half-life of 30 days), its links to matches, a small lift for `preferences`, `constraints` and `security` and for the session's own memories, minus a penalty when another saved memory *supersedes* it. A memory already shown earlier in the session gets a lift too, so the prompt changes only when the ranking clearly does (this keeps the provider's prompt cache useful). When the block leaves memories out it says how many and points to `memory_graph` search.
 
+### Every engine, the same recall
+
+Recall is the same contract for every engine: the `<mendcode_memory>` block (same selection and limits, `memoryUse` on) is frozen into the text the session starts with, and the `memory` tool searches by prompt for anything beyond it. The block is chosen without the prompt, so its text and order stay stable and the provider's cached prefix holds. A scripted run with no memory gets none.
+
+| engine | block | tool |
+|---|---|---|
+| native | in the system prompt, ranked per request with a stable order | yes |
+| Claude Code | appended to the system text its process starts with (fixed for that process) | yes, through MendCode's tool bridge |
+| Codex | appended to the system text of the turn's process | yes, through the bridge |
+| pi | appended with `--append-system-prompt` when its process starts (fixed for that process); pi has no MendCode tools, so its recall is the block only | no |
+| ACP agents | leads the first prompt of a new agent session; a resumed agent session already holds it | only agents that take HTTP MCP servers |
+
+Reviews do not depend on the engine: they read the daemon's stored events. They need the daemon's own extractor model (the native daemon).
+
 ## Memory by tier
 
 | tier | memory |
 |---|---|
-| minimalist | Exactly the switches you set. Nothing is injected, extracted or consolidated until you turn it on |
-| balanced | Same: the switches you set. A new chat starts clean |
-| full | `memory_auto` fills the switches you never set: facts reach prompts, a post-turn extractor keeps decisions, preferences and the state of the work (with scores), Dream consolidates Pending every night and archives duplicates, and the caps are 20 project and 100 total entries. `resume_context` adds a note of at most 1 800 characters to the system prompt of a new chat |
+| minimalist | Exactly the switches you set. Nothing is injected, extracted or consolidated until you turn it on; no review runs and no hidden call is made |
+| balanced | `memory_auto` fills the switches you never set: facts reach prompts and a selective review per session proposes new ones into Pending (approval stays on). Caps are 10 project and 50 total entries; a review every 10 substantive turns, at most 12 extractor calls a day. Dream and consolidation are not changed |
+| full | `memory_auto` also keeps decisions, preferences and the state of the work (with scores), saves proposals without a per-item approval, Dream consolidates Pending every night and archives duplicates, and the caps are 20 project and 100 total entries; a review every 6 substantive turns, at most 30 calls a day. `resume_context` adds a note of at most 1 800 characters to the system prompt of a new chat |
 
-A switch present in your settings (global or project) always wins over the tier. `/tier memory_auto off` and `/tier resume_context off` turn either one off.
+Changing tier never deletes, archives or edits a saved memory or a pending proposal; it only changes what is filled in for the switches you never set.
+
+A switch present in your settings (global or project) always wins over the tier. `/tier memory_auto off` and `/tier resume_context off` turn either one off. `memoryReviewEveryTurns`, `memoryReviewIdleMinutes` and `memoryReviewDailyCap` set the review cadence in any tier.
 
 Nightly consolidation in full saves a Pending proposal when its scores pass the gates (confidence ≥ .9, durability ≥ .85, change risk ≤ .2, low sensitivity) and its category is commands, stack, constraints, conventions, preferences, architecture, objective or release. A proposal that needs a person (other categories, redacted or sensitive text, revisions of user or pinned facts) stays in Pending instead of being archived. A proposal below the score gates or already remembered is archived and can be restored.
 
@@ -189,7 +242,7 @@ A saved memory can be pinned (`memory.update` with `pinned`, or `memory.add` wit
 
 ## Categories and policies
 
-An entry's category is free text. These ones are known (`memory.categories`; unknown or empty ones count as `other`; case and v1's `project.` / `user.` prefixes are ignored):
+An entry's category is stored as text. These ones are known (`memory.categories`; unknown or empty ones count as `other`; case and v1's `project.` / `user.` prefixes are ignored). A model's write (`memory` add/update/propose, `remember`) must name a known one: a near miss that means exactly one id (`category conventions`, `command`) is stored as that id, and anything else fails with the list so the model can call again:
 
 | category | for | default policy |
 |---|---|---|
