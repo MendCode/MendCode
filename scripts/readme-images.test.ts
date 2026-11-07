@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { COLUMNS, IMAGES_DIR, ROWS, SCENES, renderImages, renderSvg } from "./readme-images"
+import { activeTheme, setTheme } from "../apps/cli/src/ui/theme"
 
 describe("README images", () => {
   test("every committed screenshot is what the real views draw now (run `bun scripts/readme-images.ts` after a view change)", async () => {
@@ -30,6 +31,19 @@ describe("README images", () => {
     expect(svg).toContain('aria-label="mendcode — /memory"')
     expect(svg).toContain('fill="#0a0a0a"')
     expect(svg).toContain('font-weight="700"')
+  })
+
+  test("cells without a background take the theme's own: a light theme renders light", () => {
+    const previous = activeTheme().name
+    setTheme("paper")
+    try {
+      const svg = renderSvg({ frame: [[{ text: "hi" }, { text: "x", bg: "panel" }]], title: "t", columns: 4, rows: 1 })
+      expect(svg).toContain('rx="10" fill="#faf8f2"')
+      expect(svg).not.toContain("#0a0a0a")
+      expect(svg).toContain('fill="#1f2a24">hi<')
+    } finally {
+      setTheme(previous)
+    }
   })
 
   test("text is escaped, backgrounds become rects, wide characters take two cells", () => {

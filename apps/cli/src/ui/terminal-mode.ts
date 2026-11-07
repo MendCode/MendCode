@@ -1,3 +1,5 @@
+import type { Theme } from "../themes/define"
+
 export type TerminalMode = "dark" | "light"
 
 /** Turns on mode-change reports (DEC 2031) and asks for the current mode (DEC 996 and the OSC 11 background colour). */
@@ -27,17 +29,20 @@ function modeFromColor(channels: string[]): TerminalMode {
  */
 export function createTerminalMode(env: Record<string, string | undefined> = process.env) {
   let current = modeFromEnv(env)
+  let answered = false
   let pending = ""
   const listeners = new Set<(mode: TerminalMode) => void>()
 
-  function set(mode: TerminalMode) {
-    if (mode === current) return
+  function set(mode: TerminalMode, announce = false) {
+    if (mode === current && !announce) return
     current = mode
     for (const listener of listeners) listener(mode)
   }
 
   return {
     get mode() { return current },
+    /** The terminal answered the OSC 11 colour query: it knows OSC 11, so it can take a background colour too. */
+    get answered() { return answered },
     set,
     subscribe(listener: (mode: TerminalMode) => void) {
       listeners.add(listener)
@@ -47,7 +52,13 @@ export function createTerminalMode(env: Record<string, string | undefined> = pro
       const joined = pending + data
       pending = ""
       let rest = joined.replace(REPORT, (_, report: string | undefined, r: string, g: string, b: string) => {
-        set(report ? (report === "1" ? "dark" : "light") : modeFromColor([r, g, b]))
+        if (report) set(report === "1" ? "dark" : "light")
+        else {
+          // The first answer is announced even when COLORFGBG had guessed the same mode: it is what lets the theme's background be painted.
+          const first = !answered
+          answered = true
+          set(modeFromColor([r, g, b]), first)
+        }
         return ""
       })
       const partial = PARTIAL.exec(rest)
@@ -61,3 +72,30 @@ export function createTerminalMode(env: Record<string, string | undefined> = pro
 }
 
 export type TerminalModeTracker = ReturnType<typeof createTerminalMode>
+
+/** The terminal's default colours, set to a theme's own (OSC 10 text, 11 background, 12 cursor). */
+export type BackgroundPaint = { background: string; text: string; cursor: string }
+
+/** Puts the terminal's own default colours back (OSC 110, 111, 112). */
+export const PAINT_RESET = "\x1b]110\x07\x1b]111\x07\x1b]112\x07"
+
+/**
+ * Whether the theme's background is painted behind every cell: when the terminal answered the OSC 11 query and its
+ * light/dark mode is not the theme's (a light theme in a dark terminal draws dark text on black otherwise), or when
+ * the theme asks for it (`paintBackground: "always"`). A theme that matches its terminal, a terminal that never
+ * answered, a theme in the terminal's own palette (`ansi`) or `paintBackground: "never"` keeps the terminal's colours.
+ */
+export function backgroundPaint({ theme, mode, answered }: { theme: Pick<Theme, "dark" | "background" | "colors" | "ansi" | "paintBackground">; mode: TerminalMode | undefined; answered: boolean }): BackgroundPaint | undefined {
+  if (theme.ansi || theme.paintBackground === "never") return undefined
+  const mismatch = answered && mode !== undefined && mode !== (theme.dark ? "dark" : "light")
+  if (!mismatch && theme.paintBackground !== "always") return undefined
+  return { background: theme.background, text: theme.colors.text, cursor: theme.colors.text }
+}
+
+const oscColor = (hex: string) => `rgb:${hex.slice(1, 3)}/${hex.slice(3, 5)}/${hex.slice(5, 7)}`
+
+/** The sequence that sets the terminal's default colours to `paint`, or puts the terminal's own back when there is none. */
+export function paintSequence(paint: BackgroundPaint | undefined): string {
+  if (!paint) return PAINT_RESET
+  return `\x1b]10;${oscColor(paint.text)}\x07\x1b]11;${oscColor(paint.background)}\x07\x1b]12;${oscColor(paint.cursor)}\x07`
+}

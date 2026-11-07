@@ -1440,6 +1440,23 @@ Ctrl+L, `/theme lock [dark|light]` and `/theme unlock` pin the mode `system` use
 
 `/theme <name|system>` applies directly.
 
+### Theme background
+
+MendCode normally draws on the terminal's own background. When the theme's lightness does not match it (Paper, a light theme, in a dark terminal, or a dark theme in a light one), the theme's `background` is painted behind every cell instead, so the text stays readable.
+
+The terminal's background is asked once when the full-screen chat starts (the OSC 11 colour and the DEC 996/2031 light/dark mode); later mode-change reports, theme changes (the picker's preview too) and resizes keep it in sync.
+
+The colour is set as the terminal's default text, background and cursor colours (OSC 10/11/12), so the cells' own colours, selection, diff rows, panels and images draw as before; the terminal's colours are put back on exit, on `ctrl+z` and while an external editor runs.
+
+It stays off:
+
+- when the theme matches the terminal, nothing changes;
+- when the terminal never answers the OSC 11 query (`COLORFGBG` alone is a guess), or with `MENDCODE_TERMINAL_MODE=0`;
+- for the `terminal` theme, which uses the terminal's own palette;
+- in the inline chat (`--no-alt-screen`), whose output stays in the terminal's scrollback.
+
+A theme file can set `"paintBackground"`: `"always"` paints its background whatever the terminal is (also one that never answered), `"never"` always keeps the terminal's; without it (`"auto"`) the rule above applies.
+
 Usage scopes and widgets are documented in [usage.md](usage.md).
 
 Setup also offers presets, API budget controls and a tool-less helper conversation; `/intro` replays the native mascot/wordmark sequence.

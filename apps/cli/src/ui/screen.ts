@@ -1,5 +1,5 @@
 import { hostCellPixels, terminalPixels } from "./terminal-pixels"
-import { createTerminalMode, MODE_SUBSCRIBE, MODE_UNSUBSCRIBE } from "./terminal-mode"
+import { backgroundPaint, createTerminalMode, MODE_SUBSCRIBE, MODE_UNSUBSCRIBE, PAINT_RESET, paintSequence } from "./terminal-mode"
 import { createTerminalFocus, FOCUS_SUBSCRIBE, FOCUS_UNSUBSCRIBE } from "./terminal-focus"
 import { createKeyboardProtocol, translateKey } from "./keyboard-protocol"
 import { createInlineRegion } from "./inline-region"
@@ -7,7 +7,7 @@ import type { CellPixels } from "../pets/frames"
 import { cells, takeCells } from "../view/wrap"
 import { createMemoryGovernor, framesPerCollection } from "./memory-governor"
 import type { ImageLayer, ImagePlacement } from "./image-layer"
-import { colorDepth, sgr, type Line } from "./theme"
+import { activeTheme, colorDepth, sgr, type Line, type Theme } from "./theme"
 import { HYPERLINK_CLOSE, hyperlinkOpen, hyperlinksAllowed, safeLink } from "./hyperlink"
 
 /** A row as the escape string to write, plus how many cells it fills (≤ width; escapes and controls never pass). */
@@ -77,11 +77,34 @@ export function createScreen(
   let title = ""
   let cursorShape: "default" | "bar" | "block" = "default"
 
-  // The terminal's light/dark mode (the `system` theme): asked for on demand, never at start, so a prompt that
-  // does not read it never receives the reply. MENDCODE_TERMINAL_MODE=0 never asks.
+  // The terminal's light/dark mode (the `system` theme and the theme's background): asked for on request (the full-screen
+  // chat asks as it starts), never on entering, so a prompt that does not read it never receives the reply.
+  // MENDCODE_TERMINAL_MODE=0 never asks.
   const terminalMode = createTerminalMode(env)
   const modeAllowed = env.MENDCODE_TERMINAL_MODE !== "0" && output.isTTY === true
   let modeSubscribed = false
+
+  // The theme's background behind every cell (terminal-mode.ts `backgroundPaint`): set once as the terminal's default
+  // colours (OSC 10/11/12), so the rows' SGR stays what it was and erased or unwritten cells take it too. Only on the
+  // alternate screen: inline output stays in the scrollback, where the terminal's colours come back. Re-decided when the
+  // theme or the terminal's answer changes; the terminal's own colours go back on leaving.
+  let painted = PAINT_RESET
+  let paintInputs: { theme: Theme; mode: string | undefined; answered: boolean } | undefined
+  function paintChange(): string {
+    const theme = activeTheme()
+    if (paintInputs && paintInputs.theme === theme && paintInputs.mode === terminalMode.mode && paintInputs.answered === terminalMode.answered) return ""
+    paintInputs = { theme, mode: terminalMode.mode, answered: terminalMode.answered }
+    const next = paintSequence(backgroundPaint({ theme, mode: terminalMode.mode, answered: terminalMode.answered }))
+    if (next === painted) return ""
+    painted = next
+    return next
+  }
+  function paintRestore(): string {
+    paintInputs = undefined
+    if (painted === PAINT_RESET) return ""
+    painted = PAINT_RESET
+    return PAINT_RESET
+  }
 
   // Window focus (DEC 1004), asked for while the screen is entered so notifications can wait for the user to look away.
   // MENDCODE_FOCUS_EVENTS=0 never asks; terminals that do not know the mode ignore it and the focus stays unknown.
@@ -164,6 +187,8 @@ export function createScreen(
       if (inline) output.write(`${titles ? "\x1b[22;0t" : ""}\x1b[?25l\x1b[?2004h${focusOn}`)
       else output.write(`\x1b[?1049h${titles ? "\x1b[22;0t" : ""}\x1b[?25l\x1b[?2004h${focusOn}${mouseOn}${keepFrame ? "" : "\x1b[2J"}`)
       keepFrame = false
+      // Back from the shell or an editor (leaving turned the reports off and put the terminal's colours back): asked again, as it may have changed meanwhile.
+      if (modeSubscribed && modeAllowed) output.write(MODE_SUBSCRIBE)
       keyboard.ask()
     },
     /**
@@ -179,7 +204,7 @@ export function createScreen(
       const altPop = altKeyboard ? keyboard.alternate(false) : ""
       altKeyboard = false
       // Our images go before the alternate screen is left so none stays on the screen we return to.
-      const closing = `\x1b[0m${cursorShape === "default" ? "" : "\x1b[0 q"}${keyboard.release()}${mouseOff}${modeSubscribed ? MODE_UNSUBSCRIBE : ""}${focusOff}\x1b[?2004l\x1b[?25h${titles && title ? "\x1b[23;0t" : ""}${images?.clearAll() ?? ""}`
+      const closing = `\x1b[0m${paintRestore()}${cursorShape === "default" ? "" : "\x1b[0 q"}${keyboard.release()}${mouseOff}${modeSubscribed ? MODE_UNSUBSCRIBE : ""}${focusOff}\x1b[?2004l\x1b[?25h${titles && title ? "\x1b[23;0t" : ""}${images?.clearAll() ?? ""}`
       if (!inline) return void output.write(handOver ? `${closing}\x1b[?25l` : `${closing}\x1b[?1049l`)
       // The prompt and footer go; the history stays in the scrollback and the shell continues under it.
       if (alt) { alt = false; previous = []; output.write(`${mouseOff}${altPop}\x1b[?1049l`) }
@@ -266,7 +291,8 @@ export function createScreen(
       const changedRows = new Set<number>()
       const wanted = placements ?? []
       const repaint = images?.repaintRows?.(wanted) ?? noRows
-      let out = ""
+      // Empty unless the theme or the terminal's answer changed since the last frame.
+      let out = inline ? "" : paintChange()
       for (let y = 0; y < size.height; y++) {
         // The bottom-right cell is never written: some terminals scroll the screen when it is filled.
         const width = y === size.height - 1 ? size.width - 1 : size.width
