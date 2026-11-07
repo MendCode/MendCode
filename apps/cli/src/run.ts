@@ -185,6 +185,18 @@ export function createHeadlessRun(options: RunOptions) {
       else buffered.push(event)
     },
     async start() {
+      // The subscription replays existing requests before submission. A new turn cannot start while an older one awaits its owner.
+      const pending = new Map<string, Extract<SessionEvent, { type: "server.request" }>>()
+      for (const event of buffered) {
+        if (event.sessionId !== sessionId) continue
+        if (event.type === "server.request") pending.set(event.requestId, event)
+        else if (event.type === "server.request.resolved") pending.delete(event.requestId)
+      }
+      if ([...pending.values()].some((request) => request.kind === "approval")) {
+        options.err.write("error: this session has a pending approval; answer it from /workflows or attach to the session before running another message\n")
+        settle(EXIT.failed)
+        return done
+      }
       const reply = await (options.submit?.() ?? options.client.send({ type: "user.submit", sessionId: options.sessionId, text: options.prompt, attachments: [] }))
       if (!reply.ok) {
         if (options.compat) options.out.write(`${JSON.stringify(compatEnvelope({ kind: "error", command: "run", error: reply.error }))}\n`)

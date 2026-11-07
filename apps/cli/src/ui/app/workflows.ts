@@ -19,7 +19,7 @@ export function createWorkflows(ctx: AppContext) {
 
   async function openWorkflows() {
     state.page = "workflows"
-    state.workflowsState = createWorkflowsPageState()
+    state.workflowsState = createWorkflowsPageState("all")
     state.workflowsLoaded = false
     state.workflowsError = ""
     requestFrame()
@@ -83,7 +83,7 @@ export function createWorkflows(ctx: AppContext) {
       if (plan === undefined) return fail(`cannot read ${spec.source.file} as JSON`)
     } else plan = { ref: spec.source.ref }
     const directory = input.directory ?? ""
-    const preview = await input.send({ type: "workflow.preview", directory, plan: plan as never })
+    const preview = await input.send({ type: "workflow.preview", directory, plan: plan as never, ...(spec.permission ? { permission: spec.permission } : {}), ...(state.sessionId ? { originSessionId: state.sessionId } : {}) })
     if (!preview.ok) return fail(preview.error.message)
     const problems = (preview.result?.problems ?? []) as string[]
     if (problems.length) return fail(problems.slice(0, 3).join(" · "))
@@ -91,13 +91,13 @@ export function createWorkflows(ctx: AppContext) {
     if (!spec.confirmed && summary?.script) {
       // What a script may spend and what it is, before it runs: the user's approval is the `--yes` that follows this line.
       const caps = Object.entries(summary.script.meta.budget ?? {}).map(([key, value]) => `${key} ${value}`).join(", ") || "no caps declared (10 agent calls)"
-      state.notice = `${summary.name}: script ${scriptName ?? ""} · ${summary.script.origin} · sha256 ${summary.script.hash.slice(0, 12)} · caps ${caps} · up to ${summary.maxConcurrent ?? 16} agents at once · ${spec.permission ?? summary.permission}${summary.checks.length ? ` · checks: ${summary.checks.join(", ")}` : ""} — add --yes to start`
+      state.notice = `${summary.name}: script ${scriptName ?? ""} · ${summary.script.origin} · sha256 ${summary.script.hash.slice(0, 12)} · caps ${caps} · up to ${summary.maxConcurrent ?? 16} agents at once · ${summary.permission}${summary.checks.length ? ` · checks: ${summary.checks.join(", ")}` : ""} — add --yes to start`
       return
     }
     if (!spec.confirmed) {
       const checks = summary?.checks.length ? ` · checks: ${summary.checks.join(", ")}` : " · no checks"
       const composed = [summary?.overlapPolicy ? `overlap ${summary.overlapPolicy}` : undefined, summary?.phases?.length ? `${summary.phases.length} phases` : undefined, ...summary?.tasks.filter((task) => task.kind === "map").map((task) => `map ≤${task.map?.maxItems ?? 0}`) ?? []].filter(Boolean)
-      state.notice = `${summary?.name ?? "workflow"}: ${summary?.tasks.length ?? 0} tasks${composed.length ? ` · ${composed.join(" · ")}` : ""} · ${spec.permission ?? summary?.permission ?? "ask"}${checks} — add --yes to start`
+      state.notice = `${summary?.name ?? "workflow"}: ${summary?.tasks.length ?? 0} tasks${composed.length ? ` · ${composed.join(" · ")}` : ""} · ${summary?.permission ?? "ask"}${checks} — add --yes to start`
       return
     }
     const reply = await input.send({ type: "workflow.start", directory, plan: plan as never, ...(spec.permission ? { permission: spec.permission } : {}), ...(state.sessionId ? { originSessionId: state.sessionId } : {}) })

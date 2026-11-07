@@ -95,6 +95,39 @@ describe("/workflows command", () => {
 })
 
 describe("workflows in the chat", () => {
+  test("up from a task opened in workflows returns to the workflow list", async () => {
+    const taskId = ids("session")
+    const live = run({ tasks: [{ id: "build", title: "Build", kind: "agent", mode: "work", needs: [], state: "running", attempt: 1, sessionId: taskId }] })
+    const { app, sent, text, slash } = harness((command) => {
+      if (command.type === "workflow.list") return { ok: true, result: { workflows: [live] } }
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, parentId: live.rootSessionId } } }
+      return undefined
+    })
+    app.applySettings({})
+    await slash("/workflows")
+    await app.onKey("\r")
+    expect(app.sessionId).toBe(taskId)
+    await app.onKey("\x1b[A")
+    app.render()
+    expect(text().join("\n")).toContain("Workflows")
+    expect(text().join("\n")).toContain("ship")
+    expect(sent.filter((command) => command.type === "workflow.list").length).toBeGreaterThan(1)
+  })
+  test("the workflows page shows other projects immediately and can switch to this project", async () => {
+    const here = run({ name: "local" })
+    const elsewhere = run({ name: "elsewhere", directory: "/elsewhere", state: "needs_input" })
+    const { app, sent, text, slash } = harness((command) => command.type === "workflow.list"
+      ? { ok: true, result: { workflows: command.directory ? [here] : [here, elsewhere] } }
+      : undefined)
+    await slash("/workflows")
+    expect(sent.filter((command) => command.type === "workflow.list").at(-1)?.directory).toBeUndefined()
+    expect(text().join("\n")).toContain("elsewhere")
+    await app.onKey("\t")
+    app.render()
+    expect(sent.filter((command) => command.type === "workflow.list").at(-1)?.directory).toBe("/work/app")
+    expect(text().join("\n")).not.toContain("elsewhere")
+  })
+
   test("the row under the prompt counts live workflows and marks one that needs the user", async () => {
     const { app, text } = harness((command) =>
       command.type === "workflow.list" ? { ok: true, result: { workflows: [run(), run({ state: "needs_input" }), run({ state: "completed" }), run({ directory: "/elsewhere" })] } } : undefined,

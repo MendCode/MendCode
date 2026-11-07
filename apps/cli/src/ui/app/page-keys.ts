@@ -527,8 +527,10 @@ export function createPageKeys(ctx: AppContext, actions: {
         const { action } = result
         if (action.type === "close") state.page = "chat"
         else if (action.type === "open") {
+          const previous = state.sessionId
           state.page = "chat"
           await switchSession(action.sessionId as SessionId)
+          if (state.sessionId === action.sessionId) state.workflowReturn = { task: state.sessionId, previous }
         } else if (action.type === "control") void controlWorkflow(action.workflowId, action.action)
         else if (action.type === "retry") void controlWorkflow(action.workflowId, "retry", action.taskId)
         else if (action.type === "answer") void controlWorkflow(action.workflowId, action.decision, action.taskId)

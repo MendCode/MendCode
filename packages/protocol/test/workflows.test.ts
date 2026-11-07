@@ -159,12 +159,13 @@ describe("workflow commands", () => {
     expect(Command.safeParse({ ...control, action: "retry", taskId: "Survey" }).success).toBe(false)
   })
 
-  test("workflow.preview is directory plus plan", () => {
+  test("workflow.preview is directory plus plan, with the permission the start would ask for so it previews the applied one", () => {
     const preview = { ...base, type: "workflow.preview", directory: "/repo" }
     expect(Command.safeParse({ ...preview, plan }).success).toBe(true)
     expect(Command.safeParse({ ...preview, plan: { ref: "api-rewrite" } }).success).toBe(true)
     expect(Command.safeParse({ ...preview }).success).toBe(false)
-    expect(Command.safeParse({ ...preview, plan, permission: "full" }).success).toBe(false)
+    expect(Command.safeParse({ ...preview, plan, permission: "full" }).success).toBe(true)
+    expect(Command.safeParse({ ...preview, plan, permission: "root" }).success).toBe(false)
   })
 })
 

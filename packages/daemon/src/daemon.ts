@@ -1315,7 +1315,11 @@ export async function startDaemon(options: DaemonOptions) {
     // Built below with the loop service; tools only call this during turns.
     loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
     // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
-    loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => loopInheritedReads(sessionId) },
+    loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => {
+      const inherited = loopInheritedReads(sessionId)
+      const root = workflowContext(sessionId)?.workflow.packageRoot
+      return root ? { all: inherited?.all ?? false, roots: [...(inherited?.roots ?? []), root] } : inherited
+    } },
     // The project service is built on first use; the `worktree` tool only calls this during turns.
     worktrees: (sessionId) => worktreePort(sessionId),
     prWatch: (sessionId) => prWatch.port(sessionId),
@@ -2564,6 +2568,7 @@ export async function startDaemon(options: DaemonOptions) {
       return (store.settings.get().trustedToolDirs ?? []).some((trusted) => trusted === canonical || canonicalDir(trusted) === canonical)
     },
     defaultPermission: (directory) => defaultPermissionFor(store.settings.get(), directory),
+    sessionPermission: (sessionId) => store.hasSession(sessionId) ? livePermission(sessionId) : undefined,
     prepareTask: workflowRouter.prepare,
     routingProblems: workflowRouter.problems,
     validateAgent: workflowRouter.agentProblem,

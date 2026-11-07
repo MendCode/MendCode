@@ -1557,6 +1557,8 @@ export const WorkflowPreview = lazySchema(() => z.strictObject({
   type: z.literal("workflow.preview"),
   directory: z.string().min(1).max(4096),
   plan: WorkflowPlanInput,
+  permission: z.enum(["ask", "edits", "full"]).optional(),
+  originSessionId: SessionId.optional(),
 }))
 
 /** Saves a frozen v2 plan/contract; never creates a run. Ack: `{ receipt: WorkflowRevisionReceipt }`. */

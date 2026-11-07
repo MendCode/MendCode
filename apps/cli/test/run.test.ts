@@ -20,6 +20,25 @@ function harness(options: { thinking?: boolean; approve?: boolean } = {}) {
 }
 
 describe("headless run output", () => {
+  test("an existing pending approval exits without submitting or approving", async () => {
+    const h = harness({ approve: true })
+    h.emit({ type: "server.request", turnId: h.turnId, requestId: ids("request"), kind: "approval", title: "Read", detail: "external directory" })
+    expect(await h.run.start()).toBe(EXIT.failed)
+    expect(h.sent).toEqual([])
+    expect(h.err.join("")).toContain("pending approval")
+  })
+
+  test("a resolved historical approval does not block a new turn", async () => {
+    const h = harness({ approve: true })
+    const requestId = ids("request")
+    h.emit({ type: "server.request", turnId: h.turnId, requestId, kind: "approval", title: "Read", detail: "file" })
+    h.emit({ type: "server.request.resolved", requestId, resolution: "approved" })
+    const started = h.run.start()
+    await Promise.resolve()
+    h.emit({ type: "turn.started", turnId: h.turnId, queueId: h.queueId })
+    h.emit({ type: "turn.completed", turnId: h.turnId })
+    expect(await started).toBe(EXIT.completed)
+  })
   test("stdout carries only the answer; reasoning, tools and compaction go to stderr", async () => {
     const { run, emit, out, err, turnId, queueId } = harness()
     const started = run.start()

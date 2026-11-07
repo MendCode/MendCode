@@ -230,7 +230,7 @@ describe("workflow formatting", () => {
     expect(waitingLines(summary())).toEqual([])
   })
 
-  test("preview prints tasks, verbatim checks and the lower of the requested and granted permission", () => {
+  test("preview prints tasks, verbatim checks and the daemon's applied permission", () => {
     const text = previewText({ target: "ship.json", plan, summary: { permission: "edits" }, granted: undefined })
     expect(text).toContain("plan: ship it")
     expect(text).toContain("build  agent/work  Build it")
@@ -239,6 +239,7 @@ describe("workflow formatting", () => {
     expect(text).toContain("permission: edits")
     expect(previewText({ target: "ship.json", plan, summary: {}, granted: "ask" })).toContain("permission: ask")
     expect(previewText({ target: "ship.json", plan, summary: {}, granted: "full" })).toContain("permission: full")
+    expect(previewText({ target: "ship.json", plan, summary: { permission: "edits" }, granted: "full" })).toContain("permission: edits")
     expect(previewText({ target: "ship", plan: { ref: "ship" }, summary: undefined })).toBe("plan: ship\npermission: set by the daemon at start\n")
     expect(previewText({ target: "ship", plan: { ref: "ship" }, summary: { name: "saved", tasks: [{ id: "a", kind: "check", title: "T", command: "make" }], checks: ["make all"] } })).toContain("check: make all")
   })
@@ -353,7 +354,8 @@ describe("workflow start", () => {
   })
 
   test("--yes previews, then starts with the plan, directory and permission", async () => {
-    const h = harness({ send: daemonFor(summary()), files })
+    const base = daemonFor(summary())
+    const h = harness({ send: (command) => command.type === "workflow.preview" ? { ok: true, result: { problems: [], summary: { permission: command.permission } } } : base(command), files })
     expect(await runAutomation(parsed("workflow", "start", "ship.json", "--yes", "--permission", "ask"), h.deps)).toBe(EXIT.ok)
     expect(h.sent.map((c) => c.type)).toEqual(["workflow.preview", "workflow.start"])
     expect(h.sent[1]).toEqual({ type: "workflow.start", directory: "/work/app", plan, permission: "ask" })
