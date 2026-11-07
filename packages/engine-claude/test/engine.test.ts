@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1174,8 +1174,35 @@ describe("MCP servers changed during a turn", () => {
     expect(closes).toEqual([])
     adds.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
     await Bun.sleep(5)
-    expect(closes).toEqual([["MCP servers changed", 0]])
+    expect(closes).toEqual([["a change waited for the background tasks (MCP servers, effort or fast)", 0]])
     expect(spawned).toHaveLength(1)
+    engine.stop?.()
+  })
+
+  test("a new model or effort while a background agent runs keeps the process: the model switches live, the effort waits until the agent ends", async () => {
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (turns === 1) api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Long agent" }] })
+        streamText(api, 0, `turn ${turns}`)
+        api.push(result())
+      },
+    })
+    let choice: ClaudeModelChoice = { model: "sonnet", effort: "medium" }
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([fake], { modelFor: () => choice, onClose: (_sessionId, reason) => void closes.push(reason) })
+    const first = turnInput()
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    choice = { model: "opus", effort: "high" }
+    expect(await engine.runTurn(turnInput({ sessionId: first.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(1)
+    expect(closes).toEqual([])
+    expect(fake.written.filter((message) => message.type === "control_request").map((message) => message.request)).toContainEqual({ subtype: "set_model", model: "opus" })
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await Bun.sleep(5)
+    expect(closes).toEqual(["a change waited for the background tasks (MCP servers, effort or fast)"])
     engine.stop?.()
   })
 

@@ -349,7 +349,7 @@ Background agents live inside the `claude` process and end with it.
 | Cause | Restart behavior |
 |---|---|
 | MCP change (`claude mcp add`, `.mcp.json`) | wait until no background task is running |
-| New model or effort | restart the process |
+| New model or effort | restart the process; while a background task runs, the model switches live and a new effort or fast mode waits until none runs |
 | Idle process | restart after 10 min with nothing in the background |
 | `/env` credentials | wait like an MCP change |
 

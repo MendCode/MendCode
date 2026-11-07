@@ -27,6 +27,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Changing a Claude Code session's model no longer ends its background agents: the model switches live, and a new effort waits until they finish.
 - Page tabs draw their shortcut number dim and apart, so it no longer reads as the tab's count; `/today` shows each count once.
 - The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.
 - On a small diff the reviewer says the review pass reads the code itself, instead of calling the readers' share spent.
