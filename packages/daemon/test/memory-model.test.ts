@@ -7,7 +7,7 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import { remoteTokens } from "../src/remote"
 import { isReadOnlyCommand } from "@mendcode/protocol"
 import { remoteTurnOptions } from "../src/remote-policy"
-import { createMemoryTool, createMemoryGraphTool } from "@mendcode/engine-native"
+import { createMemoryTool, createMemoryGraphTool, createRememberTool } from "@mendcode/engine-native"
 import { createIdFactory } from "@mendcode/protocol"
 import type { MemoryEntry, MemoryId, MemoryModelInput } from "@mendcode/protocol"
 import { startDaemon } from "../src"
@@ -214,4 +214,24 @@ test("B63 assistant role falls back through extractor/small/main and metadata ch
   expect(resolveModel({ role: "memoryAssistant", roles: { main: { model: "main" } }, catalog })).toEqual({ model: "main" })
   const entry: MemoryEntry = { memoryId: createIdFactory()("memory"), text: "Fact", category: "commands", scope: "project", status: "saved", source: "agent", createdAt: 1, updatedAt: 1 }
   expect(sharedMemoryRevision(entry)).not.toBe(sharedMemoryRevision({ ...entry, details: { sensitivity: "high" } }))
+})
+
+test("memory writes check the category: a near miss becomes the known id, an unknown one is refused with the list", async () => {
+  const h = await boot()
+  const project = temporary()
+  const mapped = (await h.model(project, { action: "add", text: "Name files in kebab-case", category: "category conventions" })).memory as MemoryEntry
+  expect(mapped.category).toBe("conventions")
+  expect(((await h.model(project, { action: "add", text: "Run bun test before a push", category: "Command" })).memory as MemoryEntry).category).toBe("commands")
+  await expect(h.model(project, { action: "propose", text: "Tabs, not spaces", category: "code style" })).rejects.toThrow('Unknown memory category "code style"; use one of: commands, conventions')
+  await expect(h.model(project, { action: "add", text: "Two meanings", category: "stack release" })).rejects.toThrow("Unknown memory category")
+  await expect(h.model(project, { action: "add", text: "Bad id list", categoryIDs: ["commands", "weird"] })).rejects.toThrow('Unknown memory category "weird"')
+  expect((await h.model(project, { action: "list" })).memories as MemoryEntry[]).toHaveLength(2)
+  // The remember tool answers with an error the model can fix, and nothing is proposed.
+  const proposals: string[] = []
+  const remember = createRememberTool((entry) => { proposals.push(entry.category); return { outcome: "pending" } })
+  const refused = await remember.execute({ scope: "project", text: "Use tabs", category: "code style" } as never, { cwd: project } as never)
+  expect(refused).toMatchObject({ isError: true })
+  expect(refused.output).toContain("use one of: commands")
+  await remember.execute({ scope: "project", text: "Use tabs", category: "conventions" } as never, { cwd: project } as never)
+  expect(proposals).toEqual(["conventions"])
 })

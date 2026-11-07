@@ -1,4 +1,4 @@
-import { MEMORY_CATEGORY_IDS, MemoryAssistantAction, MemoryModelInput, redactSecrets } from "@mendcode/protocol"
+import { MEMORY_CATEGORY_IDS, MemoryAssistantAction, checkMemoryCategory, MemoryModelInput, redactSecrets } from "@mendcode/protocol"
 import type { MemoryAssistantSettings, MemoryCategoryId, MemoryDetails, MemoryEntry, MemoryId, MemoryModelInput as ModelInput, MemoryPolicyValue, MemoryScope } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { memoryGraph } from "./memory-graph"
@@ -16,7 +16,18 @@ export type MemoryAssistantControl = {
   dryRun(directory: string): { runId: number } | { error: string }
 }
 
-const CONTROL_KINDS = new Set(["propose-policy", "edit-category", "delete-category", "create-category", "dream-dry-run", "dream-service-start"])
+const WRITE_ACTIONS = new Set(["propose", "add", "update", "upsert_fact"])
+/** A write's category must be a known one (a near miss such as `category conventions` becomes its id); otherwise the call fails with the list. */
+function knownCategories(args: ModelInput): ModelInput {
+  if (!WRITE_ACTIONS.has(args.action)) return args
+  const check = (category: string) => {
+    const checked = checkMemoryCategory(category)
+    if ("error" in checked) throw new RangeError(checked.error)
+    return checked.category
+  }
+  return { ...args, ...(args.category !== undefined ? { category: check(args.category) } : {}), ...(args.categoryIDs !== undefined ? { categoryIDs: args.categoryIDs.map(check).filter(Boolean) } : {}) }
+}
+const CONTROL_KINDS =new Set(["propose-policy", "edit-category", "delete-category", "create-category", "dream-dry-run", "dream-service-start"])
 const FIXED_CATEGORIES = "v2 keeps a fixed category list; change a category's policy with edit-category instead"
 
 /** The first local time in free text as `HH:MM` (a window such as 18:00-23:00 gives its start). */
@@ -64,7 +75,7 @@ export function createMemoryModel(input: {
     return memoryGraph(saved, store.memories.links(saved.map((entry) => entry.memoryId)))
   }
   function request(directory: string, value: ModelInput, origin?: MemoryOrigin): Record<string, unknown> {
-    const args = MemoryModelInput.parse(value)
+    const args = knownCategories(MemoryModelInput.parse(value))
     const visible = entries(directory).filter((entry) => !entry.details?.action)
     const saved = visible.filter((entry) => entry.status === "saved")
     const scoped = args.scope ? saved.filter((entry) => entry.scope === scopeOf(args.scope)) : saved

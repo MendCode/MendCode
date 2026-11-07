@@ -136,7 +136,7 @@ These sessions are never reviewed: temporary folders, folders that no longer exi
 
 A daily cap (`memoryReviewDailyCap`: 12 in balanced, 30 in full, `0` stops automatic extraction) bounds the calls in 24 hours. Turns reviewed or skipped are not carried over: a capped review is dropped. Saving a fact yourself (`/remember`, the `memory` tool, "remember this") is immediate and never waits for a checkpoint.
 
-The checkpoints' state lives in the daemon: after a restart the turns counted so far are forgotten, and the next review covers only later turns.
+The checkpoints' state survives a restart: each session with unreviewed turns keeps one small row (turn count, where the unreviewed turns start, the range of a review still waiting), rewritten in place and deleted once reviewed. After a restart those turns are still reviewed (their idle checkpoint is armed again on the daemon's first memory activity) and reviewed turns are never sent again. Rows of sessions quiet for 14 days are dropped, and at most 512 are kept.
 
 ### Review record
 
@@ -150,7 +150,7 @@ A call times out after 45 seconds, retries twice with backoff, and never applies
 
 Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason.
 
-The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then the main model's cheaper peer such as Luna for Sol, then main; titles, summaries and Dream follow the same rule, from the session's own model when the daemon runs it); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
 
 ### Pending that nobody decides
 
@@ -242,7 +242,7 @@ A saved memory can be pinned (`memory.update` with `pinned`, or `memory.add` wit
 
 ## Categories and policies
 
-An entry's category is free text. These ones are known (`memory.categories`; unknown or empty ones count as `other`; case and v1's `project.` / `user.` prefixes are ignored):
+An entry's category is stored as text. These ones are known (`memory.categories`; unknown or empty ones count as `other`; case and v1's `project.` / `user.` prefixes are ignored). A model's write (`memory` add/update/propose, `remember`) must name a known one: a near miss that means exactly one id (`category conventions`, `command`) is stored as that id, and anything else fails with the list so the model can call again:
 
 | category | for | default policy |
 |---|---|---|

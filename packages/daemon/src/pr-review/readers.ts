@@ -318,7 +318,7 @@ export type ReadResult = {
  * estimate against `allowance - spent`; a group that fails either check, or whose reader fails or answers out of shape, is
  * summarized locally. `allowance` Infinity: no internal cap (the per-turn bound still applies).
  */
-export async function readGroups({ groups, source, parallel, allowance, load, directory }: { groups: readonly ReaderGroup[]; source: ReaderSource; parallel: number; allowance: number; load?: ((file: FileDiff) => Promise<FileDiff>) | undefined; directory?: string | undefined }): Promise<ReadResult> {
+export async function readGroups({ groups, source, parallel, allowance, load, directory, spentBefore = 0 }: { groups: readonly ReaderGroup[]; source: ReaderSource; parallel: number; allowance: number; /** What earlier reads of this run counted (already taken off `allowance`). */ spentBefore?: number; load?: ((file: FileDiff) => Promise<FileDiff>) | undefined; directory?: string | undefined }): Promise<ReadResult> {
   const result: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, codeRead: 0, dropped: 0, reasons: [] }
   const because = (reason: string) => { if (!result.reasons.includes(reason)) result.reasons.push(reason) }
   const local = (batch: readonly ReaderGroup[], reason: string) => {
@@ -351,7 +351,9 @@ export async function readGroups({ groups, source, parallel, allowance, load, di
       if (!cheapReaderFamily(source.model)) { local(batch.groups, `${source.model} is not a cheap reader model (${cheapReaderList()})`); continue }
       const limit = Math.ceil(batch.tokens * 1.5) + READER_TURN_OVERHEAD
       const left = allowance - spent(result.tokens) - reserved
-      if (limit > left) { local(batch.groups, "the readers' share of the review's token cap is spent"); continue }
+      // Nothing counted yet and still no room: the cap scales with this (small) diff, and its share is below one reader call's
+      // fixed cost, so the review pass reading these files itself is the cheaper way, not a spent budget.
+      if (limit > left) { local(batch.groups, spentBefore === 0 && spent(result.tokens) === 0 && reserved === 0 && result.calls === 0 ? "the diff is small: one reader call costs more than the readers' share of this review's cap, so the review pass reads it" : "the readers' share of the review's token cap is spent"); continue }
       reserved += limit
       try {
         let ready = batch.groups

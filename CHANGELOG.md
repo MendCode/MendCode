@@ -23,6 +23,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.
+- On a small diff the reviewer says the review pass reads the code itself, instead of calling the readers' share spent.
+- A workflow started from a plan or smart session keeps that mode instead of falling back to ask.
+- Dream by itself only runs inside full git checkouts: never the home folder, hidden folders such as `~/.ssh`, `~/Library`, secrets folders or tool clone folders (`*-wt`, `worktrees`); a tick lists what it left out and why.
+- Dream's run report names the model that answered and the cached prompt tokens.
+- The memory tools refuse a category they do not know and name the valid ones; a near miss is stored as the category it means.
+- Memory review keeps its progress across daemon restarts: unreviewed turns are still reviewed and reviewed ones are not sent again.
+- Titles, summaries and Dream with no model of their own or `small` run on the main model's cheaper peer (Luna for Sol), also for Claude Code, Codex and pi sessions.
 - First-run setup no longer opens on the Model row while it is still checking; the Model row appears only once something can run.
 - Dream no longer runs on temporary folders, missing folders or worktrees, and skips projects with nothing new.
 - Dream recovers every interrupted project, not only the most recent runs.

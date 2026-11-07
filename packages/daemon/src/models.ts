@@ -55,6 +55,9 @@ export function foreignEngine(model: string, catalog: ModelCatalog): string | un
  */
 export const ROLE_FALLBACKS: Partial<Record<ModelRole, readonly ModelRole[]>> = { aside: ["small"], dream: ["small"], memoryExtractor: ["small"], memoryAssistant: ["memoryExtractor", "small"], title: ["small"], summary: ["small"] }
 
+/** Calls nobody waits on: with no model of their own or `small`, they never run on a large model when a cheaper peer exists. */
+const BACKGROUND_ROLES: ReadonlySet<ModelRole> = new Set<ModelRole>(["memoryExtractor", "title", "summary", "dream"])
+
 /**
  * The model for one call. `main` is the session's own choice, else the `main` setting, else the default.
  * Any other role uses its own setting when there is one (then its `ROLE_FALLBACKS`), otherwise whatever `main`
@@ -64,10 +67,13 @@ export const ROLE_FALLBACKS: Partial<Record<ModelRole, readonly ModelRole[]>> = 
  */
 export function resolveModel(input: { role: ModelRole; session?: ModelChoice | undefined; roles: ModelRoles; catalog: ModelCatalog; cheapSubagent?: boolean }): ModelChoice {
   const { role, session, roles, catalog } = input
-  // Memory review is background work: with neither its own model nor `small` set, it takes the main model's cheaper peer
-  // (Luna for Sol), never the large model itself.
-  const cheapMemory = role === "memoryExtractor" && !roles.memoryExtractor && !roles.small
-  const cheap = (role === "subagent" && input.cheapSubagent && !roles.subagent) || cheapMemory ? cheapSubagentModel((role === "subagent" ? session : undefined) ?? roles.main ?? catalog.defaults, catalog) : undefined
+  // Background work (memory review, titles, summaries, Dream): with neither its own model nor `small` set, it takes the
+  // cheaper peer (Luna for Sol) of the session's model when the daemon runs it, else of the main model; never the large
+  // model itself. Memory review always starts from main, whatever the session runs.
+  const background = BACKGROUND_ROLES.has(role) && !roles[role] && !roles.small
+  const nativeSession = session && !modelEngine(session, catalog) && !session.model.startsWith("acp:") ? session : undefined
+  const base = role === "subagent" ? session : role === "memoryExtractor" ? undefined : nativeSession
+  const cheap = (role === "subagent" && input.cheapSubagent && !roles.subagent) || background ? cheapSubagentModel(base ?? roles.main ?? catalog.defaults, catalog) : undefined
   const candidates = [role !== "main" ? roles[role] : undefined, ...(ROLE_FALLBACKS[role] ?? []).map((fallback) => roles[fallback]), cheap, session, roles.main]
   return usableEffort(candidates.find((choice) => choice && catalog.allows?.(choice.model) !== false && (role === "main" || !modelEngine(choice, catalog) && !choice.model.startsWith("acp:"))) ?? catalog.defaults, catalog)
 }

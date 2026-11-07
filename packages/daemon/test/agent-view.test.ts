@@ -120,7 +120,9 @@ describe("agent view data in the daemon", () => {
     const h = await boot()
     const a = await h.create("a")
     const b = await h.create("b")
-    await h.submit(a, "/tool 400")
+    // A's tool runs until the daemon stops: with a timed tool, a slow machine saw it end before B's approval was pending,
+    // so both were never busy in the same snapshot and the wait timed out.
+    await h.submit(a, "/hang")
     await h.submit(b, "/ask")
     await until(() => h.last(a)?.tool === "faux" && h.last(b)?.pending === "faux tool")
     expect(h.last(b)!.tool).toBeUndefined()

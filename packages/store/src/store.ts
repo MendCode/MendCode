@@ -1142,6 +1142,13 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       set(key: string, value: string) {
         db.query("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value.slice(0, 500))
       },
+      delete(key: string) {
+        db.query("DELETE FROM meta WHERE key = ?").run(key)
+      },
+      /** Keys starting with `prefix`, at most `limit` of them (the key is the primary key, so this is an index range). */
+      list(prefix: string, limit = 1_000): Array<{ key: string; value: string }> {
+        return db.query<{ key: string; value: string }, [string, string, number]>("SELECT key, value FROM meta WHERE key >= ? AND key < ? ORDER BY key LIMIT ?").all(prefix, `${prefix}￿`, limit)
+      },
     },
     limitCheckpoints: createLimitCheckpoints(db, codec),
     /**

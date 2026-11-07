@@ -7,7 +7,7 @@ import { remoteInstructions } from "./remote-instructions"
 import { createWebfetchResources } from "./webfetch-resources"
 import { installNetworkPolicy } from "./network-policy"
 import { sweepHostMcpDirs } from "./host-mcp-sweep"
-import { systemWithLimits } from "./run-limits"
+import { createMemoryAppender, systemWithLimits } from "./run-limits"
 import { fullMemoryTier, memorySettings } from "./memory-config"
 import packageJson from "../../../apps/cli/package.json"
 import { otlpFromEnvironment } from "./tracing"
@@ -601,10 +601,10 @@ export const daemon = await startDaemon({
     }
     // Claude Code, Codex, pi and ACP agents take the same `<mendcode_memory>` block as a native session, appended once to the system text their process
     // starts with (no prompt, so the choice and its order stay put and their cached prefix holds). Their `memory` tool still searches by prompt.
-    const withMemory = (base: (root: string) => string | undefined, sessionId: import("@mendcode/protocol").SessionId) => (root: string) =>
-      [base(root), runLimits.get(sessionId)?.noMemory ? "" : memorySelector.block({ directory: root, prompt: "", sessionId })].filter(Boolean).join("\n\n") || undefined
+    const memoryAppender = createMemoryAppender({ block: (input) => memorySelector.block(input), noMemory: (sessionId) => runLimits.get(sessionId)?.noMemory === true })
+    const withMemory = memoryAppender.forSession
     /** The engines that start one process per session and ask for its appended text with the session id (Claude Code, pi, ACP agents). */
-    const withMemoryFor = (base: (root: string) => string | undefined) => (root: string, sessionId: import("@mendcode/protocol").SessionId) => withMemory(base, sessionId)(root)
+    const withMemoryFor = memoryAppender.perSession
     const transcripts = createSessionTranscripts(dir, Date.now, store.writeStoredFile)
     const configured = engineName === "native"
       ? withAcpEngine({

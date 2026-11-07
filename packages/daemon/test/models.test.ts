@@ -61,6 +61,29 @@ describe("resolveModel", () => {
     expect(review({ main: { model: "gpt-6-sol" }, memoryExtractor: { model: "anthropic:claude-haiku-5-5" } })).toBe("anthropic:claude-haiku-5-5")
   })
 
+  test("titles, summaries and Dream never fall back to the large model: a Claude Code session's title takes main's cheaper peer", () => {
+    const keyed: ModelCatalog = { selectable: true, defaults: { model: "gpt-6-sol" }, list: () => [
+      { id: "gpt-6-sol", name: "Sol", efforts: [] },
+      { id: "gpt-6-luna", name: "Luna", efforts: [] },
+      { id: "anthropic:claude-opus-5-5", name: "Opus", efforts: [], provider: "anthropic" },
+      { id: "anthropic:claude-sonnet-5-5", name: "Sonnet", efforts: [], provider: "anthropic" },
+      { id: "claude-opus", name: "Claude Opus · Claude Code", efforts: [], engine: "claude" },
+    ] }
+    const pick = (role: "title" | "summary" | "dream", session: string | undefined, roles: object = { main: { model: "gpt-6-sol" } }) => resolveModel({ role, session: session ? { model: session } : undefined, roles, catalog: keyed }).model
+    // A session another engine runs is skipped; before, that fell through to main (Sol).
+    expect(pick("title", "claude-opus")).toBe("gpt-6-luna")
+    expect(pick("summary", "claude-opus")).toBe("gpt-6-luna")
+    expect(pick("dream", undefined)).toBe("gpt-6-luna")
+    // A session the daemon runs: its own cheaper peer, or itself when it is already the cheap one.
+    expect(pick("title", "anthropic:claude-opus-5-5")).toBe("anthropic:claude-sonnet-5-5")
+    expect(pick("title", "gpt-6-luna")).toBe("gpt-6-luna")
+    // A set role or `small` wins; the user's choice is never overridden.
+    expect(pick("title", "claude-opus", { main: { model: "gpt-6-sol" }, title: { model: "gpt-6-sol" } })).toBe("gpt-6-sol")
+    expect(pick("title", "claude-opus", { main: { model: "gpt-6-sol" }, small: { model: "anthropic:claude-opus-5-5" } })).toBe("anthropic:claude-opus-5-5")
+    // Foreground roles keep the session's model.
+    expect(resolveModel({ role: "aside", session: { model: "gpt-6-sol" }, roles: {}, catalog: keyed }).model).toBe("gpt-6-sol")
+  })
+
   test("Claude Code's sub-agents: the subagent role when it is a Claude model, else Sonnet under Opus or Fable; never over the daemon's own variable", () => {
     expect(claudeSubagentEnv({ model: "opus", subagent: undefined, cheap: true })).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" })
     expect(claudeSubagentEnv({ model: "claude-fable-5-1", subagent: undefined, cheap: true })).toEqual({ CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" })
@@ -90,7 +113,8 @@ describe("resolveModel", () => {
     const roles = { compaction: { model: "gpt-6-luna", effort: "low" as const } }
     expect(resolveModel({ role: "compaction", session: { model: "gpt-6-sol", effort: "xhigh" }, roles, catalog })).toEqual({ model: "gpt-6-luna", effort: "low" })
     expect(resolveModel({ role: "subagent", session: { model: "gpt-6-sol", effort: "xhigh" }, roles, catalog })).toEqual({ model: "gpt-6-sol", effort: "xhigh" })
-    expect(resolveModel({ role: "dream", roles: { main: { model: "gpt-6-sol" } }, catalog })).toEqual({ model: "gpt-6-sol", effort: "medium" })
+    // Dream is background work: unset, it takes main's cheaper peer rather than main itself.
+    expect(resolveModel({ role: "dream", roles: { main: { model: "gpt-6-sol" } }, catalog })).toEqual({ model: "gpt-6-luna", effort: "medium" })
   })
   test("a missing or unsupported effort becomes the model's default; a model without efforts gets none", () => {
     expect(resolveModel({ role: "main", session: { model: "gpt-6-luna", effort: "xhigh" }, roles: {}, catalog })).toEqual({ model: "gpt-6-luna", effort: "medium" })

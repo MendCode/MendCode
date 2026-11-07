@@ -7,7 +7,7 @@ import { createVirtualClock } from "@mendcode/kernel"
 import { createClient } from "@mendcode/client"
 import type { SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
-import { dreamEligibleDirectory, hasNewMaterial } from "../src/dream-projects"
+import { dreamEligibleDirectory, dreamProjectSkip, hasNewMaterial } from "../src/dream-projects"
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -38,6 +38,34 @@ describe("which folders Dream runs on by itself", () => {
     writeFileSync(path.join(linked, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n")
     expect(dreamEligibleDirectory(linked)).toBe(false)
     expect(dreamEligibleDirectory(plain, { dataDir: path.dirname(plain) })).toBe(false)
+  })
+  test("a scheduled run needs a real project: a full git checkout, never the home folder, hidden, Library, secrets or tool-clone folders", () => {
+    // A home of its own, outside the OS temp dir, so the rules run on real folders.
+    const home = realFolder()
+    const make = (relative: string, git?: "dir" | "file") => {
+      const dir = path.join(home, relative)
+      mkdirSync(dir, { recursive: true })
+      if (git === "dir") mkdirSync(path.join(dir, ".git"), { recursive: true })
+      if (git === "file") writeFileSync(path.join(dir, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n")
+      return dir
+    }
+    const skip = (dir: string) => dreamProjectSkip(dir, { home })
+    expect(skip(make("Code/app", "dir"))).toBeUndefined()
+    expect(skip(make("Code/app/packages/web"))).toBeUndefined()
+    expect(skip(home)).toBe("the home folder or a folder above it")
+    expect(skip(path.dirname(home))).toBe("the home folder or a folder above it")
+    expect(skip(make(".ssh"))).toBe("a hidden folder")
+    expect(skip(make(".config/tool", "dir"))).toBe("a hidden folder")
+    expect(skip(make("Code/app/.git/hooks"))).toBe("a hidden folder")
+    expect(skip(make("Library/Application Support/x", "dir"))).toBe("the Library folder")
+    expect(skip(make("work/secrets", "dir"))).toBe("a keys or secrets folder")
+    expect(skip(make("Code/repos/mend-autopilot-wt/feature", "dir"))).toBe("a folder of clones made by a tool")
+    expect(skip(make("Code/worktrees/lane", "dir"))).toBe("a folder of clones made by a tool")
+    expect(skip(make("Code/lane", "file"))).toBe("temporary, missing, data-directory or linked-worktree folder")
+    expect(skip(make("Code/lane/src"))).toBe("inside a linked worktree")
+    expect(skip(make("Downloads/notes"))).toBe("not inside a git repository")
+    expect(skip(path.join(tmpdir(), "x"))).toBe("temporary, missing, data-directory or linked-worktree folder")
+    expect(dreamProjectSkip(make("data/app", "dir"), { home, dataDir: path.join(home, "data") })).toBe("temporary, missing, data-directory or linked-worktree folder")
   })
 })
 

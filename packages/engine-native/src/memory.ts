@@ -1,6 +1,6 @@
 import { MemoryModelInput } from "@mendcode/protocol"
 import type { MemoryModelInput as ModelInput } from "@mendcode/protocol"
-import { memoryCategoryId, type MemoryEntry, type MemoryId, type MemoryLink, type MemoryLinkKind, type MemoryGraphReport, type SessionId } from "@mendcode/protocol"
+import { checkMemoryCategory, memoryCategoryId, type MemoryEntry, type MemoryId, type MemoryLink, type MemoryLinkKind, type MemoryGraphReport, type SessionId } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
 import { memoryNoticeMeta, memoryNoticeText, type MemoryNoticeAction } from "./memory-notice"
@@ -181,11 +181,13 @@ export function createRememberTool(propose: (entry: { scope: "user" | "project";
     args: z.object({
       text: z.string().min(1).max(2_000).describe("The fact, stated on its own, specific and verbatim where it matters"),
       scope: z.enum(["project", "user"]).describe("project: this repository only; user: all projects"),
-      category: z.string().max(64).optional().describe("Short label, e.g. commands, conventions, preferences, architecture, stack, security"),
+      category: z.string().max(64).optional().describe("One of: commands, conventions, preferences, architecture, stack, release, constraints, security, objective, other"),
     }),
     async execute(args, context) {
       if (port) return memoryResult(port.request(context.cwd, { ...args, action: "add" }, context.sessionId), "remember")
-      const result = propose({ scope: args.scope, directory: context.cwd, text: args.text, category: args.category ?? "" })
+      const checked = checkMemoryCategory(args.category)
+      if ("error" in checked) return { output: checked.error, truncated: false, title: "remember", isError: true }
+      const result = propose({ scope: args.scope, directory: context.cwd, text: args.text, category: checked.category })
       const outcome = typeof result === "string" ? "pending" : result.outcome
       const output = outcome === "saved" ? "Saved: this category is set to save automatically." : outcome === "dropped" ? "Not kept: the user's policy for this category drops proposals." : "Proposed; the user will review it in /memory."
       return { output, truncated: false, title: `remember: ${args.text.slice(0, 60)}`, isError: false }

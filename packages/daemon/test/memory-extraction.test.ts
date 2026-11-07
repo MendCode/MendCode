@@ -397,3 +397,67 @@ test("the review record stays bounded", () => {
   expect(h.store.memoryReviews.list(1)[0]!.at).toBe(339)
   expect(h.store.memoryReviews.callsSince(335)).toBe(5)
 })
+
+test("review progress survives a restart: unreviewed turns are not forgotten and reviewed ones are not sent again", async () => {
+  const texts: string[] = []
+  const extract = async (job: ExtractionJob) => { texts.push(job.text); return [] }
+  const h = fixture(extract, {}, { memoryReviewEveryTurns: 3 })
+  const drive = (worker: { observe(event: never): void }, text: string) => {
+    const turnId = ids("turn"), itemId = ids("item")
+    h.store.sessionSink.append({ type: "turn.started", sessionId: h.sessionId, turnId, queueId: ids("queue") })
+    h.store.sessionSink.append({ type: "item.started", sessionId: h.sessionId, turnId, itemId, kind: "user_message" })
+    h.store.sessionSink.append({ type: "item.completed", sessionId: h.sessionId, itemId, status: "ok", text })
+    worker.observe(h.store.sessionSink.append({ type: "turn.completed", sessionId: h.sessionId, turnId }) as never)
+  }
+  const restart = async (previous: { stop(): Promise<void> }) => {
+    await previous.stop()
+    const worker = createMemoryExtraction({ store: h.store, settings: () => h.store.settings.get(), now: Date.now, extract, retryMs: 1, timeoutMs: 20, eligibleDirectory: () => true, setTimer: () => ({ cancel() {} }), commit: () => 0 })
+    cleanup.push(() => worker.stop())
+    return worker
+  }
+  h.turn("Rule one before the restart"); h.turn("Rule two before the restart")
+  expect(texts).toHaveLength(0)
+  // One small row for the session, nothing per turn.
+  expect(h.store.meta.list("memory.review:")).toHaveLength(1)
+  expect(h.store.meta.list("memory.review:")[0]!.value.length).toBeLessThan(160)
+  let worker = await restart(h.worker)
+  drive(worker, "Rule three after the restart")
+  await until(() => texts.length === 1 && h.store.extraction.list().length === 0)
+  expect(texts[0]).toContain("Rule one before the restart")
+  expect(texts[0]).toContain("Rule three after the restart")
+  // Reviewed: the row is gone, and the next restart starts from the new turns only.
+  expect(h.store.meta.list("memory.review:")).toHaveLength(0)
+  worker = await restart(worker)
+  drive(worker, "Rule four"); drive(worker, "Rule five")
+  worker = await restart(worker)
+  drive(worker, "Rule six")
+  await until(() => texts.length === 2 && h.store.extraction.list().length === 0)
+  expect(texts[1]).toContain("Rule four")
+  expect(texts[1]).toContain("Rule six")
+  expect(texts[1]).not.toContain("Rule three")
+})
+
+test("progress rows of sessions that went quiet long ago are dropped on the first use after a restart", () => {
+  const h = fixture()
+  const old = ids("session")
+  h.store.meta.set(`memory.review:${old}`, JSON.stringify({ p: 1, f: 0, qf: null, qt: 0, s: 3, t: "turn_x", at: Date.now() - 30 * 86_400_000 }))
+  h.turn("Fresh rule")
+  expect(h.store.meta.get(`memory.review:${old}`)).toBeUndefined()
+  expect(h.store.meta.list("memory.review:")).toHaveLength(1)
+})
+
+test("a PR review session (the run limits the reviewer gives it) is never reviewed for memory, and says why", async () => {
+  const { createRunLimitsStore, reviewIneligible } = await import("../src/run-limits")
+  const limits = createRunLimitsStore()
+  let calls = 0
+  // The daemon's own wiring: run limits decide, as for a review child created by the PR reviewer.
+  const h = fixture(async () => { calls++; return [] }, { ineligible: (id) => reviewIneligible(limits, id as never) })
+  limits.configure(h.sessionId, { noMemory: true, noContextFiles: true, untrustedCheckout: true })
+  h.turn("Always check the null path"); h.turn("Never log the token")
+  expect(h.store.extraction.list()).toEqual([])
+  expect(h.worker.ineligible()).toEqual({ "ineligible: PR review or no-memory run": 1 })
+  expect(h.store.meta.list("memory.review:")).toEqual([])
+  expect(calls).toBe(0)
+  // A session without limits is still reviewed.
+  expect(reviewIneligible(limits, ids("session") as never)).toBeUndefined()
+})

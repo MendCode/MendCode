@@ -45,6 +45,11 @@ type Track = {
   again: ReviewTrigger | undefined
   touched: number
 }
+/** One row per session with unreviewed turns, in the store's `meta` table, so a restart neither forgets nor repeats them. */
+const PROGRESS_KEY = "memory.review:"
+const MAX_PROGRESS_ROWS = 512
+const PROGRESS_KEEP_MS = 14 * 86_400_000
+type ProgressRow = { p: number; f: number | null; qf: number | null; qt: number; s: number; t: string; at: number }
 
 /**
  * Memory review: one job per session at checkpoints (every N substantive user turns, idle, before compaction), never one per turn.
@@ -111,24 +116,62 @@ export function createMemoryExtraction(options: {
     if (stopped || timer || !options.extract) return
     timer = setTimeout(() => { timer = undefined; void drain() }, ms)
   }
-  function track(sessionId: string): Track {
-    let entry = tracks.get(sessionId)
-    if (!entry) {
-      if (tracks.size >= MAX_TRACKED) {
-        const oldest = [...tracks.entries()].sort((a, b) => a[1].touched - b[1].touched)[0]!
-        oldest[1].idle?.cancel()
-        tracks.delete(oldest[0])
-      }
-      entry = { pending: 0, from: undefined, queuedFrom: undefined, queuedTurns: 0, seenSeq: 0, lastTurnId: "", idle: undefined, again: undefined, touched: 0 }
-      tracks.set(sessionId, entry)
+  function remember(sessionId: string, entry: Track) {
+    if (tracks.size >= MAX_TRACKED) {
+      const oldest = [...tracks.entries()].sort((a, b) => a[1].touched - b[1].touched)[0]!
+      oldest[1].idle?.cancel()
+      tracks.delete(oldest[0])
     }
+    tracks.set(sessionId, entry)
+    return entry
+  }
+  /** Old progress rows go once per daemon run: a session that stopped with one unreviewed turn keeps no row for ever. */
+  let progressPruned = false
+  function pruneProgress() {
+    if (progressPruned) return
+    progressPruned = true
+    const rows = store.meta.list(PROGRESS_KEY, MAX_PROGRESS_ROWS * 4).map((row) => ({ key: row.key, at: Number((JSON.parse(row.value) as { at?: number }).at ?? 0) })).sort((a, b) => b.at - a.at)
+    rows.forEach((row, index) => {
+      if (index >= MAX_PROGRESS_ROWS || row.at < now() - PROGRESS_KEEP_MS) { store.meta.delete(row.key); return }
+      // Turns left unreviewed by the last run get their idle review again, as if the session had just gone quiet.
+      const sessionId = row.key.slice(PROGRESS_KEY.length)
+      const entry = index < MAX_TRACKED ? restored(sessionId) : undefined
+      if (entry) armIdle(sessionId, entry)
+    })
+  }
+  /** The progress a previous daemon run saved for this session, or undefined. */
+  function restored(sessionId: string): Track | undefined {
+    const tracked = tracks.get(sessionId)
+    if (tracked) return tracked
+    pruneProgress()
+    const saved = store.meta.get(PROGRESS_KEY + sessionId)
+    if (!saved) return undefined
+    const row = JSON.parse(saved) as ProgressRow
+    return remember(sessionId, { pending: row.p, from: row.f ?? undefined, queuedFrom: row.qf ?? undefined, queuedTurns: row.qt, seenSeq: row.s, lastTurnId: row.t, idle: undefined, again: undefined, touched: now() })
+  }
+  /** Saves what a restart must not lose: unreviewed turns and the range of a waiting job. One small row per session with unreviewed turns, rewritten in place, deleted once nothing is pending. */
+  function save(sessionId: string, entry: Track) {
+    if (entry.pending === 0 && entry.queuedFrom === undefined) { store.meta.delete(PROGRESS_KEY + sessionId); return }
+    const row: ProgressRow = { p: entry.pending, f: entry.from ?? null, qf: entry.queuedFrom ?? null, qt: entry.queuedTurns, s: entry.seenSeq, t: entry.lastTurnId, at: now() }
+    store.meta.set(PROGRESS_KEY + sessionId, JSON.stringify(row))
+  }
+  function track(sessionId: string): Track {
+    const entry = restored(sessionId) ?? remember(sessionId, { pending: 0, from: undefined, queuedFrom: undefined, queuedTurns: 0, seenSeq: 0, lastTurnId: "", idle: undefined, again: undefined, touched: 0 })
     entry.touched = now()
     return entry
+  }
+  /** A waiting job left the queue (it started or was skipped): its range is no longer pending, also on disk. */
+  function dequeued(sessionId: string) {
+    const entry = restored(sessionId)
+    if (!entry) return
+    entry.queuedFrom = undefined
+    entry.queuedTurns = 0
+    save(sessionId, entry)
   }
   const reviewRunning = (sessionId: string) => store.extraction.list().some((job) => job.sessionId === sessionId && job.state === "running")
   /** Queues the session's one review job with the newest snapshot: a job still waiting is replaced, and the digest covers its turns too. */
   function request(sessionId: string, trigger: ReviewTrigger) {
-    const entry = tracks.get(sessionId)
+    const entry = restored(sessionId)
     if (!entry || stopped) return
     entry.idle?.cancel()
     entry.idle = undefined
@@ -139,14 +182,15 @@ export function createMemoryExtraction(options: {
     if (turns < MIN_REVIEW_TURNS) return
     if (!enabled(directory || undefined)) return
     const why = skipReason(sessionId)
-    if (why) { tracks.delete(sessionId); reportIneligible(sessionId, why); return }
+    if (why) { tracks.delete(sessionId); store.meta.delete(PROGRESS_KEY + sessionId); reportIneligible(sessionId, why); return }
     if (reviewRunning(sessionId)) { entry.again = trigger; return }
     const from = entry.queuedFrom ?? entry.from ?? 0
     const events = store.readAfter(sessionId as SessionId, from, 2_000)
     // A cut may split a surrogate pair; a lone half is invalid in a JSON request body and the provider answers 400.
     const text = wellFormed(buildDigest(events).lines.join("\n").slice(0, 64_000))
-    if (!text.trim()) { entry.pending = 0; entry.from = undefined; log({ sessionId, directory, trigger, turns, outcome: "skipped", reason: "empty digest" }); return }
-    for (const queued of store.extraction.list()) if (queued.sessionId === sessionId && queued.state === "queued") { store.extraction.remove(queued.jobId); meta.delete(queued.jobId) }
+    if (!text.trim()) { entry.pending = 0; entry.from = undefined; save(sessionId, entry); log({ sessionId, directory, trigger, turns, outcome: "skipped", reason: "empty digest" }); return }
+    // Only the job this range already covers is replaced; one recovered mid-run after a restart covers older turns and stays.
+    if (entry.queuedFrom !== undefined) for (const queued of store.extraction.list()) if (queued.sessionId === sessionId && queued.state === "queued") { store.extraction.remove(queued.jobId); meta.delete(queued.jobId) }
     const jobId = `review_${entry.lastTurnId}`
     store.extraction.put({ jobId, sessionId: sessionId as SessionId, turnId: entry.lastTurnId as TurnId, directory, text, state: "queued", attempts: 0, nextAttemptAt: now(), reason: options.extract ? "" : "Extractor not configured", proposed: 0, createdAt: now(), updatedAt: now() })
     meta.set(jobId, { turns, trigger })
@@ -154,6 +198,7 @@ export function createMemoryExtraction(options: {
     entry.queuedTurns = turns
     entry.pending = 0
     entry.from = undefined
+    save(sessionId, entry)
     schedule()
   }
   function armIdle(sessionId: string, entry: Track) {
@@ -185,14 +230,12 @@ export function createMemoryExtraction(options: {
             capLoggedAt = now()
             log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, outcome: "skipped", reason: "daily cap" })
           }
-          const entry = tracks.get(first.sessionId)
-          if (entry) { entry.queuedFrom = undefined; entry.queuedTurns = 0 }
+          dequeued(first.sessionId)
           release(first)
           continue
         }
         const job = put(first, { state: "running", attempts: first.attempts + 1, reason: "" })
-        const entry = tracks.get(job.sessionId)
-        if (entry) { entry.queuedFrom = undefined; entry.queuedTurns = 0 }
+        dequeued(job.sessionId)
         const controller = new AbortController()
         active = controller
         let timeout: ReturnType<typeof setTimeout> | undefined
@@ -252,13 +295,13 @@ export function createMemoryExtraction(options: {
     observe(event: SessionEvent) {
       if (event.type === "compaction.updated") {
         // Before the history is packed: review what was said so far (the first milestone of a compaction only).
-        if (event.state === "writing" && tracks.has(event.sessionId)) request(event.sessionId, "compaction")
+        if (event.state === "writing" && restored(event.sessionId)) request(event.sessionId, "compaction")
         return
       }
       if (event.type !== "turn.completed") return
       const directory = store.sessionDirectory(event.sessionId)
       if (!directory || !enabled(directory)) return
-      const existing = tracks.get(event.sessionId)
+      const existing = restored(event.sessionId)
       if (existing && event.seq <= existing.seenSeq) return
       if (!existing) {
         const why = skipReason(event.sessionId)
@@ -275,6 +318,7 @@ export function createMemoryExtraction(options: {
       if (entry.pending === 0 && entry.queuedFrom === undefined) entry.from = turn[0]!.seq - 1
       entry.pending++
       entry.lastTurnId = event.turnId
+      save(event.sessionId, entry)
       if (entry.pending + entry.queuedTurns >= reviewPolicy(options.settings(directory)).everyTurns) request(event.sessionId, "turns")
       else armIdle(event.sessionId, entry)
     },

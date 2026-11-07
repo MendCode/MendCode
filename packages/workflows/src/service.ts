@@ -29,7 +29,7 @@ import {
   type AuditOutcome,
   type TaskEnd,
 } from "./run"
-import { effectiveScriptBudget, startedQueueIds } from "@mendcode/protocol"
+import { effectiveScriptBudget, startedQueueIds, WORKFLOW_PERMISSION_RANK } from "@mendcode/protocol"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type TimerHandle = { cancel(): void }
@@ -207,7 +207,7 @@ export function createWorkflowService(options: {
   })
   function runtimeExecution(run: WorkflowRun, execution: WorkflowTaskExecution) {
     const readOnly = execution.readOnly || run.permissionMode === "report-only"
-    const rank = { ask: 0, edits: 1, full: 2 }
+    const rank = WORKFLOW_PERMISSION_RANK
     const permission = run.sessionPermission && rank[run.sessionPermission] < rank[execution.permission] ? run.sessionPermission : execution.permission
     const mode = readOnly ? "report-only" : execution.permissions?.mode === "custom" || run.permissionMode === "custom" ? "custom" : execution.permissions?.mode ?? "normal"
     return { ...execution, readOnly, permission, permissions: execution.permissions || run.permissionMode ? { ...execution.permissions, mode, ...(readOnly ? { allowEdits: false, allowMutatingCommands: false, allowExternalSend: false } : {}) } : undefined } as WorkflowTaskExecution

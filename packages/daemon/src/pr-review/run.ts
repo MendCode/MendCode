@@ -436,7 +436,7 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
       const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * share) - spent(total.tokens)
       const chosen = pick()
       tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
-      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory })
+      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory, spentBefore: spent(total.tokens) })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
       total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal; total.codeRead += result.codeRead; total.dropped += result.dropped

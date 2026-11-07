@@ -101,7 +101,7 @@ import { createSelfPackages } from "./self-packages"
 import { createCommandExecution } from "./command-execution"
 import { createInlineShellTable, type InlineShell } from "./inline-shell"
 import { expandMcpMentions, expandMcpPrompt, type McpContentPort } from "./mcp-content"
-import { createRunLimitsStore, type RunLimitsStore } from "./run-limits"
+import { createRunLimitsStore, reviewIneligible, type RunLimitsStore } from "./run-limits"
 import { createSessionPermissionRules } from "./session-permission-rules"
 import { createGrantStore, type AgentPort, type EngineHooks, type GoalPort, type GrantStore, type SecretsPort } from "@mendcode/engine-native"
 import { createGoalPrompts } from "./goal-prompts"
@@ -251,7 +251,7 @@ import { createAutomationLedgerHost } from "./automation-ledger"
 import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
 import { memoryGraph } from "./memory-graph"
 import { checkWindow, dateKey, nextCheckIn, windows } from "./dream-schedule"
-import { dreamEligibleDirectory, dreamMachinery, hasNewMaterial } from "./dream-projects"
+import { dreamMachinery, dreamProjectSkip, hasNewMaterial } from "./dream-projects"
 import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
@@ -1577,7 +1577,7 @@ export async function startDaemon(options: DaemonOptions) {
   const extraction = createMemoryExtraction({
     store, now: () => clock.now(), settings: (directory) => memorySettings(store.settings.get(), directory), extract: extractBudgeted,
     // A scripted run (headless, eval, replay, PR review child) configures run limits: it is not a conversation to learn from.
-    ineligible: (sessionId) => runLimits.get(sessionId as SessionId) ? "scripted run" : undefined,
+    ineligible: (sessionId) => reviewIneligible(runLimits, sessionId as SessionId),
     ...(options.dreamEligible ? { eligibleDirectory: options.dreamEligible } : {}), dataDir: options.dir,
     commit: (job, memories) => {
       let proposed = 0
@@ -1961,7 +1961,7 @@ export async function startDaemon(options: DaemonOptions) {
               try {
                 const completion = await dream.complete(prompt, signal, model)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                used = usage ? { provider: model.model.split(":")[0]!, model: model.model, ...usage } : undefined
+                used = usage ? { provider: model.model.split(":")[0]!, ...usage, model: model.model } : undefined
                 budgets.record(used)
                 return completion
               } catch (error) { failedCall = true; budgets.record(); throw error }
@@ -1998,7 +1998,7 @@ export async function startDaemon(options: DaemonOptions) {
               try {
                 const completion = await dream.complete(prompt, signal, usable)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                used = usage ? { provider: usable.model.split(":")[0]!, model: usable.model, ...usage } : undefined
+                used = usage ? { provider: usable.model.split(":")[0]!, ...usage, model: usable.model } : undefined
                 budgets.record(used)
                 return completion
               } catch (error) { failedCall = true; budgets.record(); throw error }
@@ -2048,17 +2048,24 @@ export async function startDaemon(options: DaemonOptions) {
   function interruptedDreams(): string[] {
     return store.dreamRuns.interrupted({ since: clock.now() - 36 * 3_600_000, errorPrefix: DREAM_INTERRUPTED, limit: 200 }).filter(dreamEligible).slice(0, MAX_RECOVERED_DREAMS)
   }
-  const dreamEligible = (directory: string) => options.dreamEligible ? options.dreamEligible(directory) : dreamEligibleDirectory(directory, { dataDir: options.dir })
+  /** Why Dream may not run by itself on a folder (see `dreamProjectSkip`), or undefined. */
+  const dreamSkip = (directory: string) => options.dreamEligible ? (options.dreamEligible(directory) ? undefined : "not eligible") : dreamProjectSkip(directory, { dataDir: options.dir })
+  const dreamEligible = (directory: string) => dreamSkip(directory) === undefined
   /** At most this many interrupted projects are resumed per check; the rest wait for the next one (every 15 minutes while scheduled). */
   const MAX_RECOVERED_DREAMS = 5
   let dreamTimer: TimerHandle | undefined
-  /** `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. */
-  function armDreamSchedule(reset = false): { status: string; reason: string; runs: Array<{ runId: number }> } {
+  /**
+   * `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. `explicit`: a
+   * tick someone asked for (`dream.control tick`, `daemon.tick`); only that runs on a development daemon, which never arms a timer.
+   * `skipped` lists the active folders the window left out and why.
+   */
+  function armDreamSchedule(reset = false, explicit = false): { status: string; reason: string; runs: Array<{ runId: number }>; skipped?: Array<{ directory: string; reason: string }> } {
     dreamTimer?.cancel()
     dreamTimer = undefined
     const at = store.settings.get().dreamAt
     const runs: Array<{ runId: number }> = []
-    if (!at || !options.dream || options.dev) return { status: "skipped", reason: options.dev ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
+    const skipped: Array<{ directory: string; reason: string }> = []
+    if (!at || !options.dream || options.dev && !explicit) return { status: "skipped", reason: options.dev && at && options.dream ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
     const handled = store.meta.get(DREAM_WINDOW_KEY)
     if (reset || handled === undefined) store.meta.set(DREAM_WINDOW_KEY, dateKey(windows(clock.now(), at).last))
     else {
@@ -2068,7 +2075,10 @@ export async function startDaemon(options: DaemonOptions) {
         const since = clock.now() - 86_400_000
         // Real projects only: a session with a user turn, not machinery, in a folder that exists and is not a temporary or linked worktree.
         const active = new Set(store.listSessions({ limit: 500, since, hideEmpty: true }).filter((s) => !dreamMachinery(s.title)).map((s) => s.directory))
-        for (const directory of active) if (!dreamEligible(directory)) active.delete(directory)
+        for (const directory of active) {
+          const why = dreamSkip(directory)
+          if (why) { active.delete(directory); if (skipped.length < 50) skipped.push({ directory, reason: why }) }
+        }
         for (const directory of active) {
           const started = startDream(directory, verdict.trigger)
           if (!("error" in started)) runs.push({ runId: started.runId })
@@ -2079,8 +2089,8 @@ export async function startDaemon(options: DaemonOptions) {
       const started = startDream(directory, "recovered")
       if (!("error" in started)) runs.push({ runId: started.runId })
     }
-    dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
-    return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs }
+    if (!options.dev) dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
+    return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs, ...(skipped.length ? { skipped } : {}) }
   }
 
   /**
@@ -4543,7 +4553,7 @@ export async function startDaemon(options: DaemonOptions) {
           const at = store.settings.get().dreamAt
           return reply(connection, command.id, { ok: true, result: { schedule: { enabled: Boolean(at), at: at ?? null, handled: store.meta.get(DREAM_WINDOW_KEY) ?? null, next: at ? windows(clock.now(), at).next : null }, runs: store.dreamRuns.list(command.directory).slice(0, 5), service: { kind: "integrated", configured: Boolean(options.dream) }, consolidator: { mode: options.models?.selectable && rolesFor(store.settings.get(), command.directory).memoryConsolidator ? "semantic" : "deterministic", model: rolesFor(store.settings.get(), command.directory).memoryConsolidator?.model ?? null }, callsProviders: false, readsSecrets: false } })
         }
-        if (command.input.operation === "tick") return reply(connection, command.id, { ok: true, result: armDreamSchedule() })
+        if (command.input.operation === "tick") return reply(connection, command.id, { ok: true, result: armDreamSchedule(false, true) })
         const started = startDream(command.directory, "manual", command.input.policy ?? memorySettings(store.settings.get(), command.directory).dreamConsolidationPolicy ?? "auto-consolidate", command.input.deterministic === true)
         if ("error" in started) return reply(connection, command.id, { ok: false, code: started.code, message: started.error })
         const run = await started.completion
@@ -6239,7 +6249,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "daemon.tick": {
         if (command.scheduler === "dream") {
           if (!command.execute) return reply(connection, command.id, { ok: true, result: { scheduler: "dream", execute: false, enabled: Boolean(store.settings.get().dreamAt), handled: store.meta.get(DREAM_WINDOW_KEY) ?? null } })
-          return reply(connection, command.id, { ok: true, result: armDreamSchedule() })
+          return reply(connection, command.id, { ok: true, result: armDreamSchedule(false, true) })
         }
         const due = loops.list().filter((loop) => loop.state === "active" && loop.nextWakeAt !== undefined && loop.nextWakeAt <= clock.now()).slice(0, command.limit ?? 10)
         const started = command.execute ? due.filter((loop) => loops.runNow(loop.loopId)).map((loop) => loop.loopId) : []
