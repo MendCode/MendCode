@@ -541,6 +541,9 @@ describe("runPrReview: coverage and stacks", () => {
     expect(run.incremental).toBe(false)
     const same = await runPrReview({ ...baseInput(repo, children().factory), state: { version: 1, published: {}, lastHead: repo.head } })
     expect(same.status).toBe("skipped")
+    // The skip says why, so an `@mendcode review` reply can give that head's earlier result instead of a bare "skipped".
+    expect(same.reviewedBefore).toBe(true)
+    expect(run.reviewedBefore).toBeUndefined()
   })
 })
 

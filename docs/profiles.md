@@ -53,8 +53,11 @@ is missing, a resource file with invalid JSON, a capability the code uses but th
 top-level entry). It exits 1 on any error.
 
 **4. Enable.** `mendcode profile install ./mylook` installs a copy and turns it on. Open `/profiles` to see what it
-currently overrides: `o` lists every setting, key and view it takes over, `k` there keeps your own value for one of
-them, `d` turns the profile off, `p` shows the one precedence report. Extension and view code reloads while you edit the
+currently overrides: `o` lists every setting, key and view it takes over, grouped (Look, Home, Prompt, Sidebar &
+commands, Keys, Views) with each one's name, what it was before (`default`, `unbound` or `built-in` when nothing was set)
+and what the profile sets; the detail beside or under the list shows the selected one in full with its setting id. `k`
+there keeps your own value for one of them (the row then says `yours`), `d` turns the profile off, `p` shows the one
+precedence report, and `?` on the list shows every key. Extension and view code reloads while you edit the
 installed copy; the profile part applies at once.
 
 **5. Share.** Put the folder in a git repository. Anyone installs it with `mendcode profile install github:you/mylook`

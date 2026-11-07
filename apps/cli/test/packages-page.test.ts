@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { PackageInfo, PackagesReport } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { createPackagesPageState, describeContents, packagesPageKey, renderPackagesPage, type PackagesPageState } from "../src/view/packages-page"
+import { createPackagesPageState, describeContents, packagesPageKey, renderPackagesPage, type ActivationLive, type PackagesPageState } from "../src/view/packages-page"
+import { builtinKeyAction, settingLabel, slotLabel, summarizeValue } from "../src/view/profile-overrides"
 import { textWidth } from "../src/view/wrap"
 
 const plain = (lines: Line[]) => lines.map((line) => line.map((span) => span.text).join(""))
@@ -257,5 +258,163 @@ describe("profiles page keys", () => {
     for (const key of [" ", "e", "d", "j", "k"]) expect(packagesPageKey(createPackagesPageState(), key, []).action).toEqual({ type: "none" })
     expect(packagesPageKey(createPackagesPageState(), "r", []).action).toEqual({ type: "reload" })
     expect(packagesPageKey(createPackagesPageState(), "q", []).action).toEqual({ type: "close" })
+  })
+  test("? shows every key in place of the detail and hides it again; the header keeps only the first few", () => {
+    const header = plain(render(createPackagesPageState()))[0]!
+    expect(header).toContain("? keys")
+    expect(header).not.toContain("marketplace")
+    const open = press(createPackagesPageState(), "?").state
+    const text = plain(render(open, 140, 35)).join("\n")
+    expect(text).toContain("┌─ Keys")
+    expect(text).toMatch(/m\s+marketplace/)
+    expect(text).toMatch(/x\s+deselect all/)
+    expect(plain(render(open, 140, 35))[0]).toContain("? hide keys")
+    expect(press(open, "?").state.keys).toBeUndefined()
+  })
+})
+
+/** A profile like the retro example: settings across several sections, two keys (one kept), two views, one kept setting. */
+const RETRO_ROWS: ActivationLive["result"]["rows"] = [
+  { part: "theme", key: "theme", package: "user:retro", value: "retro", base: "", kept: false },
+  { part: "profile", key: "logoText", package: "user:retro", value: "RETRO", base: "MENDCODE", kept: false },
+  { part: "profile", key: "homeTips", package: "user:retro", value: true, base: false, kept: false },
+  { part: "profile", key: "promptChrome", package: "user:retro", value: "box", base: "top-bottom", kept: false },
+  { part: "profile", key: "density", package: "user:retro", value: "compact", base: "comfortable", kept: true, mine: "spacious" },
+  { part: "profile", key: "slashCommands", package: "user:retro", value: [{ name: "retro-crt", pinned: true }], base: [], kept: false },
+  { part: "profile", key: "sidebarWidgets", package: "user:retro", value: [{ type: "text", title: "RETRO", options: { text: "phosphor edition" } }], base: [], kept: false },
+  { part: "keybinding", key: "alt+g", package: "user:retro", value: "panel.toggle", kept: false },
+  { part: "keybinding", key: "ctrl+t", package: "user:retro", value: "messages.open", kept: true },
+  { part: "view", key: "message.assistant", package: "user:retro", value: "message-assistant", kept: false },
+  { part: "view", key: "tool.card", package: "user:retro", value: "tool-card", kept: false },
+]
+const LIVE: ActivationLive = { result: { rows: RETRO_ROWS, owners: { user: "user:retro" }, waiting: [], conflicts: [] }, problems: [] }
+const RETRO: PackageInfo = pkg("retro")
+const overridesAt = (selected: number, width = 160, height = 36) =>
+  renderPackagesPage({ report: report([RETRO]), state: { selected: 0, overrides: { key: "user:retro", selected } }, width, height, now: NOW, activation: LIVE })
+const pressOverrides = (selected: number, key: string) => packagesPageKey({ selected: 0, overrides: { key: "user:retro", selected } }, key, [RETRO], LIVE)
+
+describe("profiles page: what a profile overrides", () => {
+  test("overrides are grouped under small dim headings in a fixed order, keys and views last", () => {
+    const lines = overridesAt(0)
+    const rows = plain(lines)
+    const headings = ["Look", "Home", "Prompt", "Sidebar & commands", "Keys", "Views"]
+    const at = headings.map((heading) => rows.findIndex((row) => new RegExp(`│ ${heading.replace("&", "\\&")}\\s+│`).test(row)))
+    expect(at.every((index) => index > 0)).toBe(true)
+    expect([...at].sort((a, b) => a - b)).toEqual(at)
+    const look = lines[at[0]!]!.find((span) => span.text === "Look")
+    expect(look?.fg).toBe("muted")
+    // Look holds the theme, the logo text and the density; Home the tips.
+    const between = (from: number, to: number) => rows.slice(from, to).join("\n")
+    expect(between(at[0]!, at[1]!)).toMatch(/Theme[\s\S]*Logo text[\s\S]*Density/)
+    expect(between(at[1]!, at[2]!)).toContain("Home tips")
+  })
+  test("selection follows the grouped order the list draws", () => {
+    // Drawn order: Theme, Logo text, Density (Look), Home tips (Home), Prompt chrome, …
+    expect(plain(overridesAt(2)).find((row) => row.includes("› "))).toContain("Density")
+    expect(pressOverrides(2, "k").action).toEqual({ type: "keep", key: "density", on: false })
+    expect(pressOverrides(3, "k").action).toEqual({ type: "keep", key: "homeTips", on: true })
+    expect(pressOverrides(0, "j").state.overrides?.selected).toBe(1)
+    // k keeps in this view; the arrow moves up.
+    expect(pressOverrides(1, "k").state.overrides?.selected).toBe(1)
+    expect(pressOverrides(1, "\x1b[A").state.overrides?.selected).toBe(0)
+  })
+  test("settings show their human names, never the raw id in the list", () => {
+    const list = plain(overridesAt(0)).map((row) => row.slice(0, 80)).join("\n")
+    expect(list).toContain("Logo text")
+    expect(list).toContain("Home tips")
+    expect(list).toContain("Slash commands")
+    expect(list).toContain("Sidebar widgets")
+    expect(list).not.toMatch(/logoText|homeTips|slashCommands/)
+    expect(settingLabel("logoText")).toBe("Logo text")
+    expect(settingLabel("someNewKey")).toBe("Some new key")
+  })
+  test("values are words: default for an empty before, on/off, and lists and objects summarized", () => {
+    expect(summarizeValue("theme", "")).toEqual({ text: "default", quiet: true })
+    expect(summarizeValue("theme", undefined)).toEqual({ text: "default", quiet: true })
+    expect(summarizeValue("slashCommands", [])).toEqual({ text: "default", quiet: true })
+    expect(summarizeValue("homeTips", true).text).toBe("on")
+    expect(summarizeValue("homeTips", false).text).toBe("off")
+    expect(summarizeValue("slashCommands", [{ name: "retro-crt", pinned: true }]).text).toBe("1 pinned command: retro-crt")
+    expect(summarizeValue("sidebarWidgets", [{ type: "text", title: "RETRO" }, { type: "context" }]).text).toBe("2 widgets: text RETRO, context")
+    expect(summarizeValue("markdownColors", { mdHeading1: "#ff8800" }).text).toBe("1 entry: mdHeading1")
+    expect(summarizeValue("statusSeparator", " ▪ ").text).toBe('" ▪ "')
+    const text = plain(overridesAt(0)).join("\n")
+    expect(text).toMatch(/Theme\s+default\s+→ retro/)
+    expect(text).toMatch(/Home tips\s+off\s+→ on/)
+    expect(text).toMatch(/Slash commands\s+default\s+→ 1 pinned command: retro-crt/)
+    expect(text).not.toContain('[{"')
+    const theme = overridesAt(0).find((line) => line.some((span) => span.text.startsWith("default")))!
+    expect(theme.find((span) => span.text.startsWith("default"))?.fg).toBe("muted")
+  })
+  test("columns line up: every arrow of the list sits in the same cell", () => {
+    const rows = plain(overridesAt(0)).filter((row) => row.includes(" → "))
+    const columns = new Set(rows.map((row) => row.indexOf(" → ")))
+    expect(rows.length).toBe(RETRO_ROWS.length)
+    expect(columns.size).toBe(1)
+    expect([...columns][0]!).toBeLessThan(60)
+  })
+  test("keys read as key → action, with the built-in action or unbound before; views as slot → the profile's view", () => {
+    expect(builtinKeyAction("alt+g")).toBeUndefined()
+    expect(builtinKeyAction("ctrl+t")).toBe("dock")
+    expect(slotLabel("message.assistant")).toBe("assistant message")
+    expect(slotLabel("tool.card")).toBe("tool card")
+    const text = plain(overridesAt(0)).join("\n")
+    expect(text).toMatch(/alt\+g\s+unbound\s+→ toggle the right panel/)
+    expect(text).toMatch(/ctrl\+t\s+session widgets\s+→ open message actions/)
+    expect(text).toMatch(/assistant message\s+built-in\s+→ retro view/)
+    expect(text).toMatch(/tool card\s+built-in\s+→ retro view/)
+  })
+  test("the detail shows the selected override in full: name, raw id, what it changes, the whole value and what k and d do", () => {
+    const logo = plain(overridesAt(1)).join("\n")
+    expect(logo).toContain("┌─ Override")
+    expect(logo).toContain("logoText · setting")
+    expect(logo).toMatch(/before\s+MENDCODE/)
+    expect(logo).toMatch(/profile\s+RETRO/)
+    expect(logo).toContain("k  keep yours (MENDCODE) instead")
+    expect(logo).toContain("d  turn user:retro off: all 11 overrides go back")
+    const widgets = plain(overridesAt(6)).join("\n")
+    expect(widgets).toContain("sidebarWidgets · setting")
+    expect(widgets).toMatch(/value\s+\[\{"type":"text","title":"RETRO"/)
+    const view = plain(overridesAt(9)).join("\n")
+    expect(view).toContain("message.assistant · view slot")
+    expect(view).toContain("module message-assistant")
+    expect(view).toContain("k  views follow the profile while it owns the look")
+    expect(pressOverrides(9, "k").action).toEqual({ type: "none" })
+    const key = plain(overridesAt(7)).join("\n")
+    expect(key).toContain("action panel.toggle")
+    expect(key).toContain("k  keep alt+g unbound")
+  })
+  test("a kept row says yours in the list, the detail and the header count", () => {
+    const lines = overridesAt(2)
+    const rows = plain(lines)
+    expect(rows[1]).toContain("11 overrides · 2 kept yours")
+    const density = lines.find((line) => line.some((span) => span.text.startsWith("Density")) && line.some((span) => span.text === " → "))!
+    expect(density.map((span) => span.text).join("")).toMatch(/Density\s+spacious\s+→ compact\s+yours/)
+    expect(density.find((span) => span.text === "yours")).toEqual({ text: "yours", fg: "muted" })
+    const text = rows.join("\n")
+    expect(text).toMatch(/yours\s+spacious/)
+    expect(text).toContain("k  use the profile's compact again")
+    // Only the two kept rows carry the tag in the list.
+    expect(plain(overridesAt(4, 100, 50)).filter((row) => /→ .*\byours\b/.test(row)).length).toBe(2)
+  })
+  test("the header names the essential keys only", () => {
+    expect(plain(overridesAt(0))[0]).toContain("↑↓ select · k keep yours · d profile off · esc back")
+  })
+  test("is exactly width x height at every size, with the detail beside the list when wide and under it otherwise", () => {
+    for (const [width, height] of [[60, 20], [80, 30], [120, 40], [160, 36], [200, 56]] as const) {
+      for (const selected of [0, 5, 10]) {
+        const lines = overridesAt(selected, width, height)
+        expect(lines).toHaveLength(height)
+        for (const row of plain(lines)) expect(textWidth(row)).toBe(width)
+        expect(plain(lines).some((row) => row.includes("› "))).toBe(true)
+      }
+    }
+    expect(plain(overridesAt(0, 160, 36)).some((row) => row.includes("Overrides · user:retro") && row.includes("Override ─"))).toBe(true)
+    expect(plain(overridesAt(0, 80, 30)).some((row) => row.includes("Overrides · user:retro") && row.includes("Override ─"))).toBe(false)
+  })
+  test("a profile that overrides nothing says so", () => {
+    const text = plain(renderPackagesPage({ report: report([RETRO]), state: { selected: 0, overrides: { key: "user:retro", selected: 0 } }, width: 100, height: 30, now: NOW, activation: { ...LIVE, result: { ...LIVE.result, rows: [] } } })).join("\n")
+    expect(text).toContain("this profile overrides nothing right now")
+    expect(text).not.toContain("┌─ Override ─")
   })
 })

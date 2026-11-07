@@ -101,11 +101,14 @@ function curated(input: NotesInput, previous: Release | undefined): { summary: s
   }
   if (input.sameTree && previous) return { summary: `This ${CHANNEL_LABEL[channel].toLowerCase()} is the same code as ${previous.tag}; there are no changes since it.`, items, folded }
   if (channel === "stable" || channel === "beta") fail(`CHANGELOG.md has no "## ${input.tag}" section; add one with a summary and at least one item before releasing`)
-  const unreleased = parseChangelog(input.tagChangelog ?? "").get("Unreleased")
+  const atTag = parseChangelog(input.tagChangelog ?? "")
+  const unreleased = atTag.get("Unreleased")
   const known = new Set([...parseChangelog(input.previousChangelog ?? "").values()].flatMap((section) => NOTE_GROUPS.flatMap((group) => section.items[group])))
-  if (unreleased) for (const group of NOTE_GROUPS) for (const item of unreleased.items[group]) if (!known.has(item) && !items[group].includes(item)) items[group].push(item)
+  // `## Unreleased` first, then any section the previous release did not have: cutting a beta moves the unreleased items into its
+  // section, and a nightly after it still carries them when its previous release (a stable) is older than that beta.
+  for (const section of atTag.values()) for (const group of NOTE_GROUPS) for (const item of section.items[group]) if (!known.has(item) && !items[group].includes(item)) items[group].push(item)
   const count = NOTE_GROUPS.reduce((total, group) => total + items[group].length, 0)
-  if (!count) fail(`nothing to say: "## Unreleased" in CHANGELOG.md has no item that ${previous?.tag ?? "an earlier release"} did not have`)
+  if (!count) fail(`nothing to say: CHANGELOG.md has no item that ${previous?.tag ?? "an earlier release"} did not have`)
   return { summary: unreleased?.summary || `${count} change${count === 1 ? "" : "s"} since ${previous?.tag ?? "the first release"}.`, items, folded }
 }
 
