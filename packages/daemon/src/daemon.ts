@@ -6195,7 +6195,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "voice.control": {
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[VOICE]: dictation is local only" })
-        const result = command.action === "start" ? await voice.start(connection) : command.action === "stop" ? await voice.stop(connection) : command.action === "cancel" ? voice.cancel(connection) : voice.status()
+        const result = command.action === "start" ? await voice.start(connection, command.held === true) : command.action === "stop" ? await voice.stop(connection) : command.action === "cancel" ? voice.cancel(connection) : voice.status()
         return reply(connection, command.id, result.ok ? { ok: true, result: result.value } : { ok: false, code: result.code, message: result.message })
       }
       case "pet.manage": {
