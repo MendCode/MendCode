@@ -9,6 +9,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.5 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
+### Upgrade notes
+
+- Same code as v0.0.5-beta.1.
+
+## v0.0.5-beta.1 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
 ### New
 
 - MendGirl, with neko ears and her little robot, ships as a built-in pet beside MendAscii: choose her in `/pet` or as the start screen's mascot with `/mascot mendgirl`.
