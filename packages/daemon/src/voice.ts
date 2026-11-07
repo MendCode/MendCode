@@ -21,6 +21,7 @@ const MAX_TEXT_CHARS = 20_000
 /** A held recording that is uploaded stops where its 16 kHz mono 16-bit WAV would pass the upload size (32 000 bytes a second). */
 const HELD_UPLOAD_SECONDS = Math.floor(MAX_AUDIO_BYTES / 32_000 / 60) * 60
 const ERROR_BODY_CHARS = 200
+const ABANDONED: Failure = { ok: false, code: "invalid_command", message: "[VOICE]: cancelled" }
 
 type Active = { owner: object; file: string; recording: VoiceRecording; startedAt: number; timer: TimerHandle; /** Where it stops by itself; 0 for a held on-device recording, which runs until let go. */ maxSeconds: number; /** On-device dictation: the transcript comes from the helper, no file or upload. */ local?: LocalSession }
 
@@ -53,6 +54,14 @@ export function createVoice(input: {
   let active: Active | undefined
   let counter = 0
   let disposed = false
+  /** Starts still waiting on the microphone. A terminal that closes or cancels meanwhile abandons its own: the microphone is let go as soon as it opens, never left held with no one to stop it. */
+  const openings = new Set<{ owner: object; abandoned: boolean }>()
+  const opening = (owner: object) => {
+    const attempt = { owner, abandoned: false }
+    openings.add(attempt)
+    return attempt
+  }
+  const abandon = (owner: object) => { for (const attempt of openings) if (attempt.owner === owner) attempt.abandoned = true }
 
   const config = () => input.settings().voice ?? {}
   const limit = () => config().max_seconds ?? VOICE_DEFAULTS.maxSeconds
@@ -138,14 +147,15 @@ export function createVoice(input: {
     mkdirSync(folder, { recursive: true, mode: 0o700 })
     const file = path.join(folder, `rec-${++counter}-${input.clock.now()}.wav`)
     let recording: VoiceRecording
+    const attempt = opening(owner)
     try { recording = await input.recorder.start(file) } catch (error) {
       discard(file)
       return { ok: false, code: "invalid_command", message: `[VOICE]: ${error instanceof Error ? error.message.slice(0, 300) : "could not open the microphone"}` }
-    }
-    if (disposed || active) {
+    } finally { openings.delete(attempt) }
+    if (disposed || active || attempt.abandoned) {
       try { recording.kill() } catch {}
       discard(file)
-      return { ok: false, code: "busy", message: "[VOICE]: already recording" }
+      return attempt.abandoned ? ABANDONED : { ok: false, code: "busy", message: "[VOICE]: already recording" }
     }
     const state: Active = { owner, file, recording, startedAt: input.clock.now(), timer: { cancel() {} }, maxSeconds }
     // The clip ends at the limit; a vanished client's clip is dropped a minute later.
@@ -162,14 +172,15 @@ export function createVoice(input: {
     const why = device ? device.available() : "on-device dictation is not available here"
     if (!device || why) return { ok: false, code: "invalid_command", message: `[VOICE]: ${why}` }
     let session: LocalSession
+    const attempt = opening(owner)
     try {
       session = await device.start({ language: config().language, live: (update) => { if (active?.local === session) input.live?.(owner, update) } })
     } catch (error) {
       return { ok: false, code: "invalid_command", message: `[VOICE]: ${error instanceof Error ? error.message.slice(0, 300) : "could not open the microphone"}` }
-    }
-    if (disposed || active) {
+    } finally { openings.delete(attempt) }
+    if (disposed || active || attempt.abandoned) {
       session.kill()
-      return { ok: false, code: "busy", message: "[VOICE]: already recording" }
+      return attempt.abandoned ? ABANDONED : { ok: false, code: "busy", message: "[VOICE]: already recording" }
     }
     const state: Active = { owner, file: "", recording: { stop: async () => {}, kill: () => session.kill() }, startedAt: input.clock.now(), timer: { cancel() {} }, local: session, maxSeconds }
     // At the limit the terminal stops it; a vanished client's recording is dropped a minute after that. A held one has no limit:
@@ -246,11 +257,13 @@ export function createVoice(input: {
   }
 
   function cancel(owner: object): VoiceResult<VoiceReport> {
+    abandon(owner)
     if (active && active.owner === owner) release(active)
     return { ok: true, value: report() }
   }
 
   function forget(owner: object) {
+    abandon(owner)
     if (active && active.owner === owner) release(active)
   }
 

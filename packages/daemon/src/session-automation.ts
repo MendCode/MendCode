@@ -63,9 +63,11 @@ export function createSessionAutomation(input: {
     for (let offset = 0; sessions.length < limit; offset += 500) {
       const candidates = store.listSessions({ ...options, directory: options.project ?? options.directory, limit: 500, offset })
       for (const candidate of candidates) {
+        // `waiting`: an approval or a question still open. Checked before the full detail, so a scan of every session stays cheap.
+        if (options.state === "waiting" && !store.pendingRequestsOf(candidate.sessionId).length) continue
         const session = detail(candidate.sessionId)!
         const active = session.queued > 0 || !["idle", "error"].includes(session.state)
-        const state = options.state === "busy" ? active : options.state === undefined || options.state === session.state || options.state === session.status
+        const state = options.state === "busy" ? active : options.state === "waiting" ? session.status.startsWith("waiting_") : options.state === undefined ||options.state === session.state || options.state === session.status
         if (!state || options.active !== undefined && options.active !== active) continue
         const size = Buffer.byteLength(JSON.stringify(session)) + (sessions.length ? 1 : 0)
         if (bytes + size > MAX_FRAME_BYTES - 16_000) return sessions

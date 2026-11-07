@@ -42,6 +42,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "pr-review/context", "pr-review/readers", "pr-review/readers-graft",
     "extensions/plugin-adapter", "extensions/plugin-tool", "extensions/session-api", "extensions/dialogs", "usage-breakdown",
     "restart-drain", "reply-language",
+    // Memory review loads at the first turn with generation on, a waiting job or the Extraction tab.
+    "memory-extraction",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)

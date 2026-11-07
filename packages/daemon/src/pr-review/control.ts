@@ -1,7 +1,8 @@
 import { PrReviewDashboard, type PrPullRequestState, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { ConfigControl, ConfigControlAction } from "./config-control"
 import { JOB_TRANSITIONS, type JobState, type PlatformControlInput, type PlatformControlResult, type PlatformHandle, type ReviewJob } from "./contracts"
-import { buildDashboard, type DashboardWatchInput } from "./dashboard"
+import { buildDashboard, unresolvedCounts, type DashboardWatchInput } from "./dashboard"
+import { readReviewState, type ReviewState } from "./state"
 import { holderOf, type release, type takeOver } from "./takeover"
 
 /**
@@ -100,6 +101,23 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     }) }
   }
 
+  /** Each listed PR job's findings still open on the PR (dashboard.ts `unresolvedCounts`): one state read per pull request. */
+  function withUnresolved(dashboard: PrReviewDashboard, jobs: readonly ReviewJob[]): PrReviewDashboard {
+    const byId = new Map(jobs.map((job) => [job.id, job]))
+    const states = new Map<string, Pick<ReviewState, "published">>()
+    return { ...dashboard, jobs: dashboard.jobs.map((summary) => {
+      const job = byId.get(summary.id)
+      if (!job || job.coverage === "audit") return summary
+      const key = `${job.repo}#${job.number}`
+      let state = states.get(key)
+      if (!state) {
+        try { state = readReviewState(handle.dataDir, job.repo, job.number) } catch { state = { published: {} } }
+        states.set(key, state)
+      }
+      return { ...summary, unresolved: unresolvedCounts(job, state) }
+    }) }
+  }
+
   async function status(input: PlatformControlInput): Promise<PlatformControlResult> {
     const jobs = handle.jobs.all()
     const pullRequests = input.pullRequests ? readPullRequests(jobs, input.pullRequests) : undefined
@@ -120,6 +138,8 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     if (here) dashboard = { ...dashboard, jobs: dashboard.jobs.map((job) => job.owner === here ? { ...job, owner: THIS_DEVICE } : job), watches: dashboard.watches.map((watch) => watch.owner === here ? { ...watch, owner: THIS_DEVICE } : watch), reviewers: dashboard.reviewers.map((reviewer) => reviewer.device === here ? { ...reviewer, device: THIS_DEVICE } : reviewer) }
     const tokens = deps.tokens24h?.()
     if (tokens) dashboard = PrReviewDashboard.parse({ ...dashboard, metrics: { ...dashboard.metrics, tokens24h: tokens } })
+    // A caller that reads the PRs' state (/today, the reviews page on open) also gets what stays open on each; the 5 s poll reads no state file.
+    if (input.pullRequests) dashboard = withUnresolved(dashboard, jobs)
     await pullRequests
     dashboard = withPullRequests(dashboard)
     const { running, queued, waiting } = dashboard.metrics

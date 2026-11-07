@@ -82,12 +82,13 @@ export function quietTurn(input: Parameters<typeof stalledFor>[0] & { reasons: b
 const lowerUnit = (value: number) => compact(value).replace(/K$/, "k")
 
 /**
- * The turn's tokens, exact: what each finished model call reported (the provider's own usage, never an estimate, so no `~`).
+ * The turn's tokens: what the provider reported for its model calls, exact. While a call streams, the received figure also counts what
+ * arrived since the provider's last count, estimated (`estimated`), and reads `↓ ~4.3k`; the exact figure replaces it when the call reports.
  * Classic: `↑142K +1.5M cached ↓5,788 tokens`, what the turn's calls sent that the provider had not cached, then the context they resent
  * and the provider read from its prompt cache (every call resends the whole context, so a long turn's sum is mostly cache), then received.
  * Inline: `↓ 88.6k tokens`, the received figure alone unless `show` (the `activityTokens` setting) lists `in` and `cache` too.
  */
-export function tokensText(tokens: { input: number; cached?: number; output: number }, options: { style?: "inline" | "classic"; show?: readonly string[] } = {}): string {
+export function tokensText(tokens: { input: number; cached?: number; output: number; estimated?: boolean }, options: { style?: "inline" | "classic"; show?: readonly string[] } = {}): string {
   const inline = options.style === "inline"
   const show = options.show?.length ? options.show : inline ? ["out"] : ["in", "cache", "out"]
   const cached = Math.min(tokens.cached ?? 0, tokens.input)
@@ -97,7 +98,7 @@ export function tokensText(tokens: { input: number; cached?: number; output: num
   const pieces = show.flatMap((name) =>
     name === "in" && tokens.input > 0 ? [`↑${arrow}${number(fresh)}`]
     : name === "cache" && cached > 0 ? [`+${number(cached)} cached`]
-    : name === "out" ? [`↓${arrow}${number(tokens.output)}`]
+    : name === "out" ? [`↓${arrow}${tokens.estimated ? "~" : ""}${number(tokens.output)}`]
     : [])
   return `${pieces.join(" ")} tokens`
 }
@@ -133,8 +134,8 @@ export function renderWorkingRow(input: {
   spinner: string
   phase: string
   elapsedMs?: number
-  /** This turn's tokens: `input` sent and `output` received, exact: the sum of what each finished call's usage reported. */
-  tokens?: { input: number; cached?: number; output: number }
+  /** This turn's tokens: `input` sent and `output` received, the provider's counts; `estimated` when `output` also holds words streamed since the last count. */
+  tokens?: { input: number; cached?: number; output: number; estimated?: boolean }
   /** `inline` (the profile's default) draws the verb and then the data parts in one group, `Generating… (2m 53s · ↓ 4.3k tokens)`; `classic` (without a style) is one run of parts. */
   style?: "inline" | "classic"
   /** The figures of the `tokens` part (`activityTokens`); empty is the style's own. */

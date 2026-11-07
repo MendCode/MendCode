@@ -11,7 +11,9 @@ import { buildBindings, parseKeybindings } from "../src/extensions/keybindings"
 import { projectOrbit, renderOrbit, orbitAnimating, orbitPosition, orbitLabels, orbitNodeSize, orbitEdgeRole, stepOrbit, ORBIT_FIRE, ORBIT_FRAME_MS, type OrbitGraph } from "../src/view/panel-orbit"
 import { panelSession } from "../src/view/panel-session"
 import { sparkline, sparkRows } from "../src/view/panel-card"
-import { SidebarSpec } from "@mendcode/protocol"
+import { SidebarSpec, type SidebarWidget } from "@mendcode/protocol"
+import { readSessionLook } from "../src/ui/app/session-look"
+import { basePresetOf, resolvePanel } from "../src/view/sidebar-spec"
 import { budgetMs } from "../../../scripts/test-budget"
 import { featureOn } from "@mendcode/protocol/wire"
 import { createUsageNotes } from "../src/view/usage-notes"
@@ -21,9 +23,11 @@ import type { Block } from "../src/view/transcript"
 afterAll(cleanTemps)
 const settle = () => Bun.sleep(12)
 
-function fixture(width = 220, height = 60, preset?: typeof PANEL_PRESETS[number], remote = false) {
+/** `stored`: the panel's file holds these cards instead of the preset's; `look`: the session's kept look as an older build wrote it. */
+function fixture(width = 220, height = 60, preset?: typeof PANEL_PRESETS[number], remote = false, saved: { stored?: SidebarWidget[]; look?: Record<string, unknown> } = {}) {
   const dataDir = tempDir(), directory = tempDir(), sessionId = ids("session"), childId = ids("session")
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", sidebarWidgets: preset ? structuredClone(SIDEBAR_PRESETS[preset]) : [], rightSidebar: !!preset })
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", sidebarWidgets: saved.stored ?? (preset ? structuredClone(SIDEBAR_PRESETS[preset]) as SidebarWidget[] : []), rightSidebar: !!preset || !!saved.stored })
+  if (saved.look) writeFileSync(path.join(dataDir, "tui", "session-look.json"), JSON.stringify({ [sessionId]: saved.look }))
   const nodes = [
     { sessionId, title: "Panel session", createdAt: NOW - 60_000, updatedAt: NOW, current: true, labels: [] },
     { sessionId: childId, parentId: sessionId, title: "Inspect renderer", kind: "task", state: "completed", model: "local-test", createdAt: NOW - 30_000, updatedAt: NOW, current: false, labels: [] },
@@ -605,4 +609,64 @@ test("a click on the Galaxy panel never takes the keyboard (its keys are letters
     await h.type("\x1b")
     expect(h.text().join("\n")).not.toContain("· focused")
   }
+})
+
+describe("a profile's custom panel and a session's preset choice", () => {
+  const CUSTOM_GALAXY: SidebarWidget[] = [{ type: "orbit", options: { priority: "high" } }, { type: "extension:system-spectrum", title: "Spectrum", options: { maxRows: 6, priority: "normal" } }, { type: "clock", options: { priority: "normal" } }]
+  /** The one session of the fixture: its look as `session-look.json` keeps it. */
+  const kept = (h: ReturnType<typeof fixture>) => [...readSessionLook(h.dataDir).values()][0]
+  const types = (widgets: readonly SidebarWidget[]) => widgets.map((widget) => widget.type)
+
+  test("the stored panel built on a preset is that preset, customized; the built-in list is the default", () => {
+    expect(basePresetOf(CUSTOM_GALAXY)).toBe("galaxy")
+    expect(basePresetOf(SIDEBAR_PRESETS.full)).toBe("full")
+    expect(basePresetOf([{ type: "clock", options: {} }])).toBeUndefined()
+    expect(resolvePanel("galaxy", CUSTOM_GALAXY)).toMatchObject({ source: "profile", widgets: CUSTOM_GALAXY })
+    expect(resolvePanel("galaxy:default", CUSTOM_GALAXY)).toMatchObject({ source: "default", widgets: SIDEBAR_PRESETS.galaxy })
+    expect(resolvePanel("pulse", CUSTOM_GALAXY)).toMatchObject({ source: "default", widgets: SIDEBAR_PRESETS.pulse })
+    expect(resolvePanel("galaxy", SIDEBAR_PRESETS.galaxy)).toMatchObject({ source: "default" })
+  })
+
+  test("switching panels in a session and back to galaxy shows the profile's custom galaxy; the session keeps only the id", async () => {
+    const h = fixture(220, 60, undefined, false, { stored: CUSTOM_GALAXY })
+    await h.type("/panel pulse\r")
+    expect(presetOf(h.app.accessibility.profile.sidebarWidgets)).toBe("pulse")
+    await h.type("/panel galaxy\r")
+    expect(types(h.app.accessibility.profile.sidebarWidgets)).toEqual(types(CUSTOM_GALAXY))
+    expect(h.text().join("\n")).toContain("panel: galaxy (3 cards) · custom (profile) · this session")
+    expect(kept(h)).toMatchObject({ panelPreset: "galaxy" })
+    expect(kept(h)?.sidebarWidgets).toBeUndefined()
+    // The profile's file was never written by the session.
+    expect(types(readTuiProfile(h.dataDir).sidebarWidgets)).toEqual(types(CUSTOM_GALAXY))
+    await h.type("/panel galaxy default\r")
+    expect(types(h.app.accessibility.profile.sidebarWidgets)).toEqual(["orbit"])
+    expect(kept(h)).toMatchObject({ panelPreset: "galaxy:default" })
+    expect(h.text().join("\n")).toContain("/panel galaxy for yours")
+    await h.type("/panel profile\r")
+    expect(types(h.app.accessibility.profile.sidebarWidgets)).toEqual(types(CUSTOM_GALAXY))
+    expect(kept(h)?.panelPreset).toBeUndefined()
+    expect(kept(h)?.sidebarWidgets).toBeUndefined()
+  })
+
+  test("a session an older build left holding the default galaxy copy reads it as the galaxy and shows the custom one", async () => {
+    const h = fixture(220, 60, undefined, false, { stored: CUSTOM_GALAXY, look: { rightSidebar: true, sidebarWidgets: [{ type: "orbit", options: { priority: "high" } }] } })
+    await settle()
+    expect(types(h.app.accessibility.profile.sidebarWidgets)).toEqual(types(CUSTOM_GALAXY))
+    const look = [...readSessionLook(h.dataDir).values()][0]!
+    expect(look).toEqual({ rightSidebar: true, panelPreset: "galaxy" })
+    // A list the session built itself (not a preset's copy) stays its own.
+    const own = fixture(220, 60, undefined, false, { stored: CUSTOM_GALAXY, look: { sidebarWidgets: [{ type: "clock", options: {} }] } })
+    await settle()
+    expect(types(own.app.accessibility.profile.sidebarWidgets)).toEqual(["clock"])
+  })
+
+  test("the /panel menu names the profile's custom preset and offers the default under it", async () => {
+    const h = fixture(220, 60, undefined, false, { stored: CUSTOM_GALAXY })
+    await h.type("/panel galaxy\r")
+    const galaxy = slashSuggestions("/panel ga")
+    expect(galaxy.map((entry) => [entry.name, entry.summary])).toEqual([["panel galaxy", "Show galaxy · custom (profile)"]])
+    expect(slashSuggestions("/panel pu")[0]!.summary).toBe("Show pulse · default")
+    expect(slashSuggestions("/panel galaxy ").map((entry) => [entry.name, entry.summary])).toEqual([["panel galaxy default", "Show the built-in galaxy, not your custom one"]])
+    expect(slashSuggestions("/panel pro").map((entry) => entry.name)).toEqual(["panel profile"])
+  })
 })

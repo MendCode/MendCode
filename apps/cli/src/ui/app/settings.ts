@@ -161,7 +161,8 @@ export function createSettings(ctx: AppContext, actions: {
    * A `layer` change (a profile's activation or an extension's `settings.set`) is applied but never saved and never touches the
    * user's settings: the stored profile stays the user's own (profile-layers.ts).
    */
-  function changeProfile(requested: Partial<TuiProfile>, options: { layer?: boolean; session?: boolean } = {}) {
+  /** `panel` (with `session`): the session keeps this preset's id instead of the cards in `requested`; `null` drops its own panel. */
+  function changeProfile(requested: Partial<TuiProfile>, options: { layer?: boolean; session?: boolean; panel?: import("../../view/sidebar-spec").PanelChoice | null | undefined } = {}) {
     // Screen-reader mode brings the plain look with it (like /raw); turning it off puts the normal look back.
     const patch: Partial<TuiProfile> = requested.accessible === undefined ? requested : { ...(requested.accessible ? ACCESSIBLE_LOOK : NORMAL_LOOK), ...requested }
     const layered = Object.keys(state.profileApplied).length > 0
@@ -173,7 +174,7 @@ export function createSettings(ctx: AppContext, actions: {
     const own = Object.fromEntries(Object.entries({ ...patch, ...coupling }).filter(([key]) => !held.has(key))) as Partial<TuiProfile>
     state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...patch, ...coupling })
     if (stored) state.profileBase = normalizeTuiProfile({ ...state.profileBase, ...own })
-    if (options.session) keepSessionLook(ctx, { ...patch, ...coupling })
+    if (options.session) keepSessionLook(ctx, { ...patch, ...coupling }, options.panel)
     configureKeyLabels({ setting: state.tuiProfile.altLabel })
     input.screen.setKeyboard?.(keyboardWanted(state.tuiProfile.keyProtocol, input.platform))
     actions.syncAudio()

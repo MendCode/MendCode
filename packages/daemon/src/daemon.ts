@@ -114,7 +114,7 @@ import { normalizeQuotaRefresh, type QuotaRefreshProvider } from "@mendcode/prot
 import { capPermission, declaredRoots, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
 import { expiredPending, memoryMaintenance } from "./memory-maintenance"
 import { findDuplicate } from "./memory-duplicates"
-import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
+import type { createMemoryExtraction, ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
 import { createTaskOwnerWake } from "./task-owner-wake"
 import { createRestartResume } from "./restart-resume"
@@ -1574,7 +1574,7 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Loops and workflows observe every session event (a map lookup per event each). */
   let extractedNotices: MemoryEntry[] = []
-  const extraction = createMemoryExtraction({
+  const extractionOptions: Parameters<typeof createMemoryExtraction>[0] = {
     store, now: () => clock.now(), settings: (directory) => memorySettings(store.settings.get(), directory), extract: extractBudgeted,
     // A scripted run (headless, eval, replay, PR review child) configures run limits: it is not a conversation to learn from.
     ineligible: (sessionId) => reviewIneligible(runLimits, sessionId as SessionId),
@@ -1608,7 +1608,39 @@ export async function startDaemon(options: DaemonOptions) {
         sessionSink.append({ type: "item.completed", sessionId: job.sessionId, itemId, status: "ok", text: memoryNoticeText(notice), meta: memoryNoticeMeta(notice) })
       }
     },
-  })
+  }
+  /**
+   * Memory review loads at its first real use: a finished turn or a compaction where generation is on, a job left queued by an earlier
+   * run, or the Extraction tab. A terminal whose tier never reviews memory never evaluates it. Events that arrive while it loads are
+   * kept in order and handed to it once it exists.
+   */
+  type MemoryExtraction = ReturnType<typeof createMemoryExtraction>
+  let extractionReady: MemoryExtraction | undefined
+  let extractionLoad: Promise<MemoryExtraction> | undefined
+  const extractionBacklog: SessionEvent[] = []
+  const loadExtraction = () => (extractionLoad ??= import("./memory-extraction").then(({ createMemoryExtraction }) => {
+    const created = createMemoryExtraction(extractionOptions)
+    for (const event of extractionBacklog.splice(0)) created.observe(event)
+    return (extractionReady = created)
+  }))
+  const generationOn = (directory: string | undefined) => { const settings = memorySettings(store.settings.get(), directory); return settings.memoryEnabled !== false && settings.memoryGenerate === true }
+  const extraction = {
+    observe(event: SessionEvent) {
+      if (extractionReady) return extractionReady.observe(event)
+      if (event.type !== "turn.completed" && !(event.type === "compaction.updated" && event.state === "writing")) return
+      const directory = store.sessionDirectory(event.sessionId)
+      if (!directory || !generationOn(directory)) return
+      extractionBacklog.push(event)
+      void loadExtraction()
+    },
+    /** A waiting job (also one a previous run left) needs the worker; with none and nothing loaded there is nothing to wake. */
+    wake() {
+      if (extractionReady) return extractionReady.wake()
+      if (extractionLoad) return
+      if (store.extraction.list().some((job) => job.state === "queued" || job.state === "running")) void loadExtraction().then((loaded) => loaded.wake())
+    },
+    async stop() { if (extractionLoad) await (await extractionLoad).stop() },
+  }
   function maintainMemory(directory?: string) {
     const settings = memorySettings(store.settings.get(), directory)
     const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), settings.memoryMaintenance)
@@ -2362,7 +2394,7 @@ export async function startDaemon(options: DaemonOptions) {
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },
-      onLiveOutput: (turnId, output) => liveTokens.push(sessionId, turnId, output),
+      onLiveOutput: (turnId, output, estimated) => liveTokens.push(sessionId, turnId, output, estimated),
       onPause: () => publishActivity(sessionId, actors.get(sessionId)?.snapshot().foreground ?? "idle", true),
     })
     actors.set(sessionId, actor)
@@ -4731,10 +4763,12 @@ export async function startDaemon(options: DaemonOptions) {
           const thread = action === "archive" ? memoryAssistant.archive(directory) : action === "restore" ? memoryAssistant.restore(directory, archiveId!) : memoryAssistant.get(directory)
           return reply(connection, command.id, { ok: true, result: { thread, archives: memoryAssistant.archives(directory) } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
-      case "memory.extraction.list":
-        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), reviews: extraction.reviews(), ineligible: extraction.ineligible(), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+      case "memory.extraction.list": {
+        const extractions = await loadExtraction()
+        return reply(connection, command.id, { ok: true, result: { jobs: extractions.list(command.directory), reviews: extractions.reviews(), ineligible: extractions.ineligible(), status: extractions.status(command.directory), configured: extractions.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+      }
       case "memory.extraction.retry":
-        try { extraction.retry(command.jobId); return reply(connection, command.id, { ok: true }) }
+        try { (await loadExtraction()).retry(command.jobId); return reply(connection, command.id, { ok: true }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error) }) }
       case "memory.workspaces":
         return reply(connection, command.id, { ok: true, result: workspaceMemory.list(command.directory) })

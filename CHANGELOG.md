@@ -9,6 +9,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.7 - 2026-11-07
+
+`/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code
+sessions load less of your own setup and keep their background agents on a model change, held-space dictation no
+longer stops after a minute, the token count moves while a model thinks, and the PR reviewer spends less.
+
+### Upgrade notes
+
+- Same code as v0.0.7-beta.1.
+
+## v0.0.7-beta.1 - 2026-11-07
+
+`/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code
+sessions load less of your own setup and keep their background agents on a model change, held-space dictation no
+longer stops after a minute, the token count moves while a model thinks, and the PR reviewer spends less.
+
 ### New
 
 - Claude Code sessions load less of your own Claude Code setup by default: `/settings` → `claude context` picks lean (no own MCP servers or auto memory), full or isolated (none of your setup); permissions never change.
@@ -27,10 +43,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The PR reviewer spends less of your model quota: a push with nothing new to review (an empty or reworded commit, only ignored files) calls no model, and a diff just over one review call is no longer split into a second call.
+- A retried PR review verification no longer asks the readers again, and a measured cost rise is settled by the next measurement instead of a model.
+- When GitHub cannot be reached, the PR review watch now says it is waiting and has not stopped; it keeps retrying and resumes by itself.
+- `/today` shows each pull request once, from its newest head, and leaves out merged or closed ones and reviews with no blocking finding left; reviews nobody touched for a week fold under one line.
+- `/today` can dismiss a row with `x`, or every old review with `X` after one confirmation; `d` lists what you dismissed and brings it back.
+- The PR reviewer blocks a MendCode pull request for cost only when a total rises (memory, CPU or disk per session); a rise inside alone is a note.
 - The start screen's infinity mark has the website logo's wide shape, with MendCode in big letters under it when the terminal has room.
 
 ### Fixed
 
+- Choosing a panel preset in a session no longer hides your own version of it: `/panel galaxy` shows your custom galaxy, `/panel galaxy default` the built-in one, and the `/panel` menu says which is which. Sessions that already showed the built-in copy get yours back.
+- A PR review verifier answer with text after its JSON, or the JSON written twice, is no longer refused and retried.
+- The activity line shows the tokens received while a long model call or a long think is still running, marked `~` until the exact figure arrives.
+- A light theme in a dark terminal (or a dark one in a light terminal) paints its own background, so its text stays readable; the terminal's colours come back on exit.
 - Dictating with a held space no longer stops and starts again after a minute: it listens until you let go.
 - A file pasted in the middle of a sentence no longer splits it: the model gets the whole sentence, then the file, and the transcript shows the file folded to its name.
 - The built-in pets drop the old green: MendGirl and her robot are in Ink's black and white, and MendAscii takes every theme's own primary color (the Mend theme keeps the mint robot).

@@ -3,12 +3,13 @@ import { featureOn } from "@mendcode/protocol/wire"
 import { pickerFrame } from "../../view/picker-frame"
 import type { TodayData, TodayLink, TodayState } from "../../view/today-page"
 import type { Line } from "../theme"
-import { createTodayState, loadTodayData, preload, renderTodayPage, todayPageKey, triageItems } from "../lazy-pages"
+import { createTodayState, loadTodayData, preload, renderTodayPage, todayPageKey, triageItems, withDismissed } from "../lazy-pages"
 import type { AppContext } from "./context"
 
 /**
  * `/today` (docs/today.md): where to get back in control. Reads what the daemon already answers when the page opens (and on `r`),
- * runs nothing and keeps nothing of its own except the time of the last visit and today's pins, which the TUI profile holds.
+ * runs nothing and keeps nothing of its own except the time of the last visit, today's pins and the dismissed rows, which the TUI
+ * profile holds (written by MendCode, never by hand).
  * Enter jumps to the row's session, or opens the page that manages it (/reviews, /workflows, /memory). `t` sends the rows to
  * `today.triage` once; nothing else calls a model. Loaded by its first command, not at start-up.
  */
@@ -50,6 +51,7 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
       reviews: featureOn(state.settingsNow, "pr_review"),
       now: now(),
       lastVisit: since,
+      dismissed: state.tuiProfile.todayDismissed,
     })
     if (ticket !== visit) return
     data = loaded
@@ -62,7 +64,7 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
     await preload("today")
     visit++
     asking++
-    view = createTodayState(todaysMarks())
+    view = createTodayState(todaysMarks(), { ...state.tuiProfile.todayDismissed })
     data = undefined
     since = state.tuiProfile.todayLastVisit
     state.page = "today"
@@ -95,10 +97,18 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
     await save({ todayMarks: { day: localDay(now()), ids } }, ["todayMarks"])
   }
 
+  /** Stores the dismissals with the row's time (the newest `MAX_DISMISSED`); the page already hides or shows them. */
+  async function dismiss(rows: Array<{ key: string; at: number }>, on: boolean) {
+    const next = withDismissed({ ...createTodayState(), dismissed: { ...state.tuiProfile.todayDismissed } }, rows, on).dismissed ?? {}
+    await save({ todayDismissed: next }, ["todayDismissed"])
+    // The rows a cap left out take the dismissed rows' places, as `r` would read them.
+    if (view && state.page === "today") await load(false)
+  }
+
   /** One `today.triage` call with the rows on the page; its answer only fills the triage view. */
   async function triage() {
     if (!view || !data) return
-    const items = triageItems(data)
+    const items = triageItems(data, view)
     if (!items.length) {
       view = { ...view, triage: { open: true, status: "error", message: "there are no rows to group", sent: 0, groups: [], selected: 0, accepted: [] } }
       return requestFrame()
@@ -126,13 +136,14 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
       if (raw === "\x1b" || raw === "q") close()
       return requestFrame()
     }
-    const result = todayPageKey(view, raw, data)
+    const result = todayPageKey(view, raw, data, now())
     view = result.state
     const action = result.action
     if (action.type === "close") close()
     else if (action.type === "reload") { visit++; void load(false) }
     else if (action.type === "open") return open(action.link)
     else if (action.type === "mark") await mark(action.keys, action.on)
+    else if (action.type === "dismiss") await dismiss(action.rows, action.on)
     else if (action.type === "triage") return triage()
     requestFrame()
   }

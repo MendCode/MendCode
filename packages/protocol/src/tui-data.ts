@@ -207,6 +207,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "rightSidebar": false,
   "todayLastVisit": 0,
   "todayMarks": { "day": "", "ids": [] },
+  "todayDismissed": {},
   "sidebarWidth": 0,
   "promptStatus": "off",
   "sidebar": "auto",

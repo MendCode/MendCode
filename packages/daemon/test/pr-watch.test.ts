@@ -243,9 +243,9 @@ test("a network or GitHub outage never ends the watch: hours of failures wake th
   }
   expect(h.watch.list("s1")[0]!.state).toBe("watching")
   expect(h.woken).toHaveLength(1)
-  expect(h.woken[0]).toContain("Could not read this pull request through gh for 1")
+  expect(h.woken[0]).toContain("Waiting for GitHub: could not read this pull request through gh for 1")
   expect(h.woken[0]).toContain("(HTTP 502: Bad Gateway")
-  expect(h.woken[0]).toContain("The watch keeps trying, at most 15 minutes apart, and wakes you as before once gh reads it again; this is said once.")
+  expect(h.woken[0]).toContain("The watch has not stopped: it keeps trying, at most 15 minutes apart, and wakes you as before once gh reads it again; this is said once.")
   // The gaps grow (1, 2, 4, 8 minutes) and never exceed 15 minutes: far fewer reads than ticks.
   const gaps = reads.slice(1).map((minute, index) => minute - reads[index]!)
   expect(Math.max(...gaps)).toBeLessThanOrEqual(15)

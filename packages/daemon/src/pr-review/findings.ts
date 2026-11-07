@@ -10,13 +10,76 @@ import { PR_CHANGE_TYPES, PR_CHECK_STATUSES, PR_FINDING_CATEGORIES, PR_FINDING_S
 /** sha1 of path, line, category and summary: the same finding on a later head keeps its id, so it is never posted twice. */
 export const findingId = (input: { path: string; line: number; category: string; summary: string }) => createHash("sha1").update(`${input.path}\n${input.line}\n${input.category}\n${input.summary}`).digest("hex")
 
-/** The first JSON object of a model answer: a fenced ```json block, else the outermost braces. */
-export function extractJson(text: string): unknown {
+/** At most this many brace-balanced spans of one answer are tried. */
+const MAX_SPANS = 20
+const VALID_ESCAPE = new Set(["\"", "\\", "/", "b", "f", "n", "r", "t", "u"])
+
+/**
+ * The brace-balanced `{…}` spans of `text` in order, braces inside JSON strings skipped. A span still open at the end of the text
+ * (a cut answer) is not one; the scan goes on from the next brace, so a stray `{` in prose before the object does not hide it.
+ */
+function balancedSpans(text: string): string[] {
+  const spans: string[] = []
+  let start = text.indexOf("{")
+  for (let tries = 0; start !== -1 && tries < MAX_SPANS; tries++) {
+    let depth = 0, quoted = false, escaped = false, end = -1
+    for (let at = start; at < text.length; at++) {
+      const char = text[at]
+      if (quoted) { if (escaped) escaped = false; else if (char === "\\") escaped = true; else if (char === "\"") quoted = false; continue }
+      if (char === "\"") quoted = true
+      else if (char === "{") depth++
+      else if (char === "}" && --depth === 0) { end = at; break }
+    }
+    if (end !== -1) spans.push(text.slice(start, end + 1))
+    start = text.indexOf("{", end !== -1 ? end + 1 : start + 1)
+  }
+  return spans
+}
+
+/** A span with what models get wrong inside strings made valid: a backslash before a character JSON does not escape, raw line breaks and tabs. */
+function repairStrings(span: string): string {
+  let out = ""
+  let quoted = false
+  for (let at = 0; at < span.length; at++) {
+    const char = span[at]!
+    if (!quoted) { if (char === "\"") quoted = true; out += char; continue }
+    if (char === "\\") {
+      const next = span[at + 1]
+      if (next !== undefined && VALID_ESCAPE.has(next)) { out += char + next; at++ } else out += "\\\\"
+      continue
+    }
+    if (char === "\"") quoted = false
+    out += char === "\n" ? "\\n" : char === "\r" ? "\\r" : char === "\t" ? "\\t" : char
+  }
+  return out
+}
+
+/**
+ * The JSON object of a model answer: a fenced ```json block, the outermost braces, else each brace-balanced span in order (an
+ * answer with prose after its object that holds a `}`, or the object written twice). Each is tried as written, then with its
+ * strings repaired (`repairStrings`). `accept` picks the object of the asked shape when the answer holds several; without one
+ * that matches, the first object found is returned, so the caller names what its shape lacks.
+ */
+export function extractJson(text: string, accept?: (value: Record<string, unknown>) => boolean): unknown {
   const fenced = /```(?:json)?\s*\n([\s\S]*?)\n```/.exec(text)
   const candidates = [fenced?.[1], text.slice(text.indexOf("{"), text.lastIndexOf("}") + 1)].filter((value): value is string => !!value && value.trim().startsWith("{"))
-  for (const candidate of candidates) {
-    try { return JSON.parse(candidate) } catch { /* the next candidate */ }
+  let first: { value: unknown } | undefined
+  const fits = (value: unknown) => !accept || (value !== null && typeof value === "object" && !Array.isArray(value) && accept(value as Record<string, unknown>))
+  /** The candidate's object when it has the asked shape; another object is kept as the fallback. */
+  const take = (candidate: string): { value: unknown } | undefined => {
+    for (const attempt of [candidate, repairStrings(candidate)]) {
+      let value: unknown
+      try { value = JSON.parse(attempt) } catch { continue }
+      if (fits(value)) return { value }
+      first ??= { value }
+      return undefined
+    }
+    return undefined
   }
+  for (const candidate of candidates) { const found = take(candidate); if (found) return found.value }
+  // The spans are scanned only when the simple candidates did not give the asked object.
+  for (const span of balancedSpans(text)) { const found = take(span); if (found) return found.value }
+  if (first) return first.value
   throw new Error("no JSON object in the answer")
 }
 
@@ -89,7 +152,7 @@ const SAYS_INCOMPLETE = /(?:the )?review is incomplete/i
 /** `{ summary, findings: [...] }` from an answer, every finding valid, or the problems a repair turn is told about. */
 export function parseFindings(text: string): ParsedFindings {
   let value: unknown
-  try { value = extractJson(text) } catch (error) { return { ok: false, problems: [error instanceof Error ? error.message : String(error)] } }
+  try { value = extractJson(text, (object) => Array.isArray(object.findings)) } catch (error) { return { ok: false, problems: [error instanceof Error ? error.message : String(error)] } }
   const body = record(value)
   if (!Array.isArray(body.findings)) return { ok: false, problems: ["the object needs a `findings` array (empty when there is nothing to report)"] }
   const problems: string[] = []

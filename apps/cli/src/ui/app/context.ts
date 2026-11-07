@@ -543,7 +543,9 @@ export type AppState = {
   /** The stored profile as this run knows it; `tuiProfile` is this with the layers over it (profile-layers.ts). */
   profileBase: TuiProfile
   /** What slash commands showed or hid in each session of this terminal (session-look.ts); over the profile, never saved. */
-  sessionLook: Map<string, Partial<TuiProfile>>
+  sessionLook: Map<string, import("./session-look").SessionLook>
+  /** The panel's file (user or project) as `sidebar.get` last answered; what a session's preset choice resolves against. */
+  panelSpec?: import("@mendcode/protocol").SidebarWidget[]
   /** What enabled profiles' activations currently ask for (extensions/activation.ts, loaded only when one exists). */
   activation: import("../../extensions/activation").TuiActivation | undefined
   /** The keys a profile overlay or a running extension holds right now, with the value each put there. */

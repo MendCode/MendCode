@@ -139,6 +139,21 @@ describe("dictation service", () => {
     expect(await h.voice.start(h.owner)).toMatchObject({ ok: false })
   })
 
+  test("a terminal that closes while the recorder starts drops the clip at once, not at the held limit", async () => {
+    const h = service({ voice: { enabled: true } })
+    let open!: () => void
+    const opened = new Promise<void>((resolve) => (open = resolve))
+    const start = h.recorder.recorder.start
+    h.recorder.recorder.start = async (file) => { await opened; return start(file) }
+    const starting = h.voice.start(h.owner, true)
+    h.voice.forget(h.owner)
+    open()
+    expect(await starting).toMatchObject({ ok: false, message: "[VOICE]: cancelled" })
+    expect(h.recorder.calls.kills).toBe(1)
+    expect(h.files()).toEqual([])
+    expect(h.clock.pendingTimers()).toBe(0)
+  })
+
   test("the recording ends at the limit and an unclaimed clip is dropped a minute later", async () => {
     const h = service({ voice: { enabled: true, max_seconds: 5 } })
     await h.voice.start(h.owner)
@@ -226,6 +241,24 @@ describe("on-device dictation", () => {
     await h.voice.start(h.owner, true)
     h.voice.forget(h.owner)
     expect(h.mic.calls.kills).toBe(1)
+  })
+
+  test("a terminal that closes or cancels while the microphone opens leaves nothing recording", async () => {
+    for (const leave of ["forget", "cancel"] as const) {
+      const mic = device()
+      let open!: () => void
+      const opened = new Promise<void>((resolve) => (open = resolve))
+      const slow: LocalDictation = { ...mic.local, async start(input) { await opened; return mic.local.start(input) } }
+      const h = onDevice({ device: { ...mic, local: slow } })
+      const starting = h.voice.start(h.owner, true)
+      if (leave === "forget") h.voice.forget(h.owner)
+      else h.voice.cancel(h.owner)
+      open()
+      expect(await starting).toMatchObject({ ok: false, message: "[VOICE]: cancelled" })
+      expect(mic.calls.kills).toBe(1)
+      expect(h.voice.status()).toMatchObject({ ok: true, value: { recording: false } })
+      expect(await h.voice.start({}, true)).toMatchObject({ ok: true })
+    }
   })
 
   test("a toggled recording (not held) keeps max_seconds", async () => {

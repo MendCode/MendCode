@@ -76,6 +76,20 @@ describe("perf-attrib verdict", () => {
     expect(v.text).toContain("tui.rest.region.WebKit_Malloc")
   })
 
+  test("an inner rise (heap counts, binary) with no total above the noise is a nota, never a finding", () => {
+    const measured: Noise = { ...noise, range: { ...noise.range, "tui.after.heap.protected": 0, "tui.after.heap.objects": 300, "binary.bytes": 0, "tui.cpu_ms.after": 400 } }
+    const inner = { "tui.after.heap.protected": 19, "tui.after.heap.objects": 239_842, "binary.bytes": 60_000_000 }
+    const rows = compare([run(inner)], [run({ "tui.after.heap.protected": 20, "tui.after.heap.objects": 240_600, "binary.bytes": 60_049_000, "total.ready.fp_mb": 59.7 })], measured)
+    const v = verdict(rows)
+    expect(v.word).toBe("nota")
+    expect(v.text).toContain("tui.after.heap.protected +1")
+    // The same inner rise with the footprint up is a sube.
+    expect(verdict(compare([run(inner)], [run({ "tui.after.heap.protected": 20, "total.ready.fp_mb": 63 })], noise)).word).toBe("sube")
+    // CPU and the bytes a session stores count as totals.
+    expect(verdict(compare([run({ "tui.cpu_ms.after": 8000 })], [run({ "tui.cpu_ms.after": 12_000 })], noise)).word).toBe("sube")
+    expect(verdict(compare([run({ "disk.bytes_per_session": 2600 })], [run({ "disk.bytes_per_session": 9000 })], noise)).word).toBe("sube")
+  })
+
   test("a drop beyond the noise is baja, never a finding", () => {
     expect(verdict(compare([run()], [run({ "total.ready.fp_mb": 57 })], noise)).word).toBe("baja")
   })

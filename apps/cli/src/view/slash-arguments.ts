@@ -17,6 +17,14 @@ const languageNames = new Intl.DisplayNames(["en"], { type: "language" })
 // Enter on a first language sets it alone; typing a space after it offers the second.
 const languages = (first: boolean): SlashArgument[] => ON_DEVICE_LANGUAGES.map((code) => ({ word: code, summary: `${languageNames.of(code) ?? code}${first ? "; a space adds a second, heard at once" : ""}` }))
 
+/** The panel presets in the order /panel offers them (sidebar-spec.ts `PANEL_PRESETS`). */
+const PANEL_WORDS = ["pulse", "crew", "ledger", "focus", "full", "galaxy"] as const
+/** The presets the stored panel has its own version of; the right bar tells after each read of the panel's file. */
+let customPanels: ReadonlySet<string> = new Set()
+export function noteCustomPanels(presets: readonly string[]) {
+  customPanels = new Set(presets)
+}
+
 const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   pr: () => [
     { word: "setup", summary: "Set up review and GitHub publishing with one confirmation" },
@@ -89,7 +97,12 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   vim: () => toggle("vim keys"),
   multiline: () => toggle("multiline input"),
   trust: () => [...onOff("trust for this project"), { word: "status", summary: "Show whether it is trusted" }],
-  panel: () => ["pulse", "crew", "ledger", "focus", "full", "galaxy", "next", "off", "edit", "reset", "width", "widget"].map((word) => ({ word, summary: "Customize the right panel", feature: word === "galaxy" ? "panel_orbit" as const : "panel" as const })),
+  panel: () => [
+    ...PANEL_WORDS.map((word) => ({ word, summary: `Show ${word} · ${customPanels.has(word) ? "custom (profile)" : "default"}`, feature: word === "galaxy" ? "panel_orbit" as const : "panel" as const })),
+    { word: "profile", summary: "Show your profile's panel again", feature: "panel" as const },
+    ...["next", "off", "edit", "reset", "width", "widget"].map((word) => ({ word, summary: "Customize the right panel", feature: "panel" as const })),
+  ],
+  ...Object.fromEntries(PANEL_WORDS.map((word) => [`panel ${word}`, () => [{ word: "default", summary: `Show the built-in ${word}${customPanels.has(word) ? ", not your custom one" : ""}`, feature: word === "galaxy" ? "panel_orbit" as const : "panel" as const }]])),
   workflows: () => [{ word: "run", summary: "Run a workflow: <file.js|name> [args]" }, { word: "new", summary: "Create one: <name>" }, { word: "convert", summary: "Convert a plan: <plan.json>" }, { word: "budget", summary: "Set a run's budget: <id> …" }, { word: "update", summary: "Update a run: <id> <file.js>" }, { word: "resume", summary: "Resume a run: <id>" }],
   agents: () => words("Act on a sub-agent: <session-id>", ["summary", "rename", "tag", "pause", "stop", "message"]),
   mcp: () => [{ word: "auth", summary: "Sign in to a server: <server>" }],

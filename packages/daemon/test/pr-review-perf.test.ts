@@ -219,3 +219,52 @@ describe("the review of a MendCode pull request", () => {
     expect(run.info?.perf).toBeUndefined()
   })
 })
+
+/**
+ * A measured rise is the cost phase's finding, not a model's: on a later head the measurement decides whether it still holds, and no
+ * verifier is asked about it again (a model re-reading code to judge a number it cannot measure is spent for nothing).
+ */
+describe("a measured rise on a later head", () => {
+  async function later(headline: string, { forcePush = false } = {}) {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const first = await review(repo, { dir: temp(), run: runner({ code: 1, out: TABLE(RISE) }).run }, child())
+    const rise = first.outcome!.result.findings.find((item) => item.category === "performance")!
+    writeFileSync(path.join(repo.dir, "apps/cli/src/a.ts"), "export const a = 2\n")
+    // A force push rewrites the reviewed head away, so the next review is a whole-PR one (incremental false, no explicit full).
+    if (forcePush) await git(repo.dir, "commit", "-q", "--amend", "-am", "smaller")
+    else await git(repo.dir, "commit", "-q", "-am", "smaller")
+    const head = await git(repo.dir, "rev-parse", "HEAD")
+    const kids = child()
+    const run = await runPrReview({
+      repo: "MendCode/MendCode", number: 7, directory: repo.dir, base: repo.base, head, publish: false, sessionFactory: kids.factory,
+      state: { version: 1, lastHead: repo.head, published: { [rise.id]: { commentId: 1, finding: rise } } },
+      perf: { dir: temp(), run: runner({ code: headline === RISE ? 1 : 0, out: TABLE(headline) }).run },
+    } as Parameters<typeof runPrReview>[0])
+    return { run, rise, prompts: kids.prompts }
+  }
+
+  test("a head measured without the rise fixes it, and no verifier is asked about it", async () => {
+    const { run, rise, prompts } = await later(SAME)
+    expect(run.incremental).toBe(true)
+    expect(run.fixed).toEqual([rise.id])
+    expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
+  })
+
+  test("after a force push, a whole-PR review measured without the rise fixes it too", async () => {
+    const { run, rise } = await later(SAME, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed).toEqual([rise.id])
+  })
+
+  test("after a force push, a head that still rises keeps it open", async () => {
+    const { run, rise } = await later(RISE, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed ?? []).not.toContain(rise.id)
+  })
+
+  test("a head that still rises keeps it open, and no verifier is asked about it either", async () => {
+    const { run, prompts } = await later(RISE)
+    expect(run.fixed).toEqual([])
+    expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
+  })
+})

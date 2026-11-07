@@ -53,6 +53,16 @@ describe("live tokens throttle", () => {
     expect(figures(events)).toEqual([10, 0])
   })
 
+  test("an estimate travels with its figure, and the same figure turning exact goes out again", () => {
+    const { clock, events, tokens, sessionId, turnId } = live()
+    tokens.push(sessionId, turnId, 120, true)
+    expect(events[0]).toEqual({ type: "turn.tokens", gseq: 0, at: 1_000, sessionId, turnId, output: 120, estimated: true })
+    expect(GlobalEvent.safeParse(events[0]).success).toBe(true)
+    clock.advance(1_000)
+    tokens.push(sessionId, turnId, 120)
+    expect(events.map((event) => [event.output, event.estimated === true])).toEqual([[120, true], [120, false]])
+  })
+
   test("a 0 for a session that showed nothing sends nothing", () => {
     const { events, tokens, sessionId, turnId } = live()
     tokens.push(sessionId, turnId, 0)

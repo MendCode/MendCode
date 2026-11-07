@@ -66,7 +66,7 @@ function watcher({ outcome = () => undefined }: { outcome?: (job: RepoWatchJob) 
 
 describe("what a failure says", () => {
   test("network, DNS, timeouts, 5xx and rate limits are transient; a missing repository or revoked access is permanent", () => {
-    for (const reason of [OFFLINE, "dial tcp: lookup api.github.com: no such host", "Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout", "HTTP 502: Bad Gateway (https://api.github.com/graphql)", "HTTP 503: Service Unavailable", "API rate limit exceeded for user ID 1. HTTP 403", "connect ENETUNREACH 140.82.112.6:443", "read: connection reset by peer"]) expect(failureKind(reason)).toBe("transient")
+    for (const reason of [OFFLINE, "dial tcp: lookup api.github.com: no such host", "Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout", "HTTP 502: Bad Gateway (https://api.github.com/graphql)", "HTTP 503: Service Unavailable", "API rate limit exceeded for user ID 1. HTTP 403", "connect ENETUNREACH 140.82.112.6:443", "read: connection reset by peer", "gh timed out after 15 s waiting for GitHub"]) expect(failureKind(reason)).toBe("transient")
     for (const reason of ["GraphQL: Could not resolve to a Repository with the name 'acme/app'. (repository)", "HTTP 404: Not Found (https://api.github.com/repos/acme/app/pulls)", "HTTP 403: Resource not accessible by integration", "none of the git remotes configured for this repository point to a known GitHub host"]) expect(failureKind(reason)).toBe("permanent")
     expect(failureKind("git fetch of pull request #8 failed")).toBe("unknown")
   })
@@ -139,6 +139,34 @@ describe("O3: a watch through a night asleep without network", () => {
     expect(w.notices).toHaveLength(1)
     expect(w.notices[0]).toContain("ended: gh could not list its pull requests for 15 minutes (GraphQL: Could not resolve to a Repository")
     expect(w.watch.describe()).toContain("ended (unreadable)")
+  })
+
+  test("the outage notice says the watch is waiting, not stopped (seen live: a session read it as \"stopped after 15 minutes\")", async () => {
+    const w = watcher()
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.fail = OFFLINE
+    for (let minute = 0; minute < 40 && !w.notices.length; minute++) { w.awake(MINUTE); await w.tick() }
+    expect(w.notices).toHaveLength(1)
+    expect(w.notices[0]).toContain("is waiting for GitHub: it could not list its pull requests for")
+    expect(w.notices[0]).toContain("The watch has not stopped and needs nothing from you")
+    expect(w.notices[0]).not.toMatch(/\b(ended|stopped after)\b/)
+  })
+
+  test("a push made during the outage is reviewed exactly once when GitHub answers again, at its newest head", async () => {
+    const w = watcher()
+    w.gh.state.prs = [{ number: 1, headRefOid: sha(1) }]
+    await w.watch.watchRepo("ses_a", "/repo")
+    await w.tick()
+    const before = w.started.length
+    w.gh.state.fail = OFFLINE
+    for (let minute = 0; minute < 30; minute++) { w.awake(MINUTE); await w.tick() }
+    // Two pushes while GitHub could not be reached: only the newest head is the work.
+    w.gh.state.prs = [{ number: 1, headRefOid: sha(3) }]
+    w.gh.state.fail = undefined
+    for (let minute = 0; minute < 40; minute++) { w.awake(MINUTE); await w.tick() }
+    const reviews = w.started.slice(before).flatMap((job) => job.kind === "review" ? [[job.number, job.head, job.trigger]] : [])
+    expect(reviews).toEqual([[1, sha(3), "synchronize"]])
+    expect(w.watch.describe()).toContain("watching")
   })
 })
 

@@ -25,7 +25,7 @@ import { createSession } from "./app/session"
 import { createSessionNav } from "./app/session-nav"
 import { createSessionTree } from "./app/session-tree"
 import { createTranscriptActions } from "./app/transcript-actions"
-import { readSessionLook, switchSessionLook } from "./app/session-look"
+import { appliedLook, readSessionLook, switchSessionLook } from "./app/session-look"
 import { createScratch } from "./app/scratch"
 import { createGoal } from "./app/goal"
 import { createUsageLimit } from "./app/usage-limit"
@@ -469,7 +469,8 @@ export function createApp(input: AppInput) {
   // What slash commands showed or hid in each session is that session's (session-look.ts): the one this terminal opens on gets its own back.
   appState.sessionLook = input.profile ? new Map() : readSessionLook(input.dataDir)
   const ownLook = appState.sessionLook.get(appState.sessionId)
-  if (ownLook) appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...ownLook })
+  // A preset the session chose is drawn as the profile's own version of it when the profile has one (session-look.ts `appliedLook`).
+  if (ownLook) appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...appliedLook(ownLook, appState.profileBase.sidebarWidgets) })
   applyGlyphMode({ state: appState, glyphs: g, pinned: input.glyphs, env: input.env ?? process.env })
   // What key hints call Alt: Option on a Mac. The platform is the caller's (main.ts passes process.platform; a test that passes none gets canonical `alt`).
   configureKeyLabels({ setting: appState.tuiProfile.altLabel, platform: input.platform, altWorks: false })
@@ -768,7 +769,7 @@ export function createApp(input: AppInput) {
     }
     else await runSlash("/tools")
     requestFrame()
-  }, (patch) => changeProfile(patch, { session: true }))
+  }, (patch, panel) => changeProfile(patch, { session: true, panel }))
   const { askAside, openFetch, scrollAside, asideKey, loadAside } = createAside(ctx)
   const { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, returnFromConnect, openIntro, finishIntro } = createSetup(ctx, { loadRecipes, loadPage: (...args) => loadPage(...args), applySettings: (...args) => applySettings(...args), changeProfile: (...args) => changeProfile(...args), openConnect: (...args) => openConnect(...args) })
   const { openConnect, connectAction, loadProviders, providersAction } = createProviders(ctx, { takeModels, loadPage: (...args) => loadPage(...args), runSlash: (...args) => runSlash(...args), returnFromConnect })

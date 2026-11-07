@@ -421,7 +421,7 @@ function shown(def: RowDef, values: SettingsValues, state: SettingsPageState): S
       const level = settings.claudeContext ?? "lean"
       return level === "full" ? { text: "full", fg: "text", note: "all of your setup", arrows: true }
         : level === "isolated" ? { text: "isolated", fg: "text", note: "ignores your rules", arrows: true }
-        : { text: "lean", fg: "muted", note: "no own MCP or skills", arrows: true }
+        : { text: "lean", fg: "muted", note: "no own MCP or auto memory", arrows: true }
     }
     case "areas":
       return { text: settings.areas?.length ? settings.areas.map((area) => area.name).join(", ") : "none", fg: settings.areas?.length ? "text" : "muted", note: "folder rules · not editable here", arrows: false }

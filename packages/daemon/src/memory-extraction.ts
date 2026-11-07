@@ -219,14 +219,18 @@ export function createMemoryExtraction(options: {
     if (stopped || draining || !options.extract) return
     draining = (async () => {
       while (!stopped) {
-        const queued = store.extraction.list().filter((job) => job.state === "queued" && enabled(job.directory)).sort((a, b) => a.nextAttemptAt - b.nextAttemptAt)
+        const waiting = store.extraction.list().filter((job) => job.state === "queued")
+        const queued = waiting.filter((job) => enabled(job.directory)).sort((a, b) => a.nextAttemptAt - b.nextAttemptAt)
         const first = queued[0]
         if (!first) break
         if (first.nextAttemptAt > now()) { schedule(first.nextAttemptAt - now()); break }
         const info = meta.get(first.jobId) ?? { turns: 0, trigger: "retry" as ReviewTrigger }
-        if (first.attempts === 0 && store.memoryReviews.callsSince(now() - DAY_MS) >= reviewPolicy(options.settings(first.directory)).dailyCap) {
+        // Every attempt is checked, retries too: calls a waiting job made in the last day are not in the record yet, so they count here.
+        const unrecorded = waiting.reduce((sum, job) => sum + (job.updatedAt >= now() - DAY_MS ? job.attempts : 0), 0)
+        if (store.memoryReviews.callsSince(now() - DAY_MS) + unrecorded >= reviewPolicy(options.settings(first.directory)).dailyCap) {
           put(first, { state: "skipped", reason: "Daily review cap reached" })
-          if (now() - capLoggedAt >= DAY_MS) {
+          if (first.attempts > 0) log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, calls: first.attempts, outcome: "skipped", reason: "daily cap" })
+          else if (now() - capLoggedAt >= DAY_MS) {
             capLoggedAt = now()
             log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, outcome: "skipped", reason: "daily cap" })
           }

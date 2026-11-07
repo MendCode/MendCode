@@ -62,7 +62,8 @@ describe("which folders Dream runs on by itself", () => {
     expect(skip(make("Code/repos/mend-autopilot-wt/feature", "dir"))).toBe("a folder of clones made by a tool")
     expect(skip(make("Code/worktrees/lane", "dir"))).toBe("a folder of clones made by a tool")
     expect(skip(make("Code/lane", "file"))).toBe("temporary, missing, data-directory or linked-worktree folder")
-    expect(skip(make("Code/lane/src"))).toBe("inside a linked worktree")
+    // A subfolder of a linked worktree fails the base filter itself, which memory review applies too.
+    expect(skip(make("Code/lane/src"))).toBe("temporary, missing, data-directory or linked-worktree folder")
     expect(skip(make("Downloads/notes"))).toBe("not inside a git repository")
     expect(skip(path.join(tmpdir(), "x"))).toBe("temporary, missing, data-directory or linked-worktree folder")
     expect(dreamProjectSkip(make("data/app", "dir"), { home, dataDir: path.join(home, "data") })).toBe("temporary, missing, data-directory or linked-worktree folder")

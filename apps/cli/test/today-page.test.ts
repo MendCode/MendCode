@@ -6,6 +6,8 @@ import { createTodayState, MAX_TRIAGE_ITEMS, renderTodayPage, TAB_MEANING, today
 import { lineWidth } from "../src/view/wrap"
 
 const plain = (lines: Line[]) => lines.map((line) => line.map((span) => span.text).join("")).join("\n")
+/** The page's text with its wrapping undone, for a sentence that may break across rows. */
+const flat = (text: string) => text.replace(/\s+/g, " ")
 const SIZES = [[80, 24], [120, 34], [180, 45], [60, 20]] as const
 const EMPTY: TodayData = { summary: { lastVisit: NOW - 9 * 3600 * 1000, sessionsRan: 0, sessionsFinished: 0, projects: 1, dreamRuns: 0 }, attention: [], pickup: [], memory: [] }
 const render = (tab: TodayTab, width: number, height: number, data = TODAY_DEMO, extra: { selected?: number; help?: boolean } = {}) =>
@@ -128,8 +130,93 @@ describe("renderTodayPage", () => {
     expect(plain(render("pickup", 120, 34))).toContain(TAB_MEANING.pickup)
     expect(plain(render("memory", 120, 34))).toContain(TAB_MEANING.memory)
     const text = plain(render("attention", 120, 34))
-    expect(text).toContain("enter open session · m pin for today · t triage")
-    expect(text).toContain("keys     enter open session · m pin for today")
+    expect(text).toContain("enter open session · m pin · x dismiss · X dismiss old · d dismissed · t triage")
+    expect(text).toContain("keys     enter open session · m pin for today · x dismiss")
+  })
+
+  test("the tab strip draws each count once: after its label, never beside the shortcut, and equal to the listed rows", () => {
+    for (const [width, height] of SIZES) {
+      const tabs = renderTodayPage({ data: TODAY_DEMO, state: createTodayState(), width, height, now: NOW })[1]!
+      const counted = tabs.filter((span) => /\d/.test(span.text) && !span.dim && !span.text.includes("since")).map((span) => span.text.trim())
+      expect(counted.map((text) => text.replace(/^\D+/, ""))).toEqual(["4", "4", "3"])
+      expect(counted.every((text) => /^[A-Z][a-z ]+ \d+$/.test(text))).toBe(true)
+      expect(tabs.filter((span) => span.dim).map((span) => span.text.trim())).toEqual(["1", "2", "3"])
+    }
+  })
+})
+
+describe("dismiss, fold and the counts", () => {
+  const review = (id: string, since: number, older = false) => ({ ...TODAY_DEMO.attention[1]!, id, title: `acme/shop#${id}`, since, ...(older ? { older: true } : {}) })
+  const DAY = 24 * 3_600_000
+  const data: TodayData = { ...TODAY_DEMO, attention: [...TODAY_DEMO.attention, review("9", NOW - 9 * DAY, true), review("12", NOW - 12 * DAY, true)] }
+
+  test("older reviews fold under one line that o opens, and the tab, the summary and the list agree", () => {
+    const text = plain(renderTodayPage({ data, state: createTodayState(), width: 120, height: 34, now: NOW }))
+    expect(text).toContain(" 1 Attention 4 ")
+    expect(flat(text)).toContain("4 things wait for your answer (2 older reviews folded)")
+    expect(text).toContain("2 older reviews folded (untouched 7+ days)")
+    expect(text).not.toContain("acme/shop#9")
+    const open = todayPageKey(createTodayState(), "o", data, NOW).state
+    const listed = plain(renderTodayPage({ data, state: open, width: 120, height: 34, now: NOW }))
+    expect(listed).toContain(" 1 Attention 6 ")
+    expect(listed).toContain("acme/shop#9")
+    expect(listed).toContain("2 older reviews listed · o folds them")
+    expect(flat(listed)).toContain("4 things wait for your answer (2 older reviews folded)")
+    expect(triageItems(data).map((item) => item.id)).not.toContain("attention:9")
+  })
+
+  test("x dismisses the row until something newer happens on it; d lists the dismissed rows and x brings one back", () => {
+    const first = todayPageKey(createTodayState(), "x", data, NOW)
+    const key = `attention:${TODAY_DEMO.attention[0]!.id}`
+    expect(first.action).toEqual({ type: "dismiss", rows: [{ key, at: TODAY_DEMO.attention[0]!.since }], on: true })
+    expect(first.state.selected).toBe(0)
+    const after = plain(renderTodayPage({ data, state: first.state, width: 120, height: 34, now: NOW }))
+    expect(after).toContain(" 1 Attention 3 ")
+    expect(flat(after)).toContain("3 things wait for your answer (2 older reviews folded, 1 row dismissed)")
+    expect(after).not.toContain(TODAY_DEMO.attention[0]!.title)
+    // A newer question on the same row brings it back by itself.
+    const newer = { ...data, attention: data.attention.map((item, i) => (i === 0 ? { ...item, since: item.since + 1 } : item)) }
+    expect(plain(renderTodayPage({ data: newer, state: first.state, width: 120, height: 34, now: NOW }))).toContain(TODAY_DEMO.attention[0]!.title)
+    const list = todayPageKey(first.state, "d", data, NOW).state
+    const dismissed = plain(renderTodayPage({ data, state: list, width: 120, height: 34, now: NOW }))
+    expect(dismissed).toContain("Attention · dismissed")
+    expect(dismissed).toContain(TODAY_DEMO.attention[0]!.title)
+    expect(dismissed).toContain("x bring back")
+    const back = todayPageKey(list, "x", data, NOW)
+    expect(back.action).toEqual({ type: "dismiss", rows: [{ key, at: TODAY_DEMO.attention[0]!.since }], on: false })
+    expect(back.state.dismissed).toEqual({})
+    expect(todayPageKey(list, "\x1b", data, NOW)).toMatchObject({ action: { type: "none" }, state: { showDismissed: false } })
+  })
+
+  test("X asks once before dismissing every review untouched for N days; + - change N, anything else cancels", () => {
+    const asked = todayPageKey(createTodayState(), "X", data, NOW)
+    expect(asked.action).toEqual({ type: "none" })
+    expect(plain(renderTodayPage({ data, state: asked.state, width: 120, height: 34, now: NOW }))).toContain("Dismiss 2 reviews untouched for 7+ days? y dismiss")
+    const longer = todayPageKey(todayPageKey(asked.state, "+", data, NOW).state, "+", data, NOW).state
+    expect(longer.confirm).toEqual({ days: 9 })
+    expect(plain(renderTodayPage({ data, state: longer, width: 120, height: 34, now: NOW }))).toContain("Dismiss 2 reviews untouched for 9+ days?")
+    const cancel = todayPageKey(asked.state, "n", data, NOW)
+    expect(cancel).toMatchObject({ action: { type: "none" } })
+    expect(cancel.state.confirm).toBeUndefined()
+    const done = todayPageKey(asked.state, "y", data, NOW)
+    expect(done.action).toEqual({ type: "dismiss", rows: [{ key: "attention:9", at: NOW - 9 * DAY }, { key: "attention:12", at: NOW - 12 * DAY }], on: true })
+    expect(plain(renderTodayPage({ data, state: done.state, width: 120, height: 34, now: NOW }))).not.toContain("older reviews folded (untouched")
+    // In the dismissed list X brings every row back, after the same one question.
+    const list = todayPageKey(done.state, "d", data, NOW).state
+    const restore = todayPageKey(todayPageKey(list, "X", data, NOW).state, "y", data, NOW)
+    expect(restore.action).toMatchObject({ type: "dismiss", on: false })
+    expect(restore.state.dismissed).toEqual({})
+  })
+
+  test("every view fits every size", () => {
+    const dismissed = todayPageKey(createTodayState(), "x", data, NOW).state
+    for (const state of [createTodayState(), { ...createTodayState(), showOlder: true }, { ...dismissed, showDismissed: true }, { ...createTodayState(), showDismissed: true }, { ...createTodayState(), confirm: { days: 7 } }]) {
+      for (const [width, height] of SIZES) {
+        const lines = renderTodayPage({ data, state, width, height, now: NOW })
+        expect(lines).toHaveLength(height)
+        for (const line of lines) expect(lineWidth(line)).toBeLessThanOrEqual(width)
+      }
+    }
   })
 })
 
@@ -211,6 +298,13 @@ describe("triage", () => {
     expect(mark.state.marks).toEqual(["pickup:ses_5d90", "pickup:ses_e3c8"])
     expect(todayPageKey(ready(), "\r", TODAY_DEMO).state.triage?.accepted).toEqual([])
     expect(todayPageKey(ready(), "\x1b", TODAY_DEMO)).toMatchObject({ action: { type: "none" }, state: { triage: { open: false } } })
+  })
+
+  test("[ and ] scroll the group panel while triage is open and keep it open", () => {
+    const down = todayPageKey(ready(), "]", TODAY_DEMO)
+    expect(down.state).toMatchObject({ scroll: 4, triage: { open: true, selected: 0 } })
+    expect(todayPageKey(down.state, "[", TODAY_DEMO).state.scroll).toBe(0)
+    expect(todayPageKey(ready(), "[", TODAY_DEMO).state.scroll).toBe(0)
   })
 
   test("the rows sent are the page's rows, attention first, capped", () => {

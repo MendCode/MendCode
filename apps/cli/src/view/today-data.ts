@@ -1,6 +1,6 @@
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { DreamRun, MemoryEntry, MemoryGraphReport, PrJobSummary, SessionSummary, WorkflowSummary } from "@mendcode/protocol"
-import type { AttentionItem, MemoryProposal, PickupItem, TodayData, TodayDream, TodayEvent } from "./today-page"
+import { DISMISS_DAYS, todayKey, type AttentionItem, type MemoryProposal, type PickupItem, type TodayData, type TodayDream, type TodayEvent } from "./today-page"
 
 /**
  * The data behind /today: assembled from what the daemon already answers (docs/today.md), read-only, with no model call and no
@@ -12,6 +12,8 @@ import type { AttentionItem, MemoryProposal, PickupItem, TodayData, TodayDream, 
 export const FIRST_VISIT_WINDOW_MS = 24 * 3_600_000
 /** Sessions older than this are not offered for picking up, whatever the last visit was. */
 export const PICKUP_WINDOW_MS = 7 * 24 * 3_600_000
+/** A review row nobody touched for this long folds under Attention's "older" line instead of filling the list. */
+export const REVIEW_FOLD_MS = DISMISS_DAYS * 24 * 3_600_000
 const SESSION_LIMIT = 100
 const MAX_ATTENTION = 40
 const MAX_PICKUP = 30
@@ -32,6 +34,8 @@ export type TodaySource = {
   now: number
   /** Epoch ms of the last visit to /today; 0 or absent when there was none. */
   lastVisit?: number | undefined
+  /** The page's dismissals (`tab:id` → the row's time when dismissed): Attention's cap counts the rows still listed, not these. */
+  dismissed?: Record<string, number> | undefined
 }
 
 const clip = (text: string, max: number) => {
@@ -68,28 +72,66 @@ function attentionOfSession(session: SessionSummary): AttentionItem | undefined 
   }
 }
 
-/** Jobs a person should look at: waiting for them, or finished with confirmed findings nobody resolved. */
+/** States whose findings are a review's answer: finished, stopped at a checkpoint, or waiting for a person. */
 const REVIEWED = new Set<PrJobSummary["state"]>(["done", "checkpointed", "paused", "waiting"])
+/** A review of the newest head still running: the findings of older heads are about to be replaced, so nothing waits on you yet. */
+const REVIEWING = new Set<PrJobSummary["state"]>(["pending", "running", "fixing", "validating"])
 
-function attentionOfJob(job: PrJobSummary): AttentionItem | undefined {
-  const open = Math.max(0, job.findings.confirmed - job.findings.resolved)
+/** The pull request a job belongs to: every head and every re-review of one PR is one row. */
+export const pullRequestKey = (job: Pick<PrJobSummary, "provider" | "repo" | "number">) => `${job.provider}:${job.repo}#${job.number}`
+const newestFirst = (a: PrJobSummary, b: PrJobSummary) => b.createdAt - a.createdAt || b.updatedAt - a.updatedAt
+
+/**
+ * One row per pull request, from its newest head only (docs/today.md): the newest job names the head; the newest answered review
+ * of that head says what waits. A PR GitHub reports merged or closed, a head still being reviewed, a head whose reviews all failed
+ * and a review with no open blocking finding give no row; earlier heads and re-reviews fold into the row's history.
+ */
+function attentionOfPullRequest(jobs: PrJobSummary[], foldAfter: number): AttentionItem | undefined {
+  const ordered = [...jobs].sort(newestFirst)
+  const newest = ordered[0]!
+  const pullRequest = ordered.find((job) => job.pullRequest)?.pullRequest
+  if (pullRequest && pullRequest.state !== "open") return undefined
+  if (REVIEWING.has(newest.state)) return undefined
+  const job = ordered.find((candidate) => candidate.head === newest.head && REVIEWED.has(candidate.state))
+  if (!job) return undefined
   const waiting = job.state === "waiting"
-  if (!REVIEWED.has(job.state) || (!waiting && open === 0)) return undefined
-  const blocking = job.findings.blocking ?? 0
-  const findings = `${plural(open, "open finding")}${blocking ? `, ${blocking} blocking` : ""}`
+  // What stays open on the PR (earlier published findings nobody resolved, plus this job's), not only this run's: an incremental
+  // or unchanged-tree job's own findings can be empty while an earlier blocker is still open.
+  const blocking = job.unresolved ? job.unresolved.blocking : job.findings.blocking ?? 0
+  if (!waiting && blocking === 0) return undefined
+  const open = job.unresolved ? job.unresolved.open : Math.max(0, job.findings.confirmed - job.findings.resolved)
+  const findings = blocking ? `${plural(blocking, "blocking finding")}${open > blocking ? ` of ${open} open` : ""}` : plural(open, "open finding")
+  const earlier = ordered.filter((candidate) => candidate !== job)
+  const heads = new Set(earlier.map((candidate) => candidate.head).filter((head) => head !== job.head)).size
+  const folded = earlier.length ? `${plural(earlier.length, "earlier review")}${heads ? ` of ${plural(heads, "older head")}` : ""} folded in` : ""
   return {
-    id: job.id,
+    id: `pr:${pullRequestKey(job)}`,
     kind: "review",
     title: clip(`${job.repo}#${job.number}${job.title ? ` ${job.title}` : ""}`, TITLE_CHARS),
     project: job.repo,
     since: job.updatedAt,
     why: waiting ? (open ? `waiting for you · ${findings}` : "the review is waiting for you") : findings,
-    explain: [waiting ? "The review waits for a decision from you." : "", open ? `${findings} from ${job.reviewer} that no fix round has resolved.` : "", job.stop?.remaining ?? ""].filter(Boolean).join(" "),
+    explain: [waiting ? "The review waits for a decision from you." : "", open ? `${findings} open on the newest head (${job.head.slice(0, 7)}) from ${job.reviewer} that nothing has resolved.` : "", job.stop?.remaining ?? "", folded ? `${folded}.` : ""].filter(Boolean).join(" "),
     next: job.sessionId ? "Open the reviewer session to read the findings." : "Open /reviews to read the findings and act on the job.",
-    history: [{ at: job.updatedAt, text: `review ${job.state}${job.phase ? ` · ${job.phase}` : ""}` }, { at: job.createdAt, text: `review started (${job.trigger})` }],
-    evidence: [`job ${job.id}`, `${job.findings.confirmed} confirmed, ${job.findings.plausible} plausible, ${job.findings.resolved} resolved`, ...(job.url ? [job.url] : [])],
+    history: [
+      { at: job.updatedAt, text: `review ${job.state}${job.phase ? ` · ${job.phase}` : ""} · head ${job.head.slice(0, 7)}` },
+      ...earlier.slice(0, 3).map((candidate) => ({ at: candidate.updatedAt, text: `earlier review ${candidate.state} · head ${candidate.head.slice(0, 7)}` })),
+    ],
+    evidence: [`job ${job.id}`, `${job.findings.confirmed} confirmed, ${job.findings.plausible} plausible, ${job.findings.resolved} resolved`, ...(folded ? [folded] : []), ...(job.url ? [job.url] : [])],
     link: { command: "/reviews", ref: job.id, ...(job.sessionId ? { sessionId: job.sessionId } : {}) },
+    ...(job.updatedAt < foldAfter ? { older: true } : {}),
   }
+}
+
+function attentionOfJobs(jobs: PrJobSummary[], foldAfter: number): AttentionItem[] {
+  const byPullRequest = new Map<string, PrJobSummary[]>()
+  for (const job of jobs) {
+    const key = pullRequestKey(job)
+    const list = byPullRequest.get(key)
+    if (list) list.push(job)
+    else byPullRequest.set(key, [job])
+  }
+  return [...byPullRequest.values()].flatMap((group) => attentionOfPullRequest(group, foldAfter) ?? [])
 }
 
 function attentionOfWorkflow(workflow: WorkflowSummary): AttentionItem | undefined {
@@ -194,12 +236,14 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   const lastVisit = source.lastVisit && source.lastVisit > 0 ? source.lastVisit : now - FIRST_VISIT_WINDOW_MS
   const notes: string[] = []
   async function ask(label: string, command: CommandInput): Promise<Record<string, unknown> | undefined> {
+    // Two reads of one source (the sessions) that fail alike leave one note.
+    const note = (why: string) => { const text = `${label} could not be read: ${clip(why, 80)}.`; if (!notes.includes(text)) notes.push(text) }
     try {
       const reply = await source.send(command)
       if (reply.ok) return reply.result ?? {}
-      notes.push(`${label} could not be read: ${clip(reply.error.message.replace(/^\[[A-Z_-]+\]:\s*/, ""), 80)}.`)
+      note(reply.error.message.replace(/^\[[A-Z_-]+\]:\s*/, ""))
     } catch (error) {
-      notes.push(`${label} could not be read: ${clip(error instanceof Error ? error.message : String(error), 80)}.`)
+      note(error instanceof Error ? error.message : String(error))
     }
     return undefined
   }
@@ -210,9 +254,12 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   if (source.reviews && !source.remote && !source.sessionId) notes.push("PR reviews are listed once the session has started.")
   if (!memoryReadable) notes.push("This client is read-only: memory proposals and contradictions are not listed.")
 
-  const [sessionsResult, jobsResult, workflowsResult, memoriesResult, graphResult, dreamResult] = await Promise.all([
+  const [sessionsResult, waitingResult, jobsResult, workflowsResult, memoriesResult, graphResult, dreamResult] = await Promise.all([
     ask("Sessions", { type: "session.list", limit: SESSION_LIMIT, roots: true, hideEmpty: true, since: Math.max(0, now - PICKUP_WINDOW_MS) }),
-    reviewsReadable ? ask("PR reviews", { type: "pr.review", sessionId: source.sessionId as never, action: "status" }) : undefined,
+    // Sessions waiting for the user, however old and however many newer ones there are: the pickup window must not hide them.
+    ask("Sessions", { type: "session.list", limit: SESSION_LIMIT, roots: true, hideEmpty: true, state: "waiting" }),
+    // `cached`: GitHub's state of each PR (one `gh` read per repository, cached and time-boxed, as /reviews asks), so merged and closed ones drop out.
+    reviewsReadable ? ask("PR reviews", { type: "pr.review", sessionId: source.sessionId as never, action: "status", pullRequests: "cached" }) : undefined,
     ask("Workflows", { type: "workflow.list" }),
     memoryReadable ? ask("Memory", { type: "memory.list", session: "all", ...(source.directory ? { directory: source.directory } : {}) }) : undefined,
     memoryReadable ? ask("Memory contradictions", { type: "memory.graph", ...(source.directory ? { directory: source.directory } : {}) }) : undefined,
@@ -220,6 +267,8 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   ])
 
   const sessions = ((sessionsResult?.sessions as SessionSummary[] | undefined) ?? []).filter((session) => !session.archivedAt)
+  const attending = new Map(sessions.map((session) => [session.sessionId, session]))
+  for (const session of (waitingResult?.sessions as SessionSummary[] | undefined) ?? []) if (!session.archivedAt && !attending.has(session.sessionId)) attending.set(session.sessionId, session)
   const jobs = ((jobsResult?.dashboard as { jobs?: PrJobSummary[] } | undefined)?.jobs ?? []).slice(0, 500)
   const workflows = (workflowsResult?.workflows as WorkflowSummary[] | undefined) ?? []
   const memories = (memoriesResult?.memories as MemoryEntry[] | undefined) ?? []
@@ -240,12 +289,21 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   }))
 
   const saved = new Map(memories.filter((entry) => entry.status === "saved").map((entry) => [entry.memoryId as string, entry]))
-  const attention = [
-    ...sessions.flatMap((session) => attentionOfSession(session) ?? []),
-    ...jobs.flatMap((job) => attentionOfJob(job) ?? []),
+  const waitingRows = [
+    ...[...attending.values()].flatMap((session) => attentionOfSession(session) ?? []),
+    ...attentionOfJobs(jobs, now - REVIEW_FOLD_MS),
     ...workflows.flatMap((workflow) => attentionOfWorkflow(workflow) ?? []),
     ...(graph?.links ? attentionOfConflicts(graph) : []),
-  ].sort((a, b) => a.since - b.since).slice(0, MAX_ATTENTION)
+  ].sort((a, b) => a.since - b.since)
+  // Reviews nobody touched for a while fold under one "older" line; the cap keeps the newest of them. Dismissed rows are capped on
+  // their own (the `d` list), so dismissing rows never leaves waiting work past the cap unlisted.
+  const dismissedAt = source.dismissed ?? {}
+  const dismissed = (item: AttentionItem) => { const at = dismissedAt[todayKey("attention", item.id)]; return at !== undefined && item.since <= at }
+  const capped = (rows: AttentionItem[], keep: (list: AttentionItem[]) => AttentionItem[]) => {
+    const chosen = new Set([...keep(rows.filter((item) => !dismissed(item))), ...keep(rows.filter(dismissed))])
+    return rows.filter((item) => chosen.has(item))
+  }
+  const attention = [...capped(waitingRows.filter((item) => !item.older), (list) => list.slice(0, MAX_ATTENTION)), ...capped(waitingRows.filter((item) => item.older), (list) => list.slice(-MAX_ATTENTION))]
   const pickup = sessions
     .flatMap((session) => pickupOfSession(session, git) ?? [])
     .sort((a, b) => b.leftAt - a.leftAt)

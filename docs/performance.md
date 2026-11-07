@@ -98,7 +98,7 @@ The probe is `scripts/perf-attrib-preload.ts`, loaded with `BUN_OPTIONS=--preloa
 
 Metrics calibration never saw get 5 % of their value with a floor per unit.
 
-Recalibrate after changing the machine, the Bun version or the script's scenario. The committed file was measured with `solo`; `split` metrics reuse it where the names match and fall back to the default otherwise.
+Recalibrate after changing the machine, the Bun version or the script's scenario. The committed file was measured with `solo`; `split` metrics reuse it where the names match and fall back to the default otherwise. A shorter recalibration never narrows the file: each metric keeps the widest spread of the runs it replaces and the new ones (2026-11-07: 6 runs of main 5fc825e5 on a loaded machine moved `tui.cpu_ms.after` from 165 to 1,029 ms, 7.4 to 8.4 s for the same build).
 
 Not done: CPU by function (`--cpu-prof`); CPU is reported per phase only.
 
@@ -106,13 +106,13 @@ Not done: CPU by function (`--cpu-prof`); CPU is reported per phase only.
 
  `--markdown` is a compact table with the verdict on its first line, ready for a review; `--json` is versioned (`schema`) and carries every metric as `{base, cand, delta, threshold, status}`.
 
-The verdict is `igual` (nothing above the noise), `baja X`, or `sube X`, followed by the regions, object types, constructors and disk tables that explain it. The exit code is 1 when the verdict is `sube` (CI or a reviewer treats it as a finding) and 0 otherwise.
+The verdict is `igual` (nothing above the noise), `baja X`, `nota X` or `sube X`, followed by the regions, object types, constructors and disk tables that explain it. Only totals make a `sube`: a process's footprint, CPU in a phase and the bytes a session stores. A rise inside (JS heap counts and bytes, protected objects, the binary's size) with every total within the noise is a `nota`: shown, never a finding. The exit code is 1 when the verdict is `sube` (CI or a reviewer treats it as a finding) and 0 otherwise.
 
 The report also prints the skill's reference line (real model, 2026-11-03: footprint 64 / 66 MB, peak 80 MB, 2.6 KB per session); the faux engine writes less per session and a tool-less reply, so that line orients and does not gate. The optional mode with a real login is not implemented here: use `bench/real.ts` of the skill for it.
 
 ### Interpret a finding
 
-Reading a report: a `sube` caused only by deterministic metrics (a few hundred objects, tens of KB of JS, the binary) is a real, small cost of new code; a `sube` in a footprint or region row with the JS metrics flat is a native allocation (a buffer, a mapping, a child) and needs `--layout split` or a profile. Rows that are all `same` with a footprint difference in the raw numbers mean the footprint difference was noise.
+Reading a report: a `nota` (a few hundred objects, a protected object, tens of KB of JS, the binary) is a real, small cost of new code that no total shows; a `sube` in a footprint or region row with the JS metrics flat is a native allocation (a buffer, a mapping, a child) and needs `--layout split` or a profile. Rows that are all `same` with a footprint difference in the raw numbers mean the footprint difference was noise.
 
 ## Budgets
 
