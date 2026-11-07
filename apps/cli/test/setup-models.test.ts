@@ -50,7 +50,7 @@ describe("the model step lists every model found", () => {
     expect(detectReady(fresh).unavailable).toEqual([
       { source: "chatgpt", title: "ChatGPT subscription", native: true, reason: "not signed in for MendCode · /connect chatgpt" },
       { source: "api", title: "API-key providers", native: true, reason: "no key yet · /connect saves one" },
-      { source: "codex", title: "Codex harness", native: false, reason: "full tier · /tier thread_mcp on codex lists its models" },
+      { source: "codex", title: "Codex harness", native: false, reason: "/tier codex_engine on lists its models" },
     ])
   })
   test("every model of each keyed provider, one group per provider, before the harnesses; a provider without a key lists nothing", () => {
@@ -128,7 +128,7 @@ describe("the model list on the page", () => {
     expect(text).toContain("Focused. Fable, chosen, recommended.")
     expect(text).toContain("Sign in to ChatGPT · /connect chatgpt, not signed in for MendCode.")
     const unlisted = detectReady(fresh)
-    expect(onboardingText({ state: onboardingKey(state(), " ", { detected: unlisted, firstRun: true }).state, detected: unlisted, firstRun: true, loading: false, width: 80, height: 24, now: 0 }).join("\n")).toContain("Not available: Codex harness, full tier · /tier thread_mcp on codex lists its models.")
+    expect(onboardingText({ state: onboardingKey(state(), " ", { detected: unlisted, firstRun: true }).state, detected: unlisted, firstRun: true, loading: false, width: 80, height: 24, now: 0 }).join("\n")).toContain("Not available: Codex harness, /tier codex_engine on lists its models.")
   })
 })
 

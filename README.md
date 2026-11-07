@@ -39,7 +39,7 @@ pull requests.
 
 - [Why MendCode](#why-mendcode)
 - [Install](#install) · [First run](#first-run)
-- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [profiles and areas](#profiles-and-areas), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
+- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [/env and /privacy](#credentials-with-env-private-chats-with-privacy), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [profiles and areas](#profiles-and-areas), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
 - [Status](#status) · [Build from source](#build-from-source)
 - Reference: [views](#replaceable-views), [script workflows](#script-workflows), [Markdown](#markdown-renderer), [process modes](#process-modes), [terminal details](#terminal-details), [tiers](#tiers), [measurements](#measurements), [engines](#engines), [embedding](#embedding), [security](#security-model), [docs](#docs-and-development)
 
@@ -179,6 +179,54 @@ Sessions live in a daemon, not in the window. Close the terminal and the turn ke
 it streams. `mendcode -s <id>`, `--continue` or Ctrl+S attach; a reconnecting terminal replays from the last event it saw, and
 `--connect` reaches a daemon on another machine over TLS, where a read-only token only watches ([remote](docs/remote.md),
 [sessions](docs/sessions.md)).
+
+`/sessions` lists them by folder, this folder or all projects, with a search row that finds a title, a folder or a pasted id.
+
+<p align="center">
+  <img src="docs/assets/readme/sessions.svg" alt="The sessions page over all projects: sessions grouped by folder under a search row, the selected session's state, last update and id beside them." width="100%">
+</p>
+
+### Credentials with /env, private chats with /privacy
+
+A `.env` file sits in your checkout as plain text, and only the processes that load it see it. `/env` keeps the same values
+in an encrypted vault in MendCode's data directory, outside the repository, and hands them to the agent's shell commands:
+
+| | `.env` in the project | `/env` |
+|---|---|---|
+| Where it lives | your checkout, plain text | `environment.enc` (AES-256-GCM), its key in `keys/environment.key` |
+| Who gets the values | whatever loads the file | the shells MendCode starts for the session, background commands included |
+| What the model sees | the file, if a tool reads it | the names only; a printed value comes back as `‹env:NAME›` in the native engine |
+| Scope | the folder | session, project (default) or global; session wins over project, project over global |
+
+1. Run `/env`, press `a`, type a name such as `FAKE_API_KEY` and its value. The value field stays hidden.
+2. Or paste a whole `.env` on the page: MendCode lists the names only, marks `new`, `replaces existing` or `refused`
+   (`PATH`, `NODE_OPTIONS`, `LD_*` and other runtime names), and Enter saves the ones you keep, encrypted. `i` imports a file
+   from the project the same way; the file itself is not changed.
+3. Ask the agent to run something that needs it. A script reads it as usual: `os.environ["FAKE_API_KEY"]`.
+
+Claude Code, Codex, pi and ACP agents get the same values in the environment of the process MendCode starts for them, but they
+print through their own tools, so MendCode cannot mask what they print; `engineEnvironment: false` keeps credentials for the
+native engine only. A running process keeps its environment; a change reaches the next one ([environment and privacy](docs/environment-privacy.md)).
+
+<p align="center">
+  <img src="docs/assets/readme/env-paste.svg" alt="The /env page after pasting a demo .env: five names found, three selected to save, PATH refused as runtime configuration and an empty value skipped; no value is shown." width="100%">
+</p>
+
+`/privacy` encrypts your local chats. It is **off by default**; `p` then `y` turns it on. The whole session database (titles,
+events, drafts, memories, settings), attachments, compaction transcripts and saved tool outputs become AES-256-GCM files with
+the key in `keys/chats.key`, and SQLite runs in memory, so no decrypted copy is written. Turning it off restores plain files
+without losing sessions.
+
+- It is encryption **at rest**: it protects a copy of the data without its key. Back up `keys/` separately; a missing key fails
+  closed instead of resetting your data.
+- Not covered: exports and shares, earlier backups, your checkout (an imported `.env` included), what the providers keep,
+  logs owned by Claude Code, Codex or pi, and debug traces you turn on.
+- Programs running as you can read the key; it is not a password or a Keychain lock. Encrypted mode keeps the database in RAM
+  and rewrites the encrypted file on each write.
+
+<p align="center">
+  <img src="docs/assets/readme/privacy.svg" alt="The /privacy confirmation: encrypt existing and future chats, back up keys/chats.key, and what stays unencrypted; beside it the privacy panel with encryption off and credentials always encrypted." width="100%">
+</p>
 
 ### Pull request reviews
 
@@ -323,6 +371,14 @@ The `full` message renderer (balanced and full views) draws code blocks with a l
 
 Use `/tier minimalist`, `/tier balanced` or `/tier full`. Minimalist selects compact presentation and a minimal prompt; balanced selects comfortable presentation and a focused prompt; full selects the full prompt. [Tiers](docs/tiers.md) are separate from setup presets.
 
+Every notice is one row in words: a severity mark, the message and a hint; F4 opens the full text, and an error stays until your
+next prompt or command. A command your tier does not list, typed by hand, runs nothing and answers that way with the tier that
+has it: `/review · balanced · /tier balanced`.
+
+<p align="center">
+  <img src="docs/assets/readme/notice.svg" alt="A finished session in the minimalist tier: typing /review shows one row on the prompt's top border, /review · balanced · /tier balanced." width="100%">
+</p>
+
 Included means the tier enables the feature, subject to its own controls. Opt-in means the tier permits it but an explicit switch/action is still required. Kernel features are independent of tiers, with their own disabling controls and safe-mode restrictions. `/tier <feature> on|off|default` overrides non-kernel features; `--safe-mode` remains a ceiling. With no tier selected, legacy defaults apply.
 
 Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including every manifest feature. Print the block with `bun scripts/readme-tiers.ts`; verify with `bun scripts/readme-tiers.ts --check` or `bun test scripts/readme-tiers.test.ts`.
@@ -330,7 +386,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 <!-- tiers:start -->
 | Feature | Minimalist | Balanced | Full | Own switch / action |
 |---|---|---|---|---|
-| [Slash menu layouts](docs/customize.md) (`slash_menu`) | Kernel | Kernel | Kernel | /customize · slashMenu · slashCommands (minimalist lists 20 commands, flat) |
+| [Slash menu layouts](docs/customize.md) (`slash_menu`) | Kernel | Kernel | Kernel | /customize · slashMenu · slashCommands (minimalist lists 21 commands, flat) |
 | [Extensions](docs/extensions.md) (`extensions`) | Kernel | Kernel | Kernel | MENDCODE_EXTENSIONS=0 · --pure |
 | [Installed profiles](docs/profiles.md) (`profiles`) | Kernel | Kernel | Kernel | disabledProfiles · /marketplace |
 | [Profile chat tools](docs/profiles.md) (`profile_tools`) | — | Included | Included | features.profile_tools |
@@ -356,6 +412,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Context forecast](docs/layout.md) (`forecast`) | — | Included | Included | /footer +forecast |
 | [pi engine (RPC)](docs/pi-engine.md) (`pi`) | — | — | Opt-in | pi.json · /tier pi on |
 | [Thread MCP bridge](docs/thread-mcp.md) (`thread_mcp`) | — | — | Opt-in | /tier thread_mcp on claude\|codex\|acp:&lt;name&gt; |
+| [Codex as its own harness](docs/setup.md) (`codex_engine`) | Opt-in | Opt-in | Opt-in | /tier codex_engine on · /setup's Codex row |
 | [ACP registry](docs/acp-engine.md) (`acp_registry`) | — | — | Included | /tier acp_registry on |
 | [Lossless storage compaction](docs/storage.md) (`storage_compact`) | Opt-in | Opt-in | Opt-in | storage --compact --offline --dir DATA |
 | [Suggested review order](docs/changes.md) (`review_order`) | — | Included | Included | /changes · o preview · O apply |
@@ -454,6 +511,7 @@ External engines retain their own authentication and tool loops. Claude Code, Co
 - OS sandboxing is opt-in and off by default; approval alone is not confinement ([sandbox](docs/sandbox.md)).
 - Remote/peer access is scoped; local-data commands and host execution settings have local-only guards ([remote](docs/remote.md), [audit](docs/security-2026-10-04.md)).
 - Recognized pasted secrets become markers with encrypted values; detection does not certify arbitrary text or external-engine files ([secrets](docs/secrets.md), [audit](docs/security-2026-10-04.md)).
+- `/env` credentials are always stored encrypted and the model gets their names, not their values; `/privacy` encryption of local chats is opt-in and at rest only ([environment and privacy](docs/environment-privacy.md)).
 - The thread MCP bridge is opt-in per engine, project-scoped and short-lived, with normal approvals and no user-config rewrites ([thread MCP](docs/thread-mcp.md)).
 
 ## Docs and development

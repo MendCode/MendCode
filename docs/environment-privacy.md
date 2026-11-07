@@ -1,8 +1,13 @@
 # Environment credentials and optional chat encryption
 
-Use `/env` to store named credentials and `/privacy` to encrypt local chats. Both controls work in the **minimal, balanced and full** terminal views.
+Use `/env` to store named credentials and `/privacy` to encrypt local chats. Both pages draw the same in every chat presentation (`minimal`, `balanced` and `full`, the `presentation` setting); that is how the chat looks, not which tier is on.
 
-The **minimalist tier** hides `/env` and `/privacy`, like other commands outside its 20-command set. Use `/tier balanced` or list either command explicitly in the command editor. No release, protocol-version or database-schema bump is required.
+The **tier** decides whether the commands are offered:
+
+- **Balanced and full** list `/env` and `/privacy` in the slash menu, `/help` and the palette.
+- **Minimalist** lists only its 21-command set, which leaves both out. Typed by hand there, either one runs nothing and answers in one row with the tier that has it. Use `/tier balanced`, or list the command in the command editor (`hidden: false` in `slashCommands`).
+
+What is already stored is not tied to the tier: credentials saved with `/env` stay in the vault, and chat encryption stays on or off as you set it. No release, protocol-version or database-schema bump is required.
 
 ## `/env`
 

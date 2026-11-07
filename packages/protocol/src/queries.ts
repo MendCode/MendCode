@@ -652,6 +652,11 @@ const SharedSettings = lazySchema(() => z.strictObject({
   serviceTier: z.enum(SERVICE_TIERS).optional(),
   /** `/output-style`: tone preset appended to the native system prompt; `default` when unset. */
   outputStyle: z.enum(OUTPUT_STYLES).optional(),
+  /**
+   * `/language`: the language every reply is in, restated in one short line with each user message (docs/prompt-modes.md). Unset or `auto`:
+   * the language of the user's latest message. A name (`Español`, `English`) holds whatever the conversation or tool output is in.
+   */
+  language: z.string().regex(/^\p{L}[\p{L}\p{M} ()-]{0,39}$/u).optional(),
   /** Set once the first-run setup page was completed or dismissed. */
   onboarded: z.boolean().optional(),
   memoryGlobalCompactionMaxEntries: z.number().int().min(1).max(10_000).optional(),

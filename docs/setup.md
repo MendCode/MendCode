@@ -5,7 +5,7 @@ The first time you start MendCode, one screen finds the logins and models you al
 ## First run
 
 1. Run `mendcode`. The setup screen opens on its own; nothing is asked before it.
-2. Check **Ready** on the left. Everything found has a check mark; anything missing shows the one command or key that fixes it.
+2. Check **Ready** on the left: one row per tool or login found, with its state and what you can do with it from here. If nothing can answer yet, the panel is called **Choose how to run** and the focus starts on its first action.
 3. Pick a model on the **Model** row. A recommended one is already selected.
 4. Go through the other rows (tier, permission, look, import). Each row shows its effect in the preview on the right.
 5. Press Enter. MendCode saves the values you changed and opens the chat.
@@ -16,23 +16,34 @@ The screen works the same in every tier. It adds no chat chrome, command or prom
 
 ### What Ready shows
 
-Ready lists what was found in two groups:
+Ready has one row per way to run turns: the ChatGPT login and API keys (MendCode's own engine), and Codex, Claude Code and pi (each on its own login). Each row says its state:
 
-| Group | What it holds | Who signs in |
-|---|---|---|
-| **MendCode's own engine** | the ChatGPT login and API keys | MendCode, with its own login |
-| **External harnesses · their own login** | Claude Code, Codex, pi | each tool, with its own login |
+| State | Meaning |
+|---|---|
+| `ready` | installed and signed in |
+| `sign-in not confirmed` | installed; its own status did not say whether it is signed in |
+| `needs sign-in` / `needs a key` | there, but not signed in yet |
+| `failed` | its check did not answer, or its login stopped working (the reason follows) |
+| not installed | not on this machine; Claude Code's row says where to get it |
 
-For each thing missing, Ready shows the fix: `claude auth login`, `codex login`, `/connect` or `export ANTHROPIC_API_KEY=...`.
+The way that holds the recommended model comes first, then the other ready ones, then those needing a step. Under each row are its actions. Press Up from the first choice to reach them; Up and Down move between them, and the line under the focused one says what Enter does:
 
-You can connect MendCode's own logins without leaving setup:
+| Row | Actions |
+|---|---|
+| **Codex** | `Use Codex · its own harness`, and `Use MendCode with your ChatGPT account` while MendCode is not signed in to ChatGPT. Not signed in: `Run codex login, then check again`. |
+| **Claude Code** | `Use Claude Code` when it is signed in and lists models. Not signed in: `Run claude auth login, then check again`. |
+| **ChatGPT** | `Sign in with ChatGPT · /connect chatgpt`, or `Use MendCode with ChatGPT` once signed in. With Codex installed, this sign-in is an action of the Codex row instead. |
+| **API keys** | `Add an API key · /connect`, or `Use your <provider> key` once one is saved. |
+| **pi** | `Use pi` when pi lists models. |
 
-- Press Up from the Model row to reach the own-engine rows.
-- Enter on the ChatGPT login runs `/connect chatgpt`.
-- Enter on API keys opens `/connect`.
-- Closing that page (Esc, or `m` after signing in) comes back to setup and checks again, so the Model row lists what you just connected.
+What Enter does:
 
-This saves only what `/connect` saves on its own; the setup's choices stay in memory until Enter. Claude Code and Codex are signed in with their own commands, outside MendCode.
+- **Use** picks that model on the Model row and moves the focus there. Nothing is saved until the final Enter.
+- **Sign in** and **Add an API key** open `/connect`. Closing it (Esc, or `m` after signing in) comes back to setup with every choice kept, checks again and, once something can run, focuses the Model row with what you just connected.
+- **Use Codex · its own harness**, before its models are listed, turns on only the `codex_engine` feature, as `/tier codex_engine on` does. It is allowed in every tier, so your tier stays as it is. This one setting is saved at once and the row says so before you press Enter. The setup then checks again and picks a Codex model. Codex runs those turns on its own login; nothing of Codex runs until a turn is sent on one of its models. `/tier codex_engine off` turns it off again.
+- **Run …, then check again** checks again after you ran that command in a terminal; `r` does the same anywhere.
+
+A Claude Code or Codex login is used only by that tool. MendCode's own engine reaches ChatGPT models through `/connect chatgpt` and Claude models through an Anthropic API key. When something can run and the focus is on a choice, Ready folds to one line per row.
 
 ### Choose a model
 
@@ -62,7 +73,7 @@ The own-engine group ends with two actions. Enter runs the flow, and closing it 
 A harness that was found but lists no model says what would list them:
 
 - `not signed in · claude auth login`
-- for Codex on MendCode's engine: `full tier · /tier thread_mcp on codex lists its models`. Its `codex:` models come with the [thread bridge](thread-mcp.md), which is off by default.
+- for Codex on MendCode's engine: `/tier codex_engine on lists its models`. Its `codex:` models come with the `codex_engine` feature, off by default and allowed in every tier (the Codex row's `Use Codex` turns it on), or with the [thread bridge](thread-mcp.md).
 
 Nothing in the list is saved until the page's final Enter.
 
@@ -123,7 +134,7 @@ Nothing is copied until the final Enter. Then exactly the selected items are wri
 - **`/setup`** reopens the same screen with the current values. With a tier already saved, the Tier row can stay unset.
 - An upgrade or a reinstall keeps the data directory and its `onboarded`, so the screen is not shown again.
 
-When nothing usable was found, neither Enter nor Esc writes `onboarded`. The chat says `no model is set up yet · this setup opens again next launch`, and the next interactive launch opens this screen again, so nobody is left at a prompt no model answers.
+When nothing usable was found, the screen never offers to start chatting. It has no Model row, Enter on a choice moves to the first way to run, and the last row reads `enter  skip for now · nothing can answer yet · /setup reopens this`. Skipping or Esc writes no `onboarded`. The chat says `nothing can answer yet · this setup opens again next launch`, and the next interactive launch opens this screen again, so nobody is left at a prompt no model answers.
 
 The minimalist preset opens no page when a model is found; see [Minimalist preset: no setup](#minimalist-preset-no-setup).
 

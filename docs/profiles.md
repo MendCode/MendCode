@@ -258,28 +258,57 @@ Manifest `environment` lists up to 32 variable names. Preview reports declaratio
 
 ### Browse the marketplace
 
-`/marketplace [source]` searches installed profiles and explicitly enabled local sources.
+`/marketplace [source]` lists the catalog: the built-in `local` source (your installed profiles, and this project's
+authored one) and the sources you added and turned on. Nothing else is listed and nothing is fetched to fill it.
+
+`/profiles` and `/marketplace` share three tabs, in this order: **1 What it takes over** (the overrides of a profile that is
+on), **2 Installed** (the `/profiles` list) and **3 Marketplace**. Press `1`, `2` or `3` on either page.
+
+The page has:
+
+- A search row at the top, always shown. `/` puts the cursor in it; every word must match the name, title, description,
+  tags, source or author.
+- Kind filters under it, for the kinds the catalog has: themes, extensions, tools, skills, commands, agents, MCP, and
+  remote (an entry whose contents are known only after install). `Tab` and `Shift+Tab` step through them.
+- One row per profile: its name, kind, author (or source), a short description and a badge. `on` and `off` mark an
+  installed copy, `update` means the catalog has a newer version than the installed one, and `problem` means it cannot install.
+- The detail of the selected profile: where it stands, what it adds, **what it takes over** and its source and trust.
+  For a profile that is on, the takeover lists the same before → after rows as `/profiles`. Before an install, Enter
+  reads them from the profile's manifest without installing anything or running its code. A remote entry says it is
+  known after install, since it is fetched only then.
 
 | Key | Does |
 | --- | --- |
-| Enter | Preview the selected profile without installing or importing code |
-| `i`, then `y` | Open install confirmation, then confirm |
-| `p` | Change user/project scope |
-| `/` | Edit search |
+| Enter | Preview (audit, capabilities, trust, takeover), then ask: Enter or `y` installs, updates or installs again; any other key says no |
+| `d`, then `d` or `y` | Remove the installed copy (it goes to the Trash for 30 days) |
+| `/` | Search |
+| `Tab`, `Shift+Tab` | Next or previous kind |
+| `p` | Install for you (user) or in this project |
 | `s` | Open sources |
-| `[]` | Scroll details |
-| Escape | Close the preview or page |
+| `↑↓`, PgUp/PgDn, Home/End | Select |
+| `[]` | Scroll the detail |
+| `r` | Read the catalog again |
+| `1` `2` `3` | What it takes over, Installed, Marketplace |
+| `?` | Show every key |
+| Escape | Close the preview, clear the search, then leave |
+
+Every install, update, remove and source change ends with one short notice. A refused install keeps the preview open,
+and the notice gives the daemon's reason (for example another profile owns the look). If the catalog cannot be read,
+the page says why and `r` tries again. If the daemon is offline, the page says so and fills in once the terminal reconnects.
 
 In Sources:
 
 | Key | Does |
 | --- | --- |
-| `a` | Add an ID and folder |
-| Enter | Inspect its location |
-| `e` | Enable/disable |
-| `d`, then `y` | Remove |
+| `a` | Add an ID, then a folder or https catalog (added off) |
+| Enter | Show its location and state |
+| `e` | Turn on or off |
+| `u` | Fetch a remote catalog's index (the only key that reaches the network) |
+| `d`, then `d` or `y` | Remove |
+| Escape | Back to the catalog |
 
-Hints live in the page header. Panels fill the available grid; terminals below 70 columns use one column.
+The built-in `local` source is always on and cannot be removed. Hints live in the page header. Wide terminals show the
+detail beside the list, narrower ones under it, and below 70 columns one panel at a time.
 
 ### Manage installed overlays
 
@@ -288,7 +317,9 @@ Hints live in the page header. Panels fill the available grid; terminals below 7
 | Space/`e` | Toggle activation |
 | `d`, then `y` | Remove a profile |
 | `x`, then `y` | Deselect all profiles; files are preserved |
-| `m` | Open the marketplace |
+| `1` or `o` | What the selected profile takes over |
+| `2` | Back to the list |
+| `3` or `m` | Open the marketplace |
 
 `/mend-assets` counts files in enabled package/user/project layers and shows the actual project prompt mode.
 

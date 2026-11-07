@@ -423,6 +423,7 @@ export function createRender(ctx: AppContext, actions: {
         ...(state.petList?.some((choice) => choice.ref === state.tuiProfile.homeMascot) ? { mascot: state.petList.find((choice) => choice.ref === state.tuiProfile.homeMascot)!.name } : {}),
         ...(state.promptReport ? { promptStatus: state.promptReport } : {}),
         graphIndex: state.settingsNow.codegraph_index ?? "auto",
+        replyLanguage: state.settingsNow.language ?? "auto",
         preview,
         facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}) },
         // The home's pet picture, placed over the preview's blank cells where the terminal draws pictures.

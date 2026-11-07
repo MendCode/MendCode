@@ -764,7 +764,7 @@ Every page with a list behaves the same way (a test, `apps/cli/test/page-standar
 | `Esc` | Clears the box first; then goes back to the page it was opened from (to the chat when it was opened from there). |
 | `Enter` or `Space`, `←` `→` | Open or toggle the selected row; change a value. |
 
-Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`; /sessions draws its search row at all times and `/` there only focuses it.
+Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`; /sessions draws its search row at all times and `/` there only focuses it. /marketplace also draws its search row at all times; `/` puts the cursor in it.
 
 The hint row names keys the same way on each page (`/ search`, `esc back`). While the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.
 

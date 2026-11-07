@@ -16,6 +16,8 @@ export const PackageCatalogEntry = lazySchema(() => z.strictObject({
   state: z.enum(["available", "installed", "active"]), problem: z.string().optional(),
   /** Entry names an npm package or git repository (location is its pinned spec); it is fetched and audited at install. */
   remote: z.boolean().optional(),
+  /** The profile manifest's `author`, when the entry was read from a folder whose manifest names one. */
+  author: z.string().max(200).optional(),
 }))
 export type PackageCatalogEntry = z.infer<typeof PackageCatalogEntry>
 export const PackageCatalogReport = lazySchema(() => z.strictObject({ entries: z.array(PackageCatalogEntry), issues: z.array(z.string()), query: z.string() }))

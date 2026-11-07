@@ -245,3 +245,11 @@ describe("a guessed profile key", () => {
     expect(tuiProblems({ showTopbar: false, panelHeader: false })).toEqual([])
   })
 })
+
+describe("codex_engine", () => {
+  test("off until the user turns it on, then on in every tier (a balanced or minimalist user can use Codex), never in safe mode", () => {
+    for (const tier of [undefined, ...TIERS]) expect(featureOn({ tier }, "codex_engine")).toBe(false)
+    for (const tier of [undefined, ...TIERS]) expect(featureOn({ tier, features: { codex_engine: true } }, "codex_engine")).toBe(true)
+    expect(featureOn({ tier: "balanced", features: { codex_engine: true } }, "codex_engine", { safeMode: true })).toBe(false)
+  })
+})

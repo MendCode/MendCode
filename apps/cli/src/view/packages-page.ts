@@ -6,7 +6,7 @@ import { pickerFrame } from "./picker-frame"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
 import { textWidth, wrap } from "./wrap"
 import { PROGRAM_NAME } from "@mendcode/program"
-import { describeOverride, keepable, overrideDetailRows, overrideListRows, sortOverrides, type ActivationRowView, type RawOverrideRow } from "./profile-overrides"
+import { describeOverride, keepable, overrideDetailRows, overrideListRows, profileTabsRow, sortOverrides, type ActivationRowView, type RawOverrideRow } from "./profile-overrides"
 
 export type { ActivationRowView } from "./profile-overrides"
 
@@ -56,7 +56,7 @@ const STATE_WIDTH = 7
 /** Every key of the list with what it does, for the `?` section; the header names only the first few. */
 const PAGE_KEYS: ReadonlyArray<readonly [string, string]> = [
   ["↑↓ j k", "select"], ["space e", "turn on or off"], ["o", "what it overrides"], ["p", "precedence report"], ["c", "resources"],
-  ["d", "remove"], ["x", "deselect all"], ["m", "marketplace"], ["[ ]", "scroll the detail"], ["r", "reload"], ["esc q", "back"], ["?", "hide keys"],
+  ["d", "remove"], ["x", "deselect all"], ["1 2 3", "takes over, installed, marketplace"], ["m", "marketplace"], ["[ ]", "scroll the detail"], ["r", "reload"], ["esc q", "back"], ["?", "hide keys"],
 ]
 const HINTS = "↑↓ select · space on/off · o overrides · ? keys · esc back"
 const KEYS_HINTS = "↑↓ select · space on/off · o overrides · ? hide keys · esc back"
@@ -95,7 +95,7 @@ export function packagesPageKey(state: PackagesPageState, key: string, packages:
   if (state.config) return configKey(state, state.config, key)
   if (state.overrides) return overridesKey(state, state.overrides, key, activation)
   if (state.confirmAll) { const { confirmAll, ...rest } = state; return { state: rest, action: key === "y" ? { type: "disable-all" } : NONE } }
-  if (key === "m") return { state, action: { type: "marketplace" } }
+  if (key === "m" || key === "3") return { state, action: { type: "marketplace" } }
   if (key === "x" && packages.some((pkg) => pkg.enabled)) return { state: { ...state, confirmAll: true }, action: NONE }
   const selected = clamp(state.selected, packages.length)
   const target = packages[selected]
@@ -118,7 +118,7 @@ export function packagesPageKey(state: PackagesPageState, key: string, packages:
   if (!target) return { state, action: NONE }
   if (key === " " || key === "e") return { state, action: { type: "enable", key: target.key, enabled: !target.enabled } }
   if (key === "c") return { state: { ...state, selected, config: { key: target.key, selected: 0 } }, action: { type: "config", key: target.key } }
-  if (key === "o") return { state: { ...state, selected, overrides: { key: target.key, selected: 0 } }, action: NONE }
+  if (key === "o" || key === "1") return { state: { ...state, selected, overrides: { key: target.key, selected: 0 } }, action: NONE }
   if (key === "d") return { state: { ...state, selected, confirm: { key: target.key } }, action: NONE }
   return { state, action: NONE }
 }
@@ -134,7 +134,8 @@ function overridesKey(state: PackagesPageState, overrides: PackagesOverridesStat
   const rows = overrideRows(activation, overrides.key)
   const selected = clamp(overrides.selected, rows.length)
   const move = (index: number) => ({ state: { ...state, overrides: { ...overrides, selected: clamp(index, rows.length) } }, action: NONE })
-  if (key === "\x1b" || key === "q") { const { overrides: _closed, ...rest } = state; return { state: rest, action: NONE } }
+  if (key === "\x1b" || key === "q" || key === "2") { const { overrides: _closed, ...rest } = state; return { state: rest, action: NONE } }
+  if (key === "3") { const { overrides: _closed, ...rest } = state; return { state: rest, action: { type: "marketplace" } } }
   // `k` keeps here (the header says so), so it is not the vim "up" it is on the list.
   const target = rows[selected]
   if (key === "k" || key === " " || key === "\r") return target && keepable(target) ? { state, action: { type: "keep", key: keptName(target), on: !target.kept } } : { state, action: NONE }
@@ -320,7 +321,8 @@ export function renderPackagesPage(input: { report: PackagesReport | undefined; 
       ? panelGrid({ width, rows: split ? [[list, detail]] : [[list], [detail]], heights: split ? [room] : [listHeight, below], compact: false, padding: true, maxColumns: split ? 2 : 1 })
       : panelGrid({ width, rows: [[list]], heights: [room], compact: false, padding: true, maxColumns: 1 })
     const kept = rows.filter((row) => row.kept).length
-    return pickerFrame(`Profiles · ${overrides.key}`, OVERRIDES_HINTS, width, height, body, input.error ? `Error · ${input.error}` : `${plural(rows.length, "override")}${kept ? ` · ${kept} kept yours` : ""}`)
+    if (input.error) return pickerFrame(`Profiles · ${overrides.key}`, OVERRIDES_HINTS, width, height, body, `Error · ${input.error}`)
+    return withTabs(pickerFrame(`Profiles · ${overrides.key}`, OVERRIDES_HINTS, width, height, body), 0, `${plural(rows.length, "override")}${kept ? ` · ${kept} kept yours` : ""}`, width)
   }
   const confirming = !!state.confirm
   const notice = state.confirmAll ? "Deselect all profiles? y confirms · any key cancels" : input.error || (confirming ? `remove ${packages[selected]?.key}? d or y confirms · any key cancels` : "")
@@ -339,5 +341,13 @@ export function renderPackagesPage(input: { report: PackagesReport | undefined; 
     : { title: "Profile", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => packages[selected] ? detailRows(packages[selected]!, w, now, activation) : [] }
   const top = Math.max(6, Math.floor((room - 1) * 0.4))
   const body = panelGrid({ width, rows: split ? [[list, detail]] : [[list], [detail]], heights: split ? [room] : [top, Math.max(0, room - top - 1)], compact: false, padding: true, maxColumns: split ? 2 : 1 })
-  return pickerFrame(`Profiles${report ? ` · ${report.directory}` : ""}`, hints, width, height, body, summary)
+  // A question or an error takes the whole row while it is there; the tabs come back after it.
+  if (notice) return pickerFrame(`Profiles${report ? ` · ${report.directory}` : ""}`, hints, width, height, body, summary)
+  return withTabs(pickerFrame(`Profiles${report ? ` · ${report.directory}` : ""}`, hints, width, height, body), 1, summary, width)
+}
+
+/** Row two: the profile tabs (What it takes over | Installed | Marketplace) with the page's summary after them. */
+function withTabs(frame: Line[], active: number, summary: string, width: number): Line[] {
+  if (frame.length > 1) frame[1] = profileTabsRow({ active, right: summary, width })
+  return frame
 }

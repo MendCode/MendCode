@@ -309,6 +309,8 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
   if (row === "capabilityCatalogue") return { state, action: { type: "open", command: "help" } }
   // A daemon setting, not a look: `/graph default` saves it for every project (`/graph on|off` overrides one).
   if (row === "graphIndex") return { state, action: key === "\r" || key === " " || key === "\x1b[C" || key === "\x1b[D" ? { type: "open", command: "graph default next" } : NONE }
+  // A daemon setting too: `/language next` steps through the presets; any other name is typed with `/language <name>`.
+  if (row === "replyLanguage") return { state, action: key === "\r" || key === " " || key === "\x1b[C" || key === "\x1b[D" ? { type: "open", command: "language next" } : NONE }
   // The built-in presets, then the user's own (`imageWaitArt` in the profile file).
   if (row === "imageWaitPreset") {
     const names = imageWaitPresetNames(profile.imageWaitArt)
@@ -362,6 +364,8 @@ export type CustomizeInput = {
   mascot?: string
   /** Where the code graph indexes by default (`codegraph_index`): auto, on or off. */
   graphIndex?: string
+  /** The language replies are in (`language`): auto or a language name. */
+  replyLanguage?: string
   /** The prompt status, for the cost notice under the prompt context row. */
   promptStatus?: PromptStatus
   preview: CustomizePreviewInput
@@ -579,6 +583,7 @@ export function customizePreview(input: { profile: TuiProfile; preview: Customiz
 /** The value a row shows between its arrows. */
 function rowValue(field: CustomizeRow, profile: TuiProfile, input: CustomizeInput): string {
   if (field === "graphIndex") return `${input.graphIndex ?? "auto"} · git repos under 10,000 files`
+  if (field === "replyLanguage") return input.replyLanguage && input.replyLanguage !== "auto" ? input.replyLanguage : "auto · your latest message"
   if (field === "views") return `${(input.views ?? []).filter((view) => view.owner !== "built-in").length} custom`
   if (field === "viewScaffold") return "enter writes a starter"
   if (field === "slashCommands") return "enter edit"

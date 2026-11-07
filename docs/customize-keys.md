@@ -173,6 +173,7 @@ Type one of these commands to open its row or toggle it. Where a command takes a
 | `assistantLead` | Assistant lead |
 | `messageMeta` | Message meta |
 | `timestamps` | Timestamps |
+| `replyLanguage` | Reply language (the daemon's `language` setting: `/language`) |
 
 #### Tools
 

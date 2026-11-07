@@ -239,6 +239,7 @@ B17 small commands:
 |---|---|
 | `/fast [on|off]` | [fast mode](providers.md) |
 | `/output-style [name]` | [styles](prompt-modes.md) |
+| `/language [auto|name|next]` | the language replies are in ([reply language](prompt-modes.md#reply-language-language)) |
 | `/experimental [flag [on|off]]` | lists boolean `experimental` flags, all off by default; toggles one while keeping the other `experimental` values |
 | `/debug-config` | config layers from defaults to environment, local only, no secret values; also `control-plane system config-layers` |
 | `/cd PATH` | moves this idle session and its children to an existing directory, relative to the session; `~` is home |

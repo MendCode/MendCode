@@ -564,6 +564,22 @@ describe.skipIf(process.env.MENDCODE_LIVE_CODEX !== "1")("codex engine (live, gp
   }, 120_000)
 })
 
+describe("codex reply language", () => {
+  test("each turn's input ends with the reply-language line once, after the user's text and the plan note", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", transportFactory: () => fake.transport, replyLanguage: async () => "Reply in Español." })
+    const ids = createIdFactory()
+    const sessionId = ids("session")
+    const turn = (text: string, mode: "plan" | "ask") => engine.runTurn({ sessionId, turnId: ids("turn"), text, attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => mode, setPermissionMode: () => {} })
+    await turn("plan it", "plan")
+    await turn("build", "ask")
+    const sent = fake.requests.filter((request) => request.method === "turn/start").map((request) => String(request.params.input[0].text).split("\n"))
+    expect(sent[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on"), "(Reply in Español.)"])
+    expect(sent[1]).toEqual(["build", expect.stringContaining("Plan mode is off"), "(Reply in Español.)"])
+    engine.stop()
+  })
+})
+
 describe("codex plan mode note", () => {
   test("every turn in plan carries the plan note after the text, the first turn after it says it ended, others carry nothing", async () => {
     const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))

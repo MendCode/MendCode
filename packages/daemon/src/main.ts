@@ -323,7 +323,9 @@ let stopPi: (() => void) | undefined
 /** Virtual models user extensions register (`api.registerVirtualModel`), listed over the real models they route to; bound with the extensions. */
 let extensionVirtualModels: (real: readonly ModelInfo[]) => ModelInfo[] = () => []
 let virtualModelFallback: (model: string) => string = (model) => model
-const realModels = (readOnly?: boolean): ModelInfo[] => [...codexModels(), ...(engineName === "native" ? providerService.models(readOnly) : []), ...(claudeProbed && claudeDetection.installed() ? claudeModels() : []), ...(engineName === "native" ? acpAgents.models() : []), ...(piEnabled() ? piConfig.models() : []), ...(engineName === "native" && threadMcpEnabled(extractionSettings(), "codex", safeMode) ? codexModels().map((model) => ({ ...model, id: `codex:${model.id}`, name: `${model.name} · Codex`, engine: "codex" as const })) : [])]
+/** Codex as its own harness on MendCode's engine: the per-user `codex_engine` feature (any tier), or its thread bridge (full tier). */
+const codexHarnessOn = () => engineName === "native" && (featureOn(extractionSettings(), "codex_engine", { safeMode }) || threadMcpEnabled(extractionSettings(), "codex", safeMode))
+const realModels = (readOnly?: boolean): ModelInfo[] => [...codexModels(), ...(engineName === "native" ? providerService.models(readOnly) : []), ...(claudeProbed && claudeDetection.installed() ? claudeModels() : []), ...(engineName === "native" ? acpAgents.models() : []), ...(piEnabled() ? piConfig.models() : []), ...(codexHarnessOn() ? codexModels().map((model) => ({ ...model, id: `codex:${model.id}`, name: `${model.name} · Codex`, engine: "codex" as const })) : [])]
 const modelCatalog: ModelCatalog = filteredCatalog({
   selectable: engineName === "native",
   list: (readOnly) => { const real = realModels(readOnly); return engineName === "native" ? [...real, ...extensionVirtualModels(real)] : real },
@@ -534,6 +536,13 @@ export const daemon = await startDaemon({
     const memorySelector = createMemorySelector(memory, { settings: (directory) => memorySettings(store.settings.get(), directory) })
     // Feature `resume_context`: the note rides in the system prompt part with the memory block, frozen per session in memory, so it adds nothing to the stored history.
     const resumeFor = createResumeSource({ store, now: Date.now, enabled: () => featureOn(store.settings.get(), "resume_context", { safeMode }) })
+    // `language` (docs/prompt-modes.md): the line every engine adds to a user message, out of the transcript. A PR review's own language
+    // wins over the user's. The module loads with the first message.
+    let replyLanguageModule: Promise<typeof import("./reply-language")> | undefined
+    const replyLanguage = async (sessionId: import("@mendcode/protocol").SessionId, text: string) => {
+      const { replyLanguageLine } = await (replyLanguageModule ??= import("./reply-language"))
+      return replyLanguageLine(runLimits.get(sessionId)?.responseLanguage ?? store.settings.get().language, text)
+    }
     const memoryFor = (root: string, context: SystemContext | undefined) => {
       const block = memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
       const resume = context ? resumeFor(context.sessionId, root) : ""
@@ -637,6 +646,7 @@ export const daemon = await startDaemon({
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
+              replyLanguage,
               // Smart mode decides as it does natively: Claude's tool names become the native ones the rules know.
               smart: ({ sessionId, tool, permission, args, cwd: root }) => {
                 const record = (args ?? {}) as Record<string, unknown>
@@ -872,6 +882,7 @@ export const daemon = await startDaemon({
             return ref
           },
           runLimits: (sessionId) => runLimits.get(sessionId),
+          replyLanguage,
           hiddenTools: (directory) => (prReviewOn() ? hiddenGraphTools(directory) : [...hiddenGraphTools(directory), "review_config", "pr_review"]),
           system: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
@@ -920,6 +931,7 @@ export const daemon = await startDaemon({
           environment: credentialsFor(turn.sessionId),
           // A PR review child or fix session: none of the checkout's AGENTS.md, `.codex/` config, hooks, rules or skills; a review child neither memories nor skills.
           runLimits: runLimits.get(turn.sessionId),
+          replyLanguage,
           appendSystem: await harnessSystem(),
           ...(hostServers.length ? { hostServers, hostInstructions, waitingForMcp: harness.waiting } : {}),
           storeImage: async (bytes, mime, sessionId) => {
@@ -947,6 +959,7 @@ export const daemon = await startDaemon({
           environment: credentialsFor,
           // pi has no todo or plan tool of its own: it is not told of a pinned list.
           appendSystem: await harnessSystem(false),
+          replyLanguage,
           projectTrusted: (root) => (store.settings.get().trustedToolDirs ?? []).some((entry) => canonicalDir(entry) === canonicalDir(root)),
           sandbox: sessionSandbox,
           permissionFor: (sessionId) => store.permissionModeOf(sessionId),

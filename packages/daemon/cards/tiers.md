@@ -13,3 +13,4 @@ Do not confuse a tier with a prompt mode ({{program}} docs prompt-modes), a perm
 
 Minimalist sends the smallest request: read, write, edit, apply_patch, shell, glob, grep and tool_search. In every tier (feature aux_tools, opt-in) shell_output and shell_kill are listed once a command runs in the background, task_status once a sub-agent was launched, the plan tools in plan mode; webfetch and question through tool_search (customize_ui too, in minimalist). Nothing is removed. /tier aux_tools on lists them always.
 A Claude Code session, and an ACP agent that takes HTTP MCP, also gets MendCode's tools as mcp__mendcode__<tool> (feature harness_tools, balanced and full): code graph, computer use, memory, customize_ui, mendcode_settings. Same approvals as native. Off: /tier harness_tools off.
+Codex as its own harness (feature codex_engine, opt-in, any tier): /tier codex_engine on, or /setup's Use Codex, lists its codex: models; the tier stays.

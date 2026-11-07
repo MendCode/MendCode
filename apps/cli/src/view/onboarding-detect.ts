@@ -26,7 +26,7 @@ export type DetectInput = {
   /** `daemon.info.ownLogins`: MendCode signs in for itself and uses no other tool's login. */
   ownLogins?: boolean | undefined
 }
-export type DetectHarness = { id: "claude" | "codex"; installed: boolean; signedIn?: boolean | undefined; plan?: string | undefined; login?: string | undefined }
+export type DetectHarness = { id: "claude" | "codex"; installed: boolean; signedIn?: boolean | undefined; method?: string | undefined; plan?: string | undefined; login?: string | undefined }
 
 export type ReadyItem = {
   id: "chatgpt" | "claude" | "codex" | "pi" | "keys"
@@ -37,6 +37,22 @@ export type ReadyItem = {
   /** The one command or variable that fixes a missing item. */
   fix?: string
 }
+/**
+ * One way to run turns, as the setup's Ready rows offer it: what was found (`ready`: installed and signed in; `unconfirmed`:
+ * installed, its sign-in not reported; `sign-in`: there but not signed in; `missing`: not on this machine; `failed`: its check did
+ * not answer or its login broke) and what Enter can do about it from the setup.
+ */
+export type WayState = "ready" | "unconfirmed" | "sign-in" | "missing" | "failed"
+export type WayAction =
+  /** Pick that model now; the Model row shows it and nothing is saved until the final Enter. */
+  | { kind: "model"; label: string; model: string; note: string }
+  /** `/connect <target>` (the provider list when empty), then back to this page with every choice kept. */
+  | { kind: "connect"; label: string; target: string; note: string }
+  /** Turn on the Codex harness (its thread bridge needs the full tier), then back here with its models listed. */
+  | { kind: "harness"; label: string; engine: "codex"; note: string }
+  /** A step outside MendCode (`codex login`, `claude auth login`): Enter checks again once it is done. */
+  | { kind: "recheck"; label: string; note: string }
+export type Way = { id: ReadyItem["id"]; label: string; state: WayState; detail: string; actions: WayAction[] }
 export type ModelSource = "chatgpt" | "claude" | "codex" | "pi" | "api" | "acp"
 export type ModelOption = {
   id: string
@@ -92,6 +108,8 @@ export type ImportRow = {
 }
 export type Detected = {
   items: ReadyItem[]
+  /** The Ready rows: each tool or login found (or worth naming), its honest state and what Enter does about it, best first. */
+  ways: Way[]
   /** Every model usable from what was found, grouped (`groups`, in that order) and in catalog order inside a group. */
   options: ModelOption[]
   /** The groups that have options, in the order the list shows them: MendCode's own engine first, then the harnesses. */
@@ -212,7 +230,81 @@ export function detectReady(input: DetectInput): Detected {
   const choices = taken.flatMap((item): ImportChoice[] => item.name && (item.kind === "mcp" || item.kind === "command") ? [importChoice({ ...item, name: item.name, kind: item.kind })] : [])
   const importRow: ImportRow | undefined = tool && parts.length ? { tool, mcp, commands, counts: parts.join(", "), summary: `${TOOL_NAME[tool] ?? tool}: ${parts.join(", ")}`, choices, inPlace: [...(input.imports?.inPlace ?? [])], notImported: [...(input.imports?.notImported ?? [])] } : undefined
 
-  return { items, options: marked, groups, unavailable, ...(recommended ? { recommended } : {}), usable: marked.length > 0 || !input.selectable, ...(importRow ? { importRow } : {}) }
+  const ways = readyWays({ input, options: marked, recommended, keyed, chatgptOk: items[0]!.ok, usesChatgpt: native.length > 0 || input.login !== undefined, claude, codex })
+  return { items, ways, options: marked, groups, unavailable, ...(recommended ? { recommended } : {}), usable: marked.length > 0 || !input.selectable, ...(importRow ? { importRow } : {}) }
+}
+
+/** What each action's line under a focused row says Enter does. */
+const NOTES = {
+  chatgptConnect: "opens /connect chatgpt to sign MendCode in with your ChatGPT account (not Codex's own login), then comes back here with your choices",
+  keysConnect: "opens /connect to save a key for MendCode's own engine (billed per token), then comes back here",
+  codexHarness: "turns on Codex as a harness now (/tier codex_engine on; your tier stays): Codex runs the turns on its own login; then back here with its models",
+} as const
+
+/** The way that holds the recommended model goes first, then the others ready, then those needing a step, then what is missing. */
+const STATE_RANK: Record<WayState, number> = { ready: 0, unconfirmed: 1, failed: 2, "sign-in": 3, missing: 4 }
+
+/** A way's state in words, before the detail of how: the Ready rows and screen-reader mode say the same. */
+export const wayStateWord = (way: Way): string => ({ ready: "ready", unconfirmed: "sign-in not confirmed", failed: "failed", missing: "not found", "sign-in": way.id === "keys" ? "needs a key" : "needs sign-in" })[way.state]
+
+/**
+ * The Ready rows, one per tool or login, each with only the actions that really work from the setup: a model action exists only
+ * for a model the catalog lists, `/connect chatgpt` only where this engine signs in to ChatGPT, the Codex harness only on
+ * MendCode's own engine. A Claude Code login is used by Claude Code alone: MendCode's engine reaches Claude only with an API key.
+ */
+function readyWays(input: { input: DetectInput; options: readonly ModelOption[]; recommended: string | undefined; keyed: readonly DetectProvider[]; chatgptOk: boolean; usesChatgpt: boolean; claude: DetectHarness | undefined; codex: DetectHarness | undefined }): Way[] {
+  const { options, claude, codex } = input
+  const first = (source: ModelSource) => options.find((option) => option.source === source)
+  const use = (source: ModelSource, label: string): WayAction[] => {
+    const option = first(source)
+    return option ? [{ kind: "model", label: option.id === input.recommended ? `${label} · recommended` : label, model: option.id, note: `picks ${option.label} · ${option.line}` }] : []
+  }
+  const chatgptConnect = (label: string): WayAction[] => input.usesChatgpt && !input.chatgptOk && input.input.selectable ? [{ kind: "connect", label, target: "chatgpt", note: NOTES.chatgptConnect }] : []
+  const ways: Way[] = []
+  const codexWay = codexReady({ codex, listed: use("codex", "Use Codex · its own harness"), selectable: input.input.selectable, connect: chatgptConnect("Use MendCode with your ChatGPT account") })
+  // With Codex there the ChatGPT sign-in is one of its row's actions, not a second row saying the same.
+  const chatgptFolded = codexWay !== undefined && codexWay.state !== "missing" && codexWay.actions.some((action) => action.kind === "connect")
+  if (input.usesChatgpt && input.input.selectable && !chatgptFolded) {
+    const message = input.input.login?.message?.replace(/^\[[A-Z]+\]:\s*/, "")
+    const failed = !input.chatgptOk && message !== undefined && /expired|failed/i.test(message)
+    ways.push(input.chatgptOk
+      ? { id: "chatgpt", label: "ChatGPT", state: "ready", detail: "signed in for MendCode", actions: use("chatgpt", "Use MendCode with ChatGPT") }
+      : { id: "chatgpt", label: "ChatGPT", state: failed ? "failed" : "sign-in", detail: failed ? message! : "for MendCode's own engine", actions: chatgptConnect("Sign in with ChatGPT · /connect chatgpt") })
+  }
+  if (input.input.selectable) ways.push(input.keyed.length
+    ? { id: "keys", label: "API keys", state: "ready", detail: input.keyed.map((provider) => keyEnvOf(provider.id) ?? provider.id).join(", "), actions: [...use("api", `Use your ${providerName(first("api")?.group.slice(4) ?? "")} key`), { kind: "connect", label: "Add another key · /connect", target: "", note: NOTES.keysConnect }] }
+    : { id: "keys", label: "API keys", state: "sign-in", detail: "none saved yet", actions: [{ kind: "connect", label: "Add an API key · /connect", target: "", note: NOTES.keysConnect }] })
+  if (codexWay) ways.push(codexWay)
+  ways.push(claudeReady(claude, use("claude", "Use Claude Code")))
+  if (first("pi")) ways.push({ id: "pi", label: "pi", state: "ready", detail: "found", actions: use("pi", "Use pi") })
+  const holds = (way: Way) => way.actions.some((action) => action.kind === "model" && action.model === input.recommended)
+  return ways.map((way, index) => ({ way, index })).sort((a, b) => Number(holds(b.way)) - Number(holds(a.way)) || STATE_RANK[a.way.state] - STATE_RANK[b.way.state] || a.index - b.index).map(({ way }) => way)
+}
+
+/** The Codex CLI as `codex login status` says it, and what the setup can do with it. Undefined when nothing reports it. */
+function codexReady(input: { codex: DetectHarness | undefined; listed: WayAction[]; selectable: boolean; connect: WayAction[] }): Way | undefined {
+  const { codex, listed, connect } = input
+  const label = "Codex"
+  if (!codex) return listed.length ? { id: "codex", label, state: "ready", detail: "found", actions: [...listed, ...connect] } : undefined
+  if (!codex.installed) return { id: "codex", label, state: "missing", detail: "not installed", actions: [] }
+  const recheck = (command: string): WayAction => ({ kind: "recheck", label: `Run ${command}, then check again`, note: `run \`${command}\` in a terminal, then enter (or r) checks again` })
+  if (codex.signedIn === false) return { id: "codex", label, state: "sign-in", detail: "installed", actions: [recheck(codex.login ?? "codex login"), ...connect] }
+  // Its models are listed with the thread bridge on MendCode's own engine; until then Enter turns it on.
+  const harness: WayAction[] = listed.length ? listed : input.selectable ? [{ kind: "harness", label: "Use Codex · its own harness", engine: "codex", note: NOTES.codexHarness }] : []
+  if (codex.signedIn === undefined) return { id: "codex", label, state: "failed", detail: "installed · its login status did not answer", actions: [{ kind: "recheck", label: "Check again", note: "asks `codex login status` again" }, ...connect] }
+  return { id: "codex", label, state: "ready", detail: `signed in${codex.method === "chatgpt" ? " with ChatGPT" : codex.method === "api_key" ? " with an API key" : ""}`, actions: [...harness, ...connect] }
+}
+
+/** Claude Code as `claude auth status` says it; its models run in Claude Code on its own login, never on MendCode's engine. */
+function claudeReady(claude: DetectHarness | undefined, listed: WayAction[]): Way {
+  const label = "Claude Code"
+  if (!claude) return listed.length ? { id: "claude", label, state: "unconfirmed", detail: "installed", actions: listed } : { id: "claude", label, state: "missing", detail: `not installed · ${CLAUDE_INSTALL}`, actions: [] }
+  if (!claude.installed) return { id: "claude", label, state: "missing", detail: `not installed · ${CLAUDE_INSTALL}`, actions: [] }
+  const command = claude.login ?? "claude auth login"
+  if (claude.signedIn === false) return { id: "claude", label, state: "sign-in", detail: "installed", actions: [{ kind: "recheck", label: `Run ${command}, then check again`, note: `run \`${command}\` in a terminal, then enter (or r) checks again` }] }
+  if (claude.signedIn === undefined) return { id: "claude", label, state: "unconfirmed", detail: "installed", actions: listed }
+  const detail = `signed in · ${claude.plan ? `${claude.plan} plan` : "plan not reported"}`
+  return { id: "claude", label, state: "ready", detail, actions: listed.length ? listed : [{ kind: "recheck", label: "No models listed yet · check again", note: "asks the daemon for Claude Code's models again" }] }
 }
 
 /** A harness can run its models unless its own status says it is not installed or not signed in; without a status, a listed one can. */
@@ -220,7 +312,7 @@ const usableHarness = (harness: DetectHarness | undefined, listed: boolean) => l
 
 /**
  * What was found but lists no model yet, each with the one step that lists its models: MendCode's ChatGPT login, an API key,
- * a harness's own sign-in, and the Codex harness, whose models a native daemon lists only with its thread bridge (full tier).
+ * a harness's own sign-in, and the Codex harness, whose models a native daemon lists only with the `codex_engine` feature (any tier) or its thread bridge.
  */
 function unavailableSources(input: { input: DetectInput; loggedIn: boolean; native: readonly DetectModel[]; keyed: readonly DetectProvider[]; claude: DetectHarness | undefined; codex: DetectHarness | undefined; listed(source: ModelSource): boolean }): UnavailableSource[] {
   const out: UnavailableSource[] = []
@@ -228,7 +320,7 @@ function unavailableSources(input: { input: DetectInput; loggedIn: boolean; nati
   if ((input.native.length || input.input.login) && !input.listed("chatgpt")) out.push({ source: "chatgpt", title: "ChatGPT subscription", native: true, reason: `${input.input.ownLogins ? "not signed in for MendCode" : "not signed in"} · /connect chatgpt` })
   if (!input.keyed.length) out.push({ source: "api", title: "API-key providers", native: true, reason: "no key yet · /connect saves one" })
   if (claude?.installed && !input.listed("claude")) out.push({ source: "claude", title: "Claude Code harness", native: false, reason: claude.signedIn === false ? `not signed in · ${claude.login ?? "claude auth login"}` : "installed · no models listed yet · r checks again" })
-  if (codex?.installed && !input.listed("codex")) out.push({ source: "codex", title: "Codex harness", native: false, reason: codex.signedIn === false ? `not signed in · ${codex.login ?? "codex login"}` : "full tier · /tier thread_mcp on codex lists its models" })
+  if (codex?.installed && !input.listed("codex")) out.push({ source: "codex", title: "Codex harness", native: false, reason: codex.signedIn === false ? `not signed in · ${codex.login ?? "codex login"}` : "/tier codex_engine on lists its models" })
   return out
 }
 

@@ -76,6 +76,14 @@ const SUBAGENT_HOOK = "mendcode-subagent-start"
 const ONE_TREE_HOOK = "mendcode-one-tree"
 /** The Claude Code tools One tree hears about: the shell, whose output names files, and the ones that write a file. */
 const ONE_TREE_TOOLS = "Bash|Edit|Write|MultiEdit|NotebookEdit"
+/** The id of the `UserPromptSubmit` hook MendCode registers at `initialize` (`replyLanguage`). */
+const REPLY_LANGUAGE_HOOK = "mendcode-reply-language"
+
+/** The prompt of a `UserPromptSubmit` hook input; empty when Claude Code sent none. */
+export function submittedPrompt(input: unknown): string {
+  const prompt = (input ?? {}) as { prompt?: unknown }
+  return typeof prompt.prompt === "string" ? prompt.prompt : ""
+}
 
 /** The id of the `PreToolUse` hook that keeps MendCode's main-agent tools from Claude Code's own sub-agents. */
 const SUBAGENT_TOOLS_HOOK = "mendcode-subagent-tools"
@@ -205,6 +213,11 @@ export function createClaudeEngine(options: {
    */
   subagentContext?(sessionId: SessionId): Promise<string | undefined>
   /** One tree (docs/one-tree.md): told what each Bash or write call wrote and printed; a line it returns reaches the model as that call's context. */
+  /**
+   * The `language` setting's line for one user message (docs/prompt-modes.md), given to Claude Code by its `UserPromptSubmit` hook as
+   * `additionalContext`: Claude Code adds it to that message for the model, out of the transcript, so every message restates it.
+   */
+  replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
   /**
    * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
@@ -407,6 +420,11 @@ export function createClaudeEngine(options: {
         line = options.oneTree?.({ sessionId: call.agent ? `${connection.sessionId}#${call.agent}` as SessionId : connection.sessionId, cwd: call.cwd ?? options.cwdFor(connection.sessionId), written: call.written, output: call.output })
       } catch { line = undefined }
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: line } } : {}))
+      return
+    }
+    if (message.request?.callback_id === REPLY_LANGUAGE_HOOK) {
+      const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, submittedPrompt(message.request?.input))).catch(() => undefined)
+      if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: line } } : {}))
       return
     }
     const context = message.request?.callback_id === SUBAGENT_HOOK ? await options.subagentContext?.(connection.sessionId).catch(() => undefined) : undefined
@@ -649,7 +667,7 @@ export function createClaudeEngine(options: {
       connection.turn?.finish({ status: "error", code: "claude_exited", message: `[CLAUDE]: claude exited during the turn${tail ? `: ${tail.slice(-1_000)}` : ""}` })
       close(connection, `process exited${tail ? `: ${tail.slice(-200)}` : ""}`)
     })()
-    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
+    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}), ...(options.replyLanguage ? { UserPromptSubmit: [{ hookCallbackIds: [REPLY_LANGUAGE_HOOK] }] } : {}) }
     connection.ready = control(connection, { subtype: "initialize", hooks }).then(() => undefined)
     return connection
   }

@@ -1,6 +1,7 @@
 import type { SessionSummary } from "@mendcode/protocol"
 import { sgr } from "../../apps/cli/src/ui/theme"
-import { createSessionListState, renderSessionList } from "../../apps/cli/src/view/session-list"
+import { createSessionListState } from "../../apps/cli/src/view/session-list"
+import { renderSessionList } from "../../apps/cli/src/view/sessions-page"
 
 const NOW = 1_800_000_000_000
 const MINUTE = 60_000

@@ -202,11 +202,14 @@ export function createPackageRegistry(input: { userDir: string; directory: strin
     const manifest = readManifest(location)
     const mismatch = "manifest" in manifest && (manifest.manifest.name !== name || manifest.manifest.version !== version)
     const problem = "problem" in manifest ? manifest.problem : mismatch ? "catalog name/version differs from profile manifest" : undefined
-    return { name, version, description, sourceId, location, tags: metadata.tags ?? [], ...(metadata.title ? { title: metadata.title } : {}), contents: packageContents(location), state: found ? found.enabled ? "active" : "installed" : "available", ...(problem ? { problem } : {}) }
+    const author = "manifest" in manifest ? manifest.manifest.author : undefined
+    // An index entry without a description reads the profile's own.
+    const summary = description || ("manifest" in manifest ? manifest.manifest.description : "")
+    return { name, version, description: summary, sourceId, location, tags: metadata.tags ?? [], ...(metadata.title ? { title: metadata.title } : {}), ...(author ? { author } : {}), contents: packageContents(location), state: found ? found.enabled ? "active" : "installed" : "available", ...(problem ? { problem } : {}) }
   }
   function catalog(source: PackageSourceInfo): PackageCatalogEntry[] {
     if (source.builtin) {
-      const rows: PackageCatalogEntry[] = installed().map((item) => ({ name: item.name, version: item.manifest?.version ?? "unversioned", description: item.manifest?.description ?? "", sourceId: "local", location: item.dir, contents: item.contents, tags: [item.source], state: item.enabled ? "active" : "installed", ...(item.problem ? { problem: item.problem } : {}) }))
+      const rows: PackageCatalogEntry[] = installed().map((item) => ({ name: item.name, version: item.manifest?.version ?? "unversioned", description: item.manifest?.description ?? "", sourceId: "local", location: item.dir, contents: item.contents, tags: [item.source], ...(item.manifest?.author ? { author: item.manifest.author } : {}), state: item.enabled ? "active" : "installed", ...(item.problem ? { problem: item.problem } : {}) }))
       const authored = path.join(input.directory, ".mendcode", LOCAL_PACKAGE_DIR)
       if (lstatSync(authored, { throwIfNoEntry: false })?.isDirectory()) {
         const manifest = readManifest(authored)

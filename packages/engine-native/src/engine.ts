@@ -429,6 +429,11 @@ export function createNativeEngine(options: {
   maxSteps?: number
   /** Scripted-run limits of a session (`--tools`, `--offline`, `--max-turns`); they only narrow what the loop may do. */
   runLimits?(sessionId: SessionId): RunLimits | undefined
+  /**
+   * The `language` setting's line for one user message of a main session (docs/prompt-modes.md): added after the message's text in the
+   * history only (the transcript shows what the user typed), so each message restates it and the cached prefix never changes.
+   */
+  replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   /** Tool patterns a project directory does not offer (the code graph's tools in a folder it does not index); unlike run limits they keep sub-agents. */
   hiddenTools?(directory: string): readonly string[]
   /** Most retries of one model call; without it network and transient failures are retried until the user cancels. */
@@ -1860,7 +1865,11 @@ export function createNativeEngine(options: {
     const orientation = newTurn && !messages.some((message) => message.role === "user") && featureOn(policy(), "orientation") && !input.workflow && options.tasks?.isChild(input.sessionId) !== true && !options.compound?.(input.sessionId)?.critic
       ? `${orientationBlock({ cwd: options.cwdFor(input.sessionId), ...(options.instructions ? { instructions: options.instructions } : {}) })}\n\n`
       : ""
-    const content = secrets ? secrets.mask(input.sessionId, orientation + mentioned.text + note) : orientation + mentioned.text + note
+    const masked = secrets ? secrets.mask(input.sessionId, orientation + mentioned.text + note) : orientation + mentioned.text + note
+    // The reply language rides at the end of each message the user writes: the newest text of the request, after the cached prefix.
+    const main = !input.workflow && options.tasks?.isChild(input.sessionId) !== true && !options.compound?.(input.sessionId)
+    const language = main ? await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined) : undefined
+    const content = language ? `${masked}\n\n(${language})` : masked
     // A new user turn ends the tool loop that needed the earlier reasoning replayed; keeping it would only grow the history.
     if (newTurn) for (const message of messages) if (message.role === "assistant") delete message.reasoning
     const attachments = [...input.attachments, ...mentionRefs]

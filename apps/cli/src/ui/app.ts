@@ -660,7 +660,7 @@ export function createApp(input: AppInput) {
   const { openAcp, acpKey } = createAcp(ctx)
   const { ideCommand, ideKey, syncIde, prepareIdeContext } = createIde(ctx)
   const peerCommands = createPeerCommands(ctx)
-  const { openMarketplace, openAssets, catalogKey, catalogRows } = createPackageCatalogPages(ctx)
+  const { openMarketplace, openAssets, catalogKey, catalogRows } = createPackageCatalogPages(ctx, { loadPackages: () => loadPackages() })
   const { agentMetadata, controlSession, loadAgentSessions, loadAgentMetadata, loadBackgroundSessions, agentSubtasks, noteActivity, loadAgentShells, loadAgents, loadMcps, loadTools, loadPackages, loadHomeMcp, restartMcp, decideMcp, authMcp, copyAuthMcp, loadMcpCatalog, readMcpResource } = createAgents(ctx)
   const { terminalExtensions, otherExtensionProblems, statusInput, loadExtensionsReport, loadStatus } = createStatus(ctx, { loadMcps, loadStorage })
   const { loadHooks, setTrust, openHooks, trustCommand, checkStartupTrust } = createHooks(ctx)
