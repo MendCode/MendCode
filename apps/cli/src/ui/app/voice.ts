@@ -50,7 +50,10 @@ export function createVoice(ctx: AppContext) {
     state.voice = pending
     requestFrame()
     try {
-      const reply = await input.send({ type: "voice.control", action: "start", ...(held ? { held: true } : {}) })
+      let reply = await input.send({ type: "voice.control", action: "start", ...(held ? { held: true } : {}) })
+      // A daemon from before `held` cannot parse it ("it may be an older build"): once more without it, so dictation still works,
+      // stopping at that daemon's limit until it restarts.
+      if (held && !reply.ok && reply.error.code === "invalid_command" && reply.error.message.includes("older build")) reply = await input.send({ type: "voice.control", action: "start" })
       // Esc while it started: the recording it opened is dropped.
       if (state.voice !== pending) {
         stopWhenStarted = false
