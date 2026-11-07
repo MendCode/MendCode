@@ -33,7 +33,7 @@ For bounded single/cascade/critic candidates with immutable review and request/t
 - `mode: read` runs in plan mode (it cannot change anything); `work` gets the workflow's permission. Only one `work` task runs per directory at a time, across all workflows.
 - A task starts when everything it `needs` is done. A failed task skips what depends on it. An interrupted task (daemon restart, dropped turn) goes back to pending, up to three starts.
 - Each start restates the whole task: the objective, the prompt, up to eight results of the tasks it needs (fenced as untrusted), and the rework note after a rejected verification. A task may end with a `TASK_RESULT` block; `status: blocked` fails it.
-- `permission` is a request: the applied permission is the lower of it and what the user granted.
+- An explicit `--permission`, or the originating session's mode, determines the workflow permission; a plan's `permission` is only the default when neither was supplied. A session cannot grant more than its own mode.
 
 ## Completion contract
 
@@ -91,7 +91,12 @@ The detail in `/workflows` shows `round N — did not finish` with the keys to c
 
 Cancelling a task's turn yourself pauses the run.
 
+A headless run targeting a session with an earlier pending approval exits instead of waiting behind it. Answer the approval in the terminal first.
+
 ### Page keys
+
+The page opens with workflows from all projects. Press Tab to limit it to the current project.
+After opening a task session from the list, press ↑ at an empty prompt to return to the list.
 
 | Key in `/workflows` | Does |
 |---|---|
@@ -421,6 +426,8 @@ Saved scripts are `workflows/<name>.js` in the extension layers, next to the JSO
 
 A saved script from a project layer runs only when the project is trusted (`/tools trust`, `trustedToolDirs`), like custom tools.
 
+Agents of a workflow started by package name can read that package's files without an external-directory prompt. Writes and explicit deny rules still follow normal permissions.
+
 `/workflows` lists script runs with:
 
 - Phase progress and one row per agent call under the label and phase the script gave it.
@@ -440,7 +447,7 @@ The first statement is `export const meta = { ... }`, a pure literal read withou
 | `phases: [{ title, detail? }]` | Phases |
 | `budget: { agents, tokens, usd, minutes }` | Caps |
 | `contract` | Inline or name of a saved contract; verified after the script returns, exactly like a static plan's |
-| `permission` | Request, never a grant |
+| `permission` | Default when no explicit permission or originating session mode is supplied; never a grant |
 | `maxConcurrent` | 1 to 16, default 16 |
 
 Calls, template substitutions and spreads in `meta` are refused with a line number.

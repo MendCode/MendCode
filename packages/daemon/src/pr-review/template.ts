@@ -22,6 +22,7 @@ export type ReviewInfo = {
   since?: string | undefined
   /** The PR's own base, only when this completed review covered its whole range. */
   fullBase?: string | undefined
+  rangeBase?: string | undefined
   /** How many candidate findings the separate verify pass judged (0: the review pass raised none, so no verify pass ran). Unset: not known. */
   checked?: number | undefined
   /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
@@ -301,7 +302,8 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   // A partial review is not a review of the head: it has neither the heading nor the head marker that say "reviewed" (`isMendCodeReview`,
   // another reviewer's stand-down, a hosted runner's state), so the rest is still asked for and done.
   const full = !partial && !stop && !result.budgetHit && info?.fullBase ? `<!-- mendcode:full-review base=${info.fullBase} -->` : ""
-  return [partial ? "## MendCode partial review" : "## MendCode review", ...order.map(render), language ? languageMarker(language) : "", partial ? "" : reviewMarker(result.head), full].filter(Boolean).join("\n\n")
+  const range = !partial && !stop && !result.budgetHit && info?.rangeBase ? `<!-- mendcode:range base=${info.rangeBase} -->` : ""
+  return [partial ? "## MendCode partial review" : "## MendCode review", ...order.map(render), language ? languageMarker(language) : "", partial ? "" : reviewMarker(result.head), full, range].filter(Boolean).join("\n\n")
 }
 
 /** The built-in layout (`renderReviewBody` without a template): what `publish.ts` posts. */

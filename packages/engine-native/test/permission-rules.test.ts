@@ -94,6 +94,22 @@ describe("ordered permission rules", () => {
 })
 
 describe("external directory and doom loop", () => {
+  test("inherited package reads do not grant writes, other directories or override denies", async () => {
+    const root = temp(), other = temp()
+    const inherit = { loopRun: { reportOnly: () => false, inheritedReads: () => ({ all: false, roots: [root] }) } }
+    const s = scenario([callTool("read", { path: path.join(root, "skill", "file") }), callTool("write", { path: path.join(root, "file") }), stop("ok")], {}, inherit)
+    const t = turn({ text: "go", mode: () => "edits", answers: [{ kind: "deny" }] })
+    await s.engine.runTurn(t.input)
+    expect(s.log).toEqual([`read:${path.join(root, "skill", "file")}`])
+    expect(t.asked.map((request) => request.title)).toEqual(["external directory access"])
+    const outside = scenario([callTool("read", { path: path.join(other, "file") }), stop("ok")], {}, inherit)
+    const outsideTurn = turn({ text: "go", answers: [{ kind: "deny" }] })
+    await outside.engine.runTurn(outsideTurn.input)
+    expect(outsideTurn.asked.map((request) => request.title)).toEqual(["external directory access"])
+    const denied = scenario([callTool("read", { path: path.join(root, "file") }), stop("ok")], { permission: { external_directory: "deny" } }, inherit)
+    await denied.engine.runTurn(turn({ text: "go" }).input)
+    expect(denied.log).toEqual([])
+  })
   test("external reads have their own prompt and session grants stay scoped to the directory", async () => {
     const outside = temp(), other = temp()
     const s = scenario([callTool("read", { path: path.join(outside, "a") }), callTool("read", { path: path.join(outside, "b") }), callTool("read", { path: path.join(outside, "nested", "c") }), callTool("read", { path: path.join(other, "c") }), stop("ok")])

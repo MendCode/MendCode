@@ -574,7 +574,12 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const usedModel = fallbackUsed(fallbackState, fallbackSources)
     const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
-    if (complete && !result.budgetHit && !outcome.partial && !context.unread?.length && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
+    if (complete && !result.budgetHit && !outcome.partial && !context.unread?.length && !range.alreadyReviewed) {
+      const start = await git(["merge-base", range.base, range.head], input.directory, 128)
+      const actualBase = start.code === 0 && !start.cut && /^[0-9a-f]{40,64}$/.test(start.out.trim()) ? start.out.trim() : undefined
+      if (!incremental && actualBase) info.fullBase = actualBase
+      else if (incremental && actualBase === range.base && range.base === input.state.lastHead) info.rangeBase = range.base
+    }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,

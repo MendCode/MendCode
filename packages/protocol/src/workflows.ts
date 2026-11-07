@@ -474,6 +474,8 @@ export const WorkflowRun = lazySchema(() => z.strictObject({
   reason: z.string().max(500).optional(),
   rootSessionId: SessionId,
   originSessionId: SessionId.optional(),
+  /** Daemon-resolved package root, never accepted from a workflow plan. */
+  packageRoot: z.string().min(1).max(4096).optional(),
   tasks: z.array(WorkflowTask).max(256),
   verifications: z.array(WorkflowVerification).max(6),
   repairs: z.number().int().min(0).max(5),

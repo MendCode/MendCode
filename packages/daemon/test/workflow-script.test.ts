@@ -114,7 +114,7 @@ describe("script workflows in the daemon (real isolated host process, faux engin
 })
 
 describe("who may start a script", () => {
-  function host() {
+  function host(layers: import("@mendcode/packages").ExtensionLayer[] = []) {
     const dir = tempDir(), project = tempDir()
     const ids = createIdFactory()
     const store = openStore({ dir })
@@ -122,7 +122,7 @@ describe("who may start a script", () => {
     const workflows = createWorkflowsHost({
       store: store.workflows, definitions: store.workflowDefinitions,
       clock: { now: () => Date.now(), setTimer: (ms, fn) => { const timer = setTimeout(fn, ms); return { cancel: () => clearTimeout(timer) } } },
-      ids, layersFor: () => [], defaultPermission: () => "ask",
+      ids, layersFor: () => layers, defaultPermission: () => "full", sessionPermission: () => "edits",
       journal: store.workflowJournal, scriptHost: createInProcessScriptHost(),
       createSession(input) { const id = ids("session"); store.createSession({ ...input, id }); return id },
       submit: async () => ({ queueId: ids("queue") }), cancelTurn: () => {}, deleteSession: () => true,
@@ -132,6 +132,34 @@ describe("who may start a script", () => {
     return { workflows, project, store }
   }
   const plan = { script: `export const meta = { name: "x" }\nreturn 1` }
+
+  test("package origin is daemon-resolved and survives in the run and task execution", async () => {
+    const root = tempDir()
+    mkdirSync(path.join(root, "workflows"))
+    writeFileSync(path.join(root, "workflows", "package.js"), `export const meta = { name: "package" }\nreturn await agent("read the package")`)
+    const { workflows, project, store } = host([{ dir: root, source: "user", pkg: "example" }])
+    const started = await workflows.handle({ type: "workflow.start", directory: project, plan: { scriptRef: "package" } })
+    expect(started.ok).toBe(true)
+    await until(() => store.workflows.all().some((run) => run.tasks.some((task) => task.sessionId)))
+    const run = store.workflows.all()[0]!
+    expect(run.packageRoot).toBe(root)
+    expect(workflows.execution(run.tasks[0]!.sessionId!)?.packageRoot).toBe(root)
+    const inline = await workflows.handle({ type: "workflow.start", directory: project, plan: { script: plan.script, origin: "package" } })
+    expect(inline.ok).toBe(true)
+    expect(store.workflows.all().find((entry) => entry.workflowId === (inline.ok ? (inline.result?.workflow as WorkflowSummary).workflowId : ""))?.packageRoot).toBeUndefined()
+  })
+
+  test("explicit and session permissions override script defaults and preview matches start", async () => {
+    const { workflows, project } = host()
+    const plan = { script: `export const meta = { name: "permissions", permission: "ask" }\nreturn 1` }
+    const session = createIdFactory()("session")
+    for (const [extra, expected] of [[{ permission: "full" }, "full"], [{ originSessionId: session }, "edits"], [{ originSessionId: session, permission: "full" }, "edits"], [{}, "ask"]] as const) {
+      const preview = await workflows.handle({ type: "workflow.preview", directory: project, plan, ...extra })
+      const started = await workflows.handle({ type: "workflow.start", directory: project, plan, ...extra })
+      expect(preview).toMatchObject({ ok: true, result: { summary: { permission: expected } } })
+      expect(started).toMatchObject({ ok: true, result: { workflow: { permission: expected } } })
+    }
+  })
 
   test("a remote or peer client cannot preview, start or save a script, nor change one", async () => {
     const { workflows, project } = host()

@@ -207,6 +207,32 @@ describe("oversized code uses bounded cheap readers", () => {
 })
 
 describe("runPrReview: already reviewed merged pull requests", () => {
+  test.each(["covered", "partial", "push", "foreign", "broken-range"])("stacked merge history: %s", async (mode) => {
+    const sha = (n: number) => n.toString(16).padStart(40, "0")
+    const [base, h1, m1, h2, h2next, m2, h3, m3, push] = Array.from({ length: 9 }, (_, i) => sha(i + 1)) as [string, string, string, string, string, string, string, string, string]
+    const prs = [
+      { number: 89, merge_commit_sha: m1, head: { sha: h1 }, base: { sha: base } },
+      { number: 90, merge_commit_sha: m2, head: { sha: h2next }, base: { sha: m1 } },
+      { number: 91, merge_commit_sha: m3, head: { sha: h3 }, base: { sha: m2 } },
+    ].map((pr) => ({ ...pr, merged_at: "2026-11-01" }))
+    const body = (head: string, marker: string) => `${reviewMarker(head)}\n${reviewerMarker({ reviewer: "global", configKey: "x", key: head })}\n${marker}`
+    const item = (head: string, text: string, date: string, login = "bot") => ({ body: text, commit_id: head, state: "COMMENTED", submitted_at: date, user: { login } })
+    const reviews = [
+      [item(h1, body(h1, `<!-- mendcode:full-review base=${base} -->`), "1")],
+      [item(h2, mode === "partial" ? `## MendCode partial review\n${reviewerMarker({ reviewer: "global", configKey: "x", key: h2 })}` : body(h2, `<!-- mendcode:full-review base=${h1} -->`), "1"), item(h2next, body(h2next, `<!-- mendcode:range base=${mode === "broken-range" ? h1 : h2} -->`), "2", mode === "foreign" ? "other" : "bot")],
+      [item(h3, body(h3, `<!-- mendcode:full-review base=${h2next} -->`), "1")],
+    ]
+    const trees = new Map([[base, sha(21)], [h1, sha(22)], [m1, sha(22)], [h2, sha(23)], [h2next, sha(24)], [m2, sha(24)], [h3, sha(25)], [m3, sha(25)], [push, sha(26)]])
+    const git: GitRun = async (args) => {
+      if (args[0] === "rev-list") return { code: 0, out: [m1, ...(mode === "push" ? [push] : []), m2, m3].join("\n") }
+      if (args[0] === "merge-base") return { code: 0, out: ({ [`${m1}^1`]: base, [`${m2}^1`]: h1, [`${m3}^1`]: h2next } as Record<string, string>)[args[1]!] ?? "" }
+      if (args[0] === "rev-parse") return { code: 0, out: args.slice(1).map((ref) => trees.get(ref.replace(/\^\{tree\}$/, "")) ?? "").join("\n") }
+      return { code: 1, out: "" }
+    }
+    const gh = fakeGh((endpoint) => endpoint.includes("state=closed") ? prs : reviews[prs.findIndex((pr) => endpoint.includes(`/pulls/${pr.number}/reviews?`))]).gh
+    const result = await alreadyReviewed({ gh, git, directory: ".", repo: "acme/app", number: 99, base, head: m3, self: "bot" })
+    expect(result).toEqual(mode === "covered" ? { base: m3, prs: [89, 90, 91] } : { base: m1, prs: [89] })
+  })
   async function release({ large = false, gap = false, resolution = false, fastForward = false } = {}) {
     const repo = await repository({ baseConfig: "enabled: true\nreaders:\n  enabled: false\n" })
     await git(repo.dir, "checkout", "-q", "-b", "beta", repo.base)
@@ -265,6 +291,7 @@ describe("runPrReview: already reviewed merged pull requests", () => {
       ...(kind === "incremental" ? { state: { ...emptyState(), lastHead: pr.commits[0]! } } : {}),
     })
     const body = kind === "unknown" ? review(pr.head.sha).body : JSON.parse(historical.posts()[0]!.stdin!).body
+    if (kind === "stacked") expect(body).toContain(`<!-- mendcode:full-review base=${pr.commits[0]} -->`)
     const github = githubFor(repo, (head) => head === pr.head.sha ? [review(head, { body })] : [review(head, {}, repo.prs.find((item) => item.head.sha === head)!.base.sha)])
     const kids = children({ findings: [] })
     const run = await runPrReview({ ...baseInput(repo, kids.factory), gh: github.gh })
@@ -1007,7 +1034,7 @@ describe("runPrReview: the commit status on the PR head", () => {
     expect(order).toEqual(["status", "review", "status"])
   })
 
-  test("a re-review of a new head that posts nothing still says the head was reviewed: success with No new findings", async () => {
+  test("a clean incremental review publishes its covered range", async () => {
     const repo = await repository()
     const github = fakeGh()
     const first = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: github.gh })
@@ -1016,12 +1043,13 @@ describe("runPrReview: the commit status on the PR head", () => {
     const head = await git(repo.dir, "rev-parse", "HEAD")
     const again = await runPrReview({ ...baseInput({ ...repo, head }, children({ findings: [] }).factory), state: first.state, publish: true, gh: github.gh })
     expect(again.status).toBe("published")
-    expect(again.report?.posted).toBe(false)
-    expect(github.posts()).toHaveLength(1)
+    expect(again.report?.posted).toBe(true)
+    expect(github.posts()).toHaveLength(2)
+    expect(JSON.parse(github.posts()[1]!.stdin!).body).toContain(`<!-- mendcode:range base=${repo.head} -->`)
     expect(statusCalls(github.calls, head)).toHaveLength(2)
     expect(github.statuses().slice(2)).toEqual([
       { state: "pending", description: "Reviewing…", context: "MendCode review", target_url: PR_URL },
-      { state: "success", description: "No new findings", context: "MendCode review", target_url: PR_URL },
+      { state: "success", description: "No findings", context: "MendCode review", target_url: `${PR_URL}#pullrequestreview-101` },
     ])
   })
 
