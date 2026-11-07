@@ -135,7 +135,7 @@ It does not read your data directory. To move your own setup between machines, u
 | Bitmap pets | `pets/<id>/pet.json` plus its PNG/WebP atlas; `/pet` lists enabled local packages with `profile:<id>` references. Non-executable, no automatic generation or selection; `/pet export user:<uuid>` creates an atlas/manifest profile without its private reference PNG |
 | Terminal settings | `activate.tuiProfile`: logo, tagline, home layout, prompt chrome and border, user lead, done symbol, density, slash menu layout and pins, panel cards (`sidebarWidgets`) and the rest of `/customize` |
 | Tier look | `activate.tier`: the terminal side of a tier (presentation, density, whether the right panel hides). Features, prompt mode and process mode stay yours |
-| Right panel | `activate.panelPreset` (`pulse`, `crew`, `ledger`, `focus`, `full`, `galaxy`) |
+| Right panel | `activate.panelPreset` (`pulse`, `crew`, `ledger`, `focus`, `full`, `galaxy`). Cards in `activate.tuiProfile.sidebarWidgets` that start with a preset's cards are that preset in your version: `/panel galaxy` in a session shows them ([sidebar](sidebar.md#your-version-of-a-preset)) |
 | Views | `activate.views` maps one of the 22 view slots to a module in `extensions/` (transcript messages, tool cards, the slash menu, headers, footers, welcome and so on) |
 | Keybindings | `activate.keybindings`: a file in the format of `keybindings.json` |
 | Prompt files | `SYSTEM.md`, `APPEND_SYSTEM.md`, `COMPACTION.md` in the profile; `activate.promptFiles` lists the ones it expects |

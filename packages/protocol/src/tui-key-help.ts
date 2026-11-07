@@ -178,6 +178,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   sidebarWidth: "width of the right panel in cells (0 automatic, 32..80)",
   todayLastVisit: "when /today was last opened (written by the page; milliseconds since the epoch, 0 never)",
   todayMarks: "rows pinned for today on /today (written by the page with m; cleared the next day)",
+  todayDismissed: "rows dismissed on /today (written by the page with x and X; d lists them and x brings one back)",
   promptStatus: "a status line (READY › model › branch) drawn in the prompt's top border",
   sidebar: "the sessions sidebar (left list of sessions): auto, always or hidden",
   images: "how images are drawn in the terminal: auto, off, kitty, sixel, iterm2",

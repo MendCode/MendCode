@@ -40,6 +40,13 @@ export type TodayState = {
   /** A triage group opened with enter: only its rows are listed until `esc`. */
   filter?: { title: string; keys: string[] }
   triage?: TodayTriageView
+  /** Rows dismissed with `x` (`tab:id` → the row's time when dismissed): hidden until something newer happens on them. */
+  dismissed?: Record<string, number>
+  /** `o` lists the reviews folded as older; `d` lists only the dismissed rows, where `x` brings one back. */
+  showOlder?: boolean
+  showDismissed?: boolean
+  /** `X` asks once before dismissing every review untouched for `days` (or, in the dismissed list, bringing every row back). */
+  confirm?: { days: number }
 }
 
 /** Where an item is managed: the command or page that owns it and the id inside it. */
@@ -63,6 +70,8 @@ export type AttentionItem = {
   history: TodayEvent[]
   evidence: string[]
   link: TodayLink
+  /** A review nobody touched for a week: folded under the list's "older" line until `o`. */
+  older?: boolean
 }
 
 export type PickupState = "interrupted" | "failed" | "blocked" | "awaiting-review" | "finished"
@@ -121,28 +130,37 @@ const KIND_TONE: Record<AttentionKind, ColorName> = { approval: "warning", decis
 const STATE_TONE: Record<PickupState, ColorName> = { interrupted: "warning", failed: "error", blocked: "error", "awaiting-review": "info", finished: "success" }
 const PROPOSAL_TONE: Record<ProposalKind, ColorName> = { new: "success", merge: "warning", fix: "info", drop: "error" }
 
-export function createTodayState(marks: string[] = []): TodayState {
-  return { tab: "attention", selected: 0, help: false, ...(marks.length ? { marks } : {}) }
+export function createTodayState(marks: string[] = [], dismissed: Record<string, number> = {}): TodayState {
+  return { tab: "attention", selected: 0, help: false, ...(marks.length ? { marks } : {}), ...(Object.keys(dismissed).length ? { dismissed } : {}) }
 }
+
+const DAY_MS = 24 * 3_600_000
+/** The age `X` starts from, in days: the same week after which a review folds as older. */
+export const DISMISS_DAYS = 7
+const MAX_DISMISS_DAYS = 90
+/** Dismissed rows kept; the oldest dismissal is forgotten past this (its row, if it still waits, comes back). */
+export const MAX_DISMISSED = 300
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const clamp = (value: number, length: number) => Math.max(0, Math.min(value, length - 1))
 const ago = (now: number, then: number) => (relativeTime(now, then) === "now" ? "just now" : `${relativeTime(now, then)} ago`)
 
 /** The paragraph on top, from counts only (no model call). It says what is waiting, in the words of the tabs. */
-export function todaySummary(data: TodayData, now: number, marked = 0): string {
-  const { summary, attention, pickup, memory } = data
+export function todaySummary(data: TodayData, now: number, marked = 0, shown: TodayCounts = todayCounts(data, createTodayState())): string {
+  const { summary } = data
+  const { attention, pickup, memory } = shown.listed
   const since = `Since you left ${ago(now, summary.lastVisit)}`
   const ran = summary.sessionsRan === 0 ? "no session ran" : `${plural(summary.sessionsRan, "session")} ran in ${plural(summary.projects, "project")} and ${summary.sessionsFinished} finished`
-  const waiting = attention.length + pickup.length + memory.length
-  if (waiting === 0) return `${since}: ${ran}. Nothing needs you, nothing is left to pick up and Dream has no proposals.`
+  const hidden = [shown.folded ? `${plural(shown.folded, "older review")} folded` : "", shown.dismissed ? `${plural(shown.dismissed, "row")} dismissed` : ""].filter(Boolean).join(", ")
+  const aside = hidden ? ` (${hidden})` : ""
+  if (attention + pickup + memory === 0) return `${since}: ${ran}. Nothing needs you${aside}, nothing is left to pick up and Dream has no proposals.`
   const parts = [
-    attention.length ? `${plural(attention.length, "thing")} ${attention.length === 1 ? "waits" : "wait"} for your answer` : "",
-    pickup.length ? `${plural(pickup.length, "session")} ${pickup.length === 1 ? "was" : "were"} left half-done` : "",
-    memory.length ? `Dream proposes ${plural(memory.length, "memory change")}` : "",
+    attention ? `${plural(attention, "thing")} ${attention === 1 ? "waits" : "wait"} for your answer${aside}` : "",
+    pickup ? `${plural(pickup, "session")} ${pickup === 1 ? "was" : "were"} left half-done` : "",
+    memory ? `Dream proposes ${plural(memory, "memory change")}` : "",
   ].filter(Boolean)
   const list = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0]!
-  return `${since}: ${ran}. ${list}.${marked ? ` ${plural(marked, "row")} pinned for today.` : ""}`
+  return `${since}: ${ran}. ${list}${attention ? "" : aside}.${marked ? ` ${plural(marked, "row")} pinned for today.` : ""}`
 }
 
 const tabLabel = (tab: TodayTab) => ({ attention: "Attention", pickup: "Pick up", memory: "Memory" })[tab]
@@ -166,22 +184,48 @@ const EMPTY: Record<TodayTab, { list: string[]; detail: string }> = {
 }
 
 type Row = { dot: ColorName; title: string; tag: string; tagTone: ColorName; why: string; at: number; ageTone: ColorName }
-type Entry = { key: string; tab: TodayTab; kind: string; link: TodayLink; row: Row; marked: boolean }
+type Entry = { key: string; tab: TodayTab; kind: string; link: TodayLink; row: Row; marked: boolean; older: boolean }
 
 export const todayKey = (tab: TodayTab, id: string) => `${tab}:${id}`
 
 function entriesOfTab(data: TodayData, tab: TodayTab): Omit<Entry, "marked">[] {
-  if (tab === "attention") return data.attention.map((item) => ({ key: todayKey(tab, item.id), tab, kind: item.kind, link: item.link, row: { dot: KIND_TONE[item.kind], title: item.title, tag: item.kind, tagTone: KIND_TONE[item.kind], why: `${item.project} · ${item.why}`, at: item.since, ageTone: "warning" } }))
-  if (tab === "pickup") return data.pickup.map((item) => ({ key: todayKey(tab, item.sessionId), tab, kind: item.state, link: item.link, row: { dot: STATE_TONE[item.state], title: item.title, tag: item.state, tagTone: STATE_TONE[item.state], why: `${item.project} · ${item.why}`, at: item.leftAt, ageTone: "muted" } }))
-  return data.memory.map((item) => ({ key: todayKey(tab, item.id), tab, kind: item.kind, link: item.link, row: { dot: PROPOSAL_TONE[item.kind], title: item.title, tag: item.kind, tagTone: PROPOSAL_TONE[item.kind], why: item.why, at: item.at, ageTone: "muted" } }))
+  if (tab === "attention") return data.attention.map((item) => ({ key: todayKey(tab, item.id), tab, kind: item.kind, link: item.link, older: item.older === true, row: { dot: KIND_TONE[item.kind], title: item.title, tag: item.kind, tagTone: KIND_TONE[item.kind], why: `${item.project} · ${item.why}`, at: item.since, ageTone: "warning" } }))
+  if (tab === "pickup") return data.pickup.map((item) => ({ key: todayKey(tab, item.sessionId), tab, kind: item.state, link: item.link, older: false, row: { dot: STATE_TONE[item.state], title: item.title, tag: item.state, tagTone: STATE_TONE[item.state], why: `${item.project} · ${item.why}`, at: item.leftAt, ageTone: "muted" } }))
+  return data.memory.map((item) => ({ key: todayKey(tab, item.id), tab, kind: item.kind, link: item.link, older: false, row: { dot: PROPOSAL_TONE[item.kind], title: item.title, tag: item.kind, tagTone: PROPOSAL_TONE[item.kind], why: item.why, at: item.at, ageTone: "muted" } }))
 }
 
-/** A tab's rows as listed: the pinned ones first, then the rest in their order; an open triage group keeps only its rows. */
+/** A row stays dismissed until something newer than the dismissal happens on it (a new question, a new head's review). */
+const isDismissed = (state: TodayState, entry: Pick<Entry, "key" | "row">) => {
+  const at = state.dismissed?.[entry.key]
+  return at !== undefined && entry.row.at <= at
+}
+
+/**
+ * A tab's rows as listed: the pinned ones first, then the rest in their order, then (with `o`) the reviews folded as older. Dismissed
+ * rows are left out, or are the only ones listed with `d`; an open triage group keeps only its rows.
+ */
 function entriesOf(data: TodayData, tab: TodayTab, state: TodayState): Entry[] {
   const marks = new Set(state.marks ?? [])
   const keep = state.filter ? new Set(state.filter.keys) : undefined
-  const all = entriesOfTab(data, tab).filter((entry) => !keep || keep.has(entry.key)).map((entry) => ({ ...entry, marked: marks.has(entry.key) }))
-  return [...all.filter((entry) => entry.marked), ...all.filter((entry) => !entry.marked)]
+  const all = entriesOfTab(data, tab).filter((entry) => (!keep || keep.has(entry.key)) && isDismissed(state, entry) === !!state.showDismissed).map((entry) => ({ ...entry, marked: marks.has(entry.key) }))
+  if (state.showDismissed) return all
+  const current = all.filter((entry) => entry.marked || !entry.older)
+  return [...current.filter((entry) => entry.marked), ...current.filter((entry) => !entry.marked), ...(state.showOlder ? all.filter((entry) => !entry.marked && entry.older) : [])]
+}
+
+/** What the tabs, the summary and the list count: rows listed per tab, reviews folded as older and rows dismissed (every tab). */
+export type TodayCounts = { listed: Record<TodayTab, number>; folded: number; dismissed: number }
+export function todayCounts(data: TodayData, state: TodayState): TodayCounts {
+  const listed = Object.fromEntries(TODAY_TABS.map((tab) => [tab, entriesOf(data, tab, state).length])) as Record<TodayTab, number>
+  const open = { ...state, showDismissed: false, showOlder: false }
+  const folded = state.showOlder || state.showDismissed ? 0 : entriesOf(data, "attention", { ...open, showOlder: true }).length - listed.attention
+  const dismissed = TODAY_TABS.reduce((sum, tab) => sum + entriesOfTab(data, tab).filter((entry) => isDismissed(state, entry)).length, 0)
+  return { listed, folded, dismissed }
+}
+
+/** The review rows `X` would dismiss: not dismissed yet, untouched for `days` or more. */
+export function staleReviewKeys(data: TodayData, state: TodayState, days: number, now: number): Array<{ key: string; at: number }> {
+  return entriesOfTab(data, "attention").filter((entry) => entry.kind === "review" && !isDismissed(state, entry) && now - entry.row.at >= days * DAY_MS).map((entry) => ({ key: entry.key, at: entry.row.at }))
 }
 
 /** The item behind the selected row, in the listed order. */
@@ -193,10 +237,12 @@ function itemAt(data: TodayData, entry: Entry | undefined): AttentionItem | Pick
   return data.memory.find((item) => item.id === id)
 }
 
-/** What the triage model reads: every row of the three tabs, attention first, as short text. */
-export function triageItems(data: TodayData): TodayTriageItem[] {
+/** What the triage model reads: the rows the three tabs list (not the dismissed or folded ones), attention first, as short text. */
+export function triageItems(data: TodayData, state: TodayState = createTodayState()): TodayTriageItem[] {
   const short = (text: string, max: number) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
-  return TODAY_TABS.flatMap((tab) => entriesOfTab(data, tab)).slice(0, MAX_TRIAGE_ITEMS).map((entry) => ({ id: entry.key, tab: entry.tab, kind: entry.kind, title: short(entry.row.title, 120), why: short(entry.row.why, 200) }))
+  const listed = { ...state, showDismissed: false, showOlder: false }
+  const { filter: _filter, ...open } = listed
+  return TODAY_TABS.flatMap((tab) => entriesOf(data, tab, open)).slice(0, MAX_TRIAGE_ITEMS).map((entry) => ({ id: entry.key, tab: entry.tab, kind: entry.kind, title: short(entry.row.title, 120), why: short(entry.row.why, 200) }))
 }
 
 /** What enter does on a row, in words: jump to the session, or open the page that manages it. */
@@ -256,13 +302,13 @@ function linkRow(link: TodayLink, width: number): Line {
   return clip([{ text: "managed".padEnd(LABEL_WIDTH), fg: "muted" }, { text: link.command, fg: "link" }, ...(link.ref ? [{ text: ` · ${link.ref}`, fg: "muted" as const }] : [])], width)
 }
 
-/** The row's keys in words: what enter does here and what `m` would do. */
-function keysRow(entry: Entry, width: number): Line {
-  return clip([{ text: "keys".padEnd(LABEL_WIDTH), fg: "muted" }, { text: "enter ", fg: "text", bold: true }, { text: enterVerb(entry.link), fg: "body" }, { text: " · ", fg: "muted" }, { text: "m ", fg: "text", bold: true }, { text: entry.marked ? "unpin from today" : "pin for today", fg: "body" }], width)
+/** The row's keys in words: what enter does here, what `m` and `x` would do. */
+function keysRow(entry: Entry, width: number, dismissed: boolean): Line {
+  return clip([{ text: "keys".padEnd(LABEL_WIDTH), fg: "muted" }, { text: "enter ", fg: "text", bold: true }, { text: enterVerb(entry.link), fg: "body" }, { text: " · ", fg: "muted" }, { text: "m ", fg: "text", bold: true }, { text: entry.marked ? "unpin from today" : "pin for today", fg: "body" }, { text: " · ", fg: "muted" }, { text: "x ", fg: "text", bold: true }, { text: dismissed ? "bring back" : "dismiss", fg: "body" }], width)
 }
 
-function detailRows(input: { data: TodayData; entry: Entry | undefined; tab: TodayTab; width: number; now: number; dense: boolean }): Line[] {
-  const { data, entry, tab, width, now, dense } = input
+function detailRows(input: { data: TodayData; entry: Entry | undefined; tab: TodayTab; width: number; now: number; dense: boolean; dismissedView: boolean }): Line[] {
+  const { data, entry, tab, width, now, dense, dismissedView } = input
   const gap: Line[] = dense ? [] : [[]]
   const title = (text: string): Line => [{ text: truncateEnd(text, width), fg: "text", bold: true }]
   const meta = (spans: Span[]): Line => clip(spans, width)
@@ -278,7 +324,7 @@ function detailRows(input: { data: TodayData; entry: Entry | undefined; tab: Tod
       ...gap,
       ...field("why", item.explain, width),
       ...field("next", item.next, width, "text"),
-      keysRow(entry, width),
+      keysRow(entry, width, dismissedView),
       linkRow(item.link, width),
       ...section("history", eventRows(item.history, width, now)),
       ...section("evidence", evidenceRows(item.evidence, width)),
@@ -292,7 +338,7 @@ function detailRows(input: { data: TodayData; entry: Entry | undefined; tab: Tod
       ...gap,
       ...field("left off", item.leftOff, width),
       ...field("next", item.next, width, "text"),
-      keysRow(entry, width),
+      keysRow(entry, width, dismissedView),
       linkRow(item.link, width),
       ...section("history", eventRows(item.history, width, now)),
       ...section("evidence", evidenceRows(item.evidence, width)),
@@ -310,7 +356,7 @@ function detailRows(input: { data: TodayData; entry: Entry | undefined; tab: Tod
     ...(item.after ? diff("+", item.after, "success") : [[{ text: "  (the memory is archived, nothing replaces it)", fg: "muted" } as Span]]),
     ...gap,
     ...field("next", item.next, width, "text"),
-    keysRow(entry, width),
+    keysRow(entry, width, dismissedView),
     linkRow(item.link, width),
     ...section("evidence", evidenceRows(item.evidence, width)),
   ]
@@ -376,7 +422,9 @@ function triageDetail(input: { data: TodayData; triage: TodayTriageView; width: 
 function hintsOf(state: TodayState, entry: Entry | undefined): string {
   if (state.help) return "↑↓ select · [ ] scroll · ? hide keys · esc back"
   if (state.triage?.open) return state.triage.status === "ready" ? "↑↓ group · a accept · enter list rows · t again · esc rows" : "t try again · esc rows"
-  return [entry ? `enter ${enterVerb(entry.link)}` : "", entry ? (entry.marked ? "m unpin" : "m pin for today") : "", "t triage", "? keys", state.filter ? "esc all rows" : "esc back"].filter(Boolean).join(" · ")
+  if (state.confirm) return state.showDismissed ? "y bring all back · esc cancel" : "y dismiss · + - days · esc cancel"
+  if (state.showDismissed) return [entry ? "x bring back" : "", "X bring all back", "d all rows", "? keys", "esc all rows"].filter(Boolean).join(" · ")
+  return [entry ? `enter ${enterVerb(entry.link)}` : "", entry ? (entry.marked ? "m unpin" : "m pin") : "", entry ? "x dismiss" : "", "X dismiss old", "d dismissed", "t triage", "? keys", state.filter ? "esc all rows" : "esc back"].filter(Boolean).join(" · ")
 }
 
 /** Renders exactly `height` lines of at most `width` cells. */
@@ -385,7 +433,8 @@ export function renderTodayPage(input: { data: TodayData; state: TodayState; wid
   const glyphs = input.glyphs ?? defaultGlyphs()
   const tab = state.tab
   const entries = entriesOf(data, tab, state)
-  const counts = Object.fromEntries(TODAY_TABS.map((name) => [name, name === tab ? entries.length : entriesOf(data, name, state).length])) as Record<TodayTab, number>
+  const shown = todayCounts(data, state)
+  const counts = shown.listed
   const selected = clamp(state.selected, entries.length)
   const entry = entries[selected]
   const triage = state.triage?.open ? state.triage : undefined
@@ -393,7 +442,7 @@ export function renderTodayPage(input: { data: TodayData; state: TodayState; wid
   const right = state.filter ? `group: ${state.filter.title}` : `since ${ago(now, data.summary.lastVisit)} · ${plural(data.summary.projects, "project")}`
   const padded = height >= PADDED_HEIGHT
   const notes = wrap((data.notes ?? []).join(" "), Math.max(1, width)).slice(0, 2).filter(Boolean).map((text): Line => [{ text, fg: "muted" }])
-  const lead = triage ? triageLead(triage, data) : todaySummary(data, now, marked)
+  const lead = triage ? triageLead(triage, data) : state.confirm ? confirmLead(data, state, now) : todaySummary(data, now, marked, state.showDismissed || state.showOlder ? todayCounts(data, { ...state, showDismissed: false, showOlder: false }) : shown)
   const paragraph = [...(padded ? [[]] : []), ...wrap(lead, Math.max(1, width)).slice(0, 2).map((text): Line => [{ text, fg: "body" }]), ...(triage ? [] : notes)]
   const room = Math.max(0, height - 2 - paragraph.length - 1)
   const chrome = padded ? 4 : 2
@@ -401,24 +450,46 @@ export function renderTodayPage(input: { data: TodayData; state: TodayState; wid
   const capacityOf = () => (split ? room : Math.ceil((room - 1) * 0.45)) - chrome
   const listBody = (w: number): Line[] => {
     if (triage) return triageRows({ data, triage, width: w, capacity: capacityOf(), glyphs })
-    const meaning: Line[] = [[{ text: truncateEnd(TAB_MEANING[tab], w), fg: "muted" }], []]
-    const capacity = capacityOf() - meaning.length
-    const head: Line[] = tab === "memory" && data.dream && !state.filter ? [[{ text: `Dream ${data.dream.run} · ${ago(now, data.dream.at)}`, fg: "text" }], ...wrap(data.dream.summary, w).map((text): Line => [{ text, fg: "muted" }]), []] : []
-    const shown = head.length && capacity >= head.length + MIN_TWO_LINE_ROWS ? head : []
-    return [...meaning, ...shown, ...listRows({ rows: entries, selected, width: w, capacity: capacity - shown.length, now, glyphs, tab, filtered: !!state.filter })]
+    const meaning: Line[] = [[{ text: truncateEnd(state.showDismissed ? "dismissed here · x brings one back · d all rows" : TAB_MEANING[tab], w), fg: "muted" }], []]
+    const older = tab === "attention" && !state.showDismissed ? foldLine({ folded: shown.folded, open: !!state.showOlder, listed: entries.filter((entry) => entry.older).length, width: w, glyphs }) : []
+    const capacity = capacityOf() - meaning.length - older.length
+    const head: Line[] = tab === "memory" && data.dream && !state.filter && !state.showDismissed ? [[{ text: `Dream ${data.dream.run} · ${ago(now, data.dream.at)}`, fg: "text" }], ...wrap(data.dream.summary, w).map((text): Line => [{ text, fg: "muted" }]), []] : []
+    const headShown = head.length && capacity >= head.length + MIN_TWO_LINE_ROWS ? head : []
+    const rows = state.showDismissed && !entries.length ? [[{ text: "nothing dismissed here", fg: "text", bold: true }], [{ text: "x on a row hides it until something new happens on it", fg: "muted" }]] as Line[] : listRows({ rows: entries, selected, width: w, capacity: capacity - headShown.length, now, glyphs, tab, filtered: !!state.filter })
+    return [...meaning, ...headShown, ...rows, ...older]
   }
-  const listTitle = triage ? `Triage${triage.status === "ready" ? ` · ${plural(triage.groups.length, "group")}` : ""}` : tab === "memory" ? "Proposals" : tabLabel(tab)
+  const listTitle = triage ? `Triage${triage.status === "ready" ? ` · ${plural(triage.groups.length, "group")}` : ""}` : state.showDismissed ? `${tabLabel(tab)} · dismissed` : tab === "memory" ? "Proposals" : tabLabel(tab)
   const list = { title: listTitle, active: true, weight: 3, body: listBody }
   const detail = state.help
     ? { title: "Keys", weight: 4, body: (w: number): Line[] => keysRows(w) }
     : triage
       ? { title: "Group", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => triageDetail({ data, triage, width: w }) }
-      : { title: "Detail", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => detailRows({ data, entry, tab, width: w, now, dense: !padded }) }
+      : { title: "Detail", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => detailRows({ data, entry, tab, width: w, now, dense: !padded, dismissedView: !!state.showDismissed }) }
   const top = Math.ceil((room - 1) * 0.45)
   const grid = panelGrid({ width, rows: split ? [[list, detail]] : [[list], [detail]], heights: split ? [room] : [top, Math.max(0, room - top - 1)], compact: false, padding: padded, maxColumns: split ? 2 : 1 })
   const frame = pickerFrame(triage ? "Today · Triage" : "Today", hintsOf(state, entry), width, height, [...paragraph, [], ...grid])
   if (frame.length > 1) frame[1] = todayTabsRow({ counts, active: TODAY_TABS.indexOf(tab), right, width })
   return frame
+}
+
+/** Attention's last line: the reviews folded as older, and the key that lists or folds them. Nothing when none is old. */
+function foldLine(input: { folded: number; open: boolean; listed: number; width: number; glyphs: Glyphs }): Line[] {
+  const count = input.open ? input.listed : input.folded
+  if (!count) return []
+  const text = input.open ? `${plural(count, "older review")} listed · o folds them` : `${plural(count, "older review")} folded (untouched ${DISMISS_DAYS}+ days) · o lists them`
+  const lead = `${input.open ? input.glyphs.dot : "+"} `
+  return [[], ...wrap(text, Math.max(1, input.width - 2)).map((part, i): Line => [{ text: i ? "  " : lead, fg: "muted" }, { text: part, fg: "muted" }])]
+}
+
+/** The one question `X` asks: how many rows it changes, and the keys that answer it. */
+function confirmLead(data: TodayData, state: TodayState, now: number): string {
+  const days = state.confirm?.days ?? DISMISS_DAYS
+  if (state.showDismissed) {
+    const count = todayCounts(data, state).dismissed
+    return count ? `Bring back every dismissed row (${count})? y bring back · n or esc keep them dismissed.` : "Nothing is dismissed. esc goes back."
+  }
+  const count = staleReviewKeys(data, state, days, now).length
+  return count ? `Dismiss ${plural(count, "review")} untouched for ${days}+ days? y dismiss · + - change the days · n or esc cancel. d lists them later; x brings one back.` : `No review is untouched for ${days}+ days. + - change the days · esc cancel.`
 }
 
 function triageLead(triage: TodayTriageView, data: TodayData): string {
@@ -439,6 +510,9 @@ function todayTabsRow(input: { counts: Record<TodayTab, number>; active: number;
 
 const KEYS: ReadonlyArray<readonly [string, string]> = [
   ["↑↓ j k", "select"], ["1 2 3 tab", "switch tab"], ["enter", "open where it is managed"], ["m", "pin or unpin for today (until midnight; runs nothing)"],
+  ["x", "dismiss the row until something new happens on it (in the dismissed list: bring it back)"],
+  ["X", `dismiss every review untouched for ${DISMISS_DAYS}+ days, after one y (+ - change the days); in the dismissed list: bring all back`],
+  ["d", "list only the dismissed rows, and back"], ["o", "list or fold the older reviews"],
   ["t", "triage: one cheap-model call groups the rows; you accept per group"], ["[ ]", "scroll the detail"], ["r", "reload"], ["esc q", "back"], ["?", "hide keys"],
 ]
 
@@ -457,6 +531,8 @@ export type TodayAction =
   | { type: "mark"; keys: string[]; on: boolean }
   /** Ask the cheap model to group the rows (only on `t`). */
   | { type: "triage" }
+  /** Dismiss (`on`) or bring back rows: the app stores each key with the row's time; nothing else changes. */
+  | { type: "dismiss"; rows: Array<{ key: string; at: number }>; on: boolean }
 export type TodayKeyResult = { state: TodayState; action: TodayAction }
 const UP = new Set(["\x1b[A", "\x1bOA", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "j"])
@@ -466,6 +542,32 @@ export function withMarks(state: TodayState, keys: string[], on: boolean): Today
   const current = state.marks ?? []
   const marks = on ? [...current.filter((key) => !keys.includes(key)), ...keys].slice(-50) : current.filter((key) => !keys.includes(key))
   return { ...state, marks }
+}
+
+/** Sets the dismissals in the state the same way the app stores them (the newest `MAX_DISMISSED`), so the list changes at once. */
+export function withDismissed(state: TodayState, rows: Array<{ key: string; at: number }>, on: boolean): TodayState {
+  const keys = new Set(rows.map((row) => row.key))
+  const kept = Object.entries(state.dismissed ?? {}).filter(([key]) => !keys.has(key))
+  const dismissed = Object.fromEntries(on ? [...kept, ...rows.map((row) => [row.key, row.at] as const)].slice(-MAX_DISMISSED) : kept)
+  return { ...state, dismissed }
+}
+
+/** The answer to `X`'s question: `y` dismisses (or brings back), + and - change the days, anything else cancels. */
+function confirmKey(state: TodayState, key: string, data: TodayData, now: number): TodayKeyResult {
+  const { confirm: _confirm, ...rest } = state
+  const days = state.confirm?.days ?? DISMISS_DAYS
+  if (key === "+" || key === "=" || key === "-") {
+    const next = Math.max(1, Math.min(MAX_DISMISS_DAYS, days + (key === "-" ? -1 : 1)))
+    return { state: { ...state, confirm: { days: next } }, action: { type: "none" } }
+  }
+  if (key !== "y" && key !== "Y") return { state: rest, action: { type: "none" } }
+  if (state.showDismissed) {
+    const rows = Object.entries(state.dismissed ?? {}).map(([key, at]) => ({ key, at }))
+    return { state: { ...withDismissed(rest, rows, false), selected: 0, scroll: 0 }, action: { type: "dismiss", rows, on: false } }
+  }
+  const rows = staleReviewKeys(data, state, days, now)
+  if (!rows.length) return { state: rest, action: { type: "none" } }
+  return { state: { ...withDismissed(rest, rows, true), selected: 0, scroll: 0 }, action: { type: "dismiss", rows, on: true } }
 }
 
 /** `[` and `]` move the detail (or the triage group) panel by four rows. */
@@ -498,14 +600,18 @@ function triageKey(state: TodayState, triage: TodayTriageView, key: string): Tod
 }
 
 /** One raw key. Moving or switching resets the detail scroll; the same state object comes back when nothing changed. */
-export function todayPageKey(state: TodayState, key: string, data: TodayData): TodayKeyResult {
+export function todayPageKey(state: TodayState, key: string, data: TodayData, now = Date.now()): TodayKeyResult {
   const none = { state, action: { type: "none" } } as const
   if (state.triage?.open && !state.help) return triageKey(state, state.triage, key)
+  if (state.confirm) return confirmKey(state, key, data, now)
   const tabIndex = TODAY_TABS.indexOf(state.tab)
   const entries = entriesOf(data, state.tab, state)
   const count = entries.length
   const selected = clamp(state.selected, count)
   if (key === "\x1b" && state.filter) { const { filter: _filter, ...rest } = state; return { state: { ...rest, selected: 0, scroll: 0 }, action: { type: "none" } } }
+  if ((key === "\x1b" && state.showDismissed) || key === "d") return { state: { ...state, showDismissed: !state.showDismissed, selected: 0, scroll: 0 }, action: { type: "none" } }
+  if (key === "o" && !state.showDismissed) return { state: { ...state, showOlder: !state.showOlder, scroll: 0 }, action: { type: "none" } }
+  if (key === "X") return { state: { ...state, help: false, confirm: { days: DISMISS_DAYS } }, action: { type: "none" } }
   if (key === "\x1b" || key === "q") return { state, action: { type: "close" } }
   if (key === "r") return { state, action: { type: "reload" } }
   if (key === "?") return { state: { ...state, help: !state.help }, action: { type: "none" } }
@@ -523,6 +629,13 @@ export function todayPageKey(state: TodayState, key: string, data: TodayData): T
     // The row moves into or out of "Today": the selection follows it.
     const index = entriesOf(data, state.tab, next).findIndex((row) => row.key === entry.key)
     return { state: { ...next, selected: Math.max(0, index) }, action: { type: "mark", keys: [entry.key], on } }
+  }
+  if (key === "x" && entry) {
+    const on = !state.showDismissed
+    const rows = [{ key: entry.key, at: entry.row.at }]
+    // The row leaves this list: the selection stays at its place, on the row that took it.
+    const next = withDismissed(state, rows, on)
+    return { state: { ...next, selected: clamp(selected, Math.max(1, entriesOf(data, state.tab, next).length)), scroll: 0 }, action: { type: "dismiss", rows, on } }
   }
   if ((key === "\r" || key === "\n") && entry) return { state, action: { type: "open", link: entry.link } }
   return none

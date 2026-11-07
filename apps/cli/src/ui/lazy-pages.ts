@@ -417,6 +417,7 @@ export const createTodayState: TodayMod["createTodayState"] = (...args) => today
 export const todayPageKey: TodayMod["todayPageKey"] = (...args) => todayPage.get().todayPageKey(...args)
 export const renderTodayPage: TodayMod["renderTodayPage"] = (...args) => todayPage.get().renderTodayPage(...args)
 export const triageItems: TodayMod["triageItems"] = (...args) => todayPage.get().triageItems(...args)
+export const withDismissed: TodayMod["withDismissed"] = (...args) => todayPage.get().withDismissed(...args)
 export const loadTodayData: TodayDataMod["loadTodayData"] = (...args) => todayData.get().loadTodayData(...args)
 
 type WhatsNewMod = typeof import("../view/whatsnew-page")

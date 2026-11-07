@@ -33,7 +33,7 @@ describe("loadTodayData", () => {
   test("Attention lists waiting sessions, reviews with open findings, workflows needing input and conflicting memories, longest waiting first", async () => {
     const { source } = fake({
       "session.list": { sessions: [session("a", { status: "waiting_for_approval", pending: "Run bun test", since: NOW - 3 * H }), session("q", { status: "waiting_for_input", pending: "Which database?", since: NOW - H }), session("idle")] },
-      "pr.review": { dashboard: { jobs: [job("rev_1", { updatedAt: NOW - 3.5 * H }), job("rev_2", { findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 1 } }), job("rev_3", { updatedAt: NOW - 2 * H, state: "waiting", sessionId: "ses_rv", findings: { confirmed: 0, plausible: 0, candidates: 0, resolved: 0 } })], watches: [], reviewers: [], metrics: {} } },
+      "pr.review": { dashboard: { jobs: [job("rev_1", { number: 7, updatedAt: NOW - 3.5 * H, findings: { confirmed: 3, plausible: 0, candidates: 0, resolved: 1, blocking: 1 } }), job("rev_2", { number: 8, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 1 } }), job("rev_3", { updatedAt: NOW - 2 * H, state: "waiting", sessionId: "ses_rv", findings: { confirmed: 0, plausible: 0, candidates: 0, resolved: 0 } })], watches: [], reviewers: [], metrics: {} } },
       "workflow.list": { workflows: [{ workflowId: "wf_1", name: "Migrate", directory: "/work/shop-api", objective: "move", state: "needs_input", tasks: [{ id: "t", title: "Pick region", state: "needs_input" }], rounds: 1, startedAt: NOW - 8 * H, updatedAt: NOW - 6 * H }, { workflowId: "wf_2", name: "Done", directory: "/work", objective: "x", state: "completed", tasks: [], rounds: 0, startedAt: 1, updatedAt: 2 }] },
       "memory.graph": { nodes: [memory("1", { text: "Use tabs" }), memory("2", { text: "Use spaces" })], links: [{ from: "mem_1", to: "mem_2", kind: "conflicts", createdAt: NOW - 20 * H }, { from: "mem_1", to: "mem_2", kind: "related", createdAt: NOW }], health: {} },
     })
@@ -41,17 +41,67 @@ describe("loadTodayData", () => {
     expect(attention.map((item) => [item.kind, item.title])).toEqual([
       ["contradiction", `"Use tabs" vs "Use spaces"`],
       ["decision", "Migrate"],
-      ["review", "acme/shop#41 Coupons"],
+      ["review", "acme/shop#7 Coupons"],
       ["approval", "Session a"],
       ["review", "acme/shop#41 Coupons"],
       ["decision", "Session q"],
     ])
     expect(attention.find((item) => item.kind === "approval")).toMatchObject({ why: "waiting for your approval: Run bun test", link: { command: "session", sessionId: "ses_a" } })
-    expect(attention.find((item) => item.id === "rev_1")).toMatchObject({ why: "2 open findings", link: { command: "/reviews", ref: "rev_1" } })
-    expect(attention.find((item) => item.id === "rev_1")?.link.sessionId).toBeUndefined()
-    expect(attention.find((item) => item.id === "rev_3")?.link).toMatchObject({ command: "/reviews", sessionId: "ses_rv" })
+    expect(attention.find((item) => item.id === "pr:github:acme/shop#7")).toMatchObject({ why: "1 blocking finding of 2 open", link: { command: "/reviews", ref: "rev_1" } })
+    expect(attention.find((item) => item.id === "pr:github:acme/shop#7")?.link.sessionId).toBeUndefined()
+    expect(attention.find((item) => item.id === "pr:github:acme/shop#41")?.link).toMatchObject({ command: "/reviews", ref: "rev_3", sessionId: "ses_rv" })
     expect(attention.find((item) => item.id === "wf_1")).toMatchObject({ why: `task "Pick region" needs your input`, link: { command: "/workflows" } })
-    expect(attention.find((item) => item.id === "rev_2")).toBeUndefined()
+    // Open findings with none blocking wait on nobody: the PR is not in Attention.
+    expect(attention.find((item) => item.id === "pr:github:acme/shop#8")).toBeUndefined()
+  })
+
+  test("a pull request is one row from its newest head: earlier heads and re-reviews fold in; merged, closed, re-reviewing and answered PRs drop out", async () => {
+    const blocking = (count: number) => ({ confirmed: count, plausible: 0, candidates: 0, resolved: 0, ...(count ? { blocking: count } : {}) })
+    const at = (hours: number) => ({ createdAt: NOW - hours * H - H, updatedAt: NOW - hours * H })
+    const jobs = [
+      // #22: three heads, the stale one superseded, a failed one, the newest with a blocking finding.
+      job("a1", { number: 22, head: "aaa1111", state: "stale", ...at(80), findings: blocking(1) }),
+      job("a2", { number: 22, head: "bbb2222", state: "failed", ...at(60), findings: blocking(0) }),
+      job("a3", { number: 22, head: "bbb2222", ...at(50), findings: blocking(2) }),
+      job("a4", { number: 22, head: "ccc3333", ...at(30), findings: blocking(1) }),
+      job("a5", { number: 22, head: "ccc3333", trigger: "comment", ...at(20), findings: blocking(1) }),
+      // #87: blocking findings on old heads, none on the newest: answered.
+      job("b1", { number: 87, head: "d1", ...at(90), findings: blocking(3) }),
+      job("b2", { number: 87, head: "d2", ...at(40), findings: blocking(0) }),
+      // #90: GitHub says merged.
+      job("c1", { number: 90, head: "e1", ...at(10), findings: blocking(2), pullRequest: { state: "merged", draft: false, mergeable: "unknown", checks: "none" } }),
+      // #91: closed.
+      job("c2", { number: 91, head: "e2", ...at(10), findings: blocking(2), pullRequest: { state: "closed", draft: false, mergeable: "unknown", checks: "none" } }),
+      // #103: the newest head is being reviewed now; the old findings are about to be replaced.
+      job("d1", { number: 103, head: "f1", ...at(12), findings: blocking(3) }),
+      job("d2", { number: 103, head: "f2", state: "running", ...at(1), findings: blocking(0) }),
+      // #104: the newest head's review failed; nothing is known about it.
+      job("e1", { number: 104, head: "g1", ...at(12), findings: blocking(1) }),
+      job("e2", { number: 104, head: "g2", state: "failed", ...at(2), findings: blocking(0) }),
+      // The same number in another repository is another pull request.
+      job("f1", { repo: "acme/web", number: 22, head: "h1", ...at(5), findings: blocking(1), pullRequest: { state: "open", draft: false, mergeable: "mergeable", checks: "passing" } }),
+    ]
+    const { source, asked } = fake({ "pr.review": { dashboard: { jobs } } })
+    const { attention } = await loadTodayData(source)
+    expect(asked.find((command) => command.type === "pr.review")).toMatchObject({ action: "status", pullRequests: "cached" })
+    expect(attention.map((item) => item.id)).toEqual(["pr:github:acme/shop#22", "pr:github:acme/web#22"])
+    const row = attention[0]!
+    expect(row).toMatchObject({ since: NOW - 20 * H, why: "1 blocking finding", link: { ref: "a5" } })
+    expect(row.explain).toContain("newest head (ccc3333)")
+    expect(row.evidence).toContain("4 earlier reviews of 2 older heads folded in")
+    expect(row.history[0]!.text).toContain("head ccc3333")
+    expect(row.older).toBeUndefined()
+  })
+
+  test("a review row nobody touched for a week is marked older, and the cap keeps the newest of those", async () => {
+    const jobs = Array.from({ length: 50 }, (_, i) => job(`old_${i}`, { number: 100 + i, createdAt: NOW - (8 * 24 + i) * H - H, updatedAt: NOW - (8 * 24 + i) * H, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 } }))
+    jobs.push(job("fresh", { number: 1, updatedAt: NOW - H, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 } }))
+    const { source } = fake({ "pr.review": { dashboard: { jobs } } })
+    const { attention } = await loadTodayData(source)
+    expect(attention.filter((item) => !item.older).map((item) => item.id)).toEqual(["pr:github:acme/shop#1"])
+    const older = attention.filter((item) => item.older)
+    expect(older).toHaveLength(40)
+    expect(older.at(-1)!.id).toBe("pr:github:acme/shop#100")
   })
 
   test("Pick up lists interrupted, failed and paused sessions and finished ones with changes nobody committed", async () => {

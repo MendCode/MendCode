@@ -9,6 +9,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- `/today` shows each pull request once, from its newest head, and leaves out merged or closed ones and reviews with no blocking finding left; reviews nobody touched for a week fold under one line.
+- `/today` can dismiss a row with `x`, or every old review with `X` after one confirmation; `d` lists what you dismissed and brings it back.
+
+### Fixed
+
+- Choosing a panel preset in a session no longer hides your own version of it: `/panel galaxy` shows your custom galaxy, `/panel galaxy default` the built-in one, and the `/panel` menu says which is which. Sessions that already showed the built-in copy get yours back.
+
 ## v0.0.7 - 2026-11-07
 
 `/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code

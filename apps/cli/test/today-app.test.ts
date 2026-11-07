@@ -109,6 +109,41 @@ describe("/today in the app", () => {
     expect(readTuiProfile(h.dataDir).todayMarks.ids).toEqual([])
   })
 
+  test("x dismisses a row in the profile, it stays dismissed when the page opens again, and d then x bring it back", async () => {
+    const h = harness({ "session.list": SESSIONS })
+    await h.run("/today")
+    await h.key("x")
+    expect(h.text()).not.toContain("Add the coupon route")
+    expect(h.text()).toContain("1 row dismissed")
+    expect(readTuiProfile(h.dataDir).todayDismissed).toEqual({ "attention:ses_waiting": NOW - 9e5 })
+    expect(h.sent.every((command) => !/\.(add|delete|set|approve|reject|run|control|triage)$/.test(String(command.type)))).toBe(true)
+    await h.key("q")
+    await h.run("/today")
+    expect(h.text()).not.toContain("Add the coupon route")
+    await h.key("d")
+    expect(h.text()).toContain("Attention · dismissed")
+    expect(h.text()).toContain("Add the coupon route")
+    await h.key("x")
+    expect(readTuiProfile(h.dataDir).todayDismissed).toEqual({})
+    await h.key("d")
+    expect(h.text()).toContain("Add the coupon route")
+  })
+
+  test("X reaches the page as a capital (the Caps Lock fold spares it), asks once, and only y dismisses the old reviews", async () => {
+    const old = { ...SESSIONS.sessions[0]! }
+    const review = { id: "prj_old", provider: "github", repo: "acme/shop", number: 9, title: "Old", reviewer: "global", scope: "global", trigger: "opened", state: "done", coverage: "full", base: "main", head: "abc1234", attempts: 1, createdAt: NOW - 12 * 864e5, updatedAt: NOW - 10 * 864e5, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 }, tokens: { input: 0, output: 0 } }
+    const h = harness({ "session.list": { sessions: [old] }, "pr.review": { dashboard: { jobs: [review] } } })
+    h.app.applySettings({ onboarded: true, tier: "full", features: { pr_review: true } } as never)
+    await h.run("/today")
+    expect(h.text()).toContain("1 older review folded")
+    await h.key("X")
+    expect(h.text()).toContain("Dismiss 1 review untouched for 7+ days?")
+    expect(readTuiProfile(h.dataDir).todayDismissed).toEqual({})
+    await h.key("y")
+    expect(readTuiProfile(h.dataDir).todayDismissed).toEqual({ "attention:pr:github:acme/shop#9": NOW - 10 * 864e5 })
+    expect(h.text()).not.toContain("older review folded")
+  })
+
   test("yesterday's pins read as none", async () => {
     const h = harness({ "session.list": SESSIONS }, { todayMarks: { day: "2001-01-01", ids: ["attention:ses_waiting"] } })
     expect(readTuiProfile(h.dataDir).todayMarks.ids).toEqual(["attention:ses_waiting"])
