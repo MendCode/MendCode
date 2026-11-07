@@ -1210,8 +1210,10 @@ model cost is the table's text. A review checkout without installed dependencies
 (`bun install --frozen-lockfile`, as the script does for each build) and loses them again afterwards; a run that still fails is
 reported by its error line.
 
-- A metric that rose above the measured noise (the script exits 1) adds a critical `performance` finding on the first changed line
-  of the code that can change cost. Within the noise is no difference.
+- A total that rose above the measured noise (a process's footprint, CPU in a phase, or the bytes a session stores; the script exits
+  1) adds a critical `performance` finding on the first changed line of the code that can change cost. Within the noise is no difference.
+- An inner count that rose while no total did (JS heap objects, protected objects, heap bytes, JIT code, the binary's size) is a
+  `nota`: it shows in the table and the model may cite it, but it is never a finding on its own.
 - Without a table, the model is told so and reports a major finding when the change adds start-up, per-turn or per-frame work, a
   timer, a stored row or column, a dependency or an embedded asset and the pull request gives no before/after numbers.
 - It runs only when the diff touches code, manifests or build scripts (`apps/`, `packages/`, `features/`, `package.json`, the lockfile,

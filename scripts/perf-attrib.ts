@@ -264,17 +264,25 @@ function explain(rows: Row[]) {
   }
 }
 
+/**
+ * What a user pays for, and so what can make a change `sube`: each process's physical footprint, CPU per phase and the bytes a
+ * session stores. The JS heap's inner counts and the binary's size are the parts that explain those totals: a rise there with no
+ * total above the noise is a `nota` (shown, never a blocker). The binary may grow with new code (the owner's rule).
+ */
+const TOTALS = /^(total|tui|daemon)\.(ready|after|rest)\.(fp_mb|peak_mb)$|\.cpu_ms\.|^disk\.bytes(_per_session)?$/
+
 export function verdict(rows: Row[]) {
   // RSS is shown, never judged: macOS reclaims pages, so it moves 10 MB or more between identical runs (docs/performance.md).
   const judged = (row: Row) => !row.name.includes("rss_mb") && SUMMARY.some(([, re]) => re.test(row.name))
-  const reds = rows.filter((row) => row.status === "up" && judged(row))
+  const ups = rows.filter((row) => row.status === "up" && judged(row))
+  const reds = ups.filter((row) => TOTALS.test(row.name))
   const downs = rows.filter((row) => row.status === "down" && judged(row))
   const why = explain(rows)
   const fmt = (r: Row) => `${r.name} ${r.delta > 0 ? "+" : ""}${r.delta}${unitOf(r.name) === "n" ? "" : unitOf(r.name)}`
-  if (reds.length) {
-    const top = [...reds].sort((a, b) => b.delta / b.threshold - a.delta / a.threshold).slice(0, 3)
-    return { word: "sube" as const, text: `sube: ${top.map(fmt).join("; ")}. Causes: ${[...why.regions, ...why.types, ...why.constructors, ...why.tables].map(fmt).join("; ") || "none above noise"}` }
-  }
+  const causes = () => [...why.regions, ...why.types, ...why.constructors, ...why.tables].map(fmt).join("; ") || "none above noise"
+  const top = (list: Row[]) => [...list].sort((a, b) => b.delta / b.threshold - a.delta / a.threshold).slice(0, 3)
+  if (reds.length) return { word: "sube" as const, text: `sube: ${top(reds).map(fmt).join("; ")}. Causes: ${causes()}` }
+  if (ups.length) return { word: "nota" as const, text: `nota: no total rose; inside, ${top(ups).map(fmt).join("; ")}${downs.length ? `; lower: ${downs.slice(0, 3).map(fmt).join("; ")}` : ""}` }
   if (downs.length) return { word: "baja" as const, text: `baja: ${downs.slice(0, 3).map(fmt).join("; ")}` }
   return { word: "igual" as const, text: "igual: nothing above the measured noise" }
 }

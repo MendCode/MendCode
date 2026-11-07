@@ -43,6 +43,7 @@ longer stops after a minute, and the token count moves while a model thinks.
 
 ### Changed
 
+- The PR reviewer blocks a MendCode pull request for cost only when a total rises (memory, CPU or disk per session); a rise inside alone is a note.
 - The start screen's infinity mark has the website logo's wide shape, with MendCode in big letters under it when the terminal has room.
 
 ### Fixed
