@@ -453,6 +453,16 @@ export function compactScriptTask(run: WorkflowRun, taskId: string): WorkflowRun
   }) }
 }
 
+/** A finished script check runs again (its whole output is no longer in memory for the replay): pending, without its end. */
+export function reopenScriptTask(run: WorkflowRun, taskId: string, at: number): WorkflowRun {
+  if (!run.script) return run
+  return settle({ ...run, tasks: run.tasks.map((task) => {
+    if (task.id !== taskId || task.state !== "done") return task
+    const { result: _result, ...rest } = withoutEnd(task)
+    return { ...rest, state: "pending" }
+  }) }, at)
+}
+
 export function setScriptPhase(run: WorkflowRun, phase: string, at: number): WorkflowRun {
   return run.script ? { ...run, script: { ...run.script, phase }, updatedAt: at } : run
 }

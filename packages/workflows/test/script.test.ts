@@ -184,6 +184,112 @@ describe("script runs", () => {
     expect(JSON.parse(done.script!.result!)).toEqual({ ok: true, last: "ok", first: "exit 0" })
   })
 
+  const bigJson = JSON.stringify({ head: "HEAD-MARK", items: Array.from({ length: 120 }, (_, n) => ({ n, rubric: `criterion ${n} of the plan` })) })
+  const readJson = `JSON.parse(read.detail.slice(read.detail.indexOf("\\n") + 1))`
+  /** The journal without the script's own return value (which may echo what it read). */
+  const journalCalls = (rows: Map<string, string>) => [...rows].filter(([key]) => !key.endsWith("\u0000result")).map(([, payload]) => payload)
+  const checkEntry = (rows: Map<string, string>) => JSON.parse(journalCalls(rows).find((payload) => payload.startsWith('{"kind":"check"'))!)
+
+  test("check() gives the script the whole output: 5 KB of JSON arrives whole and parses, the journal keeps only the tail", async () => {
+    expect(bigJson.length).toBeGreaterThan(5_000)
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => `${bigJson}\n` })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      return { ok: read.ok, first: read.detail.split("\\n")[0], head: data.head, items: data.items.length, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ ok: true, first: "exit 0", head: "HEAD-MARK", items: 120, truncated: false })
+    expect(h.checkFullOutput).toEqual([true])
+    // The run row and the journal hold only the tail (the script's own return value echoes what it read, so it is left out).
+    expect(JSON.stringify([...journalCalls(h.rows), ...[...h.saved.values()].map((row) => row.tasks)])).not.toContain("HEAD-MARK")
+    const entry = checkEntry(h.rows)
+    expect(entry).toMatchObject({ kind: "check", ok: true, long: true })
+    expect(entry.detail.length).toBeLessThanOrEqual(2_000)
+    expect(entry.truncated).toBeUndefined()
+  })
+
+  test("check() output past 1024 KB is cut at that size and says so with truncated: true", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "é".repeat(600_000) })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      const body = read.detail.slice(read.detail.indexOf("\\n") + 1)
+      return { truncated: read.truncated, chars: body.length, clean: !body.includes("\\ufffd") }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ truncated: true, chars: 524_288, clean: true })
+    const stored = checkEntry(h.rows)
+    expect(JSON.stringify(stored).length).toBeLessThan(2_500)
+    expect(stored).toMatchObject({ long: true, truncated: true })
+  })
+
+  test("a failing check() also gets its whole output", async () => {
+    const h = scriptHarness({ responder: () => "x", checkExit: () => 2, checkOutput: () => bigJson })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/integrity.ts")
+      const data = ${readJson}
+      return { ok: read.ok, first: read.detail.split("\\n")[0], items: data.items.length }
+    `))
+    await settle(30)
+    expect(JSON.parse(h.get(run).script!.result!)).toEqual({ ok: false, first: "exit 2", items: 120 })
+  })
+
+  test("a replay after a restart runs a long-output check again, so the script sees the whole output, not the stored tail", async () => {
+    const saved = new Map()
+    const rows = new Map<string, string>()
+    const source = wf(`
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      const answer = await agent("after")
+      return { head: data.head, items: data.items.length, answer }
+    `)
+    const first = scriptHarness({ saved, rows, responder: () => "HOLD", checkOutput: () => bigJson })
+    const run = first.start(source)
+    await settle(30)
+    expect(first.get(run).tasks.map((task) => task.state)).toEqual(["done", "running"])
+    expect([...rows.values()].join("\n")).not.toContain("HEAD-MARK")
+    first.service.dispose()
+
+    const second = scriptHarness({ saved, rows, responder: () => "x", checkOutput: () => bigJson })
+    second.service.start()
+    await settle(40)
+    const resumed = second.get(run)
+    expect(resumed.state).toBe("completed")
+    expect(second.ran).toHaveLength(1)
+    expect(JSON.parse(resumed.script!.result!)).toEqual({ head: "HEAD-MARK", items: 120, answer: "x" })
+    expect(journalCalls(rows).join("\n")).not.toContain("HEAD-MARK")
+    expect(checkEntry(rows)).toMatchObject({ kind: "check", ok: true, long: true })
+  })
+
+  test("the whole output is dropped once the script has it: a pause and resume runs the check again; a short output replays from the journal", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: (argv) => (argv.includes("short") ? "tiny" : bigJson) })
+    const run = h.start(wf(`
+      const small = await check("bun short")
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      await ask("go on?")
+      return { small: small.detail, items: data.items.length }
+    `))
+    await settle(30)
+    expect(h.get(run).state).toBe("needs_input")
+    expect(h.ran).toHaveLength(2)
+    h.service.control(run.workflowId, "pause")
+    await settle(10)
+    h.service.control(run.workflowId, "resume")
+    await settle(40)
+    expect(h.ran.map((argv) => argv.at(-1))).toEqual(["short", "scripts/plan.ts", "scripts/plan.ts"])
+    const asked = h.get(run).tasks.find((task) => task.kind === "human")!
+    h.service.control(run.workflowId, "approve", { taskId: asked.id })
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ small: "exit 0\ntiny", items: 120 })
+  })
+
   test("check() refuses stdin over 1024 KB or that is not a string, without running anything", async () => {
     const h = scriptHarness({ responder: () => "x" })
     const run = h.start(wf(`

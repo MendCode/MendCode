@@ -391,7 +391,13 @@ export function createWorkflowService(options: {
     put(execution ? { ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, execution } : task) } : current)
     const run$ = options.runCheck
     const stdin = run.script ? scripts.stdinOf(run, taskId) : undefined
-    const gates = run$ ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: run$, timeouts: [timeoutSeconds], ...(run.script ? { keepOutput: true } : {}), ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
+    // A script gets the whole output (up to CHECK_OUTPUT_LIMIT); the gate's detail, which events and the journal keep, stays the tail.
+    let whole: { exitCode: number; text: string } | undefined
+    const runner: CheckRunner | undefined = run$ && run.script ? (input) => run$({ ...input, fullOutput: true }).then((result) => {
+      whole = { exitCode: result.exitCode, text: result.full ?? result.output }
+      return result
+    }) : run$
+    const gates = runner ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: runner, timeouts: [timeoutSeconds], ...(run.script ? { keepOutput: true } : {}), ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
     void gates.then(([gate]) => {
       if (checks.get(key) !== controller) return
       checks.delete(key)
@@ -400,7 +406,7 @@ export function createWorkflowService(options: {
         // A script decides what a failing check means: it gets `{ ok, detail }`, the task itself is done.
         if (current.script) {
           const pass = gate?.status === "pass"
-          scripts.recordCheck(current, taskId, pass, gate?.detail ?? (pass ? "pass" : `${command} failed`))
+          scripts.recordCheck(current, taskId, pass, gate?.detail ?? (pass ? "pass" : `${command} failed`), whole)
           return compactScriptTask(finishTask(current, taskId, { outcome: "done", result: `${command}: ${pass ? "pass" : "fail"}`, at: clock.now() }), taskId)
         }
         return finishTask(current, taskId, gate?.status === "pass" ? { outcome: "done", result: `${command}: pass`, at: clock.now() } : { outcome: "failed", reason: gate?.detail ?? `${command} failed`, failure: "quality", at: clock.now() })
