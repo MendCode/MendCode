@@ -641,7 +641,9 @@ export const daemon = await startDaemon({
           usesClaude: (sessionId, override) => modelEngine(turnModel(sessionId, override), modelCatalog) === "claude",
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
-            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits } = await import("@mendcode/engine-claude")
+            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits, claudeLean } = await import("@mendcode/engine-claude")
+            // `claude_lean` (opt-in): read when each process starts, so a switch takes effect with the session's next Claude Code process.
+            const lean = () => claudeLean(featureOn(store.settings.get(), "claude_lean", { safeMode }))
             const harnessText = await harnessSystem()
             const appendSystem = withMemoryFor(harnessText)
             const engine = createClaudeEngine({
@@ -650,7 +652,7 @@ export const daemon = await startDaemon({
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
               // MendCode's native tools (code graph, computer use, memory, settings) through the daemon's loopback bridge.
               // A session's run limits reach Claude Code too: no CLAUDE.md, no auto memory, and for a PR review child not the PR checkout's settings.
-              sessionArgs: (sessionId) => [...harness.args(sessionId), ...claudeRunLimits(runLimits.get(sessionId)).args],
+              sessionArgs: (sessionId) => [...harness.args(sessionId), ...claudeRunLimits(runLimits.get(sessionId)).args, ...lean().args],
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
@@ -703,7 +705,8 @@ export const daemon = await startDaemon({
                 // Compaction at MendCode's point (`claude_compact`), not near Claude Code's 1M window.
                 const compact = claudeCompactEnv({ model: model.model, settings, on: featureOn(settings, "claude_compact", { safeMode }) })
                 const limited = claudeRunLimits(runLimits.get(sessionId)).env
-                return cache || subagent || compact || limited ? { ...cache, ...subagent, ...compact, ...limited } : undefined
+                const leanEnv = lean().env
+                return cache || subagent || compact || limited || leanEnv ? { ...cache, ...subagent, ...compact, ...limited, ...leanEnv } : undefined
               },
               environment: credentialsFor,
               readBlob: async (ref) => new Uint8Array(store.readBlob(ref.sha256)),

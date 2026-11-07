@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeLean, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1241,6 +1241,12 @@ describe("claude protocol helpers", () => {
     const args = claudeArgs({ permission: "ask", model: "sonnet", advisor: "opus" })
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 4)).toEqual(["--model", "sonnet", "--advisor", "opus"])
     expect(claudeArgs({ permission: "ask", model: "sonnet" })).not.toContain("--advisor")
+  })
+
+  test("claude_lean: on keeps only MendCode's MCP servers, drops the skills listing and auto memory; off adds nothing", () => {
+    expect(claudeLean(false)).toEqual({ args: [] })
+    expect(claudeLean(true)).toEqual({ args: ["--strict-mcp-config", "--disable-slash-commands"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    expect(claudeLean(true).args).not.toContain("--setting-sources")
   })
 
   test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {

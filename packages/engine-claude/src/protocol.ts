@@ -91,6 +91,16 @@ export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; 
 }
 
 /**
+ * What `claude_lean` changes in a Claude Code process (all three in Claude Code 2.1.319's `claude --help` or binary): `--strict-mcp-config`
+ * keeps only the servers MendCode hands it with `--mcp-config` (its own tools), `--disable-slash-commands` leaves out the skills and
+ * commands listing, and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` its auto memory (MendCode's memory block still comes). CLAUDE.md, settings,
+ * permission rules, hooks and the output style stay. Measured on Haiku: about half of a small task's input was that setup.
+ */
+export function claudeLean(on: boolean): { args: string[]; env?: Record<string, string> } {
+  return on ? { args: ["--strict-mcp-config", "--disable-slash-commands"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } } : { args: [] }
+}
+
+/**
  * Every `--settings <json object>` of `args` as one, the later keys winning: a process may get settings from several places (fast
  * mode, a run limit's language), and neither may depend on how Claude Code reads a repeated option. A value that is not a JSON
  * object (a settings file's path) is left where it is.

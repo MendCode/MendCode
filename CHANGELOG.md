@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `/tier claude_lean on` runs Claude Code sessions without your own MCP servers, skills listing and auto memory, so each call sends less; your CLAUDE.md, settings and permissions stay.
 - `/today` lists what needs you, the sessions to pick up and Dream's memory proposals in one read-only page.
 - On `/today`, each tab says what it holds (Attention: blocked until you answer; Pick up: left half-done) and each row says what Enter does.
 - `/today` `m` pins rows into a Today group at the top until midnight.

@@ -91,6 +91,16 @@ The drawing text helps the model use a diagram or chart when useful:
 
 Codex, pi and ACP agents get the same two additions ([pi](pi-engine.md#how-a-turn-runs), [ACP](acp-engine.md#agent-transport)). Codex receives them as its thread's `developerInstructions`, a developer message after its own instructions.
 
+### Lean context
+
+With `claude_lean` (off in every tier; `/tier claude_lean on`), each new `claude` process leaves out part of your own Claude Code setup to spend fewer tokens on every call:
+
+- your MCP servers: only MendCode's own tools stay (`--strict-mcp-config`);
+- the skills and custom commands listing (`--disable-slash-commands`);
+- Claude Code's auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`); MendCode's memory still comes.
+
+Your `CLAUDE.md`, settings, permission rules, hooks and output style stay. A switch applies to the session's next Claude Code process.
+
 ### Login and process lifetime
 
 Claude Code uses its own login. MendCode never reads, copies or forwards Claude credentials. There is no proxy or relay.

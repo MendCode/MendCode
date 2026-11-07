@@ -480,6 +480,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Sub-agent forks (parent's cached context)](docs/agents.md) (`task_fork`) | — | — | Opt-in | /tier task_fork on · task fork: true |
 | [Sub-agents on a cheaper model](docs/agents.md) (`cheap_subagents`) | — | Included | Included | /tier cheap_subagents off · /model roles · subagent |
 | [Claude Code compacts at MendCode's point](docs/claude-code.md) (`claude_compact`) | — | Included | Included | /tier claude_compact off · compactAtTokens |
+| [Claude Code without your own MCP servers, skills and auto memory](docs/claude-code.md) (`claude_lean`) | Opt-in | Opt-in | Opt-in | /tier claude_lean on |
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |
 | [One tree: sessions sharing a checkout](docs/one-tree.md) (`one_tree`) | — | Included | Included | /tier one_tree off |
 | [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
