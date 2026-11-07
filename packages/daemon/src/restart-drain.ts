@@ -235,6 +235,8 @@ export function createRestartDrain(deps: {
     },
     /** The sessions this drain holds (paused for it, not by the user); empty outside a drain. */
     held(): SessionId[] { return state ? [...state.held] : [] },
+    /** An explicit user pause takes ownership, even if the drain already paused the session. */
+    userPaused(sessionId: SessionId) { state?.held.delete(sessionId) },
     /** The session that asked for the restart: what it runs is the restart itself. */
     except() { return state?.except },
     dispose,

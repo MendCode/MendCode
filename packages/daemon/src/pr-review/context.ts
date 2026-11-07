@@ -4,6 +4,7 @@ import { parseDiffRows } from "@mendcode/protocol/wire"
 import type { Graph, GraphNode } from "@mendcode/codegraph"
 import { loc, traverseCalls } from "../../../codegraph/src/query"
 import type { PullRequestInfo } from "./pull-request"
+import { CODE_FILE_CHARS, codeReadText } from "./read-code"
 import type { ReaderSummary } from "./readers"
 import { diffLines, generatedRules, triageByStat, triageFiles, type TriagedFile, type TriageReason } from "./triage"
 
@@ -136,13 +137,15 @@ export type ReviewContext = {
   readTokens?: number | undefined
   /** Files omitted from the review's diffs without a successful model-reader summary. */
   unread?: string[] | undefined
+  /** Set when readers read the changed code (`readers.code: all`): every changed file with its size, so the review pass sees the whole change though it gets only the risk spots' hunks. */
+  overview?: string | undefined
 }
 
 /**
  * Reads files for the review pass (readers.ts): the data files triage chose and the code files a large diff's parts cut, each
  * summary naming the paths it covers. run.ts binds it to the reader model, the parallel count and the readers' share of the cap.
  */
-export type ContextReaders = (input: { data: TriagedFile[]; cut: FileDiff[]; load?: ((file: FileDiff) => Promise<FileDiff>) | undefined; /** Estimated tokens of the whole diff, for the readers' share of the cap. */ diffTokens: number }) => Promise<ReaderSummary[]>
+export type ContextReaders = (input: { data: TriagedFile[]; cut: FileDiff[]; /** Changed code files for the readers to read (`readers.code: all`). */ code?: FileDiff[] | undefined; load?: ((file: FileDiff) => Promise<FileDiff>) | undefined; /** Estimated tokens of the whole diff, for the readers' share of the cap. */ diffTokens: number }) => Promise<ReaderSummary[]>
 
 /** One review call's share of a large diff: whole files (a file larger than a call by itself is a one-line note) and their symbols. */
 export type ReviewPart = { files: string[]; diff: string; symbols: ChangedSymbol[]; tokens: number }
@@ -246,6 +249,13 @@ const summaryLine = (summary: ReaderSummary) => `Reader summary (${summary.by ==
 export function readerTexts(files: readonly FileDiff[], summaries: readonly ReaderSummary[]): Map<string, string> {
   const texts = new Map<string, string>()
   for (const summary of summaries) {
+    // A code file a reader could not read stays as it is: the review pass gets its whole diff.
+    if (summary.by === "raw") continue
+    // A code file a model read: its summary, risk spots and the hunks of those, in place of the whole diff.
+    if (summary.code) {
+      for (const read of summary.code) { const found = files.find((entry) => entry.path === read.path); if (found) texts.set(read.path, codeReadText(found, read, summary.by)) }
+      continue
+    }
     summary.paths.forEach((file, index) => {
       const found = files.find((entry) => entry.path === file)
       if (!found) return
@@ -441,7 +451,7 @@ async function fetchDiff({ directory, base, head, git, ignore, readers, attribut
  * The diff of `base...head` in `directory` and the graph context of what it touches, within `budgetTokens * CONTEXT_SHARE`.
  * `ignore` drops paths the repository config excludes. Without a graph the review proceeds on the diff alone and the notes say so.
  */
-export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes, compress = true, mainBytes }: { directory: string; base: string; head: string; budgetTokens: number; compress?: boolean; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined; mainBytes?: number | undefined }): Promise<ReviewContext> {
+export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes, compress = true, mainBytes, readCode = false }: { directory: string; base: string; head: string; budgetTokens: number; compress?: boolean; /** The readers read every changed code file and the review pass gets summaries and risk-spot hunks (`readers.code: all`). */ readCode?: boolean; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined; mainBytes?: number | undefined }): Promise<ReviewContext> {
   for (const ref of [base, head]) if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,199}$/.test(ref) || ref.includes("..")) throw new Error(`[PR_REVIEW]: invalid ref ${JSON.stringify(ref.slice(0, 80))}`)
   const fetched = await fetchDiff({ directory, base, head, git, ignore, readers: !!readers, attributes, graph, mainBytes })
   const files = fetched.files
@@ -449,12 +459,17 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   const triage = readers ? fetched.triage : { code: files, data: [] }
   const diffTokens = estimateTokens(files.reduce((sum, file) => sum + chars(file), 0))
   const overflow = triage.code.filter((file) => file.deferred)
-  const read = readers && (triage.data.length || overflow.length) ? await readers({ data: triage.data, cut: overflow, load: fetched.load, diffTokens }) : []
+  // Code the readers read: files with lines on the new side whose diff a cheap model can hold; the rest go to the review pass whole.
+  const readable = readers && readCode ? triage.code.filter((file) => !file.deferred && !file.deleted && file.right.size > 0 && file.text.length <= CODE_FILE_CHARS) : []
+  const read = readers && (triage.data.length || overflow.length || readable.length) ? await readers({ data: triage.data, cut: overflow, ...(readable.length ? { code: readable } : {}), load: fetched.load, diffTokens }) : []
   for (const file of overflow) if (!read.some((summary) => summary.paths.includes(file.path))) read.push({ id: "unread", paths: [file.path], text: "not read: no reader summary available", by: "not read" })
   const placeholders = readerTexts(files, read)
   const shownFiles = files.map((file) => placeholders.has(file.path) ? { ...file, text: placeholders.get(file.path)! } : compress ? { ...file, text: withoutDeletionHunks(file.text) } : file)
   const main = compress ? mainLanguage({ graph, files }) : undefined
+  // A code file a reader read still counts for the cap by what the review pass is spared: its whole diff less what it was shown.
+  const readCodePaths = new Set(read.flatMap((summary) => summary.code?.map((entry) => entry.path) ?? []))
   const readTokens = [...triage.data.map((entry) => entry.file), ...overflow].filter((file) => placeholders.has(file.path)).reduce((sum, file) => sum + estimateTokens(chars(file)), 0)
+    + files.filter((file) => readCodePaths.has(file.path)).reduce((sum, file) => sum + Math.max(0, estimateTokens(chars(file)) - estimateTokens(placeholders.get(file.path)!.length)), 0)
   const notes: string[] = []
   if (overflow.length) notes.push(`The review pass kept higher-risk code within ${MiB(MAX_DIFF_BYTES)} MiB (source before tests/docs, imports by changed files, then changed lines). Not read in full by the review pass: ${overflow.map((file) => file.path).join(", ")}.`)
   const unread = read.filter((summary) => summary.by === "not read").flatMap((summary) => summary.paths)
@@ -463,7 +478,8 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   if (!graph) notes.push("No code graph index: reviewed from the diff alone.")
   else {
     const describe = (node: GraphNode) => `${node.label} (${loc(node)})`
-    for (const file of files) for (const node of placeholders.has(file.path) ? [] : touchedNodes(graph, file)) {
+    // Callers of what changed are the graph's context for the review pass; a file a reader read still has them (its hunks are all the pass sees).
+    for (const file of files) for (const node of placeholders.has(file.path) && !readCodePaths.has(file.path) ? [] : touchedNodes(graph, file)) {
       if (symbols.length >= MAX_SYMBOLS) break
       const callers = traverseCalls({ graph, start: node, direction: "in", depth: GRAPH_DEPTH, cap: CALLER_CAP })
       const callees = traverseCalls({ graph, start: node, direction: "out", depth: GRAPH_DEPTH, cap: CALLER_CAP })
@@ -488,12 +504,13 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   const cutUnread = cutRead.filter((summary) => summary.by === "not read").flatMap((summary) => summary.paths)
   if (cutUnread.length) notes.push(`Not read: ${cutUnread.join(", ")}. The readers' share was unavailable, spent, or the reader failed.`)
   if (cutRead.length) laid = layout(new Map(cutRead.flatMap((summary) => summary.paths.map((file) => [file, summaryLine(summary)] as const))))
-  const readCount = new Set([...read, ...cutRead].flatMap((summary) => summary.paths)).size
+  const readCount = new Set([...read, ...cutRead].filter((summary) => summary.by !== "raw").flatMap((summary) => summary.paths)).size
+  const overview = readCodePaths.size ? `${files.slice(0, 300).map((file) => { const stats = file.size ?? diffLines(file).stats; return `${file.path} (+${stats.added} -${stats.removed})` }).join("\n")}${files.length > 300 ? `\n… and ${files.length - 300} more files` : ""}` : undefined
   const { single, parts, cut } = laid
   const summaries = [...read, ...cutRead]
-  const covered = new Set(summaries.filter((summary) => summary.by !== "not read" && summary.by !== "local").flatMap((summary) => summary.paths))
+  const covered = new Set(summaries.filter((summary) => summary.by !== "not read" && summary.by !== "local" && summary.by !== "raw").flatMap((summary) => summary.paths))
   const notRead = [...new Set([...unread, ...cutUnread, ...[...overflow.map((file) => file.path), ...cut].filter((path) => !covered.has(path))])]
-  const extra = { ...(readCount ? { readers: { files: readCount } } : {}), ...(readTokens ? { readTokens } : {}), ...(notRead.length ? { unread: notRead } : {}) }
+  const extra = { ...(readCount ? { readers: { files: readCount } } : {}), ...(overview ? { overview } : {}), ...(readTokens ? { readTokens } : {}), ...(notRead.length ? { unread: notRead } : {}) }
   if (!parts) {
     notes.push(...single.notes)
     return { directory, base, head, diff: single.diff, files, changedSymbols: single.symbols, truncated: single.truncated || !!overflow.length, notes, tokens: tokensOf(single.diff, single.symbols), ...extra }

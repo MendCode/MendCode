@@ -12,10 +12,10 @@ export const historyTokens = (messages: readonly ModelMessage[]) => messages.red
 export const DEFAULT_COMPACTION_PERCENT = 90
 
 /**
- * A `threshold` as the percent of the window it means, 1 to 100. It is a percent (80 = 80%), but a value above 0 and at most 1 was
- * written as a fraction (0.8 for 80%) and is read as one: 1% of a window is never what anyone asked for.
+ * A `threshold` as the percent of the window it means, 1 to 100. Values strictly between 0 and 1 are fractions (0.8 = 80%).
+ * The historical integer percentage 1 remains 1%; use 100 for 100%.
  */
-export const thresholdPercent = (threshold: number) => Math.max(1, Math.min(100, threshold > 0 && threshold <= 1 ? threshold * 100 : threshold))
+export const thresholdPercent = (threshold: number) => Math.max(1, Math.min(100, threshold > 0 && threshold < 1 ? threshold * 100 : threshold))
 
 export function compactionThreshold(config: CompactionConfig, limits: CompactionLimits, legacy?: number) {
   const window = limits.inputLimit ?? limits.contextWindow

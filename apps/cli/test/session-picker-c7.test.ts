@@ -214,6 +214,49 @@ describe("picker view", () => {
 })
 
 describe("picker in the app", () => {
+  test("bare /rename targets the open session even when it is outside the launch folder's list", async () => {
+    const own = make({ title: "original folder chat", directory: "/project" })
+    const other = make({ title: "other folder chat", directory: "/other" })
+    const h = appHarness({ sessionId: own.sessionId, dataDir: tempDir(), directory: "/project", reply: (command) => {
+      if (command.type === "session.list") return { ok: true, result: { sessions: command.directory ? [own] : [other, own] } }
+    } })
+    h.app.applySettings({ onboarded: true })
+    conversation(own.sessionId, h.app.onEvent).exchange("hello", "hi")
+    await h.type("/sessions\r")
+    await h.app.onKey("\x0c")
+    await h.type("other folder chat")
+    await h.app.onKey("\r")
+    expect(h.subscriptions.at(-1)?.sessionId).toBe(other.sessionId)
+    await h.type("/rename\r")
+    await h.app.onKey("\x15")
+    await h.type("renamed conversation\r")
+    expect(h.sentOf("session.rename")).toEqual([{ type: "session.rename", sessionId: other.sessionId, title: "renamed conversation" }])
+  })
+
+  test("scope and folder changes refresh message-only matches for the newly loaded sessions", async () => {
+    const own = make({ title: "alpha", directory: "/project" })
+    const other = make({ title: "beta", directory: "/other" })
+    const h = appHarness({ sessionId: own.sessionId, dataDir: tempDir(), directory: "/project", reply: (command) => {
+      if (command.type === "session.list") return { ok: true, result: { sessions: command.directory ? [own, other].filter((session) => session.directory === command.directory) : [own, other] } }
+      if (command.type === "session.search") return { ok: true, result: { hits: command.sessionIds?.includes(other.sessionId) ? [{ sessionId: other.sessionId, snippet: "refund the order" }] : [] } }
+    } })
+    h.app.applySettings({ onboarded: true })
+    conversation(own.sessionId, h.app.onEvent).exchange("hello", "hi")
+    await h.type("/sessions\r")
+    await h.app.onKey("\x06")
+    await h.type("refund")
+    expect(h.sentOf("session.search").at(-1)).toMatchObject({ sessionIds: [own.sessionId] })
+    expect(h.text().join("\n")).not.toContain("beta")
+    await h.app.onKey("\x0c")
+    expect(h.sentOf("session.search").at(-1)).toMatchObject({ sessionIds: [own.sessionId, other.sessionId] })
+    expect(h.text().join("\n")).toContain("beta")
+    await h.app.onKey("\t")
+    await h.type("/other\r")
+    expect(h.sentOf("session.list").at(-1)).toMatchObject({ directory: "/other" })
+    expect(h.sentOf("session.search").at(-1)).toMatchObject({ sessionIds: [other.sessionId] })
+    expect(h.text().join("\n")).toContain("beta")
+  })
+
   test("ctrl+t then enter patches the session's agent-view metadata and reloads the list", async () => {
     const id = ids("session")
     const session: SessionSummary = { sessionId: id, title: "Tagged work", directory: "/project", createdAt: NOW, updatedAt: NOW, lastSeq: 1, queued: 0, state: "idle" }

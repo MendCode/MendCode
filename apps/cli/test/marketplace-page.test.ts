@@ -106,6 +106,40 @@ describe("marketplace keys and header", () => {
     expect(press(createMarketplaceState(), "?", "?").keys).toBe(false)
   })
 
+  test("both kind-filter directions close a cancelled install preview", () => {
+    const preview = { entry: data.report.entries[0]!, scope: "user" as const, action: "install" as const, problems: [] }
+    const inspecting = { ...createMarketplaceState(), confirm: { kind: "install" as const, name: "one", sourceId: "team" } }
+    const cancelled = marketplaceKey(inspecting, "\x1b", { ...data, preview }).state
+    expect(cancelled.confirm).toBeUndefined()
+    for (const key of ["\t", "\x1b[Z"]) {
+      const result = marketplaceKey(cancelled, key, { ...data, preview })
+      expect(result.state.kind).toBe("themes")
+      expect(result.state.selectedId).toBeUndefined()
+      expect(result.action).toEqual({ type: "close-preview" })
+    }
+  })
+
+  test("sources keep the selected row and removal question visible in every layout", () => {
+    const sources = Array.from({ length: 30 }, (_, i) => ({ id: `source-${String(i).padStart(2, "0")}`, location: `/catalog/${i}`, enabled: true, builtin: false }))
+    for (const [width, height] of [[60, 20], [100, 30], [160, 45]] as const) {
+      let state: MarketplaceState = { ...createMarketplaceState(), mode: "sources" }
+      for (let i = 0; i < sources.length; i++) {
+        const render = () => plain(renderMarketplacePage({ state, sources, error: "", width, height })).join("\n")
+        expect(render()).toContain(`› ${sources[i]!.id}`)
+        state = marketplaceKey(state, "j", { sources }).state
+      }
+      state = marketplaceKey(state, "d", { sources }).state
+      const text = plain(renderMarketplacePage({ state, sources, error: "", width, height })).join("\n")
+      expect(text).toContain("› source-29")
+      expect(text).toContain("remove the source source-29?")
+      state = marketplaceKey(state, "\x1b", { sources }).state
+      for (let i = sources.length - 1; i >= 0; i--) {
+        expect(plain(renderMarketplacePage({ state, sources, error: "", width, height })).join("\n")).toContain(`› ${sources[i]!.id}`)
+        state = marketplaceKey(state, "k", { sources }).state
+      }
+    }
+  })
+
   test("is exactly width x height with no overflow at every size, in every state", () => {
     const states: MarketplaceState[] = [
       createMarketplaceState(),

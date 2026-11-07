@@ -227,6 +227,33 @@ describe("script runs", () => {
     expect(stored).toMatchObject({ long: true, truncated: true })
   })
 
+  test("check() preserves runner overflow even when trimming the captured prefix leaves only a header", async () => {
+    // The runner keeps a prefix past its byte limit; a later meaningful line is only in its discarded tail.
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "HEADER\n" + " \n".repeat(600_000) })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      return { detail: read.detail, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ detail: "exit 0\nHEADER", truncated: true })
+    expect(checkEntry(h.rows)).toMatchObject({ truncated: true })
+  })
+
+  test("check() trims ordinary trailing whitespace without reporting truncation", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "HEADER\n \n" })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      return { detail: read.detail, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ detail: "exit 0\nHEADER", truncated: false })
+    expect(checkEntry(h.rows).truncated).toBeUndefined()
+  })
+
   test("a failing check() also gets its whole output", async () => {
     const h = scriptHarness({ responder: () => "x", checkExit: () => 2, checkOutput: () => bigJson })
     const run = h.start(wf(`

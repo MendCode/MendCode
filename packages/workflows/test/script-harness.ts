@@ -1,6 +1,7 @@
 import { createIdFactory, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowRun } from "@mendcode/protocol"
 import { buildScriptPlan, createWorkflowService, validatePlan, type ScriptHostPort, type ScriptJournalPort, type ScriptMergePort } from "../src"
 import { createInProcessScriptHost } from "../src/script-inprocess"
+import type { CheckRunner } from "@mendcode/loops"
 
 export const settle = async (times = 12) => {
   for (let index = 0; index < times; index++) await new Promise((resolve) => setImmediate(resolve))
@@ -49,7 +50,7 @@ export type Responder = (prompt: string, info: { sessionId: SessionId; turn: num
  * answered by `responder` (or held, for tests that decide when a task ends). Pass the same `saved`/`rows` to a second harness to
  * simulate a daemon restart.
  */
-export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; rows?: Map<string, string>; clock?: ReturnType<typeof scriptClock>; responder?: Responder; host?: ScriptHostPort; checkExit?: (argv: string[], cwd?: string, stdin?: string) => number | Promise<number>; /** What a check prints (default "ok" or "failing"). */ checkOutput?: (argv: string[], exitCode: number) => string; /** Route per-run-worktree tasks to `/worktrees/<task>` like the daemon's router. */ worktrees?: boolean; /** No script host and no journal: what a daemon without isolation looks like. */ bare?: boolean; /** The git side of worktree results (a fake in most tests). */ merge?: ScriptMergePort } = {}) {
+export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; rows?: Map<string, string>; clock?: ReturnType<typeof scriptClock>; responder?: Responder; host?: ScriptHostPort; runCheck?: CheckRunner; checkExit?: (argv: string[], cwd?: string, stdin?: string) => number | Promise<number>; /** What a check prints (default "ok" or "failing"). */ checkOutput?: (argv: string[], exitCode: number) => string; /** Route per-run-worktree tasks to `/worktrees/<task>` like the daemon's router. */ worktrees?: boolean; /** No script host and no journal: what a daemon without isolation looks like. */ bare?: boolean; /** The git side of worktree results (a fake in most tests). */ merge?: ScriptMergePort } = {}) {
   const clock = options.clock ?? scriptClock()
   const ids = createIdFactory({ now: clock.now })
   const saved = options.saved ?? new Map<WorkflowId, WorkflowRun>()
@@ -87,11 +88,13 @@ export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; r
       return { queueId }
     },
     cancelTurn: (input) => void cancelled.push(input),
-    async runCheck({ argv, cwd, stdin, fullOutput }) {
+    async runCheck(input) {
+      const { argv, cwd, stdin, fullOutput } = input
       ran.push(argv)
       checkFullOutput.push(fullOutput)
       if (cwd) checkDirs.push(cwd)
       checkStdins.push(stdin)
+      if (options.runCheck) return options.runCheck(input)
       const exitCode = (await options.checkExit?.(argv, cwd, stdin)) ?? 0
       return { exitCode, output: options.checkOutput?.(argv, exitCode) ?? (exitCode ? "failing" : "ok") }
     },

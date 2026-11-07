@@ -246,8 +246,9 @@ without losing sessions.
 ### Pull request reviews
 
 `/pr review <n>` reviews a pull request with your model. One pass finds candidate defects, a second, independent pass tries to
-refute each, and only what it confirms is published as one review with inline comments. The review reads the diff with the
-callers and callees of every symbol it touches, from the [code graph](docs/code-graph.md). It uses your `gh` login: no GitHub App,
+refute each, and only what it confirms is published as one review with inline comments. Cheap readers on a small model read the
+changed code first, so your main model gets their summaries and the hunks that look risky, plus the callers and callees of every
+symbol the change touches, from the [code graph](docs/code-graph.md). It uses your `gh` login: no GitHub App,
 webhook server or stored token. Nothing is posted until `.mendcode/review.yaml` on the base branch sets `enabled: true`, and
 `/pr watch-repo` keeps reviewing new pull requests and pushes. GitLab and Gitea / Forgejo work through adapters
 ([PR reviewer](docs/pr-review.md), [team setup](docs/pr-review-setup.md)).

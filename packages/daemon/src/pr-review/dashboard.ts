@@ -81,6 +81,7 @@ export function jobSummary(job: ReviewJob): PrJobSummary {
     updatedAt: job.updatedAt,
     findings: findingCounts(job),
     tokens: job.tokens,
+    ...(job.readTokens ? { readTokens: job.readTokens } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(url !== undefined ? { url } : {}),
     ...(assignment !== undefined ? { assignment } : {}),

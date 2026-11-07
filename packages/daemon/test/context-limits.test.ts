@@ -16,6 +16,13 @@ test("a 500k model with nothing set packs at 90 percent of its window, and the l
   expect(compactPoint({}, { contextWindow: 500_000 }, noTrigger)).toEqual({ tokens: 450_000, compactAtSource: "threshold", thresholdPercent: 90, thresholdSource: "default" })
 })
 
+test("reserve-derived 1% and configured threshold 1 both report 1%, not a fraction", () => {
+  expect(compactPoint({ reserved: 99_000 }, { contextWindow: 100_000 }, noTrigger)).toEqual({ tokens: 1000, compactAtSource: "threshold", thresholdPercent: 1, thresholdSource: "default" })
+  expect(compactPoint({ threshold: 1 }, { contextWindow: 100_000 }, noTrigger)).toEqual({ tokens: 1000, compactAtSource: "threshold", thresholdPercent: 1, thresholdSource: "compaction.threshold" })
+  expect(compactPoint({}, { contextWindow: 100_000, provider: { threshold: 1 } }, noTrigger)).toMatchObject({ tokens: 1000, thresholdPercent: 1, thresholdSource: "provider-override" })
+  expect(compactPoint({}, { contextWindow: 100_000, model: { threshold: 1 } }, noTrigger)).toMatchObject({ tokens: 1000, thresholdPercent: 1, thresholdSource: "model-override" })
+})
+
 test("the compactAtTokens setting is an absolute trigger, lowered to a smaller window", () => {
   expect(compactPoint({}, { contextWindow: 500_000 }, { tokens: 450_000, environment: false })).toEqual({ tokens: 450_000, compactAtSource: "compactAtTokens" })
   expect(compactPoint({ threshold: 50 }, { contextWindow: 200_000 }, { tokens: 450_000, environment: false })).toEqual({ tokens: 200_000, compactAtSource: "compactAtTokens", capped: true })

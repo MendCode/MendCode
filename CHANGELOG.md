@@ -33,6 +33,7 @@ language, restarts that never interrupt or leave sessions held, prompt history t
 
 ### Changed
 
+- The PR reviewer has cheap readers read all the changed code first and sends your main model their summaries and the risky hunks instead of the whole diff, so reviews use far fewer main-model tokens; `readers: { code: overflow }` in `.mendcode/review.yaml` brings back the old behaviour, and `/reviews` shows what the readers used.
 - MendCode's license is now Apache 2.0: still open source, and copies and forks must keep the notice that credits MendCode and its author. Earlier versions keep their MIT license. The MendCode name and logo are not licensed to forks.
 - MendAscii takes the theme's colors: under the default Ink theme it is a black and white robot with pink cheeks; the Mend theme and the others keep the mint and teal one.
 - Every notice is now one short row in words with the same look and place: a severity mark, the message and what to do next, with `F4 details` for the full text (`/tier` says the tier, its prompt and how many features are on, instead of a list of flag ids); errors stay until your next prompt or command.
@@ -44,6 +45,12 @@ language, restarts that never interrupt or leave sessions held, prompt history t
 
 ### Fixed
 
+- Forced service restarts validate the service before draining and no longer stall on a disconnected daemon; explicitly paused queues and disabled restart resumption stay held.
+- `/rename` targets the current session across projects, and message search refreshes when the session scope changes.
+- Compaction preserves percentage thresholds, validates model overrides, and reports reserve-derived thresholds correctly.
+- Marketplace removal cancels on Enter, filtered previews stay accurate, and the selected source remains visible.
+- Standalone Codex sessions follow the reply-language setting.
+- Workflow checks mark discarded output as truncated even when the captured output ends in whitespace.
 - ↑ in the prompt and `/prompt-history` show what you typed before again in projects with a long history (long pasted messages left the list empty); ↑ pressed while the daemon restarts no longer leaves it empty either.
 - A workflow script's `check()` that passes now gets the command's output in `detail`, as a failing one already did, instead of just "pass". It gets the whole output, so a script can read a JSON file or a long report through a check; very large output is cut and marked `truncated` instead of being shortened silently.
 - The first-run setup shows each tool and login it found (Codex, Claude Code, ChatGPT, API keys, pi) as a row you can act on: use Codex as its own harness, sign MendCode in with your ChatGPT account and come back with your choices kept, use Claude Code, or add a key. Using Codex this way works in every tier and leaves your tier as it is (`/tier codex_engine on|off`). With nothing that can answer yet, it no longer offers to start chatting with a model that does not exist; it offers to skip for now instead.

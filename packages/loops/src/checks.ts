@@ -44,9 +44,10 @@ export function checkProblems(checks: readonly string[]): string[] {
  * `stdin` is written to the command's stdin, which is then closed; without it stdin is ignored.
  * `fullOutput: true` (only a workflow script's `check()` asks for it) keeps the start of the output too, up to
  * FULL_OUTPUT_BYTES: `full` holds it, past that size by at most one chunk when there was more (the caller cuts it).
+ * `fullTruncated` is true only when the runner discarded decoded output from `full`.
  * Without it the runner keeps only its usual tail in `output`.
  */
-export type CheckRunner = (input: { argv: string[]; cwd: string; signal: AbortSignal; timeoutSeconds?: number; stdin?: string; fullOutput?: boolean }) => Promise<{ exitCode: number; output: string; full?: string }>
+export type CheckRunner = (input: { argv: string[]; cwd: string; signal: AbortSignal; timeoutSeconds?: number; stdin?: string; fullOutput?: boolean }) => Promise<{ exitCode: number; output: string; full?: string; fullTruncated?: boolean }>
 
 /** How much of a check's output (UTF-8 bytes, from its start) `fullOutput` keeps. */
 export const FULL_OUTPUT_BYTES = 1_048_576

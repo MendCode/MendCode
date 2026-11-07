@@ -48,7 +48,7 @@ On a large test PR of 24 files, 12 of them deleted, the diff went from about 40,
 
 A diff that still does not fit one call is reviewed in parts of whole files, at most 12, one review call each. Their candidates are merged before one verify pass; a stopped job's checkpoint names its progress (`analysis 3/5`).
 
-Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go to the review pass whole. The [readers](#data-files-and-readers) on a cheap model summarize them first.
+Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go to the review pass whole. The [readers](#data-files-and-readers) on a cheap model summarize them first. In balanced and full tiers the readers also [read the changed code](#readers-read-the-code) first, and the review pass gets their summaries and only the hunks of the risk spots they cite, not the whole diff.
 
 The pull request's title and description go in as untrusted data for the pre-merge checks. So do issues it closes with GitHub's keywords (`Fixes #12`): at most three, each read with one `gh api` call.
 
@@ -137,7 +137,7 @@ fix: { mode: review, push: false, personal: false, max_rounds: 3 }   # review | 
 phases: { mode: dynamic, list: [], max_rounds_without_progress: 2 } # none | fixed | dynamic
 template: { sections: [], tone: neutral, language: English }        # tone: neutral | concise | detailed; language: a name or auto (below)
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
-readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
+readers: { enabled: true, code: all }  # cheap readers read data files and all changed code; code: all | overflow; parallel: 1..8 (unset: by tier); model: a cheap model (below)
 commands: { describe_title: false, approve: false }   # may `@mendcode describe` replace the title; may `@mendcode approve` approve (below)
 status: true            # a publishing review sets the `MendCode review` commit status on the PR head (below)
 ```
@@ -178,6 +178,25 @@ Readers are part of the PR reviewer in balanced and full tiers. Before a review,
 | Change under 40 lines | Stays with the review pass. |
 | Manifests and configuration | Stay with the review pass: `package.json`, `tsconfig*.json`, `.github/`, `.mendcode/`. |
 | Code cut from a diff too large for its parts | Reader too. |
+| Any other changed code file (`readers.code: all`, the default) | Reader first; the review pass gets its [summary and risk-spot hunks](#readers-read-the-code). |
+
+#### Readers read the code
+
+The review's expensive model should spend its tokens judging, not reading every line. In balanced and full tiers with readers enabled
+and `readers.code: all` (the default), the cheap readers read all the changed code first:
+
+1. Each code file's diff goes to a reader, one file per group, batched into calls of a bounded size and read `readers.parallel` at once. The reader sees the whole diff of the file with each new-side line numbered.
+2. For each file the reader returns what changed (behaviour, and the contracts, exports, signatures, config keys or schemas it touches) and its **risk spots**: new-side line ranges with a kind (error paths, null or undefined, concurrency, state machines, security, persistence or migrations, performance in hot paths, weakened tests, contracts) and a sentence on why; or that nothing is risky.
+3. Every range is checked against the diff: both ends must be new-side lines of that file. Invalid ranges are dropped and counted in the review note.
+4. The review pass gets the PR title and description, the list of changed files with their sizes, each file's summary and risk spots, the exact hunks the risk spots touch, and the code graph's callers and callees of the changed symbols. A small file (about 2,400 characters of diff or less) is shown whole. It never gets the whole diff by default, and it can open any file with its own read-only tools, which its prompt tells it to do for anything that matters.
+
+A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent, the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
+
+Summaries are hints and can miss a defect: a risk spot a reader did not flag is a hunk the review pass does not see unless it opens the file. That is the trade for a much smaller review prompt. It is bounded by what comes after: a finding is published only after the verify pass confirms it against the real code, so a miss costs a missed finding, never a false one. Nothing a reader says is published.
+
+`readers.code: overflow` restores the earlier behaviour: the review pass reads the code itself, and readers take only data files and the code that does not fit. Minimalist tier is unchanged: no readers.
+
+Cost: the readers may count up to 40% of the review's cap (25% with `overflow`); when they read code, the review and verify passes together have at most the other 60%, and less when the readers counted more. The cap itself is unchanged and still the total for the PR head. Reader turns are accounted as the `read` purpose in the accounting ledger, apart from `review` and `verify`, and `/reviews` shows the job's tokens with the part the cheap readers spent.
 
 #### Large pull requests
 
@@ -199,9 +218,9 @@ Excerpts are explicitly partial, not full-file coverage. Readers return short su
 
 When `graft/` and the `graft` CLI exist, bounded `graft callers <symbol>` queries can supply callers of changed exports. Absent or failing graft is skipped. These helpers load only during a review.
 
-The main reviewer sees full selected diffs, reader summaries and risks, and which files it did not read in full.
+The main reviewer sees the diffs it was given whole, reader summaries and risks, and which files it did not read in full.
 
-Readers keep their existing share of the cap. If it is spent, or no reader can answer, remaining code files are listed as **not read** in the review note instead of failing or being called clean.
+Readers keep their share of the cap (above). If it is spent, or no reader can answer, remaining code files are listed as **not read** in the review note instead of failing or being called clean.
 
 | Condition | Limit or fallback |
 |---|---|
@@ -239,18 +258,20 @@ A summary is a hint: the review pass reads the file with its tools before it rep
   may name one of them; a model off the list, or of another provider, is refused with a note and the automatic pick is used.
 - **No cheap model, no model.** When the provider has none, or the readers' share is spent, or a reader fails or answers out of
   shape, the group gets a local summary instead: sizes, changed lines, JSON keys or CSV columns, record counts, and the rarities
-  found without a model (a secret's kind, never its value). Code groups are instead marked **not read**, never locally called
-  reviewed. A reader never falls back to a larger model. The hosted workflow
+  found without a model (a secret's kind, never its value). Overflow code groups are instead marked **not read**, never locally
+  called reviewed; a changed code file no reader could read goes to the review pass raw (above). A reader never falls back to a
+  larger model. The hosted workflow
   always uses local summaries.
 - **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, balanced uses 2 and full 3.
   Minimalist does not enable readers for a review.
-- **Budget.** Readers may count up to a quarter of the review's cap, checked before each call; what they count comes off the cap
-  of the review and verify passes, so the PR's total stays under `budget.tokens_per_pr`. Their turns are in the job's ledger as
-  review work and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
+- **Budget.** Readers may count up to 40% of the review's cap when they read code (a quarter with `readers.code: overflow`),
+  checked before each call; what they count comes off the cap of the review and verify passes, so the PR's total stays under
+  `budget.tokens_per_pr`. Their turns are in the accounting ledger as the `read` purpose (files written before it existed still
+  load) and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
   same head does not read the files again.
 - **What you see.** The summary and the session notice say how many files went to readers and on which model, for example
   `Readers: 106 files went to readers instead of the review pass whole: 106 files by claude-haiku (1 call, up to 2 at once, …)`.
-- `readers.enabled: false` sends every diff to the review pass as before.
+- `readers.enabled: false` sends every diff to the review pass as before; `readers.code: overflow` does so for code only.
 
 ### Review language and session notices
 

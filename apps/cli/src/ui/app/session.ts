@@ -9,8 +9,8 @@ import { truncateEnd } from "../../view/wrap"
 import { placeholderFor } from "../../view/prompt-chrome"
 import { createTurnState } from "../../view/turn-state"
 import { createCompactionFacts } from "../../view/compaction-facts"
-import { createSessionListState, orderSessions, viewOf } from "../../view/session-list"
-import { preload, sessionListKey } from "../lazy-pages"
+import { createSessionListState } from "../../view/session-list"
+import { preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
@@ -410,9 +410,8 @@ export function createSession(ctx: AppContext, actions: {
     if (!title.trim()) {
       await openSessions(true)
       state.renameFromChat = true
-      const index = orderSessions(state.sessions, state.sessionList.filter, state.sessionId, state.sessionList.archived, viewOf(state.sessionList)).findIndex((session) => session.sessionId === state.sessionId)
-      state.sessionList.selected = Math.max(0, index)
-      state.sessionList = sessionListKey(state.sessionList, "\x12", state.sessions, state.sessionId).state
+      const current = state.sessions.find((session) => session.sessionId === state.sessionId)
+      state.sessionList.edit = { mode: "rename", sessionId: state.sessionId, draft: current?.title ?? state.agentTitles.get(state.sessionId) ?? "" }
       requestFrame()
       return
     }
@@ -426,8 +425,8 @@ export function createSession(ctx: AppContext, actions: {
     const reply = await input.send({ type: "session.list", limit: SESSION_PAGE, archived: true, hideEmpty: true, ...(folder ? { directory: folder, roots: false } : {}) })
     if (!reply.ok) fail(reply.error.message)
     else state.sessions = (reply.result?.sessions as SessionSummary[]) ?? []
-    // What was found past the page belongs to the list just replaced: a filter still typed asks again.
-    if (state.page === "sessions" && state.sessionList.filter) await findSessions()
+    // Metadata and message matches belong to the list just replaced: a filter still typed asks again.
+    if (state.page === "sessions" && state.sessionList.filter) await searchSessions()
     requestFrame()
   }
 

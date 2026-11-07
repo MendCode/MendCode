@@ -233,7 +233,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const logs = await deps.host.logs(command.lines)
         result(logs, logs.logs.map((log) => `${log.stream}: ${log.path}${log.truncated ? " (tail truncated)" : ""}\n${log.missing ? "No log file" : log.text || "Empty log"}`).join("\n\n") + "\n")
       } else if (command.service && command.action !== "tick" && command.action !== "run") {
-        if (["stop", "restart", "uninstall"].includes(command.action)) await busy()
+        if (["stop", "uninstall"].includes(command.action)) await busy()
         // An unmanaged daemon must release the writer lock before the OS starts its replacement.
         if (["start", "restart"].includes(command.action)) {
           const service = await deps.host.status()

@@ -117,6 +117,10 @@ describe("marketplace catalog", () => {
     await h.app.onKey("x")
     expect(h.sentOf("profiles.remove")).toHaveLength(0)
     await h.app.onKey("d")
+    await h.app.onKey("\r")
+    expect(h.sentOf("profiles.remove")).toHaveLength(0)
+    expect(screen(h)).not.toContain("remove review-kit (user)?")
+    await h.app.onKey("d")
     await h.app.onKey("d")
     expect(h.sentOf("profiles.remove")).toMatchObject([{ name: "review-kit", scope: "user" }])
     expect(screen(h)).toContain("review-kit removed from user")
@@ -131,6 +135,29 @@ describe("marketplace catalog", () => {
     expect(h.sentOf("profiles.install-catalog")).toHaveLength(1)
     expect(screen(h)).toContain("user:retro owns the look")
     expect(screen(h)).toContain("Install preview")
+  })
+
+  test("changing kind after cancelling a preview clears its takeover rows and restores the compact catalog", async () => {
+    const folder = tempDir("mendcode-market-")
+    writeFileSync(path.join(folder, "mendcode-profile.json"), JSON.stringify({ name: "review-kit", version: "1.0.0", activate: { theme: "stale-preview-theme" } }))
+    const entries: PackageCatalogEntry[] = [
+      { name: "review-kit", version: "1.0.0", description: "Review commands", sourceId: "team", location: folder, tags: [], state: "available", contents: { tools: 0, skills: 1, commands: 0, themes: 0, mcp: false } },
+      { name: "terminal-kit", version: "1.0.0", description: "Terminal theme", sourceId: "team", location: "/catalog/terminal-kit", tags: [], state: "available", contents: { tools: 0, skills: 0, commands: 0, themes: 1, mcp: false } },
+    ]
+    for (const [width, height] of [[60, 20], [160, 45]] as const) {
+      const h = catalogHarness(width, height, false, { entries })
+      await h.type("/marketplace\r")
+      await h.app.onKey("\r")
+      expect(screen(h)).toContain("Install preview")
+      if (width === 160) expect(screen(h)).toContain("stale-preview-theme")
+      await h.app.onKey("\x1b")
+      await h.app.onKey("\t")
+      expect(screen(h)).toContain("Catalog")
+      expect(screen(h)).toContain("terminal-kit")
+      expect(screen(h)).not.toContain("Install preview")
+      expect(screen(h)).not.toContain("stale-preview-theme")
+      expect(h.sentOf("profiles.install-catalog")).toHaveLength(0)
+    }
   })
 
   test("the preview shows what a local profile takes over, before → after, read from its manifest before anything is installed", async () => {
@@ -243,6 +270,10 @@ describe("marketplace sources", () => {
     await h.app.onKey("d")
     expect(h.sentOf("profiles.remove-source")).toHaveLength(0)
     expect(screen(h)).toContain("remove the source extra?")
+    await h.app.onKey("\r")
+    expect(h.sentOf("profiles.remove-source")).toHaveLength(0)
+    expect(screen(h)).not.toContain("remove the source extra?")
+    await h.app.onKey("d")
     await h.app.onKey("y")
     expect(h.sentOf("profiles.remove-source").at(-1)).toMatchObject({ sourceId: "extra" })
   })

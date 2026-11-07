@@ -25,7 +25,7 @@ export function profileTabsRow(input: { active: number; right: string; tone?: Co
   return fitLine(right ? spread(tabs, [{ text: right, fg: input.tone ?? "muted" }], width) : tabs, width)
 }
 
-/** A value as the page shows it: `quiet` ones (`default`, `unbound`, `built-in`) are drawn dim. */
+/** A value as the page shows it: `quiet` ones (`default`, `none`, `built-in`) are drawn dim. */
 export type ShownValue = { text: string; quiet: boolean }
 
 /** One thing an enabled profile overrides: a profile key, a keybinding, a prompt file or a view slot. `kept`: the user chose their own. */
@@ -145,7 +145,7 @@ export function describeOverride(row: RawOverrideRow): ActivationRowView {
   const base = { package: row.package, part: row.part, key: row.key, kept: row.kept, group: overrideGroup(row.part, row.key) }
   if (row.part === "keybinding") {
     const builtin = builtinKeyAction(row.key)
-    return { ...base, label: row.key, before: builtin ? { text: actionText(builtin), quiet: false } : { text: "unbound", quiet: true }, after: { text: actionText(text(row.value)), quiet: false }, full: { after: text(row.value), ...(builtin ? { before: builtin } : {}) } }
+    return { ...base, label: row.key, before: builtin ? { text: actionText(builtin), quiet: false } : { text: "none", quiet: true }, after: { text: actionText(text(row.value)), quiet: false }, full: { after: text(row.value), ...(builtin ? { before: builtin } : {}) } }
   }
   if (row.part === "view") return { ...base, label: slotLabel(row.key), before: { text: "built-in", quiet: true }, after: { text: `${profileName(row.package)} view`, quiet: false }, full: { after: text(row.value) } }
   if (row.part === "prompt") return { ...base, label: row.key, before: { text: "built-in", quiet: true }, after: { text: `${profileName(row.package)} file`, quiet: false }, full: { after: text(row.value) } }
@@ -249,7 +249,7 @@ export function overrideDetailRows(input: { row: ActivationRowView | undefined; 
   const key = (name: string, meaning: string): Line => clampLine([{ text: name.padEnd(3), fg: "text", bold: true }, { text: meaning, fg: "muted" }], width)
   if (!keepable(row)) lines.push(key("k", row.part === "view" ? "views follow the profile while it owns the look" : "prompt files follow the profile while it is on"))
   else if (row.kept) lines.push(key("k", `use the profile's ${row.after.text} again`))
-  else if (row.part === "keybinding") lines.push(key("k", row.before.quiet ? `keep ${row.key} unbound` : `keep ${row.key} as ${row.before.text}`))
+  else if (row.part === "keybinding") lines.push(key("k", `keep ${row.key} as yours: your keybindings.json entry, else ${row.before.quiet ? "nothing" : row.before.text}`))
   else lines.push(key("k", row.before.quiet ? "keep the default instead" : `keep yours (${row.before.text}) instead`))
   lines.push(key("d", `turn ${row.package} off: ${input.count === 1 ? "its override goes" : `all ${input.count} overrides go`} back`))
   return lines

@@ -112,7 +112,7 @@ describe("oversized code uses bounded cheap readers", () => {
   }
 
   for (const tier of ["balanced", "full"] as const) test(`${tier}: a six MiB code release reviews and publishes through the fake forge`, async () => {
-    const repo = await largeRepo("readers:\n  parallel: 1\n")
+    const repo = await largeRepo("readers:\n  parallel: 1\n  code: overflow\n")
     const review = children({ findings: [] })
     const forge = fakeGh()
     const pieces: string[] = []
@@ -149,7 +149,7 @@ describe("oversized code uses bounded cheap readers", () => {
   }, 60_000)
 
   test("spent reader share publishes with every remaining file listed as not read, without loading it", async () => {
-    const repo = await largeRepo("readers:\n  parallel: 1\n")
+    const repo = await largeRepo("readers:\n  parallel: 1\n  code: overflow\n")
     const review = children({ findings: [] })
     let calls = 0
     let loads = 0

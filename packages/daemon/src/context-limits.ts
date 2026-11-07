@@ -50,7 +50,7 @@ export function compactPoint(config: CompactionConfig, limits: CompactionLimits,
   const [thresholdSource, percent] = limits.model?.threshold !== undefined ? ["model-override", limits.model.threshold] as const
     : limits.provider?.threshold !== undefined ? ["provider-override", limits.provider.threshold] as const
     : config.threshold !== undefined ? ["compaction.threshold", config.threshold] as const : ["default", Math.round(tokens * 100 / window)] as const
-  return { tokens, compactAtSource: "threshold", thresholdPercent: thresholdPercent(percent), thresholdSource }
+  return { tokens, compactAtSource: "threshold", thresholdPercent: thresholdSource === "default" ? Math.max(1, Math.min(100, percent)) : thresholdPercent(percent), thresholdSource }
 }
 
 /**

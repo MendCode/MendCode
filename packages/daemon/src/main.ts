@@ -900,6 +900,7 @@ export const daemon = await startDaemon({
       ? createCodexEngine!({
           cwd,
           clock,
+          replyLanguage,
           bindings: {
             get: (sessionId) => store.engineBindings.get(sessionId, "codex"),
             set: (sessionId, threadId) => store.engineBindings.set(sessionId, "codex", threadId),

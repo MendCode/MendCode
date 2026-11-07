@@ -207,6 +207,7 @@ export function createClient(options: {
       pending.set(id, waiting)
       if (live || !resend) transmit(waiting)
       else if (closed) waiting.settle({ ok: false, error: { code: "internal", message: "[CLIENT]: client closed" } })
+      else if (established && options.reconnect === false) waiting.settle({ ok: false, error: { code: "internal", message: "[CLIENT]: connection closed" } })
     })
   }
 

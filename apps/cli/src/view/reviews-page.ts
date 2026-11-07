@@ -433,6 +433,7 @@ export function jobDetailRows(job: PrJobSummary, width: number, now: number, ext
   rows.push(...field("findings", `${found.confirmed} confirmed · ${found.plausible} plausible · ${found.candidates} candidates · ${found.resolved} resolved`, width))
   rows.push(...field("", "a count of what was found, not a measure of the review", width, "muted"))
   rows.push(...field("tokens", tokenText(job.tokens), width))
+  if (job.readTokens) rows.push(...field("", `of which cheap readers: ${tokenText(job.readTokens)}`, width, "muted"))
   if (job.stop) rows.push([], ...stopRows(job.stop, width, now))
   if (job.error) rows.push([], ...field("error", job.error, width, "error"))
   rows.push([])

@@ -7,7 +7,7 @@ import { createClient } from "@mendcode/client"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import type { DaemonStatusReport, SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
-import { openToolCalls, recordHeld, recordLost, takeHeld, takeLost, turnWork } from "../src/restart-drain"
+import { createRestartDrain, openToolCalls, recordHeld, recordLost, takeHeld, takeLost, turnWork } from "../src/restart-drain"
 import { boot as bootNative, callTool, openSession, stop, until } from "./native-harness"
 
 const cleanups: Array<() => Promise<void> | void> = []
@@ -79,6 +79,26 @@ async function boot() {
 }
 
 describe("the work a restart would kill", () => {
+  test("an explicit pause during the drain takes ownership, including when the requester leaves", async () => {
+    const sessionId = "ses_mine" as SessionId
+    const holds: boolean[] = []
+    const gone = new AbortController()
+    const drain = createRestartDrain({
+      sessions: () => [sessionId], running: () => ["shell"], title: () => "mine", paused: () => false,
+      hold: async (_id, on) => { holds.push(on) }, stop: () => { throw new Error("unexpected stop") },
+      now: () => 0, log: () => {},
+    })
+    try {
+      await drain.begin(60_000, { gone: gone.signal })
+      expect(drain.held()).toEqual([sessionId])
+      drain.userPaused(sessionId)
+      expect(drain.held()).toEqual([])
+      gone.abort()
+      expect(holds).toEqual([true])
+      expect(drain.status()).toBeUndefined()
+    } finally { drain.dispose() }
+  })
+
   test("open tool calls are the started ones that did not complete", () => {
     expect(openToolCalls([
       { type: "item.started", itemId: "a", kind: "tool_call", meta: { tool: "shell: bun run test" } },
@@ -237,6 +257,42 @@ describe.skipIf(process.platform === "win32")("a forced restart waits for runnin
     expect(answered.join("\n")).toMatch(/first after[\s\S]*second after/)
     const queue = await second.terminal.send({ type: "queue.list", sessionId: mine })
     expect(queue.ok && queue.result).toMatchObject({ held: true, entries: [{ text: "mine waits" }] })
+  }, 60_000)
+
+  test("with automatic resumption off, drain-held messages stay held and drain metadata is consumed", async () => {
+    const h = await boot()
+    expect((await h.first.terminal.send({ type: "settings.set", patch: { resumeAfterRestart: false } })).ok).toBe(true)
+    h.background(h.sessionId, [{ id: "hold", description: "wait", kind: "local_bash", command: "sleep 60" }])
+    const control = await h.first.control()
+    await h.drain(control, 60_000)
+    expect((await h.submit(h.first.terminal, "must wait")).ok).toBe(true)
+    h.background(h.sessionId, [])
+    await stoppedItself(h)
+    const second = await h.open()
+    await h.until(() => !second.daemon.store.meta.get("restart.held") || undefined)
+    const queue = await second.terminal.send({ type: "queue.list", sessionId: h.sessionId })
+    expect(queue.ok && queue.result).toMatchObject({ held: true, entries: [{ text: "must wait" }] })
+    expect((await h.log(second.terminal)).some((event) => event.type === "turn.started")).toBe(false)
+    expect((await second.terminal.send({ type: "session.control", sessionId: h.sessionId, action: "resume" })).ok).toBe(true)
+    await h.until(async () => (await h.log(second.terminal)).some((event) => event.type === "turn.completed") || undefined)
+  }, 60_000)
+
+  test("a user pause issued after the drain acquired the session survives restart", async () => {
+    const h = await boot()
+    h.background(h.sessionId, [{ id: "hold", description: "wait", kind: "local_bash", command: "sleep 60" }])
+    const control = await h.first.control()
+    await h.drain(control, 60_000)
+    expect((await h.first.terminal.send({ type: "session.control", sessionId: h.sessionId, action: "pause" })).ok).toBe(true)
+    expect((await h.submit(h.first.terminal, "user paused")).ok).toBe(true)
+    h.background(h.sessionId, [])
+    await stoppedItself(h)
+    const second = await h.open()
+    // A later automatic release pass must not claim this queue, even on a subsequent restart.
+    await Bun.sleep(100)
+    expect(second.daemon.store.meta.get("restart.held")).toBeFalsy()
+    const queue = await second.terminal.send({ type: "queue.list", sessionId: h.sessionId })
+    expect(queue.ok && queue.result).toMatchObject({ held: true, entries: [{ text: "user paused" }] })
+    expect((await h.log(second.terminal)).some((event) => event.type === "turn.started")).toBe(false)
   }, 60_000)
 
   test("a session waiting on an approval card does not extend the wait; it is named as waiting for you and its turn resumes after the restart", async () => {

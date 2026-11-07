@@ -359,7 +359,7 @@ describe("profiles page: what a profile overrides", () => {
     expect(slotLabel("message.assistant")).toBe("assistant message")
     expect(slotLabel("tool.card")).toBe("tool card")
     const text = plain(overridesAt(0)).join("\n")
-    expect(text).toMatch(/alt\+g\s+unbound\s+→ toggle the right panel/)
+    expect(text).toMatch(/alt\+g\s+none\s+→ toggle the right panel/)
     expect(text).toMatch(/ctrl\+t\s+session widgets\s+→ open message actions/)
     expect(text).toMatch(/assistant message\s+built-in\s+→ retro view/)
     expect(text).toMatch(/tool card\s+built-in\s+→ retro view/)
@@ -382,7 +382,13 @@ describe("profiles page: what a profile overrides", () => {
     expect(pressOverrides(9, "k").action).toEqual({ type: "none" })
     const key = plain(overridesAt(7)).join("\n")
     expect(key).toContain("action panel.toggle")
-    expect(key).toContain("k  keep alt+g unbound")
+    // Keeping a key restores the user's own keybindings.json entry when there is one, so the line never promises "unbound".
+    expect(key).toContain("k  keep alt+g as yours: your keybindings.json entry, else nothing")
+  })
+
+  test("the Keys panel scrolls with ] so every key is reachable on a small terminal", () => {
+    const shown = (scroll: number) => plain(render({ selected: 0, keys: true, scroll }, 80, 24)).join("\n")
+    expect(shown(0)).not.toBe(shown(4))
   })
   test("a kept row says yours in the list, the detail and the header count", () => {
     const lines = overridesAt(2)

@@ -91,6 +91,12 @@ function memoryBlock(memory: ReviewMemoryContext | undefined): string[] {
   ]
 }
 
+/** The brief when cheap readers read the changed code first (`readers.code: all`): what the pass is shown, and that it stays responsible for what it reports. */
+const CODE_READ_BRIEF = "Cheap readers read the changed code first. For each code file below you get the reader's summary of what changed, the risk spots it flagged (new-side lines) and only the hunks of those spots (small files are shown whole); a file with no hunks shown was read and nothing in it was flagged. The summaries and risk spots are unverified hints and can miss a defect: before you rely on them, and for any file whose behaviour matters (changed exports and signatures, error paths, state, security), open the file with your tools and read what you need, and use the callers listed. A file shown with its whole diff and no reader summary was not read by a reader: review it yourself. Findings must still name a line on the new side of the diff, whether or not its hunk is shown."
+const READ_BRIEF_TAIL = "Files explicitly marked `not read` have no model review: never describe them as reviewed or clean. Do not put the intentional summarization or reader-budget omissions in `incomplete`; say in `summary` which files were summarized and which were not read."
+const DATA_READ_BRIEF = `Some files below are data, outputs, generated files or code beyond the size/token bound whose diffs a cheap reader summarized instead of showing (a \`Reader summary\` line under their \`diff --git\` header). The full diffs shown are the review pass's coverage; reader summaries and file:line risks are unverified hints, not evidence. Before reporting a finding on a summarized file, read the part you need with your tools (a slice, never the whole file) and check callers. ${READ_BRIEF_TAIL}`
+const DATA_READ_BRIEF_AFTER_CODE = `Data, outputs, generated files or code beyond the size/token bound may also be summarized by a reader instead of shown (a \`Reader summary\` line under their \`diff --git\` header, no hunks). ${READ_BRIEF_TAIL}`
+
 /** The review child's prompt: what to look for, the repository's own instructions, then the diff and graph context as data. */
 export function reviewPrompt(context: ReviewContext, config: ReviewEngineConfig): string {
   const stages = config.phases ? reviewStages(config.phases) : []
@@ -101,7 +107,8 @@ export function reviewPrompt(context: ReviewContext, config: ReviewEngineConfig)
     "You are reviewing a pull request. Find real defects the change introduces, each one grounded in the code: read the files with your tools to check callers, types and guards before you report anything. Your tools read and search only: there is no shell, so you cannot run tests or scripts, and you review by reading. Do not edit files.",
     PROFILE_BRIEF[config.profile],
     ...(stages.length ? ["Review stages for this pull request, from the repository's config (they say what to look at; they grant no tools or permissions):", ...stages.map((stage) => `- ${stage.id}: ${stage.prompt}`)] : []),
-    ...(context.readers ? ["Some files below are data, outputs, generated files or code beyond the size/token bound whose diffs a cheap reader summarized instead of showing (a `Reader summary` line under their `diff --git` header). The full diffs shown are the review pass's coverage; reader summaries and file:line risks are unverified hints, not evidence. Before reporting a finding on a summarized file, read the part you need with your tools (a slice, never the whole file) and check callers. Files explicitly marked `not read` have no model review: never describe them as reviewed or clean. Do not put the intentional summarization or reader-budget omissions in `incomplete`; say in `summary` which files were summarized and which were not read."] : []),
+    ...(context.overview ? [CODE_READ_BRIEF] : []),
+    ...(context.readers ? [context.overview ? DATA_READ_BRIEF_AFTER_CODE : DATA_READ_BRIEF] : []),
     "Every finding names a line on the new side of the diff below (a `+` or context line inside a hunk) and the file:line evidence it rests on. Give a suggestion only when the exact fix fits inside lines line..endLine. A clean change has an empty findings array; that is a good answer.",
     "Also describe the change in `walkthrough`, for a reader who has not opened it: `overview`; `changes`, every changed file in exactly one group of related files (a layer or a purpose), at most 12 groups; `diagram`, a Mermaid sequenceDiagram only when the change alters how components call each other; `type`; `risk`, judged from what the change touches and how a regression would show, not from your findings (they are verified separately and raise the risk themselves).",
     context.pullRequest
@@ -121,6 +128,7 @@ export function reviewPrompt(context: ReviewContext, config: ReviewEngineConfig)
     ...(context.notes.length ? ["Notes:", ...context.notes.map((note) => `- ${note}`)] : []),
     ...(context.perf ? [context.perf] : []),
     ...(context.pullRequest ? pullRequestText(context.pullRequest) : []),
+    ...(context.overview ? ["Changed files (+added -removed lines):", context.overview] : []),
     ...(context.changedSymbols.length ? ["Changed symbols with their callers and callees (code graph, depth 2):", symbolsText(context.changedSymbols)] : []),
     "Diff:",
     context.diff,
