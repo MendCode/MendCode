@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- ↑ in the prompt and `/prompt-history` show what you typed before again in projects with a long history (long pasted messages left the list empty); ↑ pressed while the daemon restarts no longer leaves it empty either.
 - A workflow script's `check()` that passes now gets the command's output in `detail`, as a failing one already did, instead of just "pass". It gets the whole output, so a script can read a JSON file or a long report through a check; very large output is cut and marked `truncated` instead of being shortened silently.
 - The first-run setup shows each tool and login it found (Codex, Claude Code, ChatGPT, API keys, pi) as a row you can act on: use Codex as its own harness, sign MendCode in with your ChatGPT account and come back with your choices kept, use Claude Code, or add a key. Using Codex this way works in every tier and leaves your tier as it is (`/tier codex_engine on|off`). With nothing that can answer yet, it no longer offers to start chatting with a model that does not exist; it offers to skip for now instead.
 - A compaction threshold written as a fraction (such as 0.8 for 80%) now compacts at that share of the context window instead of right away on an almost empty session; the threshold is a percent of the window, and a new value above 100 or not above 0 is refused with a message saying so.

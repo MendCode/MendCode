@@ -367,15 +367,16 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   }
 
   /** The history is the local daemon's: a remote client keeps only what it enters itself, in memory. */
-  async function loadRecall(): Promise<RecallEntry[]> {
+  /** The project's history, or undefined when the daemon did not answer (restarting, reconnecting): the next ↑ asks again. */
+  async function loadRecall(): Promise<RecallEntry[] | undefined> {
     if (input.remote || !input.directory) return []
     const reply = await input.send({ type: "prompt.history", directory: input.directory, limit: 500 })
-    return reply.ok ? recallEntriesOf(reply.result) : []
+    return reply.ok ? recallEntriesOf(reply.result) : undefined
   }
 
   async function recallOlder() {
     state.recall.prompts ??= await loadRecall()
-    if (state.recall.index + 1 >= state.recall.prompts.length) return
+    if (!state.recall.prompts || state.recall.index + 1 >= state.recall.prompts.length) return
     if (state.recall.index === -1) {
       // Leaving the text behind for another entry: it stays reachable with ↓, and it is kept as a draft in case it is never come back to.
       state.recall.draft = editor.text

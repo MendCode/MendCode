@@ -5588,7 +5588,15 @@ export async function startDaemon(options: DaemonOptions) {
         // What the user typed on this machine (commands, shell lines, drafts) is not for peers or remote clients to read or change.
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: prompt history is local only" })
         if (command.type === "prompt.history") {
-          const entries = store.promptEntries(command.directory, command.limit)
+          // Each text goes out twice (`prompts` for older clients, `entries`): the newest entries that fit one frame are sent, and one
+          // too big on its own (a long pasted message) is left out, so a long history never turns into an oversized, empty reply.
+          let room = MAX_FRAME_BYTES - 8_192
+          const entries = store.promptEntries(command.directory, command.limit).filter((entry) => {
+            const size = 2 * Buffer.byteLength(JSON.stringify(entry))
+            if (size > room) return false
+            room -= size
+            return true
+          })
           return reply(connection, command.id, { ok: true, result: { prompts: entries.map((entry) => entry.text), entries } })
         }
         if (command.type === "prompt.history.delete") {

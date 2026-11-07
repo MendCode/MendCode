@@ -380,7 +380,7 @@ export const DOCS_HELP = text([
   "  commands NAME           one built-in slash command in detail",
   "",
   "Works offline. --dir D (--data-dir D): the data directory the live lines read",
-  "(default MENDCODE_V2_DIR or ~/.mendcode-v2). Exit codes: 0 a card printed,",
+  "(default MENDCODE_DIR or ~/.mendcode). Exit codes: 0 a card printed,",
   "2 none printed (the topic list follows), 64 usage.",
 ])
 

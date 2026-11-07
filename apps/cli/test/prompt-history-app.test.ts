@@ -86,6 +86,19 @@ describe("↑ recalls everything entered in the prompt", () => {
     expect(await recalled(second, 4)).toEqual(["ls -la", "/btw what is the cache key", "/panel next", "fix the flaky test"])
   })
 
+  test("↑ pressed while the daemon is restarting finds the history on the next press once it answers again", async () => {
+    const shared = daemon()
+    const first = await terminal(shared)
+    await first.type("fix the flaky test\r")
+    let restarting = true
+    const h = await terminal({ ...shared, reply: (command) => (command.type === "prompt.history" && restarting ? { ok: false, error: { code: "unavailable", message: "daemon restarting" } } : shared.reply(command)) })
+    await h.type(UP)
+    expect(h.app.editor.text).toBe("")
+    restarting = false
+    await h.type(UP)
+    expect(h.app.editor.text).toBe("fix the flaky test")
+  })
+
   test("a recalled shell line goes back into shell mode and a recalled message leaves it", async () => {
     const shared = daemon()
     const first = await terminal(shared)
