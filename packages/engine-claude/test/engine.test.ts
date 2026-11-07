@@ -1211,6 +1211,8 @@ describe("MCP servers changed during a turn", () => {
     adds.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
     await Bun.sleep(5)
     expect(closes).toEqual([["a change waited for the background tasks (MCP servers, effort or fast)", 0]])
+    // The daemon hears that none runs, so it keeps no finished task registered for the ended process.
+    expect(reported.at(-1)).toEqual([])
     expect(spawned).toHaveLength(1)
     engine.stop?.()
   })
@@ -1228,7 +1230,8 @@ describe("MCP servers changed during a turn", () => {
     })
     let choice: ClaudeModelChoice = { model: "sonnet", effort: "medium" }
     const closes: string[] = []
-    const { engine, spawned } = engineWith([fake], { modelFor: () => choice, onClose: (_sessionId, reason) => void closes.push(reason) })
+    const reported: unknown[] = []
+    const { engine, spawned } = engineWith([fake], { modelFor: () => choice, onClose: (_sessionId, reason) => void closes.push(reason), onBackground: (_sessionId, tasks) => void reported.push(tasks) })
     const first = turnInput()
     expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
     choice = { model: "opus", effort: "high" }
@@ -1239,6 +1242,7 @@ describe("MCP servers changed during a turn", () => {
     fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
     await Bun.sleep(5)
     expect(closes).toEqual(["a change waited for the background tasks (MCP servers, effort or fast)"])
+    expect(reported.map((tasks) => (tasks as unknown[]).length)).toEqual([1, 0])
     engine.stop?.()
   })
 

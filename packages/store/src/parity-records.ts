@@ -4,6 +4,7 @@ import { TaskRecord, ExtractionJob } from "@mendcode/protocol"
 const FAILED_KEPT = 20
 /** Rows of the review record kept (one per review job or skip); older ones are pruned on every insert. */
 export const REVIEW_LOG_KEPT = 300
+const DAY_MS = 86_400_000
 
 /** What one memory review did, or why it did not run. */
 export type MemoryReviewRow = {
@@ -55,7 +56,8 @@ export function createParityRecords(db: Database) {
       add(row: MemoryReviewRow) {
         db.query("INSERT INTO memory_reviews (at, session_id, directory, trigger, turns, calls, proposed, outcome, reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(row.at, row.sessionId, row.directory, row.trigger, row.turns, row.calls, row.proposed, row.outcome, row.reason.slice(0, 200))
-        db.query("DELETE FROM memory_reviews WHERE id <= (SELECT MAX(id) FROM memory_reviews) - ?").run(REVIEW_LOG_KEPT)
+        // A row that spent calls in the last day stays even past the kept count: it is the daily cap's counter (capped at 500 a day).
+        db.query("DELETE FROM memory_reviews WHERE id <= (SELECT MAX(id) FROM memory_reviews) - ? AND (calls = 0 OR at < ?)").run(REVIEW_LOG_KEPT, row.at - DAY_MS)
       },
       list(limit = REVIEW_LOG_KEPT): Array<MemoryReviewRow & { id: number }> {
         return db.query<MemoryReviewRow & { id: number }, [number]>("SELECT id, at, session_id AS sessionId, directory, trigger, turns, calls, proposed, outcome, reason FROM memory_reviews ORDER BY id DESC LIMIT ?").all(limit)

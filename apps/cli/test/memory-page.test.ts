@@ -3,6 +3,7 @@ import type { MemoryEntry } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
 import { createMemoryPageState, memoryPageKey, renderMemoryPage, visibleMemories, type MemoryPageState } from "../src/view/memory-page"
 import { textWidth } from "../src/view/wrap"
+import { createMemory } from "../src/ui/app/memory"
 
 const NOW = Date.UTC(2026, 8, 26, 12)
 const HOUR = 3_600_000
@@ -546,5 +547,18 @@ describe("memory page revisions", () => {
     expect(press("X", "y").action).toEqual({ type: "batch", decision: "reject", memoryIds: ["p1", "p2"] })
     expect(press("X", "n")).toMatchObject({ state: { confirmBatch: undefined }, action: { type: "none" } })
     expect(press("5", "A").state.confirmBatch).toBeUndefined()
+  })
+
+  test("a confirmed batch decides every proposal, past 250, and reports the count it decided", async () => {
+    const updated: string[] = []
+    const said: string[] = []
+    const memory = createMemory({
+      input: { send: async (command: { type: string; memoryId?: string }) => { if (command.type === "memory.update") updated.push(command.memoryId!); return { ok: true, result: {} } } },
+      state: {}, fail: (text: string) => said.push(`fail:${text}`), requestFrame: () => {}, say: (text: string) => said.push(text), setupChoice: async () => {}, editor: {},
+    } as never)
+    const memoryIds = Array.from({ length: 251 }, (_, index) => `mem_${index}`)
+    await memory.memoryAction({ type: "batch", decision: "approve", memoryIds })
+    expect(updated).toEqual(memoryIds)
+    expect(said).toEqual(["251 approved"])
   })
 })

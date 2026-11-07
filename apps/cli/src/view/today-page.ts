@@ -468,11 +468,15 @@ export function withMarks(state: TodayState, keys: string[], on: boolean): Today
   return { ...state, marks }
 }
 
+/** `[` and `]` move the detail (or the triage group) panel by four rows. */
+const scrolled = (state: TodayState, key: "[" | "]"): TodayState => ({ ...state, scroll: Math.max(0, (state.scroll ?? 0) + (key === "]" ? 4 : -4)) })
+
 function triageKey(state: TodayState, triage: TodayTriageView, key: string): TodayKeyResult {
   const none = { state, action: { type: "none" } } as const
   const set = (next: Partial<TodayTriageView>, extra: Partial<TodayState> = {}): TodayState => ({ ...state, ...extra, triage: { ...triage, ...next } })
   if (key === "\x1b" || key === "q") return { state: set({ open: false }), action: { type: "none" } }
   if (key === "t" && triage.status !== "running") return { state, action: { type: "triage" } }
+  if (key === "[" || key === "]") return { state: scrolled(state, key), action: { type: "none" } }
   if (triage.status !== "ready" || !triage.groups.length) return none
   const selected = clamp(triage.selected, triage.groups.length)
   if (UP.has(key) || DOWN.has(key)) {
@@ -506,7 +510,7 @@ export function todayPageKey(state: TodayState, key: string, data: TodayData): T
   if (key === "r") return { state, action: { type: "reload" } }
   if (key === "?") return { state: { ...state, help: !state.help }, action: { type: "none" } }
   if (key === "t") return state.triage && state.triage.status !== "error" ? { state: { ...state, help: false, scroll: 0, triage: { ...state.triage, open: true } }, action: { type: "none" } } : { state: { ...state, help: false }, action: { type: "triage" } }
-  if (key === "[" || key === "]") return { state: { ...state, scroll: Math.max(0, (state.scroll ?? 0) + (key === "]" ? 4 : -4)) }, action: { type: "none" } }
+  if (key === "[" || key === "]") return { state: scrolled(state, key), action: { type: "none" } }
   const tab = /^[1-3]$/.test(key) ? TODAY_TABS[Number(key) - 1] : key === "\t" ? TODAY_TABS[(tabIndex + 1) % TODAY_TABS.length] : undefined
   if (tab) return tab === state.tab ? none : { state: { ...state, tab, selected: 0, scroll: 0 }, action: { type: "none" } }
   const move = (index: number) => (clamp(index, count) === selected ? none : { state: { ...state, selected: clamp(index, count), scroll: 0 }, action: { type: "none" } } as TodayKeyResult)

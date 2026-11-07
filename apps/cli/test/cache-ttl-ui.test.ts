@@ -120,7 +120,9 @@ describe("/settings: the claude context row", () => {
   })
 
   test("each level says what it leaves out, whole at 120 columns; isolated warns that the user's rules are not followed", () => {
-    expect(at120({})).toContain("no own MCP or skills")
+    // Skills stay on in lean (they go only with /compact): the note must not say otherwise.
+    expect(at120({})).toContain("no own MCP or auto memory")
+    expect(at120({})).not.toContain("skills")
     expect(at120({ claudeContext: "full" })).toContain("all of your setup")
     expect(at120({ claudeContext: "isolated" })).toContain("ignores your rules")
     expect(detail(at, { claudeContext: "isolated" })).toContain("so the model does not follow your rules")

@@ -8,7 +8,7 @@ Every row says why it is there and which command or page manages it. `/today` re
 
 | Tab | What it lists | Read from |
 |---|---|---|
-| Attention | sessions waiting for an approval or an answer; PR reviews waiting for you or with open findings; workflows waiting for input; saved memories that contradict each other | `session.list`, `pr.review` status, `workflow.list`, `memory.graph` |
+| Attention | sessions waiting for an approval or an answer, however long ago they asked; PR reviews waiting for you or with open findings; workflows waiting for input; saved memories that contradict each other | `session.list`, `pr.review` status, `workflow.list`, `memory.graph` |
 | Pick up | sessions from the last 7 days whose last turn was interrupted or failed, paused sessions, and finished sessions whose folder has uncommitted changes or unpushed commits and no linked pull request | `session.list`, `git.status` (one per folder, at most six) |
 | Memory | what Dream did in its last run, then every pending memory proposal with the memory before and after | `dream.list`, `memory.list` |
 

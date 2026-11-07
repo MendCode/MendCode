@@ -24,6 +24,12 @@ import { VoiceSettings } from "./voice"
 import { lazySchema } from "./lazy"
 import { SessionDraft, SessionLifecycle } from "./session-lifecycle"
 
+/**
+ * A whole number from `min` to `max`, as one schema with both bounds: `z.number().int().min().max()` builds three more schemas, each with
+ * its own closures, and Settings is built at start (about 18 functions and 58 objects less per field).
+ */
+const intIn = (min: number, max: number) => z.int().check(z.gte(min), z.lte(max))
+
 /** Read-only queries answered in the command ack. They read projections; they never scan history. */
 
 export const SessionSummary = lazySchema(() => z.strictObject({
@@ -470,9 +476,9 @@ export const ModelRoles = lazySchema(() => z.partialRecord(z.enum(MODEL_ROLES), 
 export type ModelRoles = z.infer<typeof ModelRoles>
 export const AdvisorSettings = lazySchema(() => z.strictObject({
   checkpoints: z.array(z.enum(ADVISOR_CHECKPOINTS)).max(ADVISOR_CHECKPOINTS.length).optional(),
-  maxCallsPerTurn: z.number().int().min(1).max(10).optional(),
-  maxCallsPerSession: z.number().int().min(1).max(200).optional(),
-  maxBriefTokens: z.number().int().min(4_000).max(100_000).optional(),
+  maxCallsPerTurn: intIn(1, 10).optional(),
+  maxCallsPerSession: intIn(1, 200).optional(),
+  maxBriefTokens: intIn(4_000, 100_000).optional(),
 }))
 export type AdvisorSettings = z.infer<typeof AdvisorSettings>
 
@@ -546,7 +552,7 @@ const SharedSettings = lazySchema(() => z.strictObject({
   /** URL patterns (`*` spans any characters) that `http` hooks in `hooks.json` may POST to. Unset or empty: http hooks never run. */
   allowedHttpHookUrls: z.array(z.string().min(1).max(500)).max(50).optional(),
   /** Native engine compacts after a turn whose context reached this many tokens. */
-  compactAtTokens: z.number().int().min(8_000).max(2_000_000).optional(),
+  compactAtTokens: intIn(8_000, 2_000_000).optional(),
   /**
    * Context per model, keyed by the reference `mendcode models` prints (`chatgpt/gpt-6-astra`): `window` replaces the catalog's
    * window (and the provider's input limit) for every session on that model, never above its known `maxContextWindow`; `compactAt`
@@ -555,36 +561,36 @@ const SharedSettings = lazySchema(() => z.strictObject({
    */
   modelContext: z.record(
     z.string().regex(/^[A-Za-z0-9][\w.-]{0,63}\/\S{1,200}$/, "use the reference mendcode models prints (provider/model)"),
-    z.strictObject({ window: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(), compactAt: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional() })
+    z.strictObject({ window: intIn(MODEL_CONTEXT_RANGE.min, MODEL_CONTEXT_RANGE.max).optional(), compactAt: intIn(MODEL_CONTEXT_RANGE.min, MODEL_CONTEXT_RANGE.max).optional() })
       .refine((entry) => entry.window !== undefined || entry.compactAt !== undefined, { message: "set window, compactAt or both" }),
   ).refine((entries) => Object.keys(entries).length <= MODEL_CONTEXT_LIMIT, { message: `at most ${MODEL_CONTEXT_LIMIT} models` }).optional(),
   /**
    * One context window, in tokens, for every model that has no window of its own: none in the model list, none in its provider entry, none
    * from the engine. A model's `modelContext` window, a session's `/context-window` and a window the model list knows all win over it.
    */
-  defaultContextWindow: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(),
+  defaultContextWindow: intIn(MODEL_CONTEXT_RANGE.min, MODEL_CONTEXT_RANGE.max).optional(),
   /** Compaction while idle (feature `idle_compact`, docs/compaction.md): the least context, in tokens, a session must hold to be compacted before its prompt cache expires. Default 100000. */
-  idleCompactAtTokens: z.number().int().min(8_000).max(2_000_000).optional(),
+  idleCompactAtTokens: intIn(8_000, 2_000_000).optional(),
   /** Notice before a compaction (feature `compact_notice`, docs/compaction.md): the share of the compaction point, in percent, at which the transcript says once how far the compaction is. Default 80; `off` never says it. */
-  compactNoticePercent: z.union([z.literal("off"), z.number().int().min(10).max(99)]).optional(),
+  compactNoticePercent: z.union([z.literal("off"), intIn(10, 99)]).optional(),
   /** Minutes a provider keeps a prompt prefix after the last call, by provider id; replaces the built-in lifetime, and gives one to a provider that has none (compaction while idle stays off for it until then). */
-  cacheLifetimeMinutes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), z.number().int().min(CACHE_LIFETIME_MINUTES_RANGE.min).max(CACHE_LIFETIME_MINUTES_RANGE.max)).optional(),
+  cacheLifetimeMinutes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), intIn(CACHE_LIFETIME_MINUTES_RANGE.min, CACHE_LIFETIME_MINUTES_RANGE.max)).optional(),
   /** Optional caps on the commands the agent leaves running (`shell` with `background`, `shell_session`; docs/interactive-tools.md). By default none: a command runs until it ends, the agent or the user stops it, or its chat is deleted. `lifetimeMinutes` stops one that runs longer; `idleMinutes` stops a `shell_session` terminal no tool call touched for that long. 0 or unset is no cap. */
-  processLimits: z.object({ lifetimeMinutes: z.number().int().min(0).max(525_600).optional(), idleMinutes: z.number().int().min(0).max(525_600).optional() }).optional(),
+  processLimits: z.object({ lifetimeMinutes: intIn(0, 525_600).optional(), idleMinutes: intIn(0, 525_600).optional() }).optional(),
   /** How long Anthropic keeps what the native engine caches (docs/prompt-cache.md, "Cache lifetime"): `5m` (default, no `ttl` sent) or `1h` (`ttl: "1h"` on every breakpoint; writes cost 2x the input price instead of 1.25x). Anthropic API and Claude on Vertex only. */
   promptCacheTtl: z.enum(CACHE_TTLS).optional(),
   /** Opt-in: a `promptCacheTtl` of `1h` is also given to Claude Code when it is the engine, as `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` in its process environment (Claude Code v2.1.242 or later). Off when unset. */
   claudeCacheTtl: z.boolean().optional(),
   /**
    * How much of the user's own Claude Code setup each new Claude Code process loads (docs/claude-code.md, "Context level"): `full` all of
-   * it, as the CLI alone; `lean` (default when unset) no own MCP servers, skills listing or auto memory; `isolated` also no CLAUDE.md, hooks
-   * or output style. Settings, permission rules and login stay in every level.
+   * it, as the CLI alone; `lean` (default when unset) no own MCP servers or auto memory; `isolated` also no CLAUDE.md, hooks or output
+   * style. Settings, permission rules, login, skills and commands stay in every level.
    */
   claudeContext: z.enum(["full", "lean", "isolated"]).optional(),
   /** The organization requires zero data retention: features the provider does not offer under ZDR stay off (Anthropic message threads, docs/message-threads.md). Off when unset. */
   zeroDataRetention: z.boolean().optional(),
   /** Tokens (4 characters each) of earlier conversation handed to an engine that did not run it: switching between native, Claude Code and ACP agents, a fork into one, a merge-back. Default 16000; 0 turns the engine-switch handoff off. */
-  handoffTokenCap: z.number().int().min(0).max(200_000).optional(),
+  handoffTokenCap: intIn(0, 200_000).optional(),
   reducedMotion: z.boolean().optional(),
   /** Companion next to the prompt: `codex:<id>` (from ~/.codex/pets) or `user:<id>` (from the data dir's pets); off when unset or "off". */
   pet: z.string().max(120).optional(),
@@ -600,18 +606,18 @@ const SharedSettings = lazySchema(() => z.strictObject({
   /** Daily local time ("HH:MM") for Dream in every project active in the last 24 h; off when unset. */
   dreamAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   /** Model tokens one Dream run may spend in all its calls; DREAM_DEFAULT_MAX_TOKENS when unset. The run stops cleanly and its report says so. */
-  dreamMaxTokens: z.number().int().min(1_000).max(2_000_000).optional(),
+  dreamMaxTokens: intIn(1_000, 2_000_000).optional(),
   /** What Evolution does while Dream runs; `off` when unset. */
   evolution: z.enum(EVOLUTION_MODES).optional(),
   /** Per memory category: what happens to an agent proposal (auto = saved, review = Pending, never = dropped); unset categories use their default. */
-  subagentDepth: z.number().int().min(0).max(16).optional(),
-  subagentMaxChildren: z.number().int().min(1).max(64).optional(),
-  subagentMaxDescendants: z.number().int().min(1).max(256).optional(),
+  subagentDepth: intIn(0, 16).optional(),
+  subagentMaxChildren: intIn(1, 64).optional(),
+  subagentMaxDescendants: intIn(1, 256).optional(),
   subagentOwnerWake: z.boolean().optional(),
   /** A turn an orderly daemon stop interrupted continues when the daemon starts again; `false` leaves it interrupted (default on). */
   resumeAfterRestart: z.boolean().optional(),
   /** Sub-agents the `task` tool's description names (built-ins first, 6 when unset); the rest are listed on demand (`agent: "?"`). */
-  subagentCatalog: z.number().int().min(0).max(100).optional(),
+  subagentCatalog: intIn(0, 100).optional(),
   /** A prompt opening with `@name`: `address` (default) continues that agent's child of this session when it has one; `delegate` only tells the model to delegate. */
   agentMentions: z.enum(["address", "delegate"]).optional(),
   memoryMaintenance: z.enum(["disabled", "preview", "auto-consolidate"]).optional(),
@@ -619,16 +625,16 @@ const SharedSettings = lazySchema(() => z.strictObject({
   memoryUse: z.boolean().optional(),
   memoryGenerate: z.boolean().optional(),
   memoryRequireApproval: z.boolean().optional(),
-  memoryMaxPromptTokens: z.number().int().min(1).max(32_000).optional(),
-  memoryMaxEntries: z.number().int().min(1).max(10_000).optional(),
-  memoryProjectMaxEntries: z.number().int().min(1).max(10_000).optional(),
+  memoryMaxPromptTokens: intIn(1, 32_000).optional(),
+  memoryMaxEntries: intIn(1, 10_000).optional(),
+  memoryProjectMaxEntries: intIn(1, 10_000).optional(),
   memoryPolicies: z.partialRecord(z.enum(MEMORY_CATEGORY_IDS), z.enum(MEMORY_POLICIES)).optional(),
   /** Once a day (03:30 local) remove sessions idle for this many days, then orphan blobs; off when unset. */
-  retentionDays: z.number().int().min(7).max(3650).optional(),
+  retentionDays: intIn(7, 3650).optional(),
   /** In the same daily pass (03:30 local): remove the daemon's merged, clean, unused worktrees idle this many days; 14 when unset, 0 turns it off. */
-  worktreeGcDays: z.number().int().min(0).max(3650).optional(),
+  worktreeGcDays: intIn(0, 3650).optional(),
   /** Disk cap in GB for the worktrees MendCode manages: the storage page warns above it and the daily pass frees safe ones first; nothing unsafe is removed. Unset = no cap. */
-  worktreeCapGb: z.number().int().min(1).max(100_000).optional(),
+  worktreeCapGb: intIn(1, 100_000).optional(),
   /**
    * Branch names of worktrees the `worktree` tool creates (docs/worktrees.md): `static` (default) = `prefix` (default `mend/`) plus the name · `semantic` = the
    * model picks a short type prefix such as `fix` or `feat` and the branch is `<type>/<name>` · `custom` = the model follows `instruction` and names the whole branch.
@@ -649,7 +655,7 @@ const SharedSettings = lazySchema(() => z.strictObject({
    * when unset. Per device, not per repository: it is this machine's capacity, shared by every watched repository. The daemon's
    * background scheduler still runs at most 2 jobs at once in its normal resource mode (4 in high), so 3 and 4 need high.
    */
-  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional(), /** Off: the reviewer of MendCode's own repository does not measure a pull request's cost (docs/pr-review.md "Performance"). On when unset. */ perfAttrib: z.boolean().optional() }).optional(),
+  prReview: z.strictObject({ concurrency: intIn(1, 4).optional(), /** Off: the reviewer of MendCode's own repository does not measure a pull request's cost (docs/pr-review.md "Performance"). On when unset. */ perfAttrib: z.boolean().optional() }).optional(),
   /** Footer segments in display order; DEFAULT_FOOTER when unset. */
   footer: z.array(z.enum(FOOTER_SEGMENTS)).max(FOOTER_SEGMENTS.length).optional(),
   /** Prompt-cache hints the native engine sends (docs/prompt-cache.md): `legacy` (default) = today's per-session key · `off` = none · `smart` = per-lineage keys and Anthropic breakpoints at tools, system and the last user message. */
@@ -665,15 +671,15 @@ const SharedSettings = lazySchema(() => z.strictObject({
   language: z.string().regex(/^\p{L}[\p{L}\p{M} ()-]{0,39}$/u).optional(),
   /** Set once the first-run setup page was completed or dismissed. */
   onboarded: z.boolean().optional(),
-  memoryGlobalCompactionMaxEntries: z.number().int().min(1).max(10_000).optional(),
+  memoryGlobalCompactionMaxEntries: intIn(1, 10_000).optional(),
   /** Days an agent proposal may wait in Pending before it is archived (a revision is dropped); default 14, 0 keeps them until decided. */
-  memoryPendingDays: z.number().int().min(0).max(365).optional(),
+  memoryPendingDays: intIn(0, 365).optional(),
   /** Substantive user turns of a session between two memory reviews (default 10 in balanced, 6 in full). */
-  memoryReviewEveryTurns: z.number().int().min(2).max(100).optional(),
+  memoryReviewEveryTurns: intIn(2, 100).optional(),
   /** Minutes a session may sit idle before its unreviewed turns are reviewed (default 10). */
-  memoryReviewIdleMinutes: z.number().int().min(1).max(240).optional(),
+  memoryReviewIdleMinutes: intIn(1, 240).optional(),
   /** Most extractor calls per day; 0 stops automatic extraction (default 12 in balanced, 30 in full). */
-  memoryReviewDailyCap: z.number().int().min(0).max(500).optional(),
+  memoryReviewDailyCap: intIn(0, 500).optional(),
   dreamConsolidationPolicy: z.enum(["disabled", "preview", "auto-consolidate"]).optional(),
   memoryProjects: z.record(z.string().min(1).max(4096), MemoryConfigPatch).optional(),
   /** Primary destination after an explicitly applied plan; build when unset or unavailable. */

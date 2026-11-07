@@ -184,6 +184,21 @@ test("large inspect results stay below the wire limit and report truncation", as
   expect(result.truncated).toBe(true)
 })
 
+test("state waiting lists every session with an open approval or question, however old, past newer sessions", async () => {
+  const h = await native()
+  const ask = (sessionId: SessionId, kind: "question" | "approval") => {
+    const turnId = ids("turn")
+    h.store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+    h.store.sessionSink.append({ type: "server.request", sessionId, turnId, requestId: ids("request"), kind, title: "Decide", detail: "" })
+  }
+  const approval = await create(h, { title: "Old approval" })
+  const question = await create(h, { title: "Old question" })
+  ask(approval, "approval"); ask(question, "question")
+  for (let i = 0; i < 600; i++) h.store.createSession({ id: ids("session"), directory: h.project, title: `Newer ${i}` })
+  const service = createSessionAutomation({ store: h.store, foreground: () => undefined, loops: () => [], tasks: () => [] })
+  expect(service.list({ state: "waiting" }).map((session) => [session.sessionId, session.status]).sort()).toEqual([[approval, "waiting_for_approval"], [question, "waiting_for_input"]].sort())
+})
+
 test("fork before a native assistant keeps its prompt and earlier answers without copying the selected answer", async () => {
   const h = await native({ steps: [stop("first answer"), stop("excluded answer"), stop("branch answer")] })
   const root = await openSession(h)

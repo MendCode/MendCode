@@ -27,8 +27,11 @@ export function dreamEligibleDirectory(directory: string, input: { dataDir?: str
   if (tempRoots().some((root) => under(directory, root))) return false
   if (input.dataDir && under(directory, input.dataDir)) return false
   try { if (!statSync(directory).isDirectory()) return false } catch { return false }
-  // No `.git` at all is a plain folder; a `.git` file marks a linked worktree.
-  try { return !statSync(path.join(directory, ".git")).isFile() } catch { return true }
+  // The nearest `.git` up the tree decides: a file marks a linked worktree (also for a subfolder of one); none at all is a plain folder.
+  for (let current = path.resolve(directory); ; current = path.dirname(current)) {
+    try { return !statSync(path.join(current, ".git")).isFile() } catch { /* No `.git` here: look one level up. */ }
+    if (current === path.dirname(current)) return true
+  }
 }
 
 /** Folder names that hold keys and credentials rather than projects. */

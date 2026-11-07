@@ -99,7 +99,7 @@ describe("loadTodayData", () => {
   test("a read-only remote client asks for no memory and no reviews and says they are not listed", async () => {
     const { source, types } = fake({ "session.list": { sessions: [] } }, { remote: { host: "box", readOnly: true } })
     const data = await loadTodayData(source)
-    expect(types()).toEqual(["session.list", "workflow.list", "dream.list"])
+    expect(types()).toEqual(["session.list", "session.list", "workflow.list", "dream.list"])
     expect(data.notes).toEqual(["PR reviews are local-only and are not listed here.", "This client is read-only: memory proposals and contradictions are not listed."])
     expect([data.attention, data.pickup, data.memory]).toEqual([[], [], []])
   })
@@ -107,7 +107,22 @@ describe("loadTodayData", () => {
   test("a full-access remote client reads memory but never PR reviews", async () => {
     const { source, types } = fake({}, { remote: { host: "box", readOnly: false } })
     await loadTodayData(source)
-    expect(types()).toEqual(["session.list", "workflow.list", "memory.list", "memory.graph", "dream.list"])
+    expect(types()).toEqual(["session.list", "session.list", "workflow.list", "memory.list", "memory.graph", "dream.list"])
+  })
+
+  test("a session waiting for the user stays in Attention past the pickup window and behind a hundred newer sessions", async () => {
+    const asked: CommandInput[] = []
+    const newer = Array.from({ length: 100 }, (_, index) => session(`n${index}`, { updatedAt: NOW - H }))
+    const old = session("old", { status: "waiting_for_approval", pending: "Run the migration", since: NOW - 9 * 24 * H, updatedAt: NOW - 9 * 24 * H })
+    const source: TodaySource = { ...fake({}).source, send: async (command) => {
+      asked.push(command)
+      if (command.type !== "session.list") return { ok: true, result: {} } as CommandReply
+      return { ok: true, result: { sessions: command.state === "waiting" ? [old] : newer } } as CommandReply
+    } }
+    const data = await loadTodayData(source)
+    expect(asked.find((command) => command.type === "session.list" && command.state === "waiting")).not.toMatchObject({ since: expect.anything() })
+    expect(data.attention.map((item) => item.title)).toEqual(["Session old"])
+    expect(data.pickup.some((item) => item.title === "Session old")).toBe(false)
   })
 
   test("PR reviews are not read with the feature off, or without a session to ask through", async () => {

@@ -489,14 +489,15 @@ export function createClaudeEngine(options: {
         })
       connection.background = tasks.length
       for (const task of tasks) connection.tasks.add(task.id)
-      if (tasks.length) connection.idle?.cancel()
-      // An MCP change waited for the background tasks; with none left and no turn open, the process restarts now.
-      else if (!connection.turn && connection.reload) { close(connection, "a change waited for the background tasks (MCP servers, effort or fast)"); return }
-      else if (!connection.turn) keepIdle(connection)
+      // The new list is reported first, also when the process closes right after: close reports nothing once the count is zero.
       options.onBackground?.(connection.sessionId, tasks, async (taskId) => {
         if (connection.closed) throw new Error("[CLAUDE]: the Claude Code process has ended")
         await control(connection, { subtype: "stop_task", task_id: taskId })
       })
+      if (tasks.length) connection.idle?.cancel()
+      // An MCP, effort, fast or advisor change waited for the background tasks; with none left and no turn open, the process restarts now.
+      else if (!connection.turn && connection.reload) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
+      else if (!connection.turn) keepIdle(connection)
       return
     }
     if (agentTask(connection, message)) return

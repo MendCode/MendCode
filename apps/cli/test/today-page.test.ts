@@ -213,6 +213,13 @@ describe("triage", () => {
     expect(todayPageKey(ready(), "\x1b", TODAY_DEMO)).toMatchObject({ action: { type: "none" }, state: { triage: { open: false } } })
   })
 
+  test("[ and ] scroll the group panel while triage is open and keep it open", () => {
+    const down = todayPageKey(ready(), "]", TODAY_DEMO)
+    expect(down.state).toMatchObject({ scroll: 4, triage: { open: true, selected: 0 } })
+    expect(todayPageKey(down.state, "[", TODAY_DEMO).state.scroll).toBe(0)
+    expect(todayPageKey(ready(), "[", TODAY_DEMO).state.scroll).toBe(0)
+  })
+
   test("the rows sent are the page's rows, attention first, capped", () => {
     const items = triageItems(TODAY_DEMO)
     expect(items[0]).toMatchObject({ id: "attention:a1", tab: "attention", kind: "approval" })

@@ -194,12 +194,14 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   const lastVisit = source.lastVisit && source.lastVisit > 0 ? source.lastVisit : now - FIRST_VISIT_WINDOW_MS
   const notes: string[] = []
   async function ask(label: string, command: CommandInput): Promise<Record<string, unknown> | undefined> {
+    // Two reads of one source (the sessions) that fail alike leave one note.
+    const note = (why: string) => { const text = `${label} could not be read: ${clip(why, 80)}.`; if (!notes.includes(text)) notes.push(text) }
     try {
       const reply = await source.send(command)
       if (reply.ok) return reply.result ?? {}
-      notes.push(`${label} could not be read: ${clip(reply.error.message.replace(/^\[[A-Z_-]+\]:\s*/, ""), 80)}.`)
+      note(reply.error.message.replace(/^\[[A-Z_-]+\]:\s*/, ""))
     } catch (error) {
-      notes.push(`${label} could not be read: ${clip(error instanceof Error ? error.message : String(error), 80)}.`)
+      note(error instanceof Error ? error.message : String(error))
     }
     return undefined
   }
@@ -210,8 +212,10 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   if (source.reviews && !source.remote && !source.sessionId) notes.push("PR reviews are listed once the session has started.")
   if (!memoryReadable) notes.push("This client is read-only: memory proposals and contradictions are not listed.")
 
-  const [sessionsResult, jobsResult, workflowsResult, memoriesResult, graphResult, dreamResult] = await Promise.all([
+  const [sessionsResult, waitingResult, jobsResult, workflowsResult, memoriesResult, graphResult, dreamResult] = await Promise.all([
     ask("Sessions", { type: "session.list", limit: SESSION_LIMIT, roots: true, hideEmpty: true, since: Math.max(0, now - PICKUP_WINDOW_MS) }),
+    // Sessions waiting for the user, however old and however many newer ones there are: the pickup window must not hide them.
+    ask("Sessions", { type: "session.list", limit: SESSION_LIMIT, roots: true, hideEmpty: true, state: "waiting" }),
     reviewsReadable ? ask("PR reviews", { type: "pr.review", sessionId: source.sessionId as never, action: "status" }) : undefined,
     ask("Workflows", { type: "workflow.list" }),
     memoryReadable ? ask("Memory", { type: "memory.list", session: "all", ...(source.directory ? { directory: source.directory } : {}) }) : undefined,
@@ -220,6 +224,8 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
   ])
 
   const sessions = ((sessionsResult?.sessions as SessionSummary[] | undefined) ?? []).filter((session) => !session.archivedAt)
+  const attending = new Map(sessions.map((session) => [session.sessionId, session]))
+  for (const session of (waitingResult?.sessions as SessionSummary[] | undefined) ?? []) if (!session.archivedAt && !attending.has(session.sessionId)) attending.set(session.sessionId, session)
   const jobs = ((jobsResult?.dashboard as { jobs?: PrJobSummary[] } | undefined)?.jobs ?? []).slice(0, 500)
   const workflows = (workflowsResult?.workflows as WorkflowSummary[] | undefined) ?? []
   const memories = (memoriesResult?.memories as MemoryEntry[] | undefined) ?? []
@@ -241,7 +247,7 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
 
   const saved = new Map(memories.filter((entry) => entry.status === "saved").map((entry) => [entry.memoryId as string, entry]))
   const attention = [
-    ...sessions.flatMap((session) => attentionOfSession(session) ?? []),
+    ...[...attending.values()].flatMap((session) => attentionOfSession(session) ?? []),
     ...jobs.flatMap((job) => attentionOfJob(job) ?? []),
     ...workflows.flatMap((workflow) => attentionOfWorkflow(workflow) ?? []),
     ...(graph?.links ? attentionOfConflicts(graph) : []),

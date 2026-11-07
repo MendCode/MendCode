@@ -292,10 +292,13 @@ test("ineligible sessions are never reviewed and are counted once with the reaso
 test("the real folder filter refuses temp folders, missing folders and linked worktrees; a plain project passes", () => {
   const root = mkdtempSync(path.join(process.cwd(), ".review-"))
   cleanup.push(() => rmSync(root, { recursive: true, force: true }))
+  // A full checkout of its own, so the verdicts do not depend on whether the suite runs in a linked worktree.
+  mkdirSync(path.join(root, ".git"))
   const plain = path.join(root, "plain"); mkdirSync(plain)
   const linked = path.join(root, "linked"); mkdirSync(linked); writeFileSync(path.join(linked, ".git"), "gitdir: elsewhere")
+  const linkedSub = path.join(linked, "packages", "web"); mkdirSync(linkedSub, { recursive: true })
   const verdicts: Record<string, string | undefined> = {}
-  for (const [name, directory] of [["plain", plain], ["linked", linked], ["missing", path.join(root, "gone")], ["temp", mkdtempSync(path.join(tmpdir(), "review-"))]] as const) {
+  for (const [name, directory] of [["plain", plain], ["linked", linked], ["linkedSub", linkedSub], ["missing", path.join(root, "gone")], ["temp", mkdtempSync(path.join(tmpdir(), "review-"))]] as const) {
     const dir = mkdtempSync(path.join(tmpdir(), "memory-extraction-"))
     cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
     const store = openStore({ dir })
@@ -314,7 +317,7 @@ test("the real folder filter refuses temp folders, missing folders and linked wo
     verdicts[name] = store.extraction.list().length ? "reviewed" : Object.keys(worker.ineligible())[0]
     cleanup.push(() => worker.stop())
   }
-  expect(verdicts).toEqual({ plain: "reviewed", linked: "ineligible: temporary, missing or linked-worktree folder", missing: "ineligible: temporary, missing or linked-worktree folder", temp: "ineligible: temporary, missing or linked-worktree folder" })
+  expect(verdicts).toEqual({ plain: "reviewed", linked: "ineligible: temporary, missing or linked-worktree folder", linkedSub: "ineligible: temporary, missing or linked-worktree folder", missing: "ineligible: temporary, missing or linked-worktree folder", temp: "ineligible: temporary, missing or linked-worktree folder" })
 })
 
 test("child sessions, loop and review sessions and scripted runs are skipped", () => {
@@ -392,10 +395,34 @@ test("the daily cap counts every folder's reviews and survives a restart: a new 
 
 test("the review record stays bounded", () => {
   const h = fixture()
-  for (let index = 0; index < 340; index++) h.store.memoryReviews.add({ at: index, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 1, proposed: 0, outcome: "ran", reason: "" })
+  const hour = 3_600_000
+  for (let index = 0; index < 340; index++) h.store.memoryReviews.add({ at: index * hour, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 1, proposed: 0, outcome: "ran", reason: "" })
   expect(h.store.memoryReviews.list(1000)).toHaveLength(300)
-  expect(h.store.memoryReviews.list(1)[0]!.at).toBe(339)
-  expect(h.store.memoryReviews.callsSince(335)).toBe(5)
+  expect(h.store.memoryReviews.list(1)[0]!.at).toBe(339 * hour)
+  expect(h.store.memoryReviews.callsSince(335 * hour)).toBe(5)
+})
+
+test("a daily cap above the kept record still counts every call of the day: 500 reviews in a day stop at 500", () => {
+  const h = fixture()
+  const start = Date.now()
+  for (let index = 0; index < 500; index++) h.store.memoryReviews.add({ at: start + index, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 1, proposed: 0, outcome: "ran", reason: "" })
+  expect(h.store.memoryReviews.callsSince(start)).toBe(500)
+  // Skips without calls are still pruned to the kept count, and a day later the old calls go too.
+  for (let index = 0; index < 400; index++) h.store.memoryReviews.add({ at: start + 1_000 + index, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 0, proposed: 0, outcome: "skipped", reason: "empty digest" })
+  expect(h.store.memoryReviews.callsSince(start)).toBe(500)
+  expect(h.store.memoryReviews.list(10_000)).toHaveLength(800)
+  h.store.memoryReviews.add({ at: start + 86_400_000 + 1_000, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 1, proposed: 0, outcome: "ran", reason: "" })
+  expect(h.store.memoryReviews.list(10_000)).toHaveLength(300)
+})
+
+test("retries count against the daily cap: a failing review under a cap of 1 makes one call and records it", async () => {
+  let calls = 0
+  const h = fixture(async () => { calls++; throw new Error("provider down") }, {}, { memoryReviewDailyCap: 1 })
+  h.turn("First rule here"); h.turn("Second rule here")
+  await until(() => h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
+  expect(calls).toBe(1)
+  expect(h.store.extraction.list()[0]).toMatchObject({ state: "skipped", reason: "Daily review cap reached", attempts: 1 })
+  expect(h.store.memoryReviews.callsSince(Date.now() - 86_400_000)).toBe(1)
 })
 
 test("review progress survives a restart: unreviewed turns are not forgotten and reviewed ones are not sent again", async () => {
