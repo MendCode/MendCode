@@ -4,7 +4,7 @@ import { renderQueuePanel } from "../src/view/queue-panel"
 import { createTranscript } from "../src/view/transcript"
 import { textWidth } from "../src/view/wrap"
 import { b51Harness } from "./b51-harness"
-import { appHarness, cleanTemps, NOW } from "./session-ui-harness"
+import { appHarness, cleanTemps, ids, NOW } from "./session-ui-harness"
 
 afterEach(cleanTemps)
 
@@ -90,4 +90,51 @@ test("the transcript remembers what stopped the last turn, for the held queue's 
   transcript.apply({ ...base, seq: 5, type: "turn.started", turnId: "trn_3", queueId: "que_3" } as never)
   transcript.apply({ ...base, seq: 6, type: "turn.completed", turnId: "trn_3" } as never)
   expect(transcript.lastStop).toBeUndefined()
+})
+
+test("the daemon's internal notices for the agent are neither listed nor counted in the queue panel, and carry no send or steering badge", async () => {
+  const h = b51Harness(100, 30, "after-tools")
+  const notice = "Internal notification. A session you started is blocked waiting for the user's approval: - ses_a"
+  h.chat.emit({ type: "queue.changed", queue: [
+    { queueId: ids("queue"), preview: notice, attachments: 0, kind: "notice", delivery: "steer" },
+    { queueId: h.first, preview: "Also check cancellation before sending the next prompt", attachments: 0 },
+  ] })
+  const mixed = h.text().join("\n")
+  expect(mixed).toContain("1 queued · After tools")
+  expect(mixed).toContain("Also check cancellation")
+  expect(mixed).not.toContain("Internal notification")
+  expect(mixed).not.toContain("STEERING")
+  h.chat.emit({ type: "queue.changed", queue: [{ queueId: ids("queue"), preview: notice, attachments: 0, kind: "notice", delivery: "steer" }] })
+  const alone = h.text().join("\n")
+  expect(alone).toContain("1 notice for the agent")
+  expect(alone).not.toContain("Internal notification")
+  expect(alone).not.toContain("SEND")
+  expect(alone).not.toContain("queued ·")
+  const rows = renderQueuePanel({ width: 80, previews: [notice, notice], held: false, internal: new Set([0, 1]) }).rows
+  expect(rows).toHaveLength(1)
+  expect(rows[0]!.map((span) => span.text).join("")).toContain("2 notices for the agent")
+})
+
+test("send now, drop last and edit last act on the messages the queue panel shows, never on a hidden internal notice", async () => {
+  const notice = "Internal notification. A session you started is blocked waiting for the user's approval: - ses_a"
+  const h = b51Harness(100, 30, "after-tools")
+  const before = ids("queue"), message = ids("queue"), after = ids("queue")
+  h.chat.emit({ type: "queue.changed", queue: [
+    { queueId: before, preview: notice, attachments: 0, kind: "notice" },
+    { queueId: message, preview: "Also check cancellation before sending the next prompt", attachments: 0 },
+    { queueId: after, preview: notice, attachments: 0, kind: "notice" },
+  ] })
+  const rows = h.text()
+  const at = rows.findIndex((row) => row.includes("↗ SEND"))
+  expect(rows[at]).toContain("Also check cancellation")
+  await h.app.onKey(`\x1b[<0;${rows[at]!.indexOf("SEND") + 1};${at + 1}M`)
+  expect(h.sentOf("queue.promote").at(-1)).toMatchObject({ queueId: message })
+  await h.app.onKey("\x13")
+  expect(h.sentOf("queue.promote").at(-1)).toMatchObject({ queueId: message })
+  await h.app.onKey("\x0b")
+  expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: message })
+  await h.app.onKey("\x1b[1;3A")
+  expect(h.sentOf("queue.remove")).toHaveLength(2)
+  expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: message })
+  expect(h.app.editor.text).toBe("Also check cancellation before sending the next prompt")
 })

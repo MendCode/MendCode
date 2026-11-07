@@ -17,7 +17,7 @@ import { backlogCard } from "../../view/backlog"
 import type { OrbitCamera, OrbitGraph, OrbitNode, OrbitView } from "../../view/panel-orbit"
 import type { OrbitCode } from "../../view/panel-orbit-code"
 import { ATOM_ELECTRONS, ATOM_FRAME_MS, ATOM_ROWS, atomAnimating, renderAtom, type AtomItem } from "../../view/panel-atom"
-import { activityCard, agentCard, agentsCard, agentsTreeCard, alertsCard, contextCard, limitedRow, observedAge, quotaRow, todosCard, tokensCard, toolsCard, workspaceCard, type ActivityCard, type Alert, type ToolEntry } from "../../view/sidebar-cards"
+import { activityCard, agentCard, agentsCard, agentsTreeCard, alertsCard, contextCard, limitedRow, modelsCard,observedAge, quotaRow, todosCard, tokensCard, toolsCard, workspaceCard, type ActivityCard, type Alert, type ToolEntry } from "../../view/sidebar-cards"
 import { quotaFresh } from "@mendcode/protocol/wire"
 import type { Block } from "../../view/transcript"
 import { rightBarCells } from "../../view/right-bar"
@@ -373,14 +373,14 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       case "pace": {
         const calls = state.transcript.recentCalls
         const timed = calls.filter((call) => call.durationMs !== undefined && call.durationMs > 0)
-        const rate = timed.length ? timed.reduce((sum, call) => sum + call.output + call.reasoning, 0) / timed.reduce((sum, call) => sum + call.durationMs!, 0) * 60_000 : undefined
+        const rate = timed.length ? timed.reduce((sum, call) => sum + call.output, 0) / timed.reduce((sum, call) => sum + call.durationMs!, 0) * 60_000 : undefined
         const forecast = forecastTurns(state.transcript.recentContexts, contextLimit(state.transcript.lastUsage, compactFallback(state)))
         const times = state.transcript.recentTurnTimes
         // Nothing timed yet is one calm line, not four "unavailable" rows.
         if (rate === undefined && !forecast && !times.length) return [text("No timed turns yet", "muted")]
         return [
           facts(rate === undefined ? "Rate —" : `${compact(Math.round(rate))} tok/min`, forecast ? `~${forecast.turns} turns left` : "Forecast —", width),
-          ...(timed.length ? sparkRows("Rate", timed.map((call) => (call.output + call.reasoning) / call.durationMs! * 60_000), width, (value) => `${compact(Math.round(value))}/m`, ascii()) : []),
+          ...(timed.length ? sparkRows("Rate", timed.map((call) => call.output / call.durationMs! * 60_000), width, (value) => `${compact(Math.round(value))}/m`, ascii()) : []),
           ...(times.length ? sparkRows("Turn", times, width, (value) => `${(value / 1000).toFixed(1)}s`, ascii(), "muted") : []),
           text(times.length ? `Last turn ${(times.at(-1)! / 1000).toFixed(1)}s · active-call rate` : "Active-call rate", "muted"),
         ]
@@ -442,8 +442,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       case "stats": return statsCard(statsCardParts(widget.options.text), ctx.stats.read(), width)
       case "models": {
         if (!featureOn(state.settingsNow, "panel_models")) return [text("Models disabled", "muted")]
-        const models = [...state.transcript.modelUsage].sort((a, b) => b.input + b.output + b.cacheRead + b.cacheWrite + b.reasoning - a.input - a.output - a.cacheRead - a.cacheWrite - a.reasoning)
-        return models.length ? [...models.slice(0, 5).flatMap((model) => [labelValue(model.provider ? `${model.provider}/${model.model}` : model.model, `${model.calls} call${model.calls === 1 ? "" : "s"}`, width), facts(`In ${compact(model.input)}`, `Out ${compact(model.output + model.reasoning)}`, width), facts(`Read ${compact(model.cacheRead)}`, `Write ${compact(model.cacheWrite)}`, width)]), ...(models.length > 5 ? [text(`+${models.length - 5} models · ${compact(models.slice(5).reduce((sum, model) => sum + model.input + model.output + model.reasoning + model.cacheRead + model.cacheWrite, 0))} tokens`, "muted")] : []), text("Loaded history · incl. compaction", "muted")] : [text("No model usage yet", "muted")]
+        return modelsCard(state.transcript.modelUsage, width)
       }
       case "tools": return toolsCard({ ...(tools ? { enabled: tools.enabled, total: tools.total, ...(widget.options.maxRows ? { names: tools.names } : {}) } : {}), ...(sourceErrors.get("tools") ? { error: sourceErrors.get("tools")! } : {}) }, width)
       case "alerts": return alertsCard(alertList(), width, ctx.glyphs)

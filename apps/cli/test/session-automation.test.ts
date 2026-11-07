@@ -249,15 +249,26 @@ test("events keep-open survives idle, limit terminates and default follow exits 
   expect(await following).toBe(0)
 })
 
-test("the app consumes enriched session summaries without showing child sessions by default", async () => {
+test("the app consumes enriched session summaries; only /sessions' folder list asks for child sessions, every other list stays top-level", async () => {
   const h = appHarness({ dataDir: tempDir(), directory: "/project", reply: (command) => command.type === "session.list" ? { ok: true, result: { sessions: [{ sessionId: id, title: "Review client", directory: "/project", createdAt: 1, updatedAt: 2, lastSeq: 3, state: "idle", queued: 0, status: "completed", permission: "ask" }] } } : undefined })
   h.app.applySettings({ onboarded: true })
+  const childLists = () => h.sentOf("session.list").filter((command) => "roots" in command && command.roots === false)
+  // Before /sessions opens (title, home, agents), no list asks for children.
+  expect(childLists()).toEqual([])
   await h.type("/sessions\r")
   await Bun.sleep(5)
   h.app.render()
   expect(h.text().join("\n")).toContain("Review client")
   expect(h.text().join("\n")).toContain("Sessions")
-  expect(h.sentOf("session.list").every((command) => !("roots" in command) || command.roots !== false)).toBe(true)
+  // The children come only with the picker's own folder, to nest under their parents.
+  expect(childLists().length).toBeGreaterThan(0)
+  for (const command of childLists()) expect(command).toMatchObject({ directory: "/project", roots: false })
+  // All projects lists the top sessions of every folder, never children.
+  const before = h.sentOf("session.list").length
+  await h.app.onKey("\x0c")
+  const allProjects = h.sentOf("session.list").slice(before)
+  expect(allProjects.length).toBeGreaterThan(0)
+  for (const command of allProjects) expect(command.roots === false || "directory" in command).toBe(false)
   await h.app.onKey("\x03")
 })
 

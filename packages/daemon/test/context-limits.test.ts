@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { compactionThreshold } from "@mendcode/engine-native"
+import { compactEstimateText } from "@mendcode/protocol/wire"
 import { ContextLimits, RecentContextReport, type ModelInfo, type ProviderInfo, type SessionEvent } from "@mendcode/protocol"
 import { compactPoint, contextLimits, globalTrigger, modelCompactAt, modelLimits, turnSamples } from "../src/context-limits"
 import { answer, boot, openSession, until } from "./native-harness"
@@ -13,6 +14,13 @@ const usage = (extra: Partial<Extract<SessionEvent, { type: "usage.recorded" }>>
 
 test("a 500k model with nothing set packs at 90 percent of its window, and the label says so", () => {
   expect(compactPoint({}, { contextWindow: 500_000 }, noTrigger)).toEqual({ tokens: 450_000, compactAtSource: "threshold", thresholdPercent: 90, thresholdSource: "default" })
+})
+
+test("reserve-derived 1% and configured threshold 1 both report 1%, not a fraction", () => {
+  expect(compactPoint({ reserved: 99_000 }, { contextWindow: 100_000 }, noTrigger)).toEqual({ tokens: 1000, compactAtSource: "threshold", thresholdPercent: 1, thresholdSource: "default" })
+  expect(compactPoint({ threshold: 1 }, { contextWindow: 100_000 }, noTrigger)).toEqual({ tokens: 1000, compactAtSource: "threshold", thresholdPercent: 1, thresholdSource: "compaction.threshold" })
+  expect(compactPoint({}, { contextWindow: 100_000, provider: { threshold: 1 } }, noTrigger)).toMatchObject({ tokens: 1000, thresholdPercent: 1, thresholdSource: "provider-override" })
+  expect(compactPoint({}, { contextWindow: 100_000, model: { threshold: 1 } }, noTrigger)).toMatchObject({ tokens: 1000, thresholdPercent: 1, thresholdSource: "model-override" })
 })
 
 test("the compactAtTokens setting is an absolute trigger, lowered to a smaller window", () => {
@@ -73,6 +81,18 @@ test("a session's limits: the engine's point explained by the settings, tokens f
   const limits = contextLimits({ report, catalog: [sol], providers: [], settings: {}, lastUsage: usage(), environment: {} })
   expect(limits).toEqual({ model: "gpt-6.1-sol", contextWindow: 500_000, contextWindowSource: "catalog", compactAtTokens: 450_000, compactAtSource: "threshold", thresholdPercent: 90, thresholdSource: "default", autoCompact: true, contextTokens: 201_200, contextTokensSource: "last-call", forecast: { limit: "compaction", auto: true, tokensLeft: 248_800, noticeDue: false } })
   expect(ContextLimits.safeParse(limits).success).toBe(true)
+})
+
+test("a compaction.threshold of 0.8 is 80% of the window: the label says 80 and the forecast is far from 0 tokens", () => {
+  const settings = { compaction: { threshold: 0.8 } }
+  expect(compactPoint(settings.compaction, { contextWindow: 500_000 }, noTrigger)).toEqual({ tokens: 400_000, compactAtSource: "threshold", thresholdPercent: 80, thresholdSource: "compaction.threshold" })
+  expect(compactPoint({ threshold: 80 }, { contextWindow: 500_000 }, noTrigger)).toMatchObject({ tokens: 400_000, thresholdPercent: 80 })
+  const compactAtTokens = modelCompactAt({ model: sol, providers: [], settings, environment: {} })!
+  expect(compactAtTokens).toBe(400_000)
+  // The recorded case: a nearly empty session (1% of the window).
+  const limits = contextLimits({ report: { model: "gpt-6.1-sol", compactAtTokens, estimatedTokens: 0 }, catalog: [sol], providers: [], settings, lastUsage: usage({ input: 5000, cacheRead: 0, output: 0 }), environment: {} })
+  expect(limits).toMatchObject({ compactAtTokens: 400_000, thresholdPercent: 80, forecast: { tokensLeft: 395_000 } })
+  expect(compactEstimateText(limits.forecast!, (tokens) => tokens.toLocaleString("en-US"))).toBe("compaction in 395,000 tokens · /compact to pack it now")
 })
 
 test("the estimate: tokens left, turns from three main turns of growth, and whether the terminal's notice is due", () => {

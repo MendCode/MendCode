@@ -2,7 +2,8 @@ import { readdir, readFile, stat } from "node:fs/promises"
 import { isAbsolute, join, relative } from "node:path"
 import { readPetLayout, type PetLayout } from "../../../../packages/protocol/src/pet-data"
 
-export type PetSource = "codex" | "user" | "package"
+/** `builtin` pets ship inside MendCode (`builtin.ts`); a `builtin` entry of the dirs lists them and its `dir` is not read. */
+export type PetSource = "codex" | "user" | "package" | "builtin"
 export type PetInfo = { ref: `${PetSource}:${string}`; id: string; displayName: string; description: string; sheetPath: string; version: 1 | 2; /** Generated pets only: the states the generator drew. */ generatedStates?: string[]; /** Imported pets only (`/pet import`): their own frames and timings instead of the Codex atlas. */ layout?: PetLayout }
 export type SkippedPet = { dir: string; reason: string }
 
@@ -18,6 +19,13 @@ export async function listPets(dirs: Array<{ dir: string; source: PetSource }>):
   const skipped: SkippedPet[] = []
   const seen = new Set<string>()
   for (const { dir, source } of dirs) {
+    if (source === "builtin") {
+      for (const pet of (await import("./builtin")).BUILT_IN_PETS) if (!seen.has(pet.ref)) {
+        seen.add(pet.ref)
+        pets.push(pet)
+      }
+      continue
+    }
     const names = await readdir(dir).catch(() => [] as string[])
     for (const name of names.sort()) {
       const folder = join(dir, name)

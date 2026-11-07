@@ -1,8 +1,8 @@
 # File viewer
 
-Click a file path in the conversation and the file opens beside it. The chat stays on the left; the file takes the right slot (the one
-the [panel](sidebar.md) uses) with a header, line numbers, syntax colors, the cited lines selected, Git change marks in the margin and a
-search. It is read-only: it never edits a file.
+Click a file path in the conversation to read it beside the chat, with cited lines selected, syntax colors, line numbers, Git change marks and search. The viewer is read-only: it never edits a file.
+
+The chat stays on the left; the file takes the right slot, the one the [panel](sidebar.md) uses.
 
 ```
  ‹ AGENTS.md · 157 lines                         o open · a ask · y copy
@@ -13,9 +13,9 @@ search. It is read-only: it never edits a file.
    ctrl+\ focus · opt+{ panel                                   1-40/157
 ```
 
-One header row: the way back, the file's name (bold) and what it holds (muted) on the left, the actions on the right as hints, in the
-same muted colors as every other hint row of the app. They are still clicks. The language is named only when the file's name does not
-say it (a `Dockerfile`). The last row is the footer: the keys that bring the keyboard here, and where the window is in the file.
+The header is one row: the way back, the file's bold name and muted contents on the left; clickable action hints on the right. Hints use the same muted colors as the app's other hint rows.
+
+The language is named only when the file's name does not say it (a `Dockerfile`). The footer is the last row: keys that bring the keyboard here, and the window's position in the file.
 
 ## Opening a file
 
@@ -27,23 +27,43 @@ say it (a `Dockerfile`). The last row is the footer: the keys that bring the key
 | A file on the [Changes page](#from-the-changes-page) | A click on the file in the list or above its diff, or `f`. |
 | An extension | `actions.openFile(path, { from, to })` in a command or key (see [extensions](extensions-tui.md)). |
 
-A reference is read the way people write it: `src/app.rs:120`, `src/ui.rs:300:5`, `src/files/link.rs:56-79`, `DESIGN.md#L10-L20`,
-`./AGENTS.md`, `AGENTS.md`, an absolute path inside the workspace, `~/x` when it is inside, in backticks or before a full stop. A path cut
-over two rows opens from either row. A drag that starts on a path selects text and opens nothing; ctrl and alt clicks stay with the
-terminal's own link; a double click opens once and still selects the word. A click on a tool card's title opens the file, a click
-anywhere else on the header still folds the card.
+### Recognized paths
 
-What never opens: a URL, `std::collections::HashMap`, a date. A path outside the workspace says `not opened: <path> is outside the
-workspace` and is never asked for or read. The workspace is the session's directory and the directories added with `/add-dir`. A missing
-file is one line (a bare name such as `Node.js` that is not a file stays quiet).
+References are read the way people write them, in backticks or before a full stop:
+
+| Reference | Examples |
+|---|---|
+| Line, column or range | `src/app.rs:120`, `src/ui.rs:300:5`, `src/files/link.rs:56-79`, `DESIGN.md#L10-L20` |
+| Relative or bare path | `./AGENTS.md`, `AGENTS.md` |
+| Absolute or home path | An absolute path inside the workspace, `~/x` when it is inside. |
+
+A path cut over two rows opens from either row.
+
+| Mouse action | Result |
+|---|---|
+| Drag starting on a path | Selects text and opens nothing. |
+| Ctrl or alt click | Stays with the terminal's own link. |
+| Double click | Opens once and still selects the word. |
+| Click a tool card's title | Opens the file. |
+| Click elsewhere on the card header | Still folds the card. |
+
+### Workspace boundaries
+
+The workspace is the session's directory and the directories added with `/add-dir`. A path outside it says `not opened: <path> is outside the workspace` and is never asked for or read.
+
+A URL, `std::collections::HashMap` or a date never opens. A missing file is one line; a bare name such as `Node.js` that is not a file stays quiet.
 
 ### The open-path key
 
-`alt+o` (`ctrl+x ;` on a Mac where Option is not known to send Alt) looks in what you are pointing at: the kept mouse selection, or the
-passage a selection just copied (for eight seconds; copy on select drops the selection itself), else the item nearest the middle of the
-screen, the rule `ctrl+x f` and `ctrl+x Y` use. One path opens at once. Several are listed in the picker (`Open file`, the palette's list:
-type to narrow, enter opens, esc closes). `alt+x` (`ctrl+x -`) closes the open file. Both are key actions: rebind them in `/keymap` or
-`keybindings.json` (`file.open`, `file.close`), and every hint of the viewer names the key you chose.
+Press `alt+o`, or `ctrl+x ;` on a Mac where Option is not known to send Alt. It uses the same rule as `ctrl+x f` and `ctrl+x Y`, looking in this order:
+
+1. The kept mouse selection.
+2. The passage a selection just copied, for eight seconds; copy on select drops the selection itself.
+3. The item nearest the middle of the screen.
+
+One path opens at once. Several appear in `Open file`, the palette's list: type to narrow, enter opens, esc closes.
+
+`alt+x` (`ctrl+x -`) closes the open file. Rebind both key actions in `/keymap` or `keybindings.json` (`file.open`, `file.close`); every viewer hint names the key you chose.
 
 ## Folders
 
@@ -57,40 +77,74 @@ group by name, with the size of each file on the right.
    app.rs                                                    2.8 KB
 ```
 
-A click on a row enters the folder or opens the file; `j` `k` move, `enter` opens, `backspace` goes up (from a file opened out of a
-listing it comes back to that listing). `..` goes to the parent and is not offered at the workspace root: the listing follows the same
-containment as a file (a path outside the workspace, or a symlink out of it, is `outside` and never listed). `.git` is never listed. A
-listing shows at most 500 entries and says `showing the first 500 of 600`; the daemon stops counting at 20,000.
+| Action | Does |
+|---|---|
+| Click a row | Enters the folder or opens the file. |
+| `j` `k` | Move. |
+| `enter` | Opens. |
+| `backspace` | Goes up; from a file opened out of a listing, returns to that listing. |
+| `..` | Goes to the parent; not offered at the workspace root. |
+
+The listing follows the same containment as a file. A path outside the workspace, or a symlink out of it, is `outside` and never listed. `.git` is never listed.
+
+A listing shows at most 500 entries and says `showing the first 500 of 600`; the daemon stops counting at 20,000.
 
 ## Reading what is there
 
-- **Large files**: the viewer asks the daemon for a window of lines (at most 400 per request), so opening line 11,000 of an 11,000
-  line file reads one window. A file over 4 MB is `too large to view`; one line, nothing read.
-- **Binary files** show `binary file · image/png · 12 KB` and nothing else. A device, pipe or socket inside the workspace is
-  `device, pipe or socket · not opened`, found with `stat` and never opened. A symlink to anything outside the workspace is outside.
-- Lines longer than 2,000 characters are cut. A tab is four columns, other control characters are a dot.
-- **Secrets** are masked the way diffs and tool output are (`redactSecrets`); the footer says how many.
-- **Git marks** (a bar in the margin: green added, yellow modified, red where lines were removed) come from the changes report, the one
-  the Changes page draws. No report, no marks. A changed file also reads like its diff: an added or modified line has the diff's green
-  fill, and the lines HEAD had are drawn in red above the line that follows them, with `-` in the margin and no number (at most 8 per
-  run, then `… N more removed`). A file opened without a line (a click on an edit's path) lands on its first change; a cited line wins.
-- **Reload**: when the terminal window gets focus, when a turn ends or any item completes, and on `r`, the viewer asks the daemon
-  whether the file changed (a cheap `known` version check, one `stat`) and redraws only if it did. There is no watcher and no timer.
-- **Search**: `/` then Enter finds lines holding the text (smart case); `n` and `N` step through them. `:` and a number jumps to a line.
+### File limits and secrets
+
+| Content | What you see |
+|---|---|
+| Large files | A window of at most 400 lines per request; opening line 11,000 of an 11,000 line file reads one window. |
+| Files over 4 MB | `too large to view`: one line, nothing read. |
+| Binary files | `binary file · image/png · 12 KB` and nothing else. |
+| Device, pipe or socket inside the workspace | `device, pipe or socket · not opened`; found with `stat` and never opened. |
+| Symlink outside the workspace | Outside. |
+| Lines longer than 2,000 characters | Cut. |
+| Tabs and other control characters | A tab is four columns; other control characters are a dot. |
+| Secrets | Masked the way diffs and tool output are (`redactSecrets`); the footer says how many. |
+
+### Git marks and changed lines
+
+Git marks come from the changes report, the one the Changes page draws. No report, no marks. The margin bar is green for added lines, yellow for modified lines, red where lines were removed.
+
+A changed file also reads like its diff:
+
+- Added or modified lines have the diff's green fill.
+- Lines HEAD had appear in red above the line that follows them, with `-` in the margin and no number: at most 8 per run, then `… N more removed`.
+- A file opened without a line, such as a click on an edit's path, lands on its first change. A cited line wins.
+
+### Reload and search
+
+The viewer checks for changes when the terminal window gets focus, when a turn ends or any item completes, and on `r`. It asks the daemon with a cheap `known` version check, one `stat`, and redraws only if changed.
+
+There is no watcher and no timer.
+
+1. Press `/`, then Enter to find lines holding the text (smart case).
+2. Use `n` and `N` to step through them.
+
+Use `:` and a number to jump to a line.
 
 ### Colors
 
-Prose (Markdown, text) is the normal text color: headings are bold with the `#` marker in the accent, code spans use the code role, a
-link's address is muted. Code uses the same roles as a fenced block in the chat (the one tokenizer, `packages/protocol/src/syntax.ts`,
-used by the chat, the tool cards and the viewer). A language the highlighter does not know is drawn the way the read card draws it.
+Prose (Markdown, text) uses the normal text color:
+
+- Headings are bold with the `#` marker in the accent.
+- Code spans use the code role.
+- A link's address is muted.
+
+Code uses the same roles as a fenced block in chat. The chat, tool cards and viewer share one tokenizer, `packages/protocol/src/syntax.ts`. An unknown language is drawn the way the read card draws it.
 
 ### A window below something opened above it
 
-A block comment, a triple-quoted string or a fenced block opened above the window is drawn right without the client reading the file. The
-client sends the language with each `file.view`; the daemon runs the same tokenizer over the lines above the window (a pass over the
-file's bytes, no more, bounded by the 4 MB limit) and answers `lex`: the tokenizer's state at the first row (`block`, `triple` or
-`fence`; absent when nothing is open). The client carries it through the rows it received. A window at the top, or after the comment
-closed, has no `lex`.
+A block comment, triple-quoted string or fenced block opened above the window is drawn correctly without the client reading the file.
+
+1. The client sends the language with each `file.view`.
+2. The daemon runs the same tokenizer over the lines above the window: a pass over the file's bytes, no more, bounded by the 4 MB limit.
+3. It answers `lex`, the tokenizer's state at the first row: `block`, `triple` or `fence`; absent when nothing is open.
+4. The client carries that state through the rows it received.
+
+A window at the top, or after the comment closed, has no `lex`.
 
 ## Keys
 
@@ -125,10 +179,12 @@ On a narrow header the actions drop from the right (`o open` first), then the na
 
 ## From the Changes page
 
-On `/changes`, a click on a file of the list, or on the file's heading above its diff, opens it in the viewer at its first changed line
-(the first added line, or for a change that only deletes, the line the deleted text sat before). `f` does the same for the selected file.
-The chat takes the page's place with the viewer in the slot (or as a page on a narrow terminal). A deleted file says so and opens
-nothing; the list of a past message or session snapshot (`/changes message 3`) does not open files, since the working tree may differ.
+1. On `/changes`, click a file in the list or its heading above the diff. Or press `f` for the selected file.
+2. The viewer opens at the first changed line: the first added line, or for a change that only deletes, the line the deleted text sat before.
+3. The chat takes the page's place with the viewer in the slot, or as a page on a narrow terminal.
+
+- A deleted file says so and opens nothing.
+- A past message or session snapshot (`/changes message 3`) does not open files, since the working tree may differ.
 
 ## One slot, several occupants
 
@@ -163,16 +219,35 @@ The viewer is a thin client: it never reads the disk itself, so it works against
 |---|---|
 | `directory`, `path`, `from?`, `count?` (1..400), `search?`, `known?`, `lang?` | `kind` (`text`, `binary`, `special`, `directory`, `missing`, `outside`, `large`), `size`, `version`, for text `lines`, `from`, `rows`, `redacted`, `hits`, `lex`; for a directory `entries` (at most 500) and `entriesTotal` |
 
-It resolves the path with the daemon's project-path containment (symlinks resolved, `..` and escapes refused, `outside` instead of an
-error), checks the file type with `stat` before opening, reads at most 4 MB and 400 lines, and redacts secrets. A folder is listed with
-`opendir` (never more than 20,000 names read, `.git` skipped, one `lstat` per listed file for its size). It is not a read-only peer's
-command: a token marked read-only gets `forbidden` for `file.view`, file or folder, since a read-only peer must not read project files.
-Git marks use the existing `changes.query` / `changes.file`. `file.rest.read` was not used because it fails above 120,000 bytes, trims
-content (which breaks line numbers), has no redaction, windowing or special-file report, and read-only peers cannot call it.
+### Path and read limits
+
+1. The daemon resolves the path with project-path containment: symlinks resolved, `..` and escapes refused, `outside` instead of an error.
+2. It checks the file type with `stat` before opening.
+3. It reads at most 4 MB and 400 lines, and redacts secrets.
+
+A folder is listed with `opendir`: never more than 20,000 names read, `.git` skipped, one `lstat` per listed file for its size.
+
+A token marked read-only gets `forbidden` for `file.view`, file or folder. It is not a read-only peer's command, since a read-only peer must not read project files.
+
+### Existing commands
+
+Git marks use the existing `changes.query` / `changes.file`.
+
+`file.rest.read` was not used because it:
+
+- Fails above 120,000 bytes.
+- Trims content, which breaks line numbers.
+- Has no redaction, windowing or special-file report.
+- Cannot be called by read-only peers.
 
 ## Extending
 
-The viewer is the view slot `file.viewer` ([views](views.md#fileviewer)): an extension can replace or wrap its drawing, and open a file
-in it with `actions.openFile`. Users can already change the colors (theme), turn it off, restyle or replace the whole viewer as a view,
-and add keys that call `openFile`. Not possible: new actions inside the viewer beyond the closed set (`close`, `switch`, `open`, `ask`,
-`copy`, `line`, `entry`), a second viewer at once, or editing.
+The viewer is the view slot `file.viewer` ([views](views.md#fileviewer)). An extension can replace or wrap its drawing, and open a file in it with `actions.openFile`.
+
+You can change the colors through the theme, turn the viewer off, restyle or replace the whole viewer as a view, and add keys that call `openFile`.
+
+Not possible:
+
+- New actions inside the viewer beyond the closed set: `close`, `switch`, `open`, `ask`, `copy`, `line`, `entry`.
+- A second viewer at once.
+- Editing.

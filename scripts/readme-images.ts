@@ -8,12 +8,14 @@
 // Each scene is a frame of the real TUI (the same view functions the terminal draws, over fixed data) on a full-screen
 // terminal of COLUMNS x ROWS cells, set in a window with the product's own theme colors. Nothing is hand-drawn: change a
 // view, run this script, commit the images with it. The logos are artwork, not frames, and are left alone.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { ChangedFile, ChangesReport, Goal, MemoryEntry, MemoryGraphReport, MemoryLink, PackageInfo, SessionId } from "@mendcode/protocol"
+import type { ChangedFile, ChangesReport, Goal, MemoryEntry, MemoryGraphReport, MemoryLink, PackageCatalogEntry, PackageInfo, SessionId } from "@mendcode/protocol"
+// Demo data only: a throwaway data dir per scene, fixed daemon replies, placeholder credential names; never the user's ~/.mendcode.
 import { resolveActivation, type Activation } from "../packages/protocol/src/activation-data"
 import type { CommandReply } from "@mendcode/client"
+import { DEFAULT_THEME } from "../apps/cli/src/themes"
 import { activeTheme, setColorOverrides, setGlyphMode, setTheme, type Line } from "../apps/cli/src/ui/theme"
 import { createChangesPageState, renderChangesPage } from "../apps/cli/src/view/changes-page"
 import { createMemoryPageState, renderMemoryPage } from "../apps/cli/src/view/memory-page"
@@ -21,6 +23,8 @@ import { createPackagesPageState, renderPackagesPage } from "../apps/cli/src/vie
 import { cells } from "../apps/cli/src/view/wrap"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../apps/cli/src/view/tui-profile"
 import { appHarness, ids, NOW } from "../apps/cli/test/session-ui-harness"
+import { onboardingHarness } from "../apps/cli/test/onboarding-harness"
+import { catalogHarness } from "../apps/cli/test/package-catalog-harness"
 
 /** A normal full-screen terminal window on a desktop monitor. */
 export const COLUMNS = 200
@@ -258,7 +262,8 @@ const RESPONSE = [
 ].join("\n")
 
 /** A session of the shop-api work through the real app: the user's request, the folded reads, an edit with its diff, a test run. */
-async function shopSession({ goal = false, finished = false }: { goal?: boolean; finished?: boolean }): Promise<Line[]> {
+/** `typed`: input typed into the prompt after the turn, as a user would; `settings`: applied before it (a tier, say). */
+async function shopSession({ goal = false, finished = false, typed = [], settings = {} }: { goal?: boolean; finished?: boolean; typed?: string[]; settings?: Record<string, unknown> }): Promise<Line[]> {
   const dataDir = mkdtempSync(path.join(tmpdir(), "mendcode-readme-"))
   try {
     writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
@@ -275,7 +280,7 @@ async function shopSession({ goal = false, finished = false }: { goal?: boolean;
         return undefined
       },
     })
-    h.app.applySettings({ onboarded: true })
+    h.app.applySettings({ onboarded: true, ...settings } as never)
     await Bun.sleep(5)
     let seq = 0
     let clock = NOW - 90_000
@@ -341,12 +346,135 @@ async function shopSession({ goal = false, finished = false }: { goal?: boolean;
       const created: Goal = { goalId: ids("goal"), sessionId, objective: "Cap coupon discounts and cover the API preview", status: "active", tokenBudget: 200_000, tokensUsed: 64_000, timeUsedSeconds: 360, createdAt: NOW - 360_000, updatedAt: NOW } as Goal
       emit({ type: "goal.changed", change: "progress", goal: created, by: "system" })
     }
+    for (const input of typed) await h.type(input)
     await Bun.sleep(5)
     h.app.render()
     return h.frames.at(-1)!
   } finally {
     rmSync(dataDir, { recursive: true, force: true })
   }
+}
+
+const HOME = "/Users/dev"
+const PROJECT = `${HOME}/Code/shop-api`
+
+/** Credentials in the demo vault: names and scopes only, as the daemon answers `env.list`; no value exists anywhere. */
+const CREDENTIALS = [
+  { name: "FAKE_API_KEY", scope: "project", updatedAt: NOW - 3_600_000 },
+  { name: "STRIPE_TEST_KEY", scope: "project", updatedAt: NOW - 7_200_000 },
+  { name: "DATABASE_URL", scope: "session", updatedAt: NOW - 600_000 },
+  { name: "GITHUB_TOKEN", scope: "global", updatedAt: NOW - 3 * 86_400_000 },
+]
+
+/** A demo `.env` pasted on /env. Its values are placeholders; the page lists the names the daemon reports and never shows a value. */
+const PASTED_DOTENV = "FAKE_API_KEY=‹secret:1›\nFAKE_WEBHOOK_SECRET=‹secret:2›\nSENTRY_DSN=‹secret:3›\nPATH=/tmp/demo\nEMPTY_FLAG=\n"
+const PASTED_ITEMS = [
+  { name: "FAKE_API_KEY", status: "replace" },
+  { name: "FAKE_WEBHOOK_SECRET", status: "new" },
+  { name: "SENTRY_DSN", status: "new" },
+  { name: "PATH", status: "refused", reason: "runtime configuration" },
+  { name: "EMPTY_FLAG", status: "empty" },
+]
+
+const listedSession = (sessionId: string, title: string, folder: string, minutesAgo: number) => ({ sessionId, title, directory: `${HOME}/Code/${folder}`, createdAt: NOW - 2 * 86_400_000, updatedAt: NOW - minutesAgo * 60_000, lastSeq: 12, state: "idle", queued: 0 })
+const SESSIONS = [
+  listedSession("session_readme_shop_api", "Cap coupon discounts at the coupon's limit", "shop-api", 1),
+  listedSession("session_readme_flaky", "Flaky checkout test", "shop-api", 95),
+  listedSession("session_readme_notes", "Release notes for 2.4", "shop-api", 310),
+  listedSession("session_readme_cents", "Migrate orders to integer cents", "shop-api", 1_500),
+  listedSession("session_readme_dark", "Dark mode for the dashboard", "admin-web", 40),
+  listedSession("session_readme_csv", "Fix the CSV export header", "admin-web", 2_900),
+  listedSession("session_readme_rate", "Rate limit the public API", "gateway", 200),
+  listedSession("session_readme_guide", "Write the onboarding guide", "docs-site", 4_400),
+]
+
+/**
+ * A page of the real app, opened by typing into it as a user does, over a throwaway data dir and fixed daemon replies. HOME is the
+ * demo user's for the frame, so folders read `~/Code/...` and nothing of the machine's own home shows.
+ */
+async function appPage({ typed }: { typed: string[] }): Promise<Line[]> {
+  const dataDir = mkdtempSync(path.join(tmpdir(), "mendcode-readme-"))
+  const home = process.env.HOME
+  process.env.HOME = HOME
+  try {
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+    const h = appHarness({
+      width: COLUMNS, height: ROWS, mode: "balanced", sessionId: "session_readme_shop_api" as SessionId, dataDir, directory: PROJECT,
+      reply: (command) => {
+        if (command.type === "env.list") return reply({ entries: CREDENTIALS, native: true, engines: true })
+        if (command.type === "privacy.get") return reply({ enabled: false, target: false })
+        if (command.type === "env.import") return reply({ digest: "demo", items: PASTED_ITEMS })
+        if (command.type === "session.list") return reply({ sessions: SESSIONS })
+        if (command.type === "git.branch") return reply({ branch: "fix/coupon-cap" })
+        return undefined
+      },
+    })
+    h.app.applySettings({ onboarded: true })
+    await Bun.sleep(5)
+    for (const input of typed) await h.type(input)
+    await Bun.sleep(5)
+    h.app.render()
+    return h.frames.at(-1)!
+  } finally {
+    if (home === undefined) delete process.env.HOME
+    else process.env.HOME = home
+    rmSync(dataDir, { recursive: true, force: true })
+  }
+}
+
+const BRACKETED = (text: string) => `\x1b[200~${text}\x1b[201~`
+
+/** Runs `frame` with HOME set to the demo user's, so a path the page shortens reads `~/Code/...`; HOME is put back after. */
+async function asDemoUser<T>(frame: () => Promise<T>): Promise<T> {
+  const home = process.env.HOME
+  process.env.HOME = HOME
+  try {
+    return await frame()
+  } finally {
+    if (home === undefined) delete process.env.HOME
+    else process.env.HOME = home
+  }
+}
+
+/**
+ * The setup page on a first run, through `/setup`: a demo machine with Codex signed in, Claude Code installed without a confirmed
+ * sign-in and an API key in the environment (a name only), and what `/import` would take over from Claude Code.
+ */
+function setupFrame(): Promise<Line[]> {
+  return asDemoUser(async () => {
+    const h = onboardingHarness({ codex: true, claude: true, keys: ["openrouter"], importable: { mcp: 2, commands: 3 } }, { width: COLUMNS, height: ROWS, dataDir: mkdtempSync(path.join(tmpdir(), "mendcode-readme-")), directory: PROJECT })
+    h.app.applySettings({ onboarded: false })
+    await Bun.sleep(5)
+    await h.type("/setup\r")
+    await Bun.sleep(20)
+    h.app.render()
+    return h.frames.at(-1)!
+  })
+}
+
+const OFFICIAL = new URL("../examples/official-profiles/", import.meta.url).pathname
+const countIn = (dir: string) => { try { return readdirSync(dir).length } catch { return 0 } }
+
+/** The marketplace's catalog: the official profiles in examples/official-profiles, read from their index and folders, and the retro example. */
+function catalogEntries(): PackageCatalogEntry[] {
+  const index = JSON.parse(readFileSync(path.join(OFFICIAL, "marketplace-index.json"), "utf8")) as { packs: Array<{ id: string; version: string; title: string; tags: string[] }> }
+  const official = index.packs.map((pack): PackageCatalogEntry => {
+    const manifest = JSON.parse(readFileSync(path.join(OFFICIAL, pack.id, "mendcode-profile.json"), "utf8")) as { description: string }
+    return { name: pack.id, title: pack.title, version: pack.version, description: manifest.description, sourceId: "official", location: `examples/official-profiles/${pack.id}`, tags: pack.tags, state: "available", contents: { skills: countIn(path.join(OFFICIAL, pack.id, "skills")), commands: countIn(path.join(OFFICIAL, pack.id, "commands")), agents: 0, tools: 0, themes: 0, mcp: false, extensions: 0 } } as PackageCatalogEntry
+  })
+  const retro = JSON.parse(readFileSync(path.join(RETRO, "mendcode-profile.json"), "utf8")) as { name: string; version: string; description: string }
+  return [...official, { name: retro.name, title: "Retro", version: retro.version, description: retro.description, sourceId: "official", location: "examples/profiles/retro", tags: ["look"], state: "available", contents: { skills: 1, commands: 1, agents: 0, tools: 0, themes: 1, mcp: false, extensions: 2 } } as PackageCatalogEntry]
+}
+
+/** /marketplace: the shared tabs, the search row, the kind filter and the selected profile's source and trust. */
+function marketplaceFrame(): Promise<Line[]> {
+  return asDemoUser(async () => {
+    const h = catalogHarness(COLUMNS, ROWS, false, { entries: catalogEntries() })
+    await h.type("/marketplace\r")
+    await Bun.sleep(10)
+    h.app.render()
+    return h.frames.at(-1)!
+  })
 }
 
 export type Scene = { file: string; title: string; frame: () => Promise<Line[]> | Line[] }
@@ -357,6 +485,16 @@ export const SCENES: Scene[] = [
   { file: "changes.svg", title: "mendcode — /changes", frame: changesFrame },
   { file: "memory-graph.svg", title: "mendcode — /memory", frame: memoryFrame },
   { file: "profiles.svg", title: "mendcode — /packages", frame: packagesFrame },
+  { file: "env.svg", title: "mendcode — /env", frame: () => appPage({ typed: ["/env\r"] }) },
+  { file: "env-paste.svg", title: "mendcode — /env, a pasted .env", frame: () => appPage({ typed: ["/env\r", BRACKETED(PASTED_DOTENV)] }) },
+  { file: "privacy.svg", title: "mendcode — /privacy", frame: () => appPage({ typed: ["/privacy\r"] }) },
+  { file: "sessions.svg", title: "mendcode — /sessions", frame: () => appPage({ typed: ["/sessions\r", "\x0c"] }) },
+  // In minimalist, a command of a higher tier typed by hand answers in one row on the prompt: the tier that has it and how to get there.
+  { file: "notice.svg", title: "mendcode — a one-line notice", frame: () => shopSession({ finished: true, typed: ["/review\r"], settings: { tier: "minimalist" } }) },
+  { file: "setup.svg", title: "mendcode — first run", frame: setupFrame },
+  { file: "marketplace.svg", title: "mendcode — /marketplace", frame: marketplaceFrame },
+  // /language answers in one row: the language replies are in from the next message ("auto" follows your latest message).
+  { file: "language.svg", title: "mendcode — /language", frame: () => shopSession({ finished: true, typed: ["/language Español\r"] }) },
 ]
 
 export const IMAGES_DIR = new URL("../docs/assets/readme/", import.meta.url).pathname
@@ -368,7 +506,7 @@ export async function renderImages(only: readonly string[] = []): Promise<Record
   const previousEnv = { glyphs: process.env.MENDCODE_GLYPHS, theme: process.env.MENDCODE_THEME }
   delete process.env.MENDCODE_GLYPHS
   delete process.env.MENDCODE_THEME
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   setGlyphMode("unicode")
   setColorOverrides({})
   try {

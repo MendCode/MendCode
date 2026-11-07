@@ -1,4 +1,4 @@
-import { compactionThreshold, namespacedModel, type CompactionLimits } from "@mendcode/engine-native"
+import { compactionThreshold, namespacedModel, thresholdPercent, type CompactionLimits } from "@mendcode/engine-native"
 import { ACP_MODEL_PREFIX } from "../../engine-acp/src/agents"
 import { compactEstimate, compactNoticePercent, featureOn, usageContext, type ContextSample, type TierSettings } from "@mendcode/protocol/wire"
 import { clampWindow, findModel, modelContextOf, type CompactionConfig, type ContextLimits, type ContextReport, type ModelInfo, type ProviderInfo, type SessionEvent, type Settings } from "@mendcode/protocol"
@@ -50,7 +50,7 @@ export function compactPoint(config: CompactionConfig, limits: CompactionLimits,
   const [thresholdSource, percent] = limits.model?.threshold !== undefined ? ["model-override", limits.model.threshold] as const
     : limits.provider?.threshold !== undefined ? ["provider-override", limits.provider.threshold] as const
     : config.threshold !== undefined ? ["compaction.threshold", config.threshold] as const : ["default", Math.round(tokens * 100 / window)] as const
-  return { tokens, compactAtSource: "threshold", thresholdPercent: Math.max(1, Math.min(100, percent)), thresholdSource }
+  return { tokens, compactAtSource: "threshold", thresholdPercent: thresholdSource === "default" ? Math.max(1, Math.min(100, percent)) : thresholdPercent(percent), thresholdSource }
 }
 
 /**

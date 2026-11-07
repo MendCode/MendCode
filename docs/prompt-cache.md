@@ -1,10 +1,13 @@
-# Prompt cache modes
+Choose which cache hints the native engine sends with each model call using `promptCache`. Leave it unset for `legacy`, turn it `off`, or choose `smart` for lineage-aware hints.
 
-The `promptCache` setting tells the native engine what cache hints to send with each model call: `legacy` (the default
-when unset), `off` or `smart`. Ported from v1's cache policy (`provider/cache-policy.ts`), reduced to what v2's adapters can
-honour. Code: `packages/engine-native/src/engine.ts` (`cacheKeyFor`), `anthropic-messages.ts`, `openai-responses.ts`;
-`settings.set { patch: { promptCache: "smart" } }`, `null` resets. It is read at every call, so a change applies to the next
-one.
+## Prompt cache modes
+
+1. Set smart mode with `settings.set { patch: { promptCache: "smart" } }`.
+2. To reset the setting, use `null`.
+
+The setting is read at every call, so a change applies to the next one. This policy is ported from v1's cache policy (`provider/cache-policy.ts`), reduced to what v2's adapters can honour.
+
+### Mode reference
 
 | Mode | Cache key | Anthropic breakpoints |
 |---|---|---|
@@ -16,11 +19,16 @@ one.
 
 ## Lineage keys (`smart`)
 
-A cache key only routes a request to the machine that probably holds its prefix. A compaction replaces the whole history
-with one summary message, so every request after it has a different prefix than the ones before: its key should change
-too, or the old routing keeps sending it where nothing is cached. The lineage key is `<sessionId>` until the first
-compaction and `<sessionId>~<8 hex>` after it, where the hex is a hash of the summary message the history now starts with.
-So the key:
+A cache key only routes a request to the machine that probably holds its prefix. A compaction replaces the whole history with one summary message, giving later requests a different prefix.
+
+The key should change too, or the old routing keeps sending requests where nothing is cached.
+
+| History | Lineage key |
+|---|---|
+| Before the first compaction | `<sessionId>` |
+| After compaction | `<sessionId>~<8 hex>`, where the hex hashes the summary message the history now starts with |
+
+The key:
 
 - is stable for every call between two compactions (main, plan and compaction calls; the compaction call itself still
   shares the prefix of the lineage it summarizes, and uses its key);
@@ -41,70 +49,116 @@ task, tools and agent), so sharing the main conversation's key would only mix un
 
 ## What keeps the prefix whole
 
-A provider caches the longest prefix two requests share (Anthropic: tools, then system, then messages; OpenAI and Chat Completions
-hosts: tools, then the messages with the system prompt first). A request should therefore begin with the whole previous request of its
-lineage and only append. `packages/engine-native/test/prefix-stability.test.ts` records the exact request of every call of a
-multi-step turn and of the next turn through the real adapters (a local fake host, no network) and fails when that stops
-being true; `packages/daemon/test/prefix-modes.test.ts` does the same with the real prompt of each mode (`minimal`, `focus`,
-`full`), tools, project instructions, skills and memory.
+A provider caches the longest prefix two requests share. A request should therefore begin with the whole previous request of its lineage and only append.
 
-- The system prompt has no date, git status or per-call id. The one part ranked for the user's latest prompt is the memory block: it
-  is the last part of the prompt in `focus` and `full` (`minimal` and `custom` already end with it), and it keeps the order in
-  which its memories first appeared in the session, so a prompt that only reshuffles the ranking leaves the text as it was. A
-  memory that newly enters the block still changes the text, and with it everything after: measured at the first turn change of a
-  fixture with 36 memories, 90.2 % of the previous request was shared in `minimal`, 85.9 % in `focus` and 76.6 % in `full`
-  (Responses; the other adapters within 1.3 points); 100 % after this change in all three.
-- The tool list keeps one order. A tool found with `tool_search` is appended after `tool_search`, and the key stays the same
-  (the `smart` key hashes the list only up to `tool_search`), so finding a tool does not move the request to another cache
-  route. It does end the shared prefix: the tool list comes before the system prompt and the conversation, so the one call
-  after a find reads all of those uncached, and the calls after it hit again
-  (`packages/engine-native/test/cache-discovery.test.ts`). Seen on the ChatGPT backend: the call after a find read nothing
-  from the cache, and the call after that read the whole prefix again.
-  On the ChatGPT backend the list no longer grows: the search is the Responses API's client-executed tool search and a found
-  tool is defined in the search result, at the tail of `input`, so the call after a find reads the prefix from the cache like
-  any other ([tool discovery](tool-discovery.md#deferred-loading-on-the-chatgpt-backend), with the canary's numbers). Every
-  other provider, and a ChatGPT session whose backend refused the shape, keeps the behaviour above.
-  Switching a feature on or off or a tier change restarts the cache in the same way.
-- The ChatGPT backend reports cache reads in steps: in the canary of 2026-10-12 (gpt-6.1-sol, 9 calls of 5.7 to 6.0 K input
-  tokens) every non-zero read was a multiple of 128 tokens (5,504 or 5,760) and the last 133 to 187 tokens of a request
-  that repeated the one before were still read uncached. A miss was always 0. So a hit is never 100 %, and a prefix
-  shorter than one step cannot show a read at all (the smallest cacheable size was not measured).
-- Messages of earlier turns are not edited far from the compaction threshold. Old tool results are pruned by the compaction
-  rules only once the context has reached 80 % of that threshold (`pruneDue`, `compaction-policy.ts`), and a prune makes the
-  provider read uncached everything from the first pruned result on. Which results a turn prunes is fixed by its first request
-  (`turnPrunes`, engine.ts): the context crossing 80 % in the middle of a turn, or a queued prompt or a background notice joining it
-  (which moves the "two latest user turns" protection), no longer rewrites a result an earlier request of the turn already sent. The next
-  turn decides again; only a context within 5 % of the compaction point (`pruneUrgent`) prunes again inside a turn, because a
-  compaction costs more than one uncached read. At a new user turn the signed reasoning of earlier assistant messages is dropped (engine.ts, `appendUser`),
-  which changes the request from the first of those messages on for the adapters that replay it (Anthropic thinking, Gemini).
+| Provider | Prefix order |
+|---|---|
+| Anthropic | Tools, then system, then messages |
+| OpenAI and Chat Completions hosts | Tools, then messages with the system prompt first |
 
-- The system prompt is built once per turn: `SystemContext.prompt` is the prompt the turn started with, not the latest user message, so
-  a queued prompt or a notice that joins the turn cannot pick other memories into the block (the block sits before the whole
-  conversation, and in `smart` mode its text is part of the cache route, so a change there read everything uncached from a new route).
+### Prefix regression tests
 
-- A portable compaction (manual, automatic or while idle) repeats the session's last main request and appends its summary prompt,
-  so the one call that reads the whole history reads it from the cache. It keeps its own request, which shares nothing with the
-  cache (no tools, another system prompt, pruned history), when the `compaction` role has a model of its own, when the engine has no
-  such call on record (after a daemon restart, after a plan-mode call), when the stored history was edited since, or when the
-  repeated request would not fit the model's input: with the default compaction point (90 %, or the window less 20k) that happens
-  only when the last turn went well past the point, and with a point set to 95 % it is the usual case on a 200k window ([the summary request](compaction.md#the-summary-request-and-the-prompt-cache), with the numbers).
-  `packages/engine-native/test/idle-compaction-prefix.test.ts` holds the three adapters to a fully shared prefix for the three kinds.
+`packages/engine-native/test/prefix-stability.test.ts` records the exact request of every call of a multi-step turn and of the next turn through the real adapters. It uses a local fake host, no network, and fails when the append-only rule stops being true.
 
-The key is only the session id and, after a compaction, a hash of the summary that is already in the model's own history.
-Dream, `/btw` and the provider connection test do not go through the engine, so the setting does not reach them: they send
-no key, and on Anthropic the `legacy` breakpoints.
+`packages/daemon/test/prefix-modes.test.ts` does the same with the real prompt of each mode (`minimal`, `focus`, `full`), tools, project instructions, skills and memory.
+
+### Stable memory and tool order
+
+The system prompt has no date, git status or per-call id. The memory block is the one part ranked for your latest prompt.
+
+It is the last part of the prompt in `focus` and `full`; `minimal` and `custom` already end with it. Memories keep the order in which they first appeared in the session, so reshuffling the ranking leaves the text unchanged.
+
+A memory that newly enters the block still changes the text, and with it everything after. At the first turn change of a fixture with 36 memories, the shared portion of the previous request measured:
+
+| Mode | Before | After this change |
+|---|---|---|
+| `minimal` | 90.2 % | 100 % |
+| `focus` | 85.9 % | 100 % |
+| `full` | 76.6 % | 100 % |
+
+These are Responses measurements; the other adapters were within 1.3 points.
+### Tool discovery and cache routes
+
+The tool list keeps one order. A tool found with `tool_search` is appended after `tool_search`, and the key stays the same: the `smart` key hashes the list only up to `tool_search`.
+
+Finding a tool does not move the request to another cache route, but it does end the shared prefix. The tool list comes before the system prompt and conversation, so the one call after a find reads all of those uncached; later calls hit again (`packages/engine-native/test/cache-discovery.test.ts`).
+
+Seen on the ChatGPT backend: the call after a find read nothing from the cache, and the call after that read the whole prefix again.
+
+On the ChatGPT backend the list no longer grows. Search is the Responses API's client-executed tool search, and a found tool is defined in the search result at the tail of `input`.
+
+The call after a find therefore reads the prefix from the cache like any other ([tool discovery](tool-discovery.md#deferred-loading-on-the-chatgpt-backend), with the canary's numbers).
+
+Every other provider, and a ChatGPT session whose backend refused the shape, keeps the earlier behavior. Switching a feature on or off or changing tier restarts the cache in the same way.
+
+### Cache-read steps
+
+The ChatGPT backend reports cache reads in steps. In the canary of 2026-10-12 (gpt-6.1-sol, 9 calls of 5.7 to 6.0 K input tokens), every non-zero read was a multiple of 128 tokens (5,504 or 5,760).
+
+The last 133 to 187 tokens of a request that repeated the one before were still read uncached. A miss was always 0.
+
+A hit is therefore never 100 %, and a prefix shorter than one step cannot show a read at all. The smallest cacheable size was not measured.
+
+### Pruning and turn boundaries
+Messages of earlier turns are not edited far from the compaction threshold. Old tool results are pruned only once context reaches 80 % of that threshold (`pruneDue`, `compaction-policy.ts`).
+
+A prune makes the provider read uncached everything from the first pruned result on. The first request fixes which results a turn prunes (`turnPrunes`, engine.ts).
+
+Crossing 80 % mid-turn, or adding a queued prompt or background notice that moves the "two latest user turns" protection, no longer rewrites a result already sent by that turn.
+
+The next turn decides again. Only context within 5 % of the compaction point (`pruneUrgent`) prunes again inside a turn, because compaction costs more than one uncached read.
+
+At a new user turn, signed reasoning of earlier assistant messages is dropped (engine.ts, `appendUser`). This changes the request from the first of those messages on for adapters that replay it: Anthropic thinking and Gemini.
+
+The system prompt is built once per turn. `SystemContext.prompt` is the prompt the turn started with, not the latest user message, so a queued prompt or notice cannot pick other memories into the block.
+
+The block sits before the whole conversation. In `smart` mode its text is part of the cache route, so changing it reads everything uncached from a new route.
+
+### Compaction requests
+
+A portable compaction (manual, automatic or while idle) repeats the session's last main request and appends its summary prompt. The one call that reads the whole history therefore reads it from the cache.
+
+Compaction keeps its own request, sharing nothing with the cache (no tools, another system prompt, pruned history), when:
+
+- The `compaction` role has a model of its own.
+- The engine has no such call on record: after a daemon restart or plan-mode call.
+- The stored history was edited since.
+- The repeated request would not fit the model's input.
+
+With the default compaction point (90 %, or the window less 20k), the last case happens only when the last turn went well past the point.
+
+With a point set to 95 %, it is the usual case on a 200k window ([the summary request](compaction.md#the-summary-request-and-the-prompt-cache), with the numbers).
+
+`packages/engine-native/test/idle-compaction-prefix.test.ts` holds the three adapters to a fully shared prefix for the three kinds.
+
+### Calls outside the engine
+
+The key is only the session id and, after a compaction, a hash of the summary already in the model's own history.
+
+Dream, `/btw` and the provider connection test do not go through the engine, so the setting does not reach them. They send no key, and on Anthropic the `legacy` breakpoints.
+
+Code: `packages/engine-native/src/engine.ts` (`cacheKeyFor`), `anthropic-messages.ts`, `openai-responses.ts`.
 
 ## Scoped policy (B49)
 
-`Settings.cache` adds the v1 policy shape: `mode: off|smart`, `scope: session|project`, `projects` keyed by normalized
-project paths, `sessions: { mode: all|selected|none, include, exclude }`, and `providers: { ID: { mode, scope, models,
-exclude_models } }`. Model lists match exact IDs (including the provider-qualified or API ID and basename), never globs.
-Global off, project off, session exclusions/selection, provider off and model exclusions win before any enable selector.
-When multiple positive selectors apply, the order is global, project, provider/model, explicit session.
+`Settings.cache` adds the v1 policy shape:
 
-`cacheProjects` stores project-local policy layers in the daemon database. The active project layer overlays `cache`,
-merging project/provider maps and session fields while replacing explicitly supplied arrays. No project config or user
-home files are written. Unconfigured policies preserve the existing `promptCache` setting; smart scopes are opt-in.
+- Mode: `mode: off|smart`.
+- Scope: `scope: session|project`.
+- Projects: `projects` keyed by normalized project paths.
+- Sessions: `sessions: { mode: all|selected|none, include, exclude }`.
+- Providers: `providers: { ID: { mode, scope, models,
+exclude_models } }`.
+
+Model lists match exact IDs, including the provider-qualified or API ID and basename, never globs.
+
+Global off, project off, session exclusions/selection, provider off and model exclusions win before any enable selector. When multiple positive selectors apply, the order is global, project, provider/model, explicit session.
+
+`cacheProjects` stores project-local policy layers in the daemon database. The active project layer overlays `cache`, merging project/provider maps and session fields while replacing explicitly supplied arrays.
+
+No project config or user home files are written. Unconfigured policies preserve the existing `promptCache` setting; smart scopes are opt-in.
+
+### Change policy from the CLI
 
 ```bash
 mendcode --dir /tmp/mend-data cache status --format json
@@ -114,39 +168,59 @@ mendcode --dir /tmp/mend-data cache disable --session ses_example
 mendcode --dir /tmp/mend-data cache disable --global --project-path /work/private
 ```
 
-`on`/`off` alias enable/disable. `--model` requires `--provider`; project targets require `--global` and cannot combine
-with other targets; session targets cannot combine with provider/model. `--global` edits the data directory's policy;
-without it only the current project is edited. Status accepts the same selectors and `--format text|json` / `--json`.
-JSON uses the regular CLI envelope. Protocol commands are `cache.status` and `cache.set`; client helpers are
-`cacheStatus` and `setCache`. Both require full-access remote peers because configuration can contain private paths/IDs.
+`on`/`off` alias enable/disable.
 
-For structured smart policies, managed keys are allowed only for authenticated OpenAI API Responses at
-`https://api.openai.com/v1` and OpenRouter Chat Completions at `https://openrouter.ai/api/v1`. They hash the account,
-endpoint, provider/model, project, system prompt, resolved tool definitions, model parameters, role and compaction
-generation; session scope additionally hashes the session ID. No prompt or credential appears in a key. ChatGPT OAuth
-keeps a session key even if project scope was requested. Unverified hosts receive no managed key and keep legacy
-annotations. Off sends neither a key nor breakpoints. Policy is reevaluated at each model call, including tool loops.
+| Selector | Rule |
+|---|---|
+| `--model` | Requires `--provider` |
+| Project targets | Require `--global`; cannot combine with other targets |
+| Session targets | Cannot combine with provider/model |
+| `--global` | Edits the data directory's policy; without it only the current project is edited |
 
-The footer's `cache` segment and the opt-in `Cache notices` transcript lines (see `docs/customize.md`) read the cache
-counters of each `usage.recorded` event. `thinkingDropped: true` on that event is set by the Anthropic adapter when the
-call asked for reasoning but the tool loop could not carry it.
+Status accepts the same selectors and `--format text|json` / `--json`. JSON uses the regular CLI envelope.
 
-The separate Codex and Claude Code process engines manage their own caches; structured controls currently govern the
-native engine only. Dream, side chat and connection probes still use their existing adapter defaults. Provider hit/TTL
-guarantees and Claude SDK lineage controls require an external canary/adapter. No keepalive or TTL refresh is scheduled: a
-ping per lifetime costs without bound. What exists instead is one compaction of a large idle session just before its cache
-expires ([compaction while idle](compaction.md#compaction-while-idle), feature `idle_compact`, full tier).
+Protocol commands are `cache.status` and `cache.set`; client helpers are `cacheStatus` and `setCache`. Both require full-access remote peers because configuration can contain private paths/IDs.
+
+### Managed keys
+
+For structured smart policies, managed keys are allowed only for:
+
+- Authenticated OpenAI API Responses at `https://api.openai.com/v1`.
+- OpenRouter Chat Completions at `https://openrouter.ai/api/v1`.
+
+They hash the account, endpoint, provider/model, project, system prompt, resolved tool definitions, model parameters, role and compaction generation. Session scope additionally hashes the session ID.
+
+No prompt or credential appears in a key. ChatGPT OAuth keeps a session key even if project scope was requested.
+
+Unverified hosts receive no managed key and keep legacy annotations. Off sends neither a key nor breakpoints. Policy is reevaluated at each model call, including tool loops.
+
+### Cache counters and scope limits
+
+The footer's `cache` segment and opt-in `Cache notices` transcript lines (see `docs/customize.md`) read the cache counters of each `usage.recorded` event.
+
+`thinkingDropped: true` on that event is set by the Anthropic adapter when the call asked for reasoning but the tool loop could not carry it.
+
+The separate Codex and Claude Code process engines manage their own caches; structured controls currently govern the native engine only. Dream, side chat and connection probes still use their existing adapter defaults.
+
+Provider hit/TTL guarantees and Claude SDK lineage controls require an external canary/adapter. No keepalive or TTL refresh is scheduled: a ping per lifetime costs without bound.
+
+Instead, one compaction of a large idle session happens just before its cache expires ([compaction while idle](compaction.md#compaction-while-idle), feature `idle_compact`, full tier).
+
 Local-fake CLI frames: `bun scripts/render-frames.ts .agents-frames/B49 --b49 100x30 180x50`.
 
 ## Cache lifetime
 
-How long a provider keeps a prefix after the last call that read or wrote it. Only the compaction while idle uses it
-(`cacheLifetime`, `packages/protocol/src/idle-compaction-data.ts`; a manual or automatic compaction repeats the last request whatever
-time has passed); the terminal's "cache miss · idle Nm, past the cache lifetime"
-note uses the lifetime of the call before (five minutes, or an hour for a call written at `1h`). The only longer retention MendCode
-asks for is Anthropic's `ttl: "1h"`, and only under [the lifetime setting](#the-anthropic-lifetime-promptcachettl) or
-[after long waits](#a-longer-lifetime-after-long-waits-wait_cache) (no `prompt_cache_retention` is sent to OpenAI); an adapter that
-starts to must change its constant here.
+Cache lifetime is how long a provider keeps a prefix after the last call that read or wrote it.
+
+Only compaction while idle uses it (`cacheLifetime`, `packages/protocol/src/idle-compaction-data.ts`). Manual or automatic compaction repeats the last request whatever time has passed.
+
+The terminal's "cache miss · idle Nm, past the cache lifetime" note uses the lifetime of the call before: five minutes, or an hour for a call written at `1h`.
+
+The only longer retention MendCode asks for is Anthropic's `ttl: "1h"`, under [the lifetime setting](#the-anthropic-lifetime-promptcachettl) or [after long waits](#a-longer-lifetime-after-long-waits-wait_cache).
+
+No `prompt_cache_retention` is sent to OpenAI. An adapter that starts to send it must change its constant here.
+
+### Provider lifetimes
 
 | Provider | Lifetime | Who states it |
 |---|---|---|
@@ -161,12 +235,20 @@ long here is the costly mistake (the compaction then reads at the full price); t
 
 ### Observed lifetime
 
-The table's values are fallbacks: providers change their retention without notice, so the compaction while idle follows what each
-response shows (`observedCacheLifetime`, `packages/protocol/src/idle-compaction-data.ts`). Every main call that follows an earlier call
-of the same session is a sample: the gap since that call and whether the response read the conversation's prefix (cached tokens of at least half the previous prompt; the instructions and tools alone are cached across sessions). Gaps under 2 minutes and calls (or previous calls) whose
-prompt is under 4,096 tokens, whose previous call was compacted away, or that changed provider or `ttl` are not samples. Gaps are grouped
-(1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 720, 1,440 minutes); a group with three or more samples is alive when at
-least 80 % read the cache. The lifetime is the longest gap that read the cache before the first group that mostly missed.
+The table's values are fallbacks: providers change retention without notice. Compaction while idle follows what each response shows (`observedCacheLifetime`, `packages/protocol/src/idle-compaction-data.ts`).
+
+Every main call following an earlier call of the same session is a sample. It records the gap and whether cached tokens covered at least half the previous prompt, showing the conversation's prefix was read; instructions and tools alone are cached across sessions.
+
+These are not samples:
+
+- Gaps under 2 minutes.
+- Calls or previous calls whose prompt is under 4,096 tokens.
+- Calls whose previous call was compacted away.
+- Calls that changed provider or `ttl`.
+
+Gaps are grouped: 1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 720, 1,440 minutes.
+
+A group with three or more samples is alive when at least 80 % read the cache. The lifetime is the longest gap that read the cache before the first group that mostly missed.
 
 | Observed | Replaces |
 |---|---|
@@ -174,17 +256,25 @@ least 80 % read the cache. The lifetime is the longest gap that read the cache b
 | a lifetime seen ending (a later group missed), shorter or longer | the assumed one (ChatGPT) |
 | nothing, or too few samples | nothing: the fallback stays |
 
-The provider's lifetime is never replaced when the `cacheLifetimeMinutes` entry is set. A provider with no fallback only gets an observed one once
-it was seen ending. Samples are read from the stored calls of the last 14 days when the provider's first call is seen after the daemon starts, and
-grow with each call, 400 at most per provider and lifetime request. `mendcode context <sessionID>` shows `observed` as the source.
+The provider's lifetime is never replaced when the `cacheLifetimeMinutes` entry is set. A provider with no fallback only gets an observed one once it was seen ending.
 
-Limit: a session of 100,000 tokens or more is compacted before the lifetime in force ends, so it never shows what the cache does later. Longer gaps
-come from smaller sessions, other sessions that were left alone, and the stored history. A changed prefix (a rewound or edited history) counts as a miss.
+Samples are read from stored calls of the last 14 days when the provider's first call is seen after the daemon starts. They grow with each call, 400 at most per provider and lifetime request.
 
-To measure the ChatGPT backend (one live test, not run yet): in one session send a prompt of at least 6,000 tokens, then the identical
-request again after N minutes of silence, and read `cacheRead` of the second `usage.recorded` (`mendcode context <sessionID>`). Repeat
-with a fresh session per N (2, 4, 6, 9, 15, 30, 60): the largest N whose second call still reads the prefix is the lifetime; a zero
-read at a short N is the route miss described below, so take two samples per N. Then set `CHATGPT_CACHE_LIFETIME_MS` and say here that it is measured.
+`mendcode context <sessionID>` shows `observed` as the source.
+
+**Note:** A session of 100,000 tokens or more is compacted before the lifetime in force ends, so it never shows what the cache does later.
+
+Longer gaps come from smaller sessions, other sessions left alone, and stored history. A changed prefix (a rewound or edited history) counts as a miss.
+
+### Measure the ChatGPT backend
+
+This is one live test, not run yet:
+
+1. In one session, send a prompt of at least 6,000 tokens.
+2. Send the identical request again after N minutes of silence.
+3. Read `cacheRead` of the second `usage.recorded` with `mendcode context <sessionID>`.
+4. Repeat with a fresh session per N (2, 4, 6, 9, 15, 30, 60). Take two samples per N: a zero read at a short N is the route miss described below.
+5. Use the largest N whose second call still reads the prefix as the lifetime. Set `CHATGPT_CACHE_LIFETIME_MS` and say here that it is measured.
 
 ### The Anthropic lifetime (`promptCacheTtl`)
 
@@ -223,9 +313,11 @@ What Anthropic documents ([prompt caching](https://platform.claude.com/docs/en/b
 Feature `wait_cache`: on in the `full` tier, off otherwise (`/tier wait_cache on|off`), and ignored while `promptCacheTtl` is `1h`.
 It has no setting of its own.
 
-**What the engine can know.** The `ttl` goes on the request whose *answer* starts the wait. The engine does not know, when it sends a
-call, that the reply will run a twenty-minute test. What it does know is how long this session waited between its earlier calls. So the
-rule learns: it never asks for `1h` "before" a long wait, it asks for it once the session has shown that it waits.
+#### What the engine can know
+
+The `ttl` goes on the request whose *answer* starts the wait. When sending a call, the engine does not know that the reply will run a twenty-minute test.
+
+It knows how long this session waited between earlier calls. The rule learns: it never asks for `1h` "before" a long wait, but once the session has shown that it waits.
 
 **The rule** (`nextWaitCache`, `packages/protocol/src/idle-compaction-data.ts`; state per session, in the daemon's memory):
 
@@ -235,10 +327,11 @@ rule learns: it never asks for `1h` "before" a long wait, it asks for it once th
    writes at `1h`, and stays there through short gaps and through waits of up to an hour.
 3. A gap of more than 60 minutes, which neither lifetime covers, returns it to `5m` and clears the count.
 
-The lifetime only ever changes on a call whose cache has already expired (rule 2 switches after a gap longer than the 5 minutes in
-force, rule 3 after one longer than the hour). That is deliberate: since Anthropic does not say whether a changed `ttl` on a warm
-prefix reads the old entry, a switch on a warm call could cost a whole rewrite. On a cold call everything is rewritten anyway, and the
-only difference is the write price. For the same reason there is no "drop back after N short gaps": that would switch while warm.
+The lifetime only changes on a call whose cache has already expired: rule 2 switches after a gap longer than the 5 minutes in force, rule 3 after one longer than the hour.
+
+Anthropic does not say whether changing `ttl` on a warm prefix reads the old entry. A switch on a warm call could therefore cost a whole rewrite.
+
+On a cold call everything is rewritten anyway; only the write price differs. For the same reason there is no "drop back after N short gaps": that would switch while warm.
 
 **Break-even**, with the documented multipliers (`P` = tokens of the prefix, read price `r` = 0.1):
 
@@ -249,16 +342,22 @@ only difference is the write price. For the same reason there is no "drop back a
 | The switching call (cold) | 1.25·P | 2.0·P | 0.75·P, once |
 | A switch on a warm call, if entries are per lifetime | 0.1·P | 2.0·P | 1.9·P: two later waits to repay. Never done |
 
-Every token written at `1h` is part of the prefix, so the whole premium since the switch is at most 0.75·P of the prefix at the next
-wait, and one covered wait (1.15·P) repays it. So after the switch: **one more wait of 5 to 60 minutes and `1h` has paid; none
-before the session ends or is compacted and it has cost up to 0.75 of what was written.** In expectation it pays when another such
-wait is more likely than 0.75 / 1.15 = 65 % (62 % and 61 % with the cheaper reads). Two waits already seen are the evidence for that;
-it remains a prediction, which is why the feature is off below the `full` tier. Steady work that never pauses 5 minutes never
-switches and pays nothing.
+Every token written at `1h` is part of the prefix. The whole premium since the switch is at most 0.75·P of the prefix at the next wait; one covered wait (1.15·P) repays it.
 
-Limits: the state is lost when the daemon restarts (the session relearns from two waits); a session at `1h` that then works for hours
-without a pause keeps paying the higher write price until a wait past an hour; a refusal of the field (above) leaves the session at
-the provider's 5 minutes whatever the rule says.
+After the switch:
+
+- One more wait of 5 to 60 minutes and `1h` has paid.
+- None before the session ends or is compacted, and it has cost up to 0.75 of what was written.
+
+In expectation it pays when another such wait is more likely than 0.75 / 1.15 = 65 % (62 % and 61 % with the cheaper reads).
+
+Two waits already seen are evidence for that prediction, not a guarantee. This is why the feature is off below the `full` tier. Steady work that never pauses 5 minutes never switches and pays nothing.
+
+#### Limits and pending live test
+
+- State is lost when the daemon restarts; the session relearns from two waits.
+- A session at `1h` that works for hours without a pause keeps paying the higher write price until a wait past an hour.
+- A refusal of the field, described above, leaves the session at the provider's 5 minutes whatever the rule says.
 
 **Not run yet (needs an Anthropic API key):** one request with `ttl: "1h"` and no beta header, to confirm it is accepted and that
 `usage.cache_creation.ephemeral_1h_input_tokens` counts the write; the same prefix read after 6 minutes; and a warm `5m` prefix
@@ -266,14 +365,23 @@ re-sent with `ttl: "1h"`, to see whether it is read or rewritten (the fact the r
 
 ## Misses in the middle of a run
 
-In the 36-run gpt-6-luna evaluation (480 calls after the first of a run), 30 calls had no cached tokens at all. 14 of 54 calls
-that followed a cold call missed, against 16 of 391 that followed a warm one. The request did not change on those calls: tool
-count, tool-schema estimate and instruction size are identical to the call before, the key is the session id (the ChatGPT backend
-is `session` passive), the gap to the previous call is tens of milliseconds in every case, hits and misses alike, and a miss is
-always zero, never a partial hit as a changed prefix would give. That points to the provider's cache route or write
-propagation (the entry from the call just before is not readable yet, or the call landed on another replica), not to the
-harness. It is not proven: the evaluation kept no request bodies. What the harness controls is the price of a miss, which is the
-whole prefix: about 21 K tokens before the lean catalogue and about 3 to 4 K after it.
+In the 36-run gpt-6-luna evaluation (480 calls after the first of a run), 30 calls had no cached tokens at all.
+
+| Previous call | Misses | Calls |
+|---|---|---|
+| Cold | 14 | 54 |
+| Warm | 16 | 391 |
+
+The request did not change on those calls by the available measures:
+
+- Tool count, tool-schema estimate and instruction size were identical to the call before.
+- The key was the session id; the ChatGPT backend is `session` passive.
+- The gap was tens of milliseconds in every case, hits and misses alike.
+- A miss was always zero, never a partial hit as a changed prefix would give.
+
+This points to the provider's cache route or write propagation, not the harness: the previous entry may not yet be readable, or the call may have landed on another replica.
+
+It is not proven; the evaluation kept no request bodies. The harness controls the price of a miss: the whole prefix, about 21 K tokens before the lean catalogue and about 3 to 4 K after it.
 
 ### Finding where a request stopped repeating the one before
 
@@ -284,30 +392,46 @@ engine writes one line to the daemon log (the terminal's log file when it hosts 
 [PROMPT-PREFIX]: session=ses_... role=main turn=trn_... call=7 instructions=9c1f02aa tools=51d3e7b0 route=0be2a4c1 items=23 change=item[4] hashes=...
 ```
 
-The hashes are 8 hex digits of SHA-1 of the instructions (or `system`), the tool list, the cache route and each serialised input item
-(`input`, `messages` or `contents`, as the request body names them after plugins ran); there is no prompt text, tool output or key in
-the line. `change` compares with the previous request of the same session and role, in the order a prefix cache reads them: `first`,
-`same`, `append` (the new request only added items: the observed prefix is intact), or a list of `tools`, `instructions`, `route`,
-`item[k]` (the first input item that differs: a provider re-reads from there) and `shrunk@n`. A usage record that shows a miss
-(`cacheRead` near zero after a call of more than 10 K tokens) with `tools`, `instructions`, `route`, `item[k]` or `shrunk@n` shows
-a client-side prefix change; `same` and `append` do not. An `append` or `same` miss with stable model, transport and other request
-parameters points to provider-side cache behavior; the hashes alone cannot identify routing, propagation or eviction as its cause.
-`first` has no earlier request to compare. Its code is `prompt-trace.ts`; `test/prune-prefix.test.ts` and
-`test/turn-system-prefix.test.ts` run the engine against a fake Responses host and assert the append-only rule inside a turn.
+The hashes are 8 hex digits of SHA-1 of the instructions (or `system`), tool list, cache route and each serialised input item.
+
+Items are named `input`, `messages` or `contents`, as in the request body after plugins ran. The line contains no prompt text, tool output or key.
+
+`change` compares with the previous request of the same session and role, in the order a prefix cache reads them:
+
+| Value | Meaning |
+|---|---|
+| `first` | No earlier request to compare |
+| `same` | Same observed prefix |
+| `append` | New request only added items; the observed prefix is intact |
+| List of `tools`, `instructions`, `route`, `item[k]` and `shrunk@n` | Changed prefix components; `item[k]` is the first differing input item, where a provider starts re-reading |
+
+A miss (`cacheRead` near zero after a call of more than 10 K tokens) with `tools`, `instructions`, `route`, `item[k]` or `shrunk@n` shows a client-side prefix change. `same` and `append` do not.
+
+An `append` or `same` miss with stable model, transport and other request parameters points to provider-side cache behavior. Hashes alone cannot identify routing, propagation or eviction as its cause.
+
+Code: `prompt-trace.ts`. `test/prune-prefix.test.ts` and `test/turn-system-prefix.test.ts` run the engine against a fake Responses host and assert the append-only rule inside a turn.
 
 ### In-turn misses measured on one ChatGPT account (2026-11-01)
 
-108 calls of the ChatGPT provider (previous call under 5 minutes earlier and over 10 K tokens, next one reading under 10 % of it)
-missed; 67 were between two calls of one turn. By what the request log can show without bodies: 12 of those followed a `tool_search`
-(11 % of the 110 calls that did, against about 1 % of the others), and about 14 to 21 were in a session whose context stood at 80 % of
-the compaction point, where the prune moved (the total of the prefix falling by 40 to 60 % between two calls of one turn, 11 times,
-and the same turn missing again each time a queued prompt joined). The first group is the prune and the join described above, fixed
-by freezing the turn's prune set. Repeated `tool_search` calls also used to change an earlier item (`searchLoads`,
-tool-discovery.md): the earlier answer lost the definition the later one carried. The adapter now assigns definitions in forward
-history order, keeping each in its first successful search result, and appends an already-loaded notice to a repeated find.
-An overlapping search loads its new tools and acknowledges those already loaded. Failed searches never claim to load tools.
-The remaining roughly 35 to 45 misses are unresolved: without per-call prefix traces, their attribution to the provider is a
-hypothesis, not a measurement that the prefix stayed identical.
+108 ChatGPT provider calls missed: the previous call was under 5 minutes earlier and over 10 K tokens, and the next read under 10 % of it. Of these, 67 were between two calls of one turn.
+
+By what the request log can show without bodies:
+
+| Observation | Count or share |
+|---|---|
+| Misses following `tool_search` | 12; 11 % of the 110 calls that did, against about 1 % of the others |
+| Misses in sessions at 80 % of the compaction point, where the prune moved | About 14 to 21 |
+| Prefix total falling by 40 to 60 % between two calls of one turn | 11 times; the same turn missed again each time a queued prompt joined |
+
+The prune-and-join group described above was fixed by freezing the turn's prune set.
+
+Repeated `tool_search` calls also used to change an earlier item (`searchLoads`, tool-discovery.md): the earlier answer lost the definition the later one carried.
+
+The adapter now assigns definitions in forward history order, keeping each in its first successful search result. It appends an already-loaded notice to a repeated find.
+
+An overlapping search loads new tools and acknowledges those already loaded. Failed searches never claim to load tools.
+
+The remaining roughly 35 to 45 misses are unresolved. Without per-call prefix traces, attributing them to the provider is a hypothesis, not a measurement that the prefix stayed identical.
 
 ### Repeated-search regression and live canary (2026-11-01)
 
@@ -316,14 +440,24 @@ and complete engine tool loops in both `legacy` and `smart` cache modes. After t
 cases preserve prior input items, and the tool still executes after repeated discovery. Separate checks cover Responses function
 fallback, Anthropic, Chat Completions and Gemini receipts; these formats keep their existing behavior.
 
-`bun scripts/prompt-cache-canary.ts --live before|after [--dir <MendCode data directory>]` runs a single in-memory turn with the real
-engine and Responses adapter on `gpt-6-luna`, effort `low`: a stable prefix over 2 K tokens, search, repeated search, two deterministic
-tool calls, then a short answer. It prints `PROMPT-PREFIX` lines and the returned input/cached/output usage. Run the same script on
-each revision with its matching label; the label does not emulate the old code. It permits at most six HTTP requests, aborts on an
-error, and uses no daemon or database. It only accepts a valid MendCode-owned subscription-backend login, refuses refresh and never
-falls back to another application's credentials. The plan API route does not currently enable client-executed tool search.
+#### Run the canary
 
-Live verification is **blocked** in this run: MendCode's own credential loader returned `state: none` for the default data directory.
-No provider requests were made and no cache-token measurements were obtained. A valid MendCode-owned subscription-backend login
-(or its actual data-directory location) is required to run the before/after comparison within those credential boundaries. No
-provider-side misses were established by this local regression; the historical unexplained misses remain unresolved.
+`bun scripts/prompt-cache-canary.ts --live before|after [--dir <MendCode data directory>]` runs a single in-memory turn with the real engine and Responses adapter on `gpt-6-luna`, effort `low`.
+
+The turn uses a stable prefix over 2 K tokens, search, repeated search, two deterministic tool calls, then a short answer. It prints `PROMPT-PREFIX` lines and returned input/cached/output usage.
+
+Run the same script on each revision with its matching label; the label does not emulate the old code.
+
+- At most six HTTP requests; aborts on an error.
+- No daemon or database.
+- Only a valid MendCode-owned subscription-backend login; refuses refresh and never falls back to another application's credentials.
+
+The plan API route does not currently enable client-executed tool search.
+
+#### Live verification status
+
+Live verification is **blocked** in this run: MendCode's own credential loader returned `state: none` for the default data directory. No provider requests were made and no cache-token measurements were obtained.
+
+A valid MendCode-owned subscription-backend login, or its actual data-directory location, is required for the before/after comparison within those credential boundaries.
+
+No provider-side misses were established by this local regression; historical unexplained misses remain unresolved.

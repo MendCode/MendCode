@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionSummary } from "@mendcode/protocol"
 import { parseAutomation, runAutomation } from "../src/automation"
-import { renderSessionList, sessionListKey } from "../src/view/session-list"
+import { renderSessionList, sessionListKey } from "../src/view/sessions-page"
 import { projectSessions } from "../src/view/sidebar"
 import { textWidth } from "../src/view/wrap"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
@@ -60,6 +60,8 @@ test("picker archives/restores without closing the open transcript and typing pr
   expect(h.text().join("\n")).toContain("archived")
   await h.app.onKey("\x01")
   expect(h.sentOf("session.archive").at(-1)).toEqual({ type: "session.archive", sessionId: id, restore: true })
+  // Esc clears the typed search first, the next one goes back.
+  await h.app.onKey("\x1b")
   await h.app.onKey("\x1b")
   expect(h.text().join("\n")).toContain("Keep this response")
 })

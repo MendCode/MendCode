@@ -35,7 +35,7 @@ export function createSessionNav(ctx: AppContext) {
       return requestFrame()
     }
     const seen = input.dataDir ? readSeen(input.dataDir) : undefined
-    const fresh = entries.map((entry) => newItems(entry, seen))
+    const fresh = entries.map((entry) => newItems(entry, seen, entries))
     const unseen = fresh.reduce((sum, count) => sum + count, 0)
     const sections: TextSection[] = entries.map((entry, index) => {
       const top = highlights(entry.items)

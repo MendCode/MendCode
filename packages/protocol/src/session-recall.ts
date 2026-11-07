@@ -11,8 +11,28 @@ export const SessionRecallReadInput = lazySchema(() => z.strictObject({
   offset: z.number().finite().optional(),
 }))
 export type SessionRecallReadInput = z.infer<typeof SessionRecallReadInput>
-export const SessionRecallSearchInput = lazySchema(() => SessionRecallReadInput.extend({ query: z.string().min(1).max(16_000) }))
+export const SessionRecallSearchInput = lazySchema(() => SessionRecallReadInput.extend({
+  query: z.string().min(1).max(16_000),
+  /** `project`: the other sessions of this project (titles and messages), newest first; `cursor` continues that list. */
+  scope: z.enum(["session", "project"]).optional(),
+  cursor: z.string().max(20).optional(),
+}))
 export type SessionRecallSearchInput = z.infer<typeof SessionRecallSearchInput>
+
+/** One page of a project search: which sessions hold the phrase, with one short snippet each. */
+export const SessionRecallFound = lazySchema(() => z.strictObject({
+  scope: z.literal("project"),
+  sessions: z.array(z.strictObject({
+    session_id: SessionId,
+    title: z.string().max(200),
+    /** When the session was last active, local time with its UTC offset. */
+    at: z.string().max(40),
+    snippet: z.string().max(200),
+  })).max(10),
+  next_cursor: z.string().max(20).optional(),
+  more: z.boolean(),
+}))
+export type SessionRecallFound = z.infer<typeof SessionRecallFound>
 
 export const SessionRecallPage = lazySchema(() => z.strictObject({
   session_id: SessionId,
@@ -36,6 +56,12 @@ export const SessionRecallMessage = lazySchema(() => z.strictObject({
   next_offset: z.number().int().nonnegative().optional(),
 }))
 export type SessionRecallMessage = z.infer<typeof SessionRecallMessage>
+
+/** `session_open`: a session of this project by its full id or the end of it (at least 8 characters). */
+export const SessionOpenInput = lazySchema(() => z.strictObject({
+  session_id: z.string().trim().min(8).max(64),
+}))
+export type SessionOpenInput = z.infer<typeof SessionOpenInput>
 
 export const SessionNotesInput = lazySchema(() => z.strictObject({
   action: z.enum(["read", "write"]),

@@ -27,7 +27,7 @@ import { modelPageKey } from "../lazy-pages"
 import { preload, onboardingKey } from "../lazy-pages"
 import { keyName } from "../keymap"
 import { DEFAULT_TUI_PROFILE, normalizeHomeMascot, type TuiProfile } from "../../view/tui-profile"
-import { sessionListKey } from "../../view/session-list"
+import { sessionListKey } from "../lazy-pages"
 import { slashCatalog } from "../../view/commands"
 import { viewRows } from "./view-rows"
 import { followPage } from "./page-back"
@@ -78,7 +78,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   switchSession: ReturnType<typeof createSession>["switchSession"]
   changeSession: ReturnType<typeof createSession>["changeSession"]
   reloadSessions: ReturnType<typeof createSession>["reloadSessions"]
-  searchSessionContent: ReturnType<typeof createSession>["searchSessionContent"]
+  searchSessions: ReturnType<typeof createSession>["searchSessions"]
   forkAt: ReturnType<typeof createSession>["forkAt"]
   jumpTo: ReturnType<typeof createSession>["jumpTo"]
   loadUsage: ReturnType<typeof createUsage>["loadUsage"]
@@ -207,7 +207,7 @@ export function createPageKeys(ctx: AppContext, actions: {
       if (result.action.type === "close") state.page = "chat"
       if (result.action.type === "open") await switchSession(result.action.sessionId as SessionId)
       if (result.action.type === "reload") await actions.reloadSessions()
-      if (result.action.type === "search") await actions.searchSessionContent()
+      if (result.action.type === "search") await actions.searchSessions()
       if (result.action.type === "rename" || result.action.type === "delete" || result.action.type === "archive" || result.action.type === "tag" || result.action.type === "pin") {
         const saved = await changeSession(result.action)
         if (!saved && result.action.type === "rename") state.sessionList = previous

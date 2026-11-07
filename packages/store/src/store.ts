@@ -34,6 +34,7 @@ import {
   EvolutionReceipt,
   SessionEvent,
   Settings,
+  CompactionPatch,
   WorkflowRun,
   type BlobRef,
   type ItemId,
@@ -646,6 +647,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
     patch = currentSettingKeys(patch)
+    if ("compaction" in patch) CompactionPatch.parse(patch)
     delete next.acpAgents
     const saveAcp = "acpAgents" in patch ? acpSettings.prepare(patch.acpAgents) : undefined
     for (const [key, value] of Object.entries(patch)) {
@@ -1569,7 +1571,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       const row = db.query<SessionRow, [string]>("SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at FROM sessions WHERE id = ?").get(sessionId)
       return row ? { sessionId: row.id, title: row.title, directory: row.directory, createdAt: row.created_at, updatedAt: row.updated_at || row.created_at, lastSeq: row.last_seq, queued: q.queuedCount.get(row.id)?.n ?? 0, ...(row.parent_id ? { parentId: row.parent_id as SessionId } : {}), ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}) } : undefined
     },
-    listSessions(options: { limit?: number | undefined; offset?: number | undefined; directory?: string | undefined; roots?: boolean | undefined; since?: number | undefined; search?: string | undefined; agent?: string | undefined; model?: string | undefined; archived?: boolean | undefined; hideEmpty?: boolean | undefined } = {}) {
+    listSessions(options: { limit?: number | undefined; offset?: number | undefined; directory?: string | undefined; roots?: boolean | undefined; since?: number | undefined; search?: string | undefined; find?: string | undefined; agent?: string | undefined; model?: string | undefined; archived?: boolean | undefined; hideEmpty?: boolean | undefined } = {}) {
       const limit = Math.min(options.limit ?? 100, 500)
       const where: string[] = []
       const values: Array<string | number> = []
@@ -1583,6 +1585,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       if (options.directory) { where.push("directory = ?"); values.push(options.directory) }
       if (options.since !== undefined) { where.push("MAX(updated_at, created_at) >= ?"); values.push(options.since) }
       if (options.search !== undefined) { where.push("instr(lower(title), lower(?)) > 0"); values.push(options.search) }
+      if (options.find) { where.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(directory), lower(?)) > 0 OR instr(lower(id), lower(?)) > 0)"); values.push(options.find, options.find, options.find) }
       if (options.agent !== undefined) { where.push("COALESCE(agent, CASE WHEN permission_mode = 'plan' THEN 'plan' ELSE 'build' END) = ?"); values.push(options.agent) }
       if (options.model !== undefined) { where.push("substr(model, 1, length(?)) = ?"); values.push(options.model, options.model) }
       const rows = db.query<SessionRow, Array<string | number>>(`SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at FROM sessions${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, options.offset ?? 0)
@@ -1792,8 +1795,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     },
     usageByModel(range: { from: string; to: string }) {
       return db
-        .query<{ provider: string; model: string; input: number; output: number; calls: number; costMicros: number; costUnknownCalls: number }, [string, string]>(`
-          SELECT provider, model, SUM(input) AS input, SUM(output) AS output, SUM(calls) AS calls, SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls
+        .query<{ provider: string; model: string; input: number; output: number; calls: number; costMicros: number; costUnknownCalls: number; reasoning: number; cacheRead: number; cacheWrite: number }, [string, string]>(`
+          SELECT provider, model, SUM(input) AS input, SUM(output) AS output, SUM(calls) AS calls, SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls,
+            SUM(reasoning) AS reasoning, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite
           FROM usage_daily WHERE day BETWEEN ? AND ? GROUP BY provider, model ORDER BY input + output DESC`)
         .all(range.from, range.to)
     },

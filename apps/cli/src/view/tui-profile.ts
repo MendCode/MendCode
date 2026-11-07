@@ -44,7 +44,7 @@ export const PET_SIZES = ["small", "medium", "large"] as const
  * (`user:<id>`, `codex:<id>`, `package:<id>`; full tier). `mendy`, a built-in sprite that was removed, reads as `mend`.
  */
 export function normalizeHomeMascot(value: unknown): string {
-  return typeof value === "string" && /^(user|codex|package):[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value) ? value : "mend"
+  return typeof value === "string" && /^(user|codex|package|builtin):[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value) ? value : "mend"
 }
 export const HOME_PANELS = ["actions", "agentManager"] as const
 export const COMPACTION_PANELS = ["panel", "stats", "arcade", "scratchpad", "quiet"] as const

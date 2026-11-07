@@ -1,11 +1,12 @@
 import { pageSearchKey } from "./page-search"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
+import type { ReviewActivityJob } from "./review-activity"
 import { canCancel, canPause, canRelease, canResume, canRetry, canTakeOver, listedJobs, MAX_FILTER_TEXT, MAX_REASON_TEXT, reviewRepos, selectedJob, STATE_FILTERS, type ReviewsPageState } from "./reviews-page"
 
 /**
  * Keys of the reviews page (`reviews-page.ts`). Pure: a key gives the next page state and at most one action; the app sends the
  * action's `pr.review` command (`reviewsCommand`) and never decides what a key means. Destructive actions ask first (`x` cancel,
- * `t` take over or release); a retry needs a typed reason.
+ * `t` take over or release); a retry needs a typed reason. `?` shows or hides every key of the jobs tab; esc hides it first.
  */
 
 export type ReviewsJobAction = "job-pause" | "job-resume" | "job-cancel" | "job-retry" | "take-over" | "release"
@@ -59,10 +60,13 @@ function cycle<T>(list: readonly T[], current: T, step: number): T {
   return list[(index + step + list.length) % list.length]!
 }
 
-/** One raw key. Returns the same state object when nothing changed, so the app can skip a frame. */
-export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: PrReviewDashboard | undefined): Result {
+/**
+ * One raw key. Returns the same state object when nothing changed, so the app can skip a frame. `activity` (the daemon's live
+ * runs) is what an unpinned selection follows; moving, enter or a job action pins it, esc in the list unpins it.
+ */
+export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: PrReviewDashboard | undefined, activity?: readonly ReviewActivityJob[]): Result {
   const jobs = listedJobs(dashboard, state.filter)
-  const job = selectedJob(state, jobs)
+  const job = selectedJob(state, jobs, activity)
 
   if (state.reason) {
     if (key === ESC) { const { reason: _dropped, ...rest } = state; void _dropped; return keep(rest) }
@@ -100,10 +104,19 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     return keep(state)
   }
 
+  if (key === "?" && state.tab === 0) {
+    if (!state.keys) return keep({ ...state, keys: true })
+    const { keys: _hidden, ...rest } = state
+    void _hidden
+    return keep(rest)
+  }
+  if (key === ESC && state.keys) { const { keys: _hidden, ...rest } = state; void _hidden; return keep(rest) }
+
   const filtered = state.filter.text !== "" || state.filter.state !== "all" || state.filter.repo !== undefined
   if (key === "q") return { state, action: { type: "close" } }
   if (key === ESC) {
     if (state.detail) return keep({ ...state, detail: false, scroll: 0 })
+    if (state.tab === 0 && state.selectedId !== undefined) { const { selectedId: _unpinned, ...rest } = state; void _unpinned; return keep({ ...rest, selected: 0, scroll: 0 }) }
     if (state.tab === 0 && filtered) return keep({ ...state, selected: 0, filter: { text: "", state: "all" } })
     return { state, action: { type: "close" } }
   }

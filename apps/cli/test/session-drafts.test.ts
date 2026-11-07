@@ -5,7 +5,8 @@ import { draftDaemon, PROJECT, type DraftDaemon } from "./session-draft-daemon"
 import { paste } from "./inline-attachments-helpers"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_WIDTH, renderSessionSidebar } from "../src/view/sidebar"
-import { renderSessionList, createSessionListState } from "../src/view/session-list"
+import { createSessionListState } from "../src/view/session-list"
+import { renderSessionList } from "../src/view/sessions-page"
 import { matchesQuery, parseSessionQuery, selectSessions } from "../src/view/session-query"
 import { attachmentsLabel, draftSizeLabel, labelString, sessionActivityAt, sessionLabel, withPushedDraft } from "../src/view/session-label"
 import { contentSize, draftSize, unsentNotice } from "../src/ui/drafts"
@@ -224,7 +225,7 @@ describe("a session with only a draft is a draft in the left list", () => {
     expect(sessionActivityAt(typedLately)).toBe(NOW - 60_000)
     expect(sessionActivityAt(older)).toBe(NOW - 3_600_000)
     const out = renderSessionSidebar({ sessions: [older, typedLately], current: "none", focused: false, height: 20, now: NOW })
-    expect(out.rows.map((row) => row.map((span) => span.text).join("")).join("\n")).toContain("1m ago")
+    expect(out.rows.map((row) => row.map((span) => span.text).join("")).join("\n")).toMatch(/Draft · x +1m │/)
   })
 })
 
@@ -271,7 +272,8 @@ describe("opening a session with a draft puts the draft in the prompt", () => {
     d.store.drafts.set(other, "the draft already there")
     const t = await terminal(d)
     await t.h.type("typed here first")
-    await t.click("Draft · the draft already there")
+    // The row cuts the words to leave room for the age on the right.
+    await t.click("Draft · the draft already")
     expect(t.editor.text).toBe("the draft already there")
     expect(d.store.drafts.get(t.sessionId)?.text).toBe("typed here first")
     expect(d.store.drafts.get(other)?.text).toBe("the draft already there")
@@ -346,7 +348,7 @@ describe("the label follows the draft", () => {
     await t.h.app.saveDrafts()
     await Bun.sleep(10)
     t.h.app.render()
-    expect(t.sidebar().join("\n")).toContain("Draft · ship the release notes")
+    expect(t.sidebar().join("\n")).toContain("Draft · ship the release")
     await t.h.type("\r")
     await Bun.sleep(20)
     t.h.app.render()

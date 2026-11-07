@@ -25,7 +25,7 @@ import { createPermissions } from "./permissions"
 import { createProfileStore } from "./profile-store"
 import { checkoutForge, forgeName, forgeProvider, gatedOff, parseRemoteUrl } from "./providers"
 import { listAll, publishReview, publishThroughProvider, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
-import { explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
+import { alreadyReviewedReply, explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
 import { pushKept, runFix, type FixSource } from "./fix"
 import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, isMendCodeReview, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
 import { readPullRequestInfo } from "./pull-request"
@@ -223,6 +223,12 @@ const OPEN_HINT = (jobId: string) => `/reviews shows its phase; /reviews open ${
 /** A backlog PR is the `opened` event no watch saw: `triggers.opened`, the mode and the filters decide it as they would have. */
 const eligibilityTrigger = (trigger: ReviewTrigger) => trigger === "stack" || trigger === "routed" || trigger === "recovered" ? "synchronize" as const : trigger === "backlog" ? "opened" as const : trigger
 
+/** A load run once: every caller, concurrent ones included, gets the same promise and so the same value. */
+export function sharedLoad<T>(load: () => Promise<T>): () => Promise<T> {
+  let loading: Promise<T> | undefined
+  return () => (loading ??= load())
+}
+
 export function createPrReviewService(options: PrReviewServiceOptions) {
   const run = options.run ?? ghProcess
   const call = options.call ?? ghCall
@@ -348,14 +354,14 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   /** Records one model turn of `job`: in the accounting ledger (per PR head and attempt) and on the job. Never throws. */
   const accountFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["account"] => job ? ({ purpose, tokens, sessionId }) => {
     try { accounting.record({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, input: tokens.input, output: tokens.output, cached: tokens.cached, unreported: tokens.unreported, ...(sessionId ? { sessionId, parentSessionId: job.sessionId } : {}) }) } catch { /* a bad report is dropped, the review goes on */ }
-    try { ledger.addTokens(job.id, tokens) } catch { /* the job may have been pruned */ }
+    try { ledger.addTokens(job.id, tokens, purpose === "read") } catch { /* the job may have been pruned */ }
     try { options.reviewUsage?.({ directory: job.directory, childSessionId: sessionId, tokens }) } catch { /* bookkeeping never stops a review */ }
   } : undefined
   /** The call `job` starts, kept on disk until it ends: one a killed daemon never ended is accounted as unknown at the next start. */
   const callingFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["calling"] => job ? ({ purpose, sessionId }) => {
     const id = accounting.begin({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, ...(sessionId ? { sessionId } : {}) })
     // The phase /reviews shows while the job runs: the review pass is `analysis`, the verify passes (and a resume's) `corroboration`.
-    try { ledger.checkpoint(job.id, { phase: purpose === "review" ? "analysis" : "corroboration" }) } catch { /* the job may have been pruned */ }
+    try { ledger.checkpoint(job.id, { phase: purpose === "review" ? "analysis" : purpose === "read" ? "readers" : "corroboration" }) } catch { /* the job may have been pruned */ }
     return () => accounting.end(id)
   } : undefined
   // Calls a previous process left open died with it: accounted now, unknown spend as unknown, plus what their child sessions recorded.
@@ -972,8 +978,13 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
 
   /** The newest finished review of `head` as the job ledger kept it (its result holds the walkthrough and the findings). */
   function lastReviewOf(repo: string, number: number, head: string): ReviewSnapshot | undefined {
-    const job = ledger.list({ repo, number, states: ["done", "running", "fixing", "validating"] }).filter((item) => item.coverage !== "audit" && !item.stop && item.checkpoint.result?.head === head).toSorted((a, b) => b.updatedAt - a.updatedAt)[0]
+    const job = lastReviewJob(repo, number, head)
     return job?.checkpoint.result ? { head, result: job.checkpoint.result } : undefined
+  }
+
+  /** The job behind `lastReviewOf`: its result, and `updatedAt` for when it finished. */
+  function lastReviewJob(repo: string, number: number, head: string): ReviewJob | undefined {
+    return ledger.list({ repo, number, states: ["done", "running", "fixing", "validating"] }).filter((item) => item.coverage !== "audit" && !item.stop && item.checkpoint.result?.head === head).toSorted((a, b) => b.updatedAt - a.updatedAt)[0]
   }
 
   async function commentReview({ sessionId, directory, repo, number, head, actor, full = false }: { sessionId: string; directory: string; repo: string; number: number; head: string; actor: string; full?: boolean }): Promise<ReviewSummary> {
@@ -1031,7 +1042,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       // Published with nothing new on a new head posts no review: the reply then names the head and the earlier findings' state.
       const report = done.report
       const nothingNew = done.status === "published" && report && !report.posted && !report.duplicate ? nothingNewReply({ head, resolved: report.resolved, state: report.state }) : undefined
-      return { status: done.status, reason: local ?? done.reason ?? report?.reason, posted: report?.posted ?? false, ...(nothingNew ? { text: nothingNew } : {}) }
+      // A head already reviewed ran nothing: the reply gives that review's result, never just "skipped".
+      const before = done.status === "skipped" && done.reviewedBefore ? lastReviewJob(repo, number, head) : undefined
+      const already = done.status === "skipped" && done.reviewedBefore ? alreadyReviewedReply({ head, state: done.state, result: before?.checkpoint.result, at: before?.updatedAt, now: now() }) : undefined
+      const text = nothingNew ?? already
+      return { status: done.status, reason: local ?? done.reason ?? report?.reason, posted: report?.posted ?? false, ...(text ? { text } : {}) }
     } catch (error) {
       const current = ledger.get(job.id)
       if (current && IN_FLIGHT.has(current.state)) move(job.id, "failed", { attempts: current.attempts + 1, error: errorText(error).slice(0, 2000) })
@@ -2067,13 +2082,18 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   }
 
   const configControl = createConfigControl({ dataDir: options.dir, repo: (directory) => repoCached(directory).catch(() => undefined), login: (directory) => watch.loginOf(directory), git, now, provider: "github", profiles })
-  const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens })
+  // The reviews page's pull request states load with the page's first read of them, never at start-up.
+  let prStates: import("./pr-states").PrStates | undefined
+  // One shared load: concurrent first reads (one per repository) must all fill the same cache, not one each.
+  const loadPrStates = sharedLoad(() => import("./pr-states").then(({ createPrStates }) => (prStates = createPrStates({ run, now }))))
+  const pullRequests = { fetch: async (repo: string, directory: string, refresh: boolean) => (await loadPrStates()).fetch(repo, directory, refresh), cached: (repo: string) => prStates?.cached(repo) }
+  const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens, pullRequests })
 
   /** `full` (`review` only): review the head whole even when it was already reviewed with this config. */
-  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; full?: boolean | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined }
+  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; full?: boolean | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined; pullRequests?: "cached" | "refresh" | undefined }
   type ControlResult = { ok: true; text: string; watches: ReturnType<typeof watch.rows>; dashboard?: PrReviewDashboard; config?: PrReviewConfigView } | { ok: false; message: string }
 
-  async function control({ sessionId, action, directory: given, pr, full, role, jobId, reason, scope, patch, version }: ControlInput): Promise<ControlResult> {
+  async function control({ sessionId, action, directory: given, pr, full, role, jobId, reason, scope, patch, version, pullRequests: readPullRequests }: ControlInput): Promise<ControlResult> {
     if (!options.enabled()) return { ok: false, message: PR_REVIEW_DISABLED }
     const directory = given ?? options.sessionDirectory(sessionId)
     if (!directory || !path.isAbsolute(directory)) return { ok: false, message: "unknown session directory" }
@@ -2093,7 +2113,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       return done(action === "publish-on" ? `Reviews of this repository are posted to ${(await forgeOf(directory))?.name ?? "GitHub"} from now on${waiting.length ? `; posting ${waiting.length} held review${waiting.length === 1 ? "" : "s"}` : "; no finished review was waiting"}.` : "Reviews of this repository stay in this session.")
     }
     if (action !== "review" && action !== "describe") {
-      const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version })
+      const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version, pullRequests: readPullRequests })
       return result.ok ? { ...done(result.text), ...(result.dashboard ? { dashboard: result.dashboard } : {}), ...(result.config ? { config: result.config } : {}) } : result
     }
     const ref = parseRef(pr)

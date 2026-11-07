@@ -57,6 +57,8 @@ export const DAEMON_HELP = text([
   `usage: ${P} daemon <command> [--dir D] [--json]`,
   "",
   "  start|run|stop|restart  --force: interrupt active work",
+  "                          restart --force first waits for running commands,",
+  "                          background tasks and agents: --grace S (0-3600, 120)",
   "  status",
   "  logs                    --lines N (1-1000)",
   "  service <action>        plan, install, start, stop, restart, status, logs,",
@@ -378,7 +380,7 @@ export const DOCS_HELP = text([
   "  commands NAME           one built-in slash command in detail",
   "",
   "Works offline. --dir D (--data-dir D): the data directory the live lines read",
-  "(default MENDCODE_V2_DIR or ~/.mendcode-v2). Exit codes: 0 a card printed,",
+  "(default MENDCODE_DIR or ~/.mendcode). Exit codes: 0 a card printed,",
   "2 none printed (the topic list follows), 64 usage.",
 ])
 

@@ -6,6 +6,15 @@ import type { SealedTurns } from "./sealed-turns"
 export type SessionSearchHit = { sessionId: SessionId; snippet: string }
 export type SessionSearchOptions = { text: string; regex?: boolean; sessionIds?: SessionId[]; directory?: string; limit?: number }
 
+export type SessionFindOptions = { text: string; directory: string; exclude?: SessionId; offset?: number; limit?: number; clock?: () => number }
+export type SessionFindHit = { sessionId: SessionId; title: string; updatedAt: number; snippet: string }
+export type SessionFindPage = { hits: SessionFindHit[]; next?: number }
+type FoundRow = { id: string; title: string; last_seq: number; updated_at: number; created_at: number }
+
+/** A project search page: at most this many hits, read from at most `FIND_SCAN` sessions within `FIND_BUDGET_MS`. */
+export const FIND_LIMIT = 10
+export const FIND_SCAN = 40
+export const FIND_BUDGET_MS = 250
 const MAX_SESSIONS = 200
 const SCAN_EVENTS = 3000
 const SCAN_MESSAGES = 300
@@ -71,7 +80,48 @@ export function createSessionSearch(db: Database, load?: ObjectLoader, sealed?: 
     return out
   }
 
+  // Prepared on the first project search, never at open.
+  let projectRows: ReturnType<typeof db.query<FoundRow, [string, string, number, number]>> | undefined
+  const projectSessions = () => projectRows ??= db.query<FoundRow, [string, string, number, number]>("SELECT id, title, last_seq, updated_at, created_at FROM sessions WHERE directory = ?1 AND id != ?2 ORDER BY updated_at DESC, id DESC LIMIT ?3 OFFSET ?4")
+
+  /** The first message of one session (newest first, bounded like `search`) that `matcher` finds, as a snippet. */
+  function firstMatch(session: { id: string; last_seq: number }, matcher: RegExp): string | undefined {
+    const rows = texts.all(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES)
+    // Sealed turns (sealed-turns.ts) are older than every row still in `events`, so they continue the newest-first scan.
+    if (sealed && rows.length < SCAN_MESSAGES) rows.push(...sealedTexts(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES - rows.length))
+    for (const row of rows) {
+      const text = unpackText(row.text, row.z, row.zref, load)?.slice(0, MAX_TEXT)
+      const match = text ? matcher.exec(text) : null
+      if (text && match) return snippetAround(text, match.index, match[0].length)
+    }
+    return undefined
+  }
+
   return {
+    /**
+     * One page of a project's sessions (one directory, archived and child sessions too, newest first) whose title or messages
+     * hold the phrase. A call reads at most `FIND_SCAN` sessions and stops after `FIND_BUDGET_MS`; `next` is where the next page
+     * starts. Nothing is indexed or kept: every call reads the existing rows again.
+     */
+    find(options: SessionFindOptions): SessionFindPage {
+      const matcher = new RegExp(options.text.slice(0, 200).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      const offset = Math.max(0, Math.floor(options.offset ?? 0))
+      const limit = Math.max(1, Math.min(FIND_LIMIT, Math.floor(options.limit ?? FIND_LIMIT)))
+      const clock = options.clock ?? Date.now
+      const started = clock()
+      const rows = projectSessions().all(options.directory, options.exclude ?? "", FIND_SCAN + 1, offset)
+      const hits: SessionFindHit[] = []
+      let scanned = 0
+      for (const row of rows.slice(0, FIND_SCAN)) {
+        if (hits.length >= limit || (scanned > 0 && clock() - started > FIND_BUDGET_MS)) break
+        scanned++
+        const titled = matcher.exec(row.title)
+        const snippet = titled ? snippetAround(row.title, titled.index, titled[0].length) : firstMatch(row, matcher)
+        if (snippet !== undefined) hits.push({ sessionId: row.id as SessionId, title: row.title, updatedAt: row.updated_at || row.created_at, snippet })
+      }
+      const more = scanned < rows.length
+      return { hits, ...(more ? { next: offset + scanned } : {}) }
+    },
     /** Sessions whose messages contain the phrase (or match the expression), newest session first, with the first matching line. */
     search(options: SessionSearchOptions): SessionSearchHit[] {
       let matcher: RegExp
@@ -86,16 +136,8 @@ export function createSessionSearch(db: Database, load?: ObjectLoader, sealed?: 
       const hits: SessionSearchHit[] = []
       const limit = options.limit ?? 50
       for (const session of sessions) {
-        const rows = texts.all(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES)
-        // Sealed turns (sealed-turns.ts) are older than every row still in `events`, so they continue the newest-first scan.
-        if (sealed && rows.length < SCAN_MESSAGES) rows.push(...sealedTexts(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES - rows.length))
-        for (const row of rows) {
-          const text = unpackText(row.text, row.z, row.zref, load)?.slice(0, MAX_TEXT)
-          const match = text ? matcher.exec(text) : null
-          if (!text || !match) continue
-          hits.push({ sessionId: session.id as SessionId, snippet: snippetAround(text, match.index, match[0].length) })
-          break
-        }
+        const snippet = firstMatch(session, matcher)
+        if (snippet !== undefined) hits.push({ sessionId: session.id as SessionId, snippet })
         if (hits.length >= limit) break
       }
       return hits

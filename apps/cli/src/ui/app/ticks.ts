@@ -10,10 +10,11 @@ import { sessionDisplayTitle } from "./display-title"
 export function createTicks(ctx: AppContext, actions: {
   chatWidth: () => number
   sessionTitle: () => string
+  sidebarShown: (width: number) => boolean
   render: () => void
 }) {
   const { state, schedule } = ctx
-  const { chatWidth, sessionTitle, render } = actions
+  const { chatWidth, sessionTitle, sidebarShown, render } = actions
 
   function syncPulse() {
     const busy =BUSY.has(state.transcript.foreground) || state.transcript.foreground === "waiting_approval" || state.turnState.retry !== undefined
@@ -26,8 +27,11 @@ export function createTicks(ctx: AppContext, actions: {
     // A sub-agent's thread open in the chat's place: its own working row moves while that agent runs.
     const thread = state.page === "chat" && state.agentView !== undefined && (state.agentRoot ?? state.transcript).agentThreads().some((each) => each.itemId === state.agentView && each.running)
     // A PR review of the open session's watch: its activity status and running step move until the run ends (nothing at rest).
-    const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId)
-    const wanted = (busy || preview || agents || home || thread || reviewing) && !state.reducedMotion
+    // `/reviews` with a review running turns the same spinner on its running rows.
+    const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
+    // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
+    const listed = state.page === "chat" && (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval") && s.directory === (ctx.input.directory ?? "")) && sidebarShown(ctx.input.screen.size.width)
+    const wanted = (busy || preview || agents || home || thread || reviewing || listed) && !state.reducedMotion
     if (wanted && !state.pulse)
       state.pulse = setInterval(() => {
         state.spinFrame++
@@ -57,8 +61,8 @@ export function createTicks(ctx: AppContext, actions: {
   }
 
   function syncLoopsTick() {
-    // `/reviews` with a review running: its live time moves once a second until the run ends.
-    const wanted = state.page === "loops" && needsTick(state.loops) || state.page === "reviews" && state.reviewActivity.length > 0
+    // `/reviews` with a review running and reduced motion (no pulse): its live time moves once a second until the run ends.
+    const wanted = state.page === "loops" && needsTick(state.loops) || state.page === "reviews" && state.reviewActivity.length > 0 && state.reducedMotion
     if (wanted && !state.loopsTick) state.loopsTick = setInterval(requestFrame, 1_000)
     if (!wanted && state.loopsTick) {
       clearInterval(state.loopsTick)

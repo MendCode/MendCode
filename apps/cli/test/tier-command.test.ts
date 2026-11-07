@@ -10,7 +10,9 @@ afterAll(cleanTemps)
 const reply = (value: unknown) => value as CommandReply
 
 function app(options: { settings?: Record<string, unknown>; persist?: boolean; remote?: boolean; safeMode?: boolean; promptOk?: boolean; reply?: (command: CommandInput) => unknown } = {}) {
+  // Wide enough that a notice row holds its whole message beside the session list.
   const h = appHarness({
+    width: 200,
     directory: tempDir("mendcode-tier-"),
     ...(options.remote ? { remote: { host: "test.invalid", readOnly: false } } : {}),
     ...(options.safeMode ? { safeMode: true } : {}),
@@ -82,7 +84,7 @@ describe("/tier", () => {
     expect(screen(on)).toMatch(/allowed browser/)
     const back = app({ settings: { tier: "full", features: { computer: true } } })
     await back.type("/tier computer default\r")
-    expect(screen(back)).toContain("computer off · its default")
+    expect(screen(back)).toContain("Computer control: off · its default")
     expect(screen(back)).not.toContain("follows the tier")
   })
 
@@ -97,17 +99,38 @@ describe("/tier", () => {
     await h.type("/tier minimalist\r")
     expect(h.sentOf("settings.set")[0]).toMatchObject({ patch: { tier: "minimalist", view: "minimal" } })
     expect(h.sentOf("prompt.set")[0]).toMatchObject({ mode: "minimal" })
-    expect(screen(h)).toContain("tier minimalist · view minimal · prompt minimal · density compact")
+    // Words, not flag ids: the tier, its prompt and how many features are on, the way back as the hint, the rest behind F4.
+    expect(screen(h)).toMatch(/✓ Minimalist: small prompt, \d+ of \d+ features on · \/tier off to go back · F4 details/)
+    expect(screen(h)).not.toMatch(/-mcp|view minimal|density compact/)
+    await h.app.onKey("\x1bOS")
+    expect(screen(h)).toContain("Chat view minimal · prompt minimal · density compact")
+    await h.type("\x1b")
     await h.type("/tier full\r")
     expect(h.sentOf("settings.set")[1]).toMatchObject({ patch: { tier: "full", view: "full" } })
     expect(h.sentOf("prompt.set")[1]).toMatchObject({ mode: "full" })
+    expect(screen(h)).toMatch(/Full: full prompt, \d+ of \d+ features on · \/tier minimalist to go back/)
+    await h.app.onKey("\x1bOS")
+    expect(screen(h)).toMatch(/Turned on: .*Code graph tools/)
+  })
+
+  test("the tier notice counts the features the tier turns on, not the ones it only allows", async () => {
+    const { tierNotice } = await import("../src/ui/app/tier")
+    const { tierRows, FEATURES } = await import("@mendcode/protocol/wire")
+    const on = tierRows({ tier: "minimalist" }).filter((row) => row.now.on && (row.mode !== "permit" || FEATURES[row.id].optIn)).length
+    const notice = tierNotice({ tier: "minimalist", before: "full", settings: { tier: "minimalist" }, promptOk: true })
+    expect(notice.message).toBe(`Minimalist: small prompt, ${on} of ${Object.keys(FEATURES).length} features on`)
+    expect(notice.hint).toBe("/tier full to go back")
+    expect(notice.detail).toContain("Turned off: ")
+    expect(notice.detail).toContain(FEATURES.mcp.label)
+    expect(notice.message + notice.hint).not.toMatch(/[+-][a-z_]+\b|_/)
+    expect(tierNotice({ tier: "full", before: "full", settings: { tier: "full" }, promptOk: true }).hint).toBe("/tier lists each feature")
   })
 
   test("a failed prompt mode change is said, not hidden", async () => {
     const h = app({ promptOk: false })
     await h.type("/tier balanced\r")
     expect(h.sentOf("settings.set")[0]).toMatchObject({ patch: { tier: "balanced", view: "balanced" } })
-    expect(screen(h)).toContain("prompt mode unchanged")
+    expect(screen(h)).toContain("Balanced: prompt unchanged")
   })
 
   test("a feature is overridden and put back without touching the others", async () => {
@@ -140,8 +163,8 @@ describe("/tier", () => {
     // Computer control has no second switch: `/tier computer on` is the switch.
     await h.type("/tier computer on\r")
     expect(h.sentOf("settings.set").at(-1)).toMatchObject({ patch: { features: { computer: true } } })
-    expect(screen(h)).toContain("computer on")
-    expect(screen(h)).not.toContain("computer included")
+    expect(screen(h)).toContain("Computer control: on")
+    expect(screen(h)).not.toContain("Computer control: included")
     expect(screen(h)).not.toContain("/tier computer on (macOS")
     await h.type("/tier hooks off\r")
     expect(screen(h)).toContain("changes only with --safe-mode")

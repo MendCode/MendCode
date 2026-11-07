@@ -14,12 +14,19 @@ const SEND = " ↗ SEND "
 const HELD_INDENT = "  "
 
 /** v1's queued previews and send chip, inside the shared panel grid. Chip coordinates are local to these rows. */
-export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
-  const { width, previews } = input
-  if (previews.length === 0) return { rows: [] }
+export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number>; /** Positions that are the daemon's internal notes for the agent (a child waits for approval): never listed or counted. */ internal?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
+  const { width } = input
+  if (input.previews.length === 0) return { rows: [] }
+  const shown = input.previews.flatMap((preview, index) => (input.internal?.has(index) ? [] : [{ preview, index }]))
+  // Only internal notes wait: one dim line, not messages of the user's with send and steering badges.
+  if (shown.length === 0) {
+    const hidden = input.previews.length
+    return { rows: [fit([{ text: `${HELD_INDENT}${hidden} ${hidden === 1 ? "notice" : "notices"} for the agent`, fg: "muted", dim: true }], width)] }
+  }
+  const previews = shown.map((entry) => entry.preview)
   // Nothing of the user's is waiting, only notices of the session's own background work: one muted line, not a box of messages to send.
   // Held after a cancel they go with the next message; while a turn runs the model reads them at its next step, with nothing to do here.
-  if (!input.paused && previews.every((_, index) => input.notices?.has(index))) {
+  if (!input.paused && shown.every((entry) => input.notices?.has(entry.index))) {
     const count = `${previews.length} background ${previews.length === 1 ? "result" : "results"}`
     // Under the transcript's text and over the prompt's rule (two cells in, where the box puts its text), in the longest form that fits whole.
     const forms = (input.held
@@ -32,12 +39,12 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
   let sendChip: { row: number; from: number; to: number } | undefined
   const padded = width >= 70
   const room = Math.max(1, width - 4)
-  previews.slice(0, QUEUE_SHOWN).forEach((preview, index) => {
+  shown.slice(0, QUEUE_SHOWN).forEach(({ preview, index: at }, index) => {
     const chips: Line = [
       ...(index === 0 ? [{ text: SEND, bold: true, ...onColor("primary") }, { text: " " }] : []),
-      { text: input.delivery?.[index] === "steer" ? STEER : QUEUED, bold: true, ...onColor("accent") },
+      { text: input.delivery?.[at] === "steer" ? STEER : QUEUED, bold: true, ...onColor("accent") },
     ]
-    const text = truncateEnd(`${input.shell?.has(index) ? "$ " : ""}${queuedNotice(readableText(preview, { quotes: false }).replace(/\s+/g, " "))}`, Math.max(1, room - lineWidth(chips) - 4))
+    const text = truncateEnd(`${input.shell?.has(at) ? "$ " : ""}${queuedNotice(readableText(preview, { quotes: false }).replace(/\s+/g, " "))}`, Math.max(1, room - lineWidth(chips) - 4))
     const left: Line = [{ text: "… ", fg: "muted" }, { text, fg: "body" }]
     const gap = Math.max(1, room - lineWidth(left) - lineWidth(chips))
     if (index === 0) {

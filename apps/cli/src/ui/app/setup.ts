@@ -1,5 +1,5 @@
 import type { SetupReport, Tier } from "@mendcode/protocol/wire"
-import { createOnboardingState, createSetupPageState, detectReady, type preload } from "../lazy-pages"
+import { createOnboardingState, createSetupPageState, detectReady, focusAfterCheck, type preload } from "../lazy-pages"
 import { activeTheme, setTheme, SYSTEM_THEME, themeSelection } from "../theme"
 import type { DaemonInfoReport, McpStatusReport, MemoryEntry, Settings } from "@mendcode/protocol"
 import type { SetupAction, SetupChecks, SetupHelper, SetupValues } from "../../view/setup-page"
@@ -8,7 +8,7 @@ import { toolLayoutOf, type TuiProfile } from "../../view/tui-profile"
 
 /** The profile keys the setup's Look rows (Glyphs, Tools, Diff, Prompt, Pet) move live; Theme is held apart, as a theme selection. */
 /** Said when the first setup closes with no model to talk to: it is not marked done, so the next launch opens it again. */
-const NOT_SET_UP = "no model is set up yet · this setup opens again next launch · /connect chatgpt signs MendCode in, /setup reopens it"
+const NOT_SET_UP = "nothing can answer yet · this setup opens again next launch · /setup reopens it now"
 const SETUP_STYLE_KEYS =["glyphs", "toolOutput", "toolDensity", "codeMapCard", "diffView", "promptChrome", "pet"] as const satisfies readonly (keyof TuiProfile)[]
 import type { AppContext } from "./context"
 import { applyTierBundle } from "./tier"
@@ -134,8 +134,32 @@ export function createSetup(ctx: AppContext, actions: {
     onboarding.loading = true
     const { detected } = await detectAnswers({ imports: true })
     if (state.onboarding !== onboarding) return
+    // Every choice made so far stays; only the focus moves: to the first way to run while nothing can, to the Model row once something can.
+    onboarding.state = focusAfterCheck(onboarding.state, detected, onboarding.detected)
     onboarding.detected = detected
     onboarding.loading = false
+    requestFrame()
+  }
+
+  /**
+   * "Use Codex · its own harness" from the setup: switches on only the `codex_engine` feature (what `/tier codex_engine on` does),
+   * which lists Codex's models in any tier; the tier and every other choice stay. Then it checks again and picks the first Codex
+   * model on the page. Codex keeps its own login; nothing of it is read or copied.
+   */
+  async function useCodexHarness() {
+    const onboarding = state.onboarding
+    if (!onboarding) return
+    if (input.remote) { ctx.say("the Codex harness is turned on on the machine that runs the commands", "warning"); return }
+    await setupChoice({ features: { ...(state.settingsNow.features ?? {}), codex_engine: true } })
+    await detect()
+    if (state.onboarding !== onboarding) return
+    const codex = onboarding.detected?.options.find((option) => option.source === "codex")
+    if (codex) {
+      const { ready, ...choosing } = onboarding.state
+      void ready
+      onboarding.state = { ...choosing, model: codex.id, row: 0 }
+      ctx.say("Codex harness on · Codex runs the turns on its own login · /tier codex_engine off turns it off", "success")
+    } else ctx.say("Codex harness on, but it lists no model yet · r checks again", "warning")
     requestFrame()
   }
 
@@ -249,7 +273,7 @@ export function createSetup(ctx: AppContext, actions: {
     } else if (action.type === "tier") {
       if (action.tier) {
         const applied = await applyTierBundle(ctx, { tier: action.tier, changeProfile })
-        if (applied) { applySettings(applied.settings); state.notice = applied.summary }
+        if (applied) { applySettings(applied.settings); ctx.say(applied.notice.message, "success", { hint: applied.notice.hint, detail: applied.notice.detail, oneLine: true }) }
       } else {
         const reply = await input.send({ type: "settings.set", patch: { tier: null } } as never)
         report(reply)
@@ -310,6 +334,7 @@ export function createSetup(ctx: AppContext, actions: {
     if (action.type === "recheck") { await detect(); return }
     // The `/connect` flow saves what it saves itself; this page keeps its choices in memory until it is back.
     if (action.type === "connect") { onboarding.connecting = true; await openConnect(action.target); return }
+    if (action.type === "harness") { await useCodexHarness(); return }
     if (action.type === "look") { applyLook(action.theme); return }
     // In memory only while the row moves; the final Enter saves it, esc puts the opening value back.
     if (action.type === "style") { changeProfile(action.patch, { layer: true }); requestFrame(); return }

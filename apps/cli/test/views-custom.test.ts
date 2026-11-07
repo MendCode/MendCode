@@ -421,11 +421,12 @@ describe("approvals and questions keep their safety", () => {
 
   test("a view that makes a click region for an approval option is invalid output: the built-in draws and no region is its own", async () => {
     for (const region of [`action: "choose", arg: 99`, `action: "choose", arg: 0`]) {
-      const { h } = await app(`api.view("approval", () => [[{ text: "go", ${region} }]])`)
+      // A marker no random temp path can contain: "go" matched a project path like mend-ext-kPgowT.
+      const { h } = await app(`api.view("approval", () => [[{ text: "VIEW-GO-MARK", ${region} }]])`)
       request(h, "ls -la")
       expect(h.text()).toContain("ls -la")
       expect(h.text()).toContain("Allow once")
-      expect(h.text()).not.toContain("go")
+      expect(h.text()).not.toContain("VIEW-GO-MARK")
     }
   })
 

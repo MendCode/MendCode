@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import type { PrFinding, PrStopReason, PrTokenUsage, Tier } from "@mendcode/protocol"
-import { groupFiles, READER_SHARE, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
+import { groupFiles, READER_SHARE, READER_SHARE_ALL, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
 import { cheapReaderList, isCheapReaderModel } from "./reader-models"
 import type { Graph } from "@mendcode/codegraph"
 import { failureStop, budgetPolicy, scaledBudget, stopText } from "./budget"
@@ -8,12 +8,13 @@ import { buildReviewContext, gitRun, type ContextReaders, type GitRun, type Revi
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
-import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { closeCheckpoint, resumeReview, REVIEW_PASS_SHARE, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
 import { fallbackUsed, newFallbackState, withFallbacks, type FallbackSource, type FallbackState } from "./fallback"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
 import { measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
+import { commitStatus } from "./commit-status"
 import { publishReview, publishThroughProvider, type GhCall, type PublishReport, type ReviewInfo } from "./publish"
 import type { PublishCheck } from "./publishers"
 import { reviewedBy, reviewedThrough } from "./publishers"
@@ -49,6 +50,8 @@ export type ReviewRun = {
   info?: ReviewInfo
   /** The repository's `publishers` does not let this reviewer post, or another publisher already did: nothing to ask or hold. */
   notPublisher?: true
+  /** Skipped because this head was already reviewed: `state` holds that review's findings. */
+  reviewedBefore?: true
   /** The config version the run used (`runConfigKey`). */
   configKey?: string
   /** What to keep for the job: the plan's decisions always; with `stop`, the candidates a resume verifies. */
@@ -83,6 +86,8 @@ export type RunPrReviewInput = {
   git?: GitRun
   graph?: () => Promise<Graph | undefined>
   gh?: GhCall
+  /** Known publisher identity, including installation-token bots that cannot call GET /user. */
+  self?: string | undefined
   /** The caller's consent to post (the repo config's `enabled` is checked here too). */
   publish: boolean
   /** Review the whole PR even when the head was reviewed before (`@mendcode review`). */
@@ -190,8 +195,8 @@ type Calling = RunPlatformInput["calling"]
 export function meteredSessions({ factory, account, calling, resuming, failures, language }: { factory: ReviewSessionFactory; account: Account; calling?: Calling; resuming: boolean; failures: ReviewTurnError[]; language?: string | undefined }): ReviewSessionFactory {
   return async ({ purpose }) => {
     const session = await factory({ purpose, ...(language ? { language } : {}) })
-    // A reader's turn is review-pass work in the ledger (its child session tells /usage which model ran it).
-    const label = purpose === "read" ? "review" : resuming && purpose === "verify" ? "resume" : purpose
+    // A reader's turn is its own purpose in the ledger, so a cheap model's tokens show apart from the review pass's (its child session tells /usage which model ran it).
+    const label = purpose === "read" ? "read" : resuming && purpose === "verify" ? "resume" : purpose
     const id = (session as { id?: unknown }).id
     const sessionId = typeof id === "string" && id.length <= 120 ? id : undefined
     const of = sessionId ? { sessionId } : {}
@@ -342,7 +347,7 @@ async function chooseRange({ input, git, full, resume }: { input: RunPrReviewInp
   if (range && gh && !input.provider) {
     const { alreadyReviewed } = await import("./already-reviewed")
     const covered = await alreadyReviewed({ gh, git, directory: input.directory, repo: input.repo, number: input.number, base: range.base, head: range.head,
-      reviewer: input.publishAs?.reviewer ?? input.reviewer?.id, self: input.publishAs?.self ?? input.publisher?.login ?? input.reviewer?.login })
+      reviewer: input.publishAs?.reviewer ?? input.reviewer?.id, self: input.publishAs?.self ?? input.self ?? input.publisher?.login ?? input.reviewer?.login })
     if (covered) return { base: covered.base, head: range.head, incremental: true, alreadyReviewed: covered.prs }
   }
   return range
@@ -401,8 +406,9 @@ async function baseAttributes(git: GitRun, directory: string, ref: string): Prom
  */
 function runReaders({ input, config, resume }: { input: RunPrReviewInput; config: ReviewConfig; resume: ReviewCheckpoint | undefined }) {
   const parallel = config.readers.parallel ?? READERS_BY_TIER[input.readers?.tier ?? "balanced"]
+  const share = config.readers.code === "all" ? READER_SHARE_ALL : READER_SHARE
   const notes: string[] = []
-  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, reasons: [] }
+  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, codeRead: 0, dropped: 0, reasons: [] }
   const kept: ReaderSummary[] = []
   let reused = 0
   let source: ReaderSource | undefined
@@ -416,25 +422,31 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
     return source
   }
-  const read: ContextReaders = async ({ data, cut, diffTokens }) => {
-    const groups = groupFiles({ data, cut })
+  const read: ContextReaders = async ({ data, cut, code, diffTokens, load }) => {
+    // Code is read only by a model: without a cheap reader model the review pass reads it, as before, and the note says why once.
+    const chosenForCode = code?.length ? pick() : undefined
+    if (chosenForCode && !chosenForCode.ok) notes.push(`readers.code is all, but ${chosenForCode.reason}; the review pass reads the code itself.`)
+    const groups = groupFiles({ data, cut, code: chosenForCode?.ok ? code : undefined })
     const cached = resume?.readers ?? []
-    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
+    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.by !== "not read" && summary.by !== "raw" && (group.reason !== "code" || !!summary.code) && (group.kind !== "code" || summary.by !== "local") && summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
     const out: ReaderSummary[] = []
     const fresh = groups.filter((group) => { const hit = covered(group); if (hit) { out.push(hit); reused += hit.paths.length } return !hit })
     if (fresh.length) {
       const cap = scaledBudget(config.budget, diffTokens)
-      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
+      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * share) - spent(total.tokens)
       const chosen = pick()
       tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
-      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance })
+      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
-      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal; total.codeRead += result.codeRead; total.dropped += result.dropped
+      if (result.raw?.length) (total.raw ??= []).push(...result.raw)
+      if (result.notRead?.length) (total.notRead ??= []).push(...result.notRead)
       total.model ??= result.model
       for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
     }
-    kept.push(...out)
+    // Job checkpoints already allow at most 500 summaries. Unread markers are rebuilt, not stored as successful coverage.
+    kept.push(...out.filter((summary) => summary.by !== "not read" && summary.by !== "raw").slice(0, Math.max(0, 500 - kept.length)))
     return out
   }
   const note = () => [
@@ -442,15 +454,21 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     readersNote(total, parallel),
     reused ? `Readers: the summaries of ${reused.toLocaleString("en-US")} file${reused === 1 ? "" : "s"} were kept from this head's earlier run, not read again.` : undefined,
   ].filter((line): line is string => !!line)
-  return { read, note, spent: () => spent(total.tokens), summaries: () => kept }
+  /** Whether a model read changed code this run: only then is the main pass held to the share the readers leave it. */
+  return { read, note, share, spent: () => spent(total.tokens), summaries: () => kept, readCode: () => total.codeRead > 0 }
 }
 
 export async function runPrReview(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
-  const run = await reviewRun(input)
+  // The head's commit status (commit-status.ts): GitHub only, set `pending` once the run is known to publish, closed here whatever happened.
+  const status = input.gh && input.publish && !input.provider
+    ? commitStatus({ gh: input.gh, repo: input.repo, number: input.number, head: input.head, reviewer: input.publishAs?.reviewer ?? input.reviewer?.id })
+    : undefined
+  const run = await reviewRun(input, status)
+  await status?.finish(run).catch(() => undefined)
   return { ...run, head: input.head }
 }
 
-async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
+async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof commitStatus>): Promise<ReviewRun & RunPlatformOutput> {
   const git = input.git ?? gitRun
   const policyRef = input.policy ?? input.base
   const configKey = runConfigKey({ policy: policyRef, layers: input.layers })
@@ -468,20 +486,23 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   const resume = input.checkpoint?.result && input.checkpoint.result.head === input.head ? input.checkpoint as ReviewCheckpoint : undefined
   if (input.checkpoint && !resume) notes.push(input.checkpoint.result ? `The checkpoint was taken on head ${input.checkpoint.result.head.slice(0, 12)}, not this one: reviewed again from the start.` : "The checkpoint holds no finished review pass: the review pass runs again.")
   const range = await chooseRange({ input, git, full: config.coverage === "full", resume })
-  if (!range) return skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`)
+  if (!range) return { ...skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`), reviewedBefore: true as const }
   const incremental = range.incremental
   if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
     const blocked = await publishBlock({ input, config })
     if (blocked) return { ...skipped(`${blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head` : blocked.why}; nothing was sent to a model`), notPublisher: true as const }
-  }
+    if (status && config.status) await status.start()
+  } else if (status && config.enabled && config.status && (!input.publisher || !await publishBlock({ input, config }).catch(() => true))) await status.start()
   try {
     const nothingLeft = !!range.alreadyReviewed && (await git(["diff", "--no-ext-diff", "--quiet", range.base, range.head, "--"], input.directory)).code === 0
     const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${nothingLeft ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined
     const graph = nothingLeft ? undefined : await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
-    const readers = config.readers.enabled ? runReaders({ input, config, resume }) : undefined
+    const readers = config.readers.enabled && input.readers?.tier !== "minimalist" ? runReaders({ input, config, resume }) : undefined
     const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes })
+    // An oversized diff must also fit the pass's existing cap after readers and verification. Leave room for summaries/briefs.
+    const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - (readers?.share ?? READER_SHARE)) * REVIEW_PASS_SHARE * 0.9 * 4)
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes, readCode: config.readers.code === "all" && !!input.readers })
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
@@ -502,7 +523,8 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     // The diffs readers read count too, so the cap is the same with or without them; what the readers counted comes off it.
     const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
     const cap = scaledBudget(config.budget, diffTokens)
-    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, cap - (readers?.spent() ?? 0))
+    // Readers that read the code carry most of the reading, so the review and verify passes are held to what the readers' share leaves them, not to every token the readers did not use.
+    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, readers?.readCode() ? Math.min(cap - readers.spent(), Math.floor(cap * (1 - readers.share))) : cap - (readers?.spent() ?? 0))
     const engineConfig = { ...engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory }), ...(input.progress ? { onVerify: (candidates: number) => tell(input, { phase: "corroboration", label: `Verifying ${plural(candidates, "candidate")}` }) } : {}) }
     // A resume that already has the review pass goes on with what it kept (its verify step says so); otherwise the pass starts here.
     if (!resume?.result) tell(input, { phase: "analysis", label: "Analysis", detail: `${plural(context.files.length, "file")}${incremental ? " · incremental" : ""}` })
@@ -552,6 +574,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const usedModel = fallbackUsed(fallbackState, fallbackSources)
     const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
+    if (complete && !result.budgetHit && !outcome.partial && !context.unread?.length && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
@@ -593,7 +616,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     }
     tell(input, { phase: "posting", label: "Posting review" })
     const report = await publishReview({
-      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
+      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info, self: input.self,
       ...(config.template.sections.length ? { template: config.template } : {}), ...(outcome.sections ? { sections: outcome.sections } : {}),
       ...(as ? { effects: as.effects, reviewer: as.reviewer, configKey: as.configKey, jobId: as.jobId, isCurrent: as.isCurrent, ...(as.self ? { self: as.self } : {}) } : {}),
     })

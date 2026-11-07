@@ -1,12 +1,18 @@
 # Tiers and safe mode
 
-The balanced/full `profile_tools` feature offers the local `profiles` tool only after `tool_search` discovery, even when general tool discovery is off. Its mutations always require approval; full permission mode does not bypass profile review.
+Choose a tier to set a bundle of existing switches for the chat view, prompt mode and feature modules. Every feature stays individually switchable; with no `tier` set, every feature keeps the default it had before tiers.
 
-Balanced/full also includes pre-limit compaction checkpoints, native graph orientation/impact, focused handoff, instruction includes and static profile capability previews. Caveman style and PDF/GitHub fetch modes require explicit selection. Full defaults MCP discovery on unless explicitly disabled. The event-stream model-spending watcher (I28) is excluded by lead decision.
+## Choose a tier
 
-One `tier` setting (`minimalist`, `balanced`, `full`) selects a bundle of switches that already exist. It adds no new meaning to the setup presets, the chat view, density or prompt modes: a tier only chooses which of their existing values to set and which feature modules are on. Every feature stays individually switchable. With no `tier` set, nothing changes: every feature keeps the default it had before tiers.
+1. Run `/tier` to see the bundles and what is on now and why.
+2. Apply `/tier minimalist|balanced|full`, or use the Tier row of `/setup`.
+3. Change individual switches as needed. A later change stays; feature modules follow `tier` live whenever they are read, with no restart.
 
-Names, reconciled. `minimal`/`balanced`/`full` already mean three different things, and they keep those meanings:
+One `tier` setting (`minimalist`, `balanced`, `full`) selects the bundle. It adds no new meaning to setup presets, the chat view, density or prompt modes: it only chooses existing values and which feature modules are on.
+
+### What the names mean
+
+`minimal`/`balanced`/`full` already mean three different things, and they keep those meanings:
 
 | Where | Values | What a tier does with it |
 |---|---|---|
@@ -22,20 +28,32 @@ The bundle is written once by `/tier <name>` (or the Tier row of `/setup`), like
 
 ## Commands
 
-- `/tier` lists the bundles, what each tier includes (`[x - -]` is minimalist, balanced, full) and what is on now and why.
-- `/tier minimalist|balanced|full` applies a tier and says which features it added or removed.
-- `/tier <feature> on|off|default` overrides one feature (`features.<id>` in settings). `default` removes the override.
-- `/tier off` clears the tier. `/experimental` shows the experimental flags with the tier applied, plus the active overrides.
-- `/setup` has a Tier row: left/right cycles none, minimalist, balanced, full and shows what the next one adds or removes.
-- Local only: the daemon refuses `tier` and `features` from remote terminals and peers.
+| Command | Does |
+|---|---|
+| `/tier` | Lists bundles, what each includes (`[x - -]` is minimalist, balanced, full), and what is on now and why |
+| `/tier minimalist|balanced|full` | Applies a tier and says which features it added or removed |
+| `/tier <feature> on|off|default` | Overrides one feature (`features.<id>` in settings); `default` removes the override |
+| `/tier off` | Clears the tier |
+| `/experimental` | Shows experimental flags with the tier applied, plus active overrides |
+| `/setup` | Tier row: left/right cycles none, minimalist, balanced, full and shows what the next one adds or removes |
+
+**Note:** Tier changes are local only. The daemon refuses `tier` and `features` from remote terminals and peers.
 
 ## Starting tier
 
-The installers take `--tier minimalist|balanced|full` ([releases](release.md#starting-tier)); the choice travels in the install receipt and is
-read once, by the first launch. It is a starting configuration, not a lock: it is used only while setup was never completed and no `tier`
-is saved, so it never overwrites a tier or settings that already exist, `mendcode upgrade` and a reinstall do not apply it again, and `/tier`
-changes the tier whenever you like. `minimalist` applies the bundle and configures itself ([setup](setup.md#first-run)); `balanced` and `full`
-open the setup page with that tier selected. With no receipt (a source run, an older install) nothing changes.
+The installers take `--tier minimalist|balanced|full` ([releases](release.md#starting-tier)). The choice travels in the install receipt and is read once, by the first launch.
+
+It is a starting configuration, not a lock:
+
+- It is used only while setup was never completed and no `tier` is saved, so it never overwrites a tier or settings that already exist.
+- `mendcode upgrade` and a reinstall do not apply it again.
+- `/tier` changes the tier whenever you like.
+
+| Starting tier | First launch |
+|---|---|
+| `minimalist` | Applies the bundle and configures itself ([setup](setup.md#first-run)) |
+| `balanced` and `full` | Open the setup page with that tier selected |
+| No receipt: a source run or older install | Nothing changes |
 
 ## Slash commands
 
@@ -59,6 +77,20 @@ trust help shortcuts quit`. `tree` is there because it is how a message is found
   feature is off stays out of the menu even with `hidden: false`.
 
 ## Feature manifest
+
+### Included features and explicit choices
+
+The balanced/full `profile_tools` feature offers the local `profiles` tool only after `tool_search` discovery, even when general tool discovery is off. Its mutations always require approval; full permission mode does not bypass profile review.
+
+Balanced/full also includes:
+
+- Pre-limit compaction checkpoints.
+- Native graph orientation/impact and focused handoff.
+- Instruction includes and static profile capability previews.
+
+Caveman style and PDF/GitHub fetch modes require explicit selection. Full defaults MCP discovery on unless explicitly disabled. The event-stream model-spending watcher (I28) is excluded by lead decision.
+
+### Maintain the manifest
 
 The [README](../README.md#tiers) contains every manifest entry, generated by
 `bun scripts/readme-tiers.ts` (stdout only). Replace its marked block with that output after
@@ -96,6 +128,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `resume_context` (the system prompt of a new chat carries at most 1 800 characters (nothing stored in the session) on what the latest sessions of this project, and of others, were doing) | full | tier | `/tier resume_context off` |
 | `graph_autopilot` (MendCode builds the [code graph](code-graph.md#autopilot) of a real project by itself, refreshes it after ten changed files or 3%, and one ~70-token prompt line tells the model to locate code with it first; also reaches Claude Code, Codex and ACP agents) | full | tier | `/tier graph_autopilot on\|off`; **on by default only in nightly, dev and local builds** (the binary's channel), off in beta and stable until switched on; minimalist and balanced have nothing new |
 | `mcp` (servers, `mcp__*`, `mcp_resource_*`) | full | tier | `mcp.json` |
+| `codex_engine` (Codex as its own harness: its `codex:` models run in Codex on the Codex CLI's login; nothing runs at rest; [setup](setup.md)) | minimalist, opt-in | tier | `/tier codex_engine on` or setup's `Use Codex` (off by default, in every tier and without one) |
 | `thread_mcp` ([thread bridge](thread-mcp.md), cross-engine delegation: a Claude Code, Codex or ACP session's sub-agents on MendCode's other models, which its instructions name by engine) | full | permit | `threadMcp.claude` / `threadMcp.codex`, off by default |
 | `jev` (adaptive reasoning) | full | tier | `experimental.reasoning_auto` |
 | `idle_compact` (one compaction of a large idle session just before its prompt cache expires; [compaction](compaction.md#compaction-while-idle)) | full | tier | `/tier idle_compact on\|off`; `idleCompactAtTokens` (off without a tier) |
@@ -132,10 +165,32 @@ Peers cannot change execution switches through `experimental`, `tools`, disabled
 installation endpoints. Safe mode remains a host startup choice, checked before stored feature overrides. Local overrides
 outside safe mode keep their documented meaning.
 
-`mendcode --safe-mode` (or `MENDCODE_SAFE_MODE=1`) starts with no extensions (daemon or terminal), no installed profiles, no shell hooks, no MCP and no project custom tools, whatever the settings say. It builds on `--pure`: the daemon must have been started in safe mode, so use a separate `--dir` or `--isolated` when another daemon is running. Skills and commands in your own folders still load (they are prompt data, not code). `/doctor` shows a Mode section, and `daemon.info` reports `safeMode`. Settings are untouched, so restarting without the flag restores everything.
+Start with `mendcode --safe-mode` (or `MENDCODE_SAFE_MODE=1`). Whatever the settings say, this disables:
+
+- Extensions, daemon or terminal, and installed profiles.
+- Shell hooks and MCP.
+- Project custom tools.
+
+Safe mode builds on `--pure`: the daemon must have been started in safe mode. Use a separate `--dir` or `--isolated` when another daemon is running.
+
+Skills and commands in your own folders still load because they are prompt data, not code. `/doctor` shows a Mode section, and `daemon.info` reports `safeMode`.
+
+Settings are untouched. Restarting without the flag restores everything.
 
 ## Baseline budget
 
-`packages/daemon/test/tier.test.ts` builds the first request of a fresh session for each tier through the real engine, a fake provider and the real prompt modes, and counts the system prompt plus every tool definition (characters over four, a growth guard rather than an exact cost). Stored budgets: minimalist 3,500, balanced 4,800, full 6,400 estimated tokens for the test's tool pool (built-in, code graph, computer, browser and two fake MCP tools, with sub-agents on); measured 3,402, 4,780 and 6,291 (balanced was 5,023 before its prompt told the terminal's drawing in one sentence instead of the full block: [prompt modes](prompt-modes.md)) (grep's `context` and edit's `edits` cost nothing: see [tool discovery](tool-discovery.md)). The test also requires minimalist < balanced < full and checks which tools each tier offers. The budgets came down from 3,700 / 5,250 / 9,100 when the core tools' descriptions were cut to what a model needs (a limit, an output shape, a failure), stated once: an entry of `read`'s `paths` no longer repeats the descriptions of the top-level keys. A change that makes a tier bigger fails it: raise the number on purpose in review, or move the cost to a higher tier.
+`packages/daemon/test/tier.test.ts` builds the first request of a fresh session for each tier through the real engine, a fake provider and the real prompt modes, and counts the system prompt plus every tool definition (characters over four, a growth guard rather than an exact cost).
 
-Project context is measured separately because it depends on the project, not on the tier: `packages/daemon/test/tier-instructions.test.ts` composes the system prompt of each tier's prompt mode for a fixture project (a 1.6 KB `AGENTS.md` and five skills) and stores what that project adds. Every mode now carries the user's instructions and `focus`/`full` carry the compact skill catalog ([prompt modes](prompt-modes.md)), so the fixture adds 204 (minimalist), 346 (balanced) and 346 (full) estimated tokens; before, it added 0, 0 and 346, because minimal and focus dropped `AGENTS.md` and focus dropped the catalog. The per-tier baseline numbers above are for a project without instruction files or skills and did not change. An `AGENTS.md` is capped at 16,000 characters (about 4,000 tokens) per file and 64,000 in total, so the worst case per mode is bounded.
+Stored budgets: minimalist 3,500, balanced 4,800, full 6,400 estimated tokens for the test's tool pool (built-in, code graph, computer, browser and two fake MCP tools, with sub-agents on); measured 3,402, 4,780 and 6,291 (balanced was 5,023 before its prompt told the terminal's drawing in one sentence instead of the full block: [prompt modes](prompt-modes.md)) (grep's `context` and edit's `edits` cost nothing: see [tool discovery](tool-discovery.md)).
+
+The test also requires minimalist < balanced < full and checks which tools each tier offers.
+
+The budgets came down from 3,700 / 5,250 / 9,100 when the core tools' descriptions were cut to what a model needs (a limit, an output shape, a failure), stated once: an entry of `read`'s `paths` no longer repeats the descriptions of the top-level keys.
+
+A change that makes a tier bigger fails it: raise the number on purpose in review, or move the cost to a higher tier.
+
+Project context is measured separately because it depends on the project, not on the tier: `packages/daemon/test/tier-instructions.test.ts` composes the system prompt of each tier's prompt mode for a fixture project (a 1.6 KB `AGENTS.md` and five skills) and stores what that project adds.
+
+Every mode now carries the user's instructions and `focus`/`full` carry the compact skill catalog ([prompt modes](prompt-modes.md)), so the fixture adds 204 (minimalist), 346 (balanced) and 346 (full) estimated tokens; before, it added 0, 0 and 346, because minimal and focus dropped `AGENTS.md` and focus dropped the catalog.
+
+The per-tier baseline numbers above are for a project without instruction files or skills and did not change. An `AGENTS.md` is capped at 16,000 characters (about 4,000 tokens) per file and 64,000 in total, so the worst case per mode is bounded.

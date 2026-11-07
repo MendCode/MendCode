@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
+import { DEFAULT_THEME } from "../src/themes"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { TUI_DEFAULTS, TUI_ENUMS, featureOn, tuiProblems } from "@mendcode/protocol/wire"
@@ -26,7 +27,7 @@ import { onBackground, sampleSprite, sheetOf, smoothSample } from "./mascot-samp
 import { cleanTemps, conversation, mendRowIn, plain, tempDir } from "./session-ui-harness"
 
 afterAll(() => {
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   cleanTemps()
 })
 
@@ -933,7 +934,7 @@ describe("the mascot's settings and commands", () => {
     const mascotOf = (homeMascot: unknown) => normalizeTuiProfile({ homeMascot }).homeMascot
     expect(["mendy", "mend", "dragon", 7, "user:", "user:../x", "user:9f1c", "codex:greenie", "package:acme.pet"].map(mascotOf)).toEqual(["mend", "mend", "mend", "mend", "mend", "mend", "user:9f1c", "codex:greenie", "package:acme.pet"])
     expect(normalizeTuiProfile({ mascotSize: "huge", mascotMotion: "yes" })).toMatchObject({ mascotSize: "medium", mascotMotion: true })
-    expect(tuiProblems({ homeMascot: "dragon" })).toEqual(["homeMascot: expected mend or a pet reference (user:<id>, codex:<id>, package:<id>; /pet lists them)"])
+    expect(tuiProblems({ homeMascot: "dragon" })).toEqual(["homeMascot: expected mend or a pet reference (builtin:mendgirl, user:<id>, codex:<id>, package:<id>; /pet lists them)"])
     expect(tuiProblems({ homeMascot: "mendy" })).toEqual([])
     expect(tuiProblems({ homeMascot: "user:9f1c", mascotMotion: false, mascotSize: "large" })).toEqual([])
     expect(tuiProblems({ mascotSize: "huge" })).toEqual(["mascotSize: expected small|medium|large"])

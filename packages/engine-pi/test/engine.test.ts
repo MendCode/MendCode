@@ -65,6 +65,7 @@ type Setup = {
   smartBash?: (input: { args: Record<string, unknown>; cwd: string }) => "allow" | "ask" | "deny"
   environment?: () => { values: Record<string, string>; note: string } | undefined
   appendSystem?: (cwd: string) => string | undefined
+  replyLanguage?: (sessionId: string, text: string) => string | undefined
 }
 
 function setup(patch: Setup = {}) {
@@ -85,6 +86,7 @@ function setup(patch: Setup = {}) {
     ...(patch.smartBash ? { smartBash: patch.smartBash } : {}),
     ...(patch.environment ? { environment: patch.environment } : {}),
     ...(patch.appendSystem ? { appendSystem: patch.appendSystem } : {}),
+    ...(patch.replyLanguage ? { replyLanguage: patch.replyLanguage } : {}),
     capabilities: () => patch.capabilities ?? { settled: true, disableExtensions: true },
     ...(patch.idleMs ? { idleMs: patch.idleMs } : {}),
     ...(patch.settleQuietMs ? { settleQuietMs: patch.settleQuietMs } : {}),
@@ -869,6 +871,16 @@ describe("routing", () => {
     expect(await router.runTurn(turnInput().input)).toEqual({ status: "error", code: "pi_unavailable", message: "[PI]: no pi" })
     await router.runTurn(turnInput().input)
     expect(attempts).toBe(2)
+  })
+})
+
+describe("reply language", () => {
+  test("each prompt ends with the reply-language line once, after the user's message", async () => {
+    const { engine, commands } = setup({ replyLanguage: (_sessionId, text) => text.startsWith("arregla") ? "Reply in Spanish, the language of the user's latest message." : undefined })
+    const sessionId = ids("session")
+    await engine.runTurn(turnInput({ sessionId, text: "arregla el test" }).input)
+    await engine.runTurn(turnInput({ sessionId, text: "ok" }).input)
+    expect(commands("prompt").map((message) => String(message.message))).toEqual(["arregla el test\n(Reply in Spanish, the language of the user's latest message.)", "ok"])
   })
 })
 

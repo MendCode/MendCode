@@ -5,6 +5,7 @@ import { PROMPT_SEARCH_MAX_QUERY, PROMPT_SEARCH_PROMPTS, promptSearchBar, search
 import { MAX_COMMENTS, parseSentComments, readableMessage, type ReplyComment } from "../../view/reply-comments"
 import type { QueuedPrompt } from "../../view/turn-state"
 import { MOUSE_SGR } from "./constants"
+import { userQueue } from "./queue-policy"
 import type { AppContext } from "./context"
 
 const PRINTABLE = /^[^\x00-\x1f\x7f\x1b]+$/
@@ -85,7 +86,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
 
   /** ↑ on an empty prompt edits the queue instead of the prompt history while its newest entry is one that can come back. */
   function canEditQueued() {
-    const last = state.transcript.queue.at(-1)
+    const last = userQueue(state.transcript.queue).at(-1)
     return state.page === "chat" && !input.remote?.readOnly && !!last && refusal(queuedPrompt(last.queueId)) === undefined
   }
 
@@ -94,7 +95,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
    * queued still runs once the cancelled turn has stopped. Undefined when nothing is queued; else whether the send was taken.
    */
   async function sendQueueNext() {
-    const first = state.transcript.queue[0]
+    const first = userQueue(state.transcript.queue)[0]
     if (!first || input.remote?.readOnly) return undefined
     const reply = await input.send({ type: "queue.promote", sessionId: state.sessionId, queueId: first.queueId })
     if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
@@ -105,7 +106,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
   async function editQueued() {
     if (state.page !== "chat") return
     if (input.remote?.readOnly) return say("queue editing disabled while read-only", "warning")
-    const last = state.transcript.queue.at(-1)
+    const last = userQueue(state.transcript.queue).at(-1)
     if (!last) return say("nothing queued")
     const entry = queuedPrompt(last.queueId)
     const refused = refusal(entry)

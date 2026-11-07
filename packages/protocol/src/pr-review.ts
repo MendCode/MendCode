@@ -126,6 +126,19 @@ export const PrStopReason = lazySchema(() => z.strictObject({
 }))
 export type PrStopReason = z.infer<typeof PrStopReason>
 
+/**
+ * The pull request on GitHub as `gh pr list` last read it (one call per repository, cached briefly): open, merged or closed, a
+ * draft, whether it merges without conflicts and how its checks stand, with up to three failing check names.
+ */
+export const PrPullRequestState = lazySchema(() => z.strictObject({
+  state: z.enum(["open", "merged", "closed"]),
+  draft: z.boolean(),
+  mergeable: z.enum(["mergeable", "conflicting", "unknown"]),
+  checks: z.enum(["passing", "failing", "pending", "none"]),
+  failing: z.array(z.string().max(120)).max(3).optional(),
+}))
+export type PrPullRequestState = z.infer<typeof PrPullRequestState>
+
 export const PrJobSummary = lazySchema(() => z.strictObject({
   id: z.string().min(1).max(80),
   provider: z.enum(PR_REVIEW_PROVIDERS),
@@ -154,8 +167,13 @@ export const PrJobSummary = lazySchema(() => z.strictObject({
   fixSessionId: z.string().max(120).optional(),
   /** Who holds the fix session now: the reviewer, or the user after a take-over. */
   control: z.enum(["reviewer", "user"]).optional(),
-  findings: z.strictObject({ confirmed: z.number().int().nonnegative(), plausible: z.number().int().nonnegative(), candidates: z.number().int().nonnegative(), resolved: z.number().int().nonnegative() }),
+  /** `blocking`: confirmed critical or major findings a fix round has not resolved. */
+  findings: z.strictObject({ confirmed: z.number().int().nonnegative(), plausible: z.number().int().nonnegative(), candidates: z.number().int().nonnegative(), resolved: z.number().int().nonnegative(), blocking: z.number().int().nonnegative().optional() }),
+  /** The pull request's GitHub state, when it was read (GitHub only; `status` with `pullRequests`). */
+  pullRequest: PrPullRequestState.optional(),
   tokens: PrTokenUsage,
+  /** The part of `tokens` the cheap readers spent (the rest is the review and verify passes' model); absent when no reader ran. */
+  readTokens: PrTokenUsage.optional(),
   stop: PrStopReason.optional(),
   error: z.string().max(600).optional(),
   stack: z.strictObject({ parent: z.number().int().positive().optional(), children: z.array(z.number().int().positive()).max(50), depth: z.number().int().nonnegative() }).optional(),

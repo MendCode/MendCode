@@ -30,7 +30,7 @@ export function createWhatsNew(ctx: AppContext) {
     try { entries = bundledChangelog(input.version) } catch (error) { return say(error instanceof Error ? error.message : String(error), "error") }
     const seen = input.dataDir ? readSeen(input.dataDir) : undefined
     const listed = entries.flatMap((entry) => {
-      const fresh = freshItems(entry, seen)
+      const fresh = freshItems(entry, seen, entries)
       return sectionItems(entry).map((item, index) => ({ section: entry.title, item, fresh: fresh[index]! }))
     })
     const unseen = listed.filter((change) => change.fresh)

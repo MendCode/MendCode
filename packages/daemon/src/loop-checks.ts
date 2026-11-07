@@ -7,16 +7,19 @@ import { killProcessTree } from "@mendcode/tools"
 
 const DEFAULT_CHECK_TIMEOUT_SECONDS = 300
 const OUTPUT_TAIL_CHARS = 64_000
+/** `FULL_OUTPUT_BYTES` of @mendcode/loops, kept here as a value so this start-up module imports only its types (a test pins them equal). */
+export const RUNNER_FULL_OUTPUT_BYTES = 1_048_576
 
 /**
  * Runs one loop check as a plain program (argv, no shell) in its own process group, bounded in time and
  * output; a timeout (`timeoutSeconds`, default 300) or abort kills the whole group. A timed-out check keeps the
- * output collected so far and ends with `timed out after N s`.
+ * output collected so far and ends with `timed out after N s`. `stdin` is written whole and then closed; without it
+ * stdin is ignored.
  */
-export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeconds = DEFAULT_CHECK_TIMEOUT_SECONDS }) => {
+export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeconds = DEFAULT_CHECK_TIMEOUT_SECONDS, stdin, fullOutput }) => {
   let child: ReturnType<typeof Bun.spawn>
   try {
-    child = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1", TERM: "dumb" }, detached: true })
+    child = Bun.spawn(argv, { cwd, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1", TERM: "dumb" }, detached: true })
   } catch (error) {
     return { exitCode: -1, output: `cannot run ${argv[0]}: ${error instanceof Error ? error.message : String(error)}` }
   }
@@ -28,19 +31,34 @@ export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeco
   }, timeoutSeconds * 1000)
   signal.addEventListener("abort", kill, { once: true })
   let output = ""
+  // Only with `fullOutput` is the start kept as well, until it passes FULL_OUTPUT_BYTES (by at most one chunk); later chunks only feed the tail.
+  let head = fullOutput ? "" : undefined
+  let headBytes = 0
+  let fullTruncated = false
+  const append = (text: string) => {
+    output += text
+    if (output.length > OUTPUT_TAIL_CHARS * 2) output = output.slice(-OUTPUT_TAIL_CHARS)
+    if (head !== undefined) {
+      if (headBytes <= RUNNER_FULL_OUTPUT_BYTES) {
+        head += text
+        headBytes += Buffer.byteLength(text, "utf8")
+      } else if (text.length > 0) fullTruncated = true
+    }
+  }
   const collect = async (stream: ReadableStream<Uint8Array> | undefined) => {
     if (!stream) return
     const decoder = new TextDecoder()
     for await (const chunk of stream) {
-      output += decoder.decode(chunk, { stream: true })
-      if (output.length > OUTPUT_TAIL_CHARS * 2) output = output.slice(-OUTPUT_TAIL_CHARS)
+      append(decoder.decode(chunk, { stream: true }))
     }
+    append(decoder.decode())
   }
   await Promise.all([collect(child.stdout as ReadableStream<Uint8Array>), collect(child.stderr as ReadableStream<Uint8Array>)])
   const exitCode = await child.exited
   clearTimeout(timer)
   signal.removeEventListener("abort", kill)
-  return { exitCode, output: output.slice(-OUTPUT_TAIL_CHARS) + (timedOut ? `\ntimed out after ${timeoutSeconds} s` : "") }
+  const timeout = timedOut ? `\ntimed out after ${timeoutSeconds} s` : ""
+  return { exitCode, output: output.slice(-OUTPUT_TAIL_CHARS) + timeout, ...(head !== undefined ? { full: head + timeout, fullTruncated } : {}) }
 }
 
 /** git's output, or undefined when it fails or cannot start (no git, or a directory that is gone). */

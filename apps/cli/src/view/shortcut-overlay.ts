@@ -56,6 +56,7 @@ export function shortcutEntries(bindings: Bindings, options: { multiline: boolea
   add("permission.next", "next permission mode")
   add("palette", "command palette")
   add("transcript.find", "find in the transcript")
+  entries.push(["F4", "details of the last notice"])
   return entries
 }
 

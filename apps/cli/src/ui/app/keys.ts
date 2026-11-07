@@ -15,7 +15,7 @@ import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SIDEBAR_WIDTH } from "../../view/sidebar"
+import { projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarStops } from "../../view/sidebar"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -30,7 +30,7 @@ import { createOptionKeys } from "./option-keys"
 import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
-import { queuePolicy } from "./queue-policy"
+import { queuePolicy, userQueue } from "./queue-policy"
 import { wheelStep } from "./page-wheel"
 
 export function createKeys(ctx: AppContext, actions: {
@@ -372,7 +372,8 @@ export function createKeys(ctx: AppContext, actions: {
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < SIDEBAR_WIDTH) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
-      if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
+      if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
+      else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     const click = screenClick ? { ...screenClick, col: screenClick.col - offset } : undefined
@@ -418,11 +419,15 @@ export function createKeys(ctx: AppContext, actions: {
         return requestFrame()
       }
       if (state.sidebarFocus && !mouse) {
-        const index = Math.max(0, sessions.findIndex((session) => session.sessionId === (state.sidebarSelected ?? state.sessionId)))
-        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = sessions[Math.max(0, Math.min(sessions.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]?.sessionId
-        else if (key === "\r" && sessions[index]) {
+        // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
+        const stops = sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
+        const onSettled = stops[index] === SETTLED_ROW
+        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
+        else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
-          await actions.switchSession(sessions[index]!.sessionId)
+          await actions.switchSession(stops[index]! as typeof state.sessionId)
         } else if (key === "\x1b" || (onRight ? key === "\x1b[D" : key === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }
@@ -602,7 +607,7 @@ export function createKeys(ctx: AppContext, actions: {
     if (inline === "permission.next") return cyclePermission()
     if (inline === "view.next" && editor.isEmpty() && !pendingPanelRequest()) return void await runSlash("/view")
     if (inline === "queue.send" && editor.isEmpty() && state.transcript.visibleCount === 0 && !state.transcript.queue.length) return void await runSlash("/sessions")
-    if (inline === "queue.send" && (state.transcript.queue[0] || state.transcript.usageLimit)) return promoteQueued()
+    if (inline === "queue.send" && (userQueue(state.transcript.queue)[0] || state.transcript.usageLimit)) return promoteQueued()
     // Backspace on an empty prompt takes the last chip off the row (an attachment with a token in the text is removed with its token instead).
     const lastChip = (key === "\x7f" || key === "\b") && editor.isEmpty() ? chipRowAttachments(liveAttachments(state.attachments, editor.text), state.tuiProfile.attachmentChips).at(-1) : undefined
     if (lastChip) {
@@ -775,7 +780,7 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** The newest queued message is removed (ctrl+k on an empty prompt). */
   async function dropLastQueued() {
-    const last = state.transcript.queue.at(-1)
+    const last = userQueue(state.transcript.queue).at(-1)
     if (!last) return
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
     if (!reply.ok) fail(reply.error.message)
@@ -799,7 +804,7 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** Ctrl+S and the ` ↗ SEND ` chip: the first queued message goes now. */
   async function promoteQueued() {
-    const first = state.transcript.queue[0]
+    const first = userQueue(state.transcript.queue)[0]
     // Nothing queued but a turn paused by a usage limit: the key continues it (Resume at reset).
     if (!first) {
       if (await actions.limitKey()) requestFrame()

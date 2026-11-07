@@ -1,4 +1,4 @@
-import type { SessionNotesReport, SessionRecallMessage, SessionRecallPage } from "@mendcode/protocol"
+import type { SessionNotesReport, SessionRecallFound, SessionRecallMessage, SessionRecallPage } from "@mendcode/protocol"
 import type { Line } from "../ui/theme"
 import { panelGrid } from "./deck"
 import { wrapSpans } from "./markdown"
@@ -8,7 +8,7 @@ export function sessionRecallCard(input: { name: string; text: string; width: nu
   if (!title) return
   const panel = (label: string, body: (width: number) => Line[]) => panelGrid({ width: input.width, padding: true, maxColumns: 1, rows: [[{ title: label, body }]] })
   if (input.failed) return panel(title, (width) => wrapSpans([{ text: input.text, fg: "error" }], width))
-  let data: SessionNotesReport | SessionRecallPage | SessionRecallMessage
+  let data: SessionNotesReport | SessionRecallPage | SessionRecallMessage | SessionRecallFound
   try { data = JSON.parse(input.text) }
   catch { return }
   if (!data || typeof data !== "object") return
@@ -22,6 +22,14 @@ export function sessionRecallCard(input: { name: string; text: string; width: nu
     return panel(`${title} · v${notes.version}`, (width) => [
       ...wrapSpans([{ text: `${notes.text.length} chars${notes.version !== notes.current_version ? ` · current v${notes.current_version}` : ""}`, fg: "muted" }], width),
       ...(notes.text ? [[], ...bodyText(notes.text, width)] : []),
+    ])
+  }
+  if ("scope" in data && data.scope === "project") {
+    if (!Array.isArray(data.sessions) || data.sessions.length > 10 || data.sessions.some((found) => !found || typeof found.session_id !== "string" || typeof found.title !== "string" || typeof found.snippet !== "string")) return
+    const found = data
+    return panel(`${title} · project`, (width) => [
+      ...wrapSpans([{ text: `${found.sessions.length} ${found.sessions.length === 1 ? "session" : "sessions"}${found.more ? " · more" : ""}`, fg: "muted" }], width),
+      ...found.sessions.flatMap((session): Line[] => [[], ...wrapSpans([{ text: `${session.title || "untitled"} · ${session.session_id}${session.at ? ` · ${session.at.slice(0, 10)}` : ""}`, fg: "primary" }], width), ...bodyText(session.snippet, width)]),
     ])
   }
   if (!("session_id" in data) || typeof data.session_id !== "string") return

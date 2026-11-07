@@ -33,7 +33,7 @@ import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelive
 import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
 import { LedgerQuery } from "./automation-ledger"
-import { CompactionOverride } from "./compaction"
+import { CompactionOverrideInput } from "./compaction"
 import { LspInput } from "./lsp"
 import { ReviewRead, ReviewChange } from "./review"
 import { PromptFocusChoice, PromptMode } from "./prompt"
@@ -351,6 +351,8 @@ export const SessionList = lazySchema(() => z.strictObject({
   project: z.string().min(1).max(4096).optional(),
   since: z.number().int().nonnegative().optional(),
   search: z.string().max(200).optional(),
+  /** Text in the title, the folder path or the id (any case); what /sessions asks for past the sessions it loaded. */
+  find: z.string().min(1).max(200).optional(),
   agent: z.string().max(100).optional(),
   model: z.string().max(100).optional(),
   state: z.string().max(100).optional(),
@@ -481,6 +483,13 @@ export const DaemonShutdown = lazySchema(() => z.strictObject({
   force: z.boolean().optional(),
   /** Busy: instead of refusing, stop as soon as the running turns and jobs end (a restart that cuts nothing). Ack `{ pending: true }`. */
   whenIdle: z.boolean().optional(),
+  /**
+   * A forced restart that waits: every session is held (it starts no new turn; nothing is interrupted yet) until no command,
+   * background task or sub-agent runs, or this many ms pass; then the daemon stops by itself, and the turns still open resume after
+   * the restart. A client that leaves before that lets the wait go and the sessions go on. Ack `{ waiting }` (the sessions and what
+   * runs in each); `daemon.status` reports `drain` until the stop.
+   */
+  drainMs: z.number().int().min(0).max(3_600_000).optional(),
 }))
 
 /** Read-only. Ack: `DaemonInfoReport` (engine, data directory, pid, and the subscription login check when the engine uses one). */
@@ -672,6 +681,11 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   /** A partial config: top-level keys replace, `null` removes an override (personal) or a key (global). */
   patch: z.record(z.string(), z.unknown()).optional(),
   version: z.number().int().nonnegative().optional(),
+  /**
+   * `status` only: read the pull requests' GitHub state (one `gh pr list` per repository): `cached` reads a repository whose
+   * last read is older than a minute, `refresh` reads it now. Unset, the last read state is attached and nothing is fetched.
+   */
+  pullRequests: z.enum(["cached", "refresh"]).optional(),
 }))
 
 /** Applies from the next tool call of the session; every subscribed client sees `session.permission`. */
@@ -1312,8 +1326,8 @@ export const ProvidersSet = lazySchema(() => z.strictObject({
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/).optional(),
   headers: z.record(z.string().min(1).max(100), z.string().max(2048)).optional(),
   enabled: z.boolean().optional(),
-  models: z.array(ProviderModel).max(1000).optional(),
-  compaction: CompactionOverride.nullable().optional(),
+  models: z.array(ProviderModel.extend({ compaction: CompactionOverrideInput.optional() })).max(1000).optional(),
+  compaction: CompactionOverrideInput.nullable().optional(),
 }))
 
 /** Removes a provider's entry from providers.json (a preset enabled by an environment key stays until the key goes). Ack: `{ providers: ProviderInfo[] }`. */

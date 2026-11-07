@@ -32,6 +32,9 @@ export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 const MAX_UNSOLICITED = 2_000
 /** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
 const MAX_AGENT_TASKS = 256
+/** Command lines of the last calls that can become background tasks (Bash, Monitor, Agent), kept so a task can be listed by what it runs. */
+const MAX_LAUNCHES = 32
+const LAUNCH_TOOLS = new Set(["Bash", "Monitor", "Agent", "Task"])
 const CONTROL_TIMEOUT_MS = 30_000
 /** Esc gives Claude Code this long to stop a turn on its own; then the turn ends here and what it still sends is dropped. */
 export const CANCEL_GRACE_MS = 3_000
@@ -73,6 +76,14 @@ const SUBAGENT_HOOK = "mendcode-subagent-start"
 const ONE_TREE_HOOK = "mendcode-one-tree"
 /** The Claude Code tools One tree hears about: the shell, whose output names files, and the ones that write a file. */
 const ONE_TREE_TOOLS = "Bash|Edit|Write|MultiEdit|NotebookEdit"
+/** The id of the `UserPromptSubmit` hook MendCode registers at `initialize` (`replyLanguage`). */
+const REPLY_LANGUAGE_HOOK = "mendcode-reply-language"
+
+/** The prompt of a `UserPromptSubmit` hook input; empty when Claude Code sent none. */
+export function submittedPrompt(input: unknown): string {
+  const prompt = (input ?? {}) as { prompt?: unknown }
+  return typeof prompt.prompt === "string" ? prompt.prompt : ""
+}
 
 /** The id of the `PreToolUse` hook that keeps MendCode's main-agent tools from Claude Code's own sub-agents. */
 const SUBAGENT_TOOLS_HOOK = "mendcode-subagent-tools"
@@ -141,6 +152,8 @@ type Connection = {
    * answers its end, so it is no background task of the session's own.
    */
   agentTasks: Set<string>
+  /** What each recent Bash, Monitor or Agent call runs, by tool use id, then by the task id Claude Code gives it (`task_started`): a daemon restart says which commands it stopped. */
+  launches?: Map<string, string>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
 }
@@ -200,6 +213,11 @@ export function createClaudeEngine(options: {
    */
   subagentContext?(sessionId: SessionId): Promise<string | undefined>
   /** One tree (docs/one-tree.md): told what each Bash or write call wrote and printed; a line it returns reaches the model as that call's context. */
+  /**
+   * The `language` setting's line for one user message (docs/prompt-modes.md), given to Claude Code by its `UserPromptSubmit` hook as
+   * `additionalContext`: Claude Code adds it to that message for the model, out of the transcript, so every message restates it.
+   */
+  replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
   /**
    * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
@@ -229,7 +247,7 @@ export function createClaudeEngine(options: {
   notify?(sessionId: SessionId, text: string): void
   /** The background tasks Claude Code has running for a session, each time that list changes. */
   /** Claude Code's background tasks changed; `stop` asks it to stop one of them (its `stop_task` control request). */
-  onBackground?(sessionId: SessionId, tasks: Array<{ id: string; description: string; kind: string }>, stop: (taskId: string) => Promise<void>): void
+  onBackground?(sessionId: SessionId, tasks: Array<{ id: string; description: string; kind: string; command?: string }>, stop: (taskId: string) => Promise<void>): void
   /** A session's Claude Code process ended, why, and how many background tasks it still had running (they end with it). */
   onClose?(sessionId: SessionId, reason: string, background: number): void
   /** What a background agent does after the turn that started it ended: items under that turn (the agent's thread). */
@@ -404,6 +422,11 @@ export function createClaudeEngine(options: {
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: line } } : {}))
       return
     }
+    if (message.request?.callback_id === REPLY_LANGUAGE_HOOK) {
+      const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, submittedPrompt(message.request?.input))).catch(() => undefined)
+      if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: line } } : {}))
+      return
+    }
     const context = message.request?.callback_id === SUBAGENT_HOOK ? await options.subagentContext?.(connection.sessionId).catch(() => undefined) : undefined
     if (!connection.closed) write(connection, controlResponse(String(message.request_id), context ? { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: context } } : {}))
   }
@@ -457,9 +480,13 @@ export function createClaudeEngine(options: {
       if (quota) options.onQuota?.(quota)
       return
     }
+    noteLaunch(connection, message)
     if (message.type === "system" && message.subtype === "background_tasks_changed" && Array.isArray(message.tasks)) {
       const tasks = (message.tasks as Array<Record<string, unknown>>).filter((task) => task && typeof task.task_id === "string")
-        .map((task) => ({ id: String(task.task_id), description: String(task.description ?? "").slice(0, 200), kind: String(task.task_type ?? "") }))
+        .map((task) => {
+          const command = String(task.command ?? connection.launches?.get(String(task.task_id)) ?? connection.launches?.get(String(task.tool_use_id ?? "")) ?? "").slice(0, 300)
+          return { id: String(task.task_id), description: String(task.description ?? "").slice(0, 200), kind: String(task.task_type ?? ""), ...(command ? { command } : {}) }
+        })
       connection.background = tasks.length
       for (const task of tasks) connection.tasks.add(task.id)
       if (tasks.length) connection.idle?.cancel()
@@ -499,6 +526,27 @@ export function createClaudeEngine(options: {
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
     if (message.type === "user" && !message.parent_tool_use_id && Array.isArray(message.message?.content) && message.message.content.some((part: { type?: string }) => part?.type === "tool_result")) void steerQueued(connection, turn)
+  }
+
+  /** Keeps what a Bash, Monitor or Agent call runs (`launches`), and moves it to the task id Claude Code starts it as. */
+  function rememberLaunch(connection: Connection, toolUseId: string, name: string, input: Record<string, unknown>) {
+    if (!LAUNCH_TOOLS.has(name)) return
+    const text = String(input.command ?? input.description ?? input.prompt ?? "").split("\n")[0]!.trim().slice(0, 300)
+    if (!text) return
+    const launches = (connection.launches ??= new Map())
+    if (launches.size >= MAX_LAUNCHES && !launches.has(toolUseId)) launches.delete(launches.keys().next().value!)
+    launches.set(toolUseId, name === "Bash" ? text : `${name}: ${text}`)
+  }
+
+  function noteLaunch(connection: Connection, message: ClaudeMessage) {
+    if (message.type === "assistant" && Array.isArray(message.message?.content)) {
+      for (const part of message.message.content as Array<{ type?: string; id?: unknown; name?: unknown; input?: Record<string, unknown> }>) {
+        if (part?.type === "tool_use" && typeof part.id === "string") rememberLaunch(connection, part.id, String(part.name), part.input ?? {})
+      }
+    } else if (message.type === "system" && message.subtype === "task_started" && typeof message.task_id === "string" && typeof message.tool_use_id === "string") {
+      const text = connection.launches?.get(message.tool_use_id)
+      if (text) { connection.launches!.delete(message.tool_use_id); connection.launches!.set(message.task_id, text) }
+    }
   }
 
   /**
@@ -619,7 +667,7 @@ export function createClaudeEngine(options: {
       connection.turn?.finish({ status: "error", code: "claude_exited", message: `[CLAUDE]: claude exited during the turn${tail ? `: ${tail.slice(-1_000)}` : ""}` })
       close(connection, `process exited${tail ? `: ${tail.slice(-200)}` : ""}`)
     })()
-    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
+    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}), ...(options.replyLanguage ? { UserPromptSubmit: [{ hookCallbackIds: [REPLY_LANGUAGE_HOOK] }] } : {}) }
     connection.ready = control(connection, { subtype: "initialize", hooks }).then(() => undefined)
     return connection
   }
@@ -749,7 +797,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

@@ -556,17 +556,17 @@ export function createApp(input: AppInput) {
   appState.sendChipArea = undefined!
   appState.limitArea = undefined!
 
-  function say(message: string, variant: ToastVariant = "info", extra: { title?: string; hint?: string; oneLine?: boolean; ms?: number; quiet?: boolean } = {}) {
+  function say(message: string, variant: ToastVariant = "info", extra: { title?: string; hint?: string; detail?: string; oneLine?: boolean; ms?: number; quiet?: boolean } = {}) {
     // Success is silent where the result is already on screen (`quiet`): only what failed or tells something new is said. `confirmNotices` brings those back.
     // The notice it would have replaced goes all the same: it spoke of a state that is over.
     if (extra.quiet && !appState.tuiProfile.confirmNotices) return void toasts.dismiss()
     {
       // Never steal focus from a form or an async command. The complete latest report stays one key away,
       // even after its preview expires; only one string is retained and the page module stays lazy.
-      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message, ...(extra.hint ? { hint: extra.hint } : {}) }
+      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message: extra.detail ?? message, ...(extra.hint ? { hint: extra.hint } : {}) }
     }
     appState.toastPage = appState.page
-    toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
+    toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.detail ? { detail: extra.detail } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
   }
 
   // One place for a passing notice: what a command reports through `state.notice` shows in the notice slot over the prompt, like
@@ -660,7 +660,7 @@ export function createApp(input: AppInput) {
   const { openAcp, acpKey } = createAcp(ctx)
   const { ideCommand, ideKey, syncIde, prepareIdeContext } = createIde(ctx)
   const peerCommands = createPeerCommands(ctx)
-  const { openMarketplace, openAssets, catalogKey, catalogRows } = createPackageCatalogPages(ctx)
+  const { openMarketplace, openAssets, catalogKey, catalogRows } = createPackageCatalogPages(ctx, { loadPackages: () => loadPackages() })
   const { agentMetadata, controlSession, loadAgentSessions, loadAgentMetadata, loadBackgroundSessions, agentSubtasks, noteActivity, loadAgentShells, loadAgents, loadMcps, loadTools, loadPackages, loadHomeMcp, restartMcp, decideMcp, authMcp, copyAuthMcp, loadMcpCatalog, readMcpResource } = createAgents(ctx)
   const { terminalExtensions, otherExtensionProblems, statusInput, loadExtensionsReport, loadStatus } = createStatus(ctx, { loadMcps, loadStorage })
   const { loadHooks, setTrust, openHooks, trustCommand, checkStartupTrust } = createHooks(ctx)
@@ -707,7 +707,7 @@ export function createApp(input: AppInput) {
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
   const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name) })
-  const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
+  const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
     resetAudio: audio.reset,
     newTranscript,
     loadDiffTotals,
@@ -952,7 +952,7 @@ export function createApp(input: AppInput) {
     closeExtensionPage: (...args) => closeExtensionPage(...args),
     switchSession,
     changeSession,
-    searchSessionContent,
+    searchSessions,
     reloadSessions,
     historyKey,
     skillsKey,
@@ -1239,6 +1239,7 @@ export function createApp(input: AppInput) {
   const { syncPulse, syncTopbarTick, syncLoopsTick, syncWorkflowsTick, syncUsageTick, syncBackgroundTick, requestFrame: tickFrame } = createTicks(ctx, {
     chatWidth: (...args) => chatWidth(...args),
     sessionTitle: (...args) => sessionTitle(...args),
+    sidebarShown: (...args) => sidebarShown(...args),
     render,
   })
   const { queueCommand, queueKey, noteQueue } = createQueue(ctx, (...args) => applySettings(...args))
@@ -1274,6 +1275,7 @@ export function createApp(input: AppInput) {
     },
     reloadExtensions,
     noteTurnEnded,
+    openSession: (sessionId) => switchSession(sessionId),
     loadMcps,
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,

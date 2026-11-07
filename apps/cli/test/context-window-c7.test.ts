@@ -57,12 +57,12 @@ describe("/context-window", () => {
       : undefined)
     await h.type("/context-window 500k --always\r")
     expect(h.sentOf("session.context-window").at(-1)).toEqual({ type: "session.context-window", sessionId: id, tokens: 500_000, always: true })
-    // The reply wraps inside its notice box: compare its words.
-    const words = () => h.text().join(" ").replace(/[┃│]/g, " ").replace(/\s+/g, " ")
-    expect(words()).toContain("context window: 500,000 tokens for every session on chatgpt/gpt-6-astra")
+    // The notice row is cut to fit; its whole reply is behind F4: compare its words.
+    const words = async () => (await h.details()).join(" ").replace(/[┃│]/g, " ").replace(/\s+/g, " ")
+    expect(await words()).toContain("context window: 500,000 tokens for every session on chatgpt/gpt-6-astra")
     await h.type("/context-window --always reset\r")
     expect(h.sentOf("session.context-window").at(-1)).toEqual({ type: "session.context-window", sessionId: id, tokens: null, always: true })
-    expect(words()).toContain("chatgpt/gpt-6-astra is back to the model list's window")
+    expect(await words()).toContain("chatgpt/gpt-6-astra is back to the model list's window")
   })
 
   test("without an argument it names a window kept for the model", async () => {

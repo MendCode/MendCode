@@ -1,6 +1,16 @@
-# Prompt editor
+Edit prompts, comment on answers and recover text you have not sent. The prompt also supports undo and redo, a stash, your own editor, answer copying and a turn-end bell.
 
-Comment on a passage of an answer: select it (or just copy it with the mouse) and press `ctrl+g` (`alt+q` does the same); see [Comments on an answer](#comments-on-an-answer). The older quote, which puts the selection into the prompt as `> ` lines, is `selection.quote` (bind it in `keybindings.json`) and the `commentKey: quote` setting, which also gives `alt+q` back to it; in the minimal view, where comments are off by default, `alt+q` still quotes. `ctrl+g` never quotes. Quote + comment is also in message actions (Shift+Q). A bounded Markdown quote is inserted above your existing draft/comment and attachments. Nothing is submitted until you send it.
+## Prompt editor
+
+To comment on a passage, select it or copy it with the mouse, then press `ctrl+g` (`alt+q` does the same). See [Comments on an answer](#comments-on-an-answer).
+
+Quote + comment is also in message actions (Shift+Q). A bounded Markdown quote is inserted above your existing draft/comment and attachments. Nothing is submitted until you send it.
+
+### Use the older quote action
+
+The older quote puts the selection into the prompt as `> ` lines. Bind `selection.quote` in `keybindings.json`, or use `commentKey: quote` to give `alt+q` back to it.
+
+In the minimal view, comments are off by default and `alt+q` still quotes. `ctrl+g` never quotes.
 
 What the prompt does beyond typing, ported from v1: undo and redo, a stash for prompts you are not ready to send, your own editor for long ones, copying an answer, and a bell when a turn ends. Every action below can be bound or unbound in [`keybindings.json`](extensions-tui.md#keys) by its name (`"alt+z": "edit.undo"`); the keys shown are the defaults.
 
@@ -48,9 +58,37 @@ Pending comments are saved with the draft. A session switch keeps each session's
 
 `ctrl+g` sends the BEL byte, which also ends the replies a terminal sends back (a colour, the clipboard). Those replies are removed from the input whole, terminator included, also when a read cuts one in two, so a reply is never a comment key.
 
-**Reply mode** (`ctrl+g` or `alt+q` with nothing selected): a bar above the prompt reads `reply 6/6 · paragraph · j k move · c comment · d decide · esc exit`. It walks the units of the newest finished answer: paragraphs, list items, numbered options and code blocks, scrolling the transcript to each. `j k` or `↓ ↑` move, `c` comments on the unit (the keys are the `commentReplyKeys` setting, default `jkcd`: next, previous, comment, decide), a digit jumps to that numbered option, `d` writes a decision for all the numbered options at once (`1: yes, 2: no` makes one comment per option; a wrong number is refused), `esc` leaves. Plain letters are never taken from the prompt unless this mode (or the list) is open and its bar says so: any other printable key closes the mode and is typed.
+### Walk the newest answer
 
-**The list** (`alt+l`): `↑ ↓` select, `e` or `Enter` edit (the words come back in the prompt), `d` delete, `J` `K` move down and up (the chip numbers follow), `esc` closes. Like the reply mode, any other printable key closes it and is typed.
+Press `ctrl+g` or `alt+q` with nothing selected to enter reply mode. A bar above the prompt reads `reply 6/6 · paragraph · j k move · c comment · d decide · esc exit`.
+
+Reply mode walks paragraphs, list items, numbered options and code blocks of the newest finished answer, scrolling the transcript to each.
+
+| Key | Does |
+| --- | --- |
+| `j k` or `↓ ↑` | Move |
+| `c` | Comment on the unit |
+| A digit | Jump to that numbered option |
+| `d` | Write a decision for all numbered options at once; `1: yes, 2: no` makes one comment per option, and a wrong number is refused |
+| `esc` | Leave |
+
+The letter keys come from `commentReplyKeys`, default `jkcd`: next, previous, comment, decide.
+
+Plain letters are taken only while reply mode or the list is open and its bar says so. Any other printable key closes the mode and is typed.
+
+### Edit the comment list
+
+Open the list with `alt+l`:
+
+| Key | Does |
+| --- | --- |
+| `↑ ↓` | Select |
+| `e` or `Enter` | Edit; the words return to the prompt |
+| `d` | Delete |
+| `J` `K` | Move down and up; chip numbers follow |
+| `esc` | Close |
+
+Like reply mode, any other printable key closes the list and is typed.
 
 **`ctrl+c`** closes an open mode first. With an empty prompt and comments pending it does *not* ask: the comments are kept as a draft (saved with the draft system), the chip row becomes `draft 2 comments · alt+l brings them back · /comments clear discards`, and nothing is sent until you bring them back. A second `ctrl+c` is the ordinary one. With text in the prompt it clears the text and the comments stay.
 
@@ -133,7 +171,13 @@ Placeholders are filled in one pass, so nothing typed can add one, and `{quote}`
 
 ### `/comments`
 
-`/comments` lists the pending comments; `/comments reply` walks the newest answer, `clear` drops them, `on`, `off` and `auto` set `comments`, `settings` opens the rows.
+| Command | Does |
+| --- | --- |
+| `/comments` | List pending comments |
+| `/comments reply` | Walk the newest answer |
+| `clear` | Drop pending comments |
+| `on`, `off`, `auto` | Set `comments` |
+| `settings` | Open the rows |
 
 ### Extending
 
@@ -145,7 +189,28 @@ The comment is not under its passage: a chip row and a margin number stand in fo
 
 ## Unsent drafts and copy on select
 
-The prompt is saved to the daemon while you type (after a 0.4 s pause, at once for a paste, and on quit or when the terminal closes), per session. A prompt with nothing in it (no text but spaces and line breaks, no attachment) is no draft: it saves nothing, and clears a draft saved before. Starting in a project that has an unsent draft in another session shows `Unsent draft saved (1.2k chars) · ctrl+r restore`; the size is of what was typed (an attachment's `[Image #1]` token is not a character) and what came with it is named: `(340 chars, 1 image)`, `(1 image)` for a draft of attachments only, `(2 attachments)` when they are not all images. `ctrl+r` moves the newest into the prompt (what you had typed goes to the stash); `/drafts` lists them with a preview (Enter restores, two Ctrl+D presses delete). A draft over 64 KB is kept truncated. Drafts older than `draftRetentionDays` (default 14, `0` keeps them) are deleted when a terminal starts; `/customize` has the row.
+The daemon saves the prompt per session while you type: after a 0.4 s pause, at once for a paste, and on quit or terminal close.
+
+A prompt containing only spaces and line breaks, with no attachment, is no draft. It saves nothing and clears any draft saved before.
+
+### Restore an unsent draft
+
+1. Start in a project with an unsent draft in another session. The notice reads `Unsent draft saved (1.2k chars) · ctrl+r restore`.
+2. Press `ctrl+r` to move the newest draft into the prompt. Anything you had typed goes to the stash.
+
+Use `/drafts` for a list with previews. Enter restores; two Ctrl+D presses delete.
+
+The size counts typed text, not an attachment's `[Image #1]` token. The notice also names attachments:
+
+| Notice detail | Contents |
+| --- | --- |
+| `(340 chars, 1 image)` | Text and an image |
+| `(1 image)` | Attachments-only draft with one image |
+| `(2 attachments)` | Attachments that are not all images |
+
+A draft over 64 KB is kept truncated. At terminal start, drafts older than `draftRetentionDays` are deleted: default 14, `0` keeps them. `/customize` has the row.
+
+### Switch sessions
 
 The prompt belongs to its session. Switching session (sidebar, `/sessions`, the palette, a fork) saves what is in the prompt as the session you leave's draft and empties the prompt; the session you open puts its own draft back by itself, with no key and no notice: text, the cursor at its end, attachment tokens with their attachments and pending comments. If you have already typed something when the draft arrives, your text stays and the draft is parked in the stash (`Unsent draft kept in the stash (340 chars) · ctrl+x o restore`); the prompt is never overwritten. Sending the message, or deleting all the text, clears the draft.
 
@@ -155,7 +220,13 @@ Dragging with the mouse in the transcript or the prompt highlights the text and,
 
 ## Attachment tokens
 
-A paste of 1,000 characters or more (`pasteSummaryMinChars` in `/customize`, Paste threshold; `pasteSummary` off pastes everything as text) goes in as `[Pasted Content 4210 chars]`, as in Codex: the text around it stays editable, a second paste of the same size is `[Pasted Content 4210 chars #2]`, and Enter sends the whole pasted text in its place (the saved draft keeps it whole too). Deleting or editing the label drops that paste.
+A paste of 1,000 characters or more goes in as `[Pasted Content 4210 chars]`, as in Codex. The text around it stays editable; a second paste of the same size is `[Pasted Content 4210 chars #2]`.
+
+Enter sends the whole pasted text in its place, and the saved draft keeps it whole too. Deleting or editing the label drops that paste.
+
+Set the threshold with `pasteSummaryMinChars` in `/customize`, Paste threshold. With `pasteSummary` off, everything pastes as text.
+
+### Move and edit tokens
 
 A pasted or dropped image, PDF, external file or folder, `/attach` and the clipboard-image key put a token in the text at the cursor (`[Image #1]`, `[PDF spec.pdf]`, `[codeconfig/]`; see [attachments.md](attachments.md#inline-tokens)). The editor treats a token as one character, wherever the label stands in the text:
 
@@ -169,19 +240,66 @@ A pasted or dropped image, PDF, external file or folder, `/attach` and the clipb
 
 ## Moving in the prompt
 
-`↑` and `↓` move the cursor one drawn row: a wrapped line is several rows, a line break starts another, and the column stays where it was (counted in terminal cells, so a wide character such as `漢` takes two, and a cell inside one lands before it) even across a shorter row; the prompt's history takes over only when there is no row to move to. The same motion is bound to `edit.move-up` / `edit.move-down` and, with `shift`, to the selecting variants, and it is what the scratchpad, the goal and memory editors and the plan draft do too, since they share the component. In vim normal and visual mode `j` and `k` (and the arrows) follow the same rows; `dj` and `dk` still act on whole lines.
+Use `↑` and `↓` to move one drawn row. A wrapped line is several rows; a line break starts another. History takes over only when there is no row to move to.
+
+The column stays where it was, even across a shorter row. Columns count terminal cells: a wide character such as `漢` takes two, and a cell inside one lands before it.
+
+The same motion is bound to `edit.move-up` / `edit.move-down`; `shift` selects. The scratchpad, goal and memory editors, and plan draft share this component and behavior.
+
+In vim normal and visual mode, `j` and `k` and the arrows follow the same drawn rows. `dj` and `dk` still act on whole lines.
+
+### Click to move or select
 
 A left click in the prompt puts the cursor at that cell: before the character under the pointer (either half of a wide one), at the start of the row over its margin, lead or border, at the end of the row past its text, and at the end of the text on the prompt's closing border. It follows wrapped rows, a scrolled prompt and every chrome preset. A click moves the cursor only: nothing is selected or copied unless the mouse is dragged (a drag, a double click for the word and a triple click for the line work as described in [layout.md](layout.md#selecting-text-and-details-blocks)). `shift`+click selects from the cursor to the clicked cell, like `shift` and the arrows (terminals that keep `shift`+click for their own selection never report it). In vim mode a click ends visual mode and rests on a character. A click in the transcript does not move the prompt cursor; with mouse reporting off nothing changes.
 
 ## Status and scroll button around the prompt
 
-With `activityPlacement: inside` (`/activity inside`) the working status is drawn at the right of the prompt's first row. It never takes a cell the text needs: the cursor and the typed text stay put, the status shrinks and leaves when the line fills, and an empty prompt showing its placeholder keeps the placeholder. `above` draws it over the prompt's top rule instead. See [customize.md](customize.md#activity-status).
+| Placement | Working status location |
+| --- | --- |
+| `activityPlacement: inside` (`/activity inside`) | Right of the prompt's first row |
+| `above` | Over the prompt's top rule |
+
+The status never takes a cell the text needs. The cursor and text stay put; the status shrinks and leaves when the line fills. An empty prompt keeps its placeholder. See [customize.md](customize.md#activity-status).
 
 While the transcript is scrolled up, the `↓ latest · End` button sits on the row above the prompt's top rule. The `End` key follows the newest output only while the prompt is empty (with text, End moves the cursor), so the button names the key only then; clicking it works either way.
 
 ## Prompt history and shell commands
 
-`↑` on the first drawn row of the prompt and `↓` on the last one (while browsing) recall everything you entered in it, newest first, in one list per project (the directory) that all of the project's sessions share and that survives restarts: sent messages, slash commands with their arguments as typed (`/panel next`, `/btw question`; one picked from the slash menu counts as `/name`), `!` shell lines (recalled in shell mode, `!!cmd` included) and discarded drafts. 2,000 entries are kept per project, the oldest go first. A text entered again moves to the top instead of repeating. Nothing is recorded for `/connect <name>` (a pasted key could follow it), and a line that is only secret markers is not stored; pasted secrets are stored as their markers, like in sent prompts ([secrets.md](secrets.md)). Recalling a line puts the unsent text in the prompt aside as the bottom entry: `↓` returns to it, untouched and with its cursor where it was. A recalled entry arrives with the cursor at its end; while it is not edited (moving the cursor does not count) `↑` first walks up through its rows and from its first row goes to the next older entry, and `↓` walks down through its rows and from its last row to the next newer one, or back to the text you were typing. The first edit of a recalled entry makes it the text being typed: from then on `↑`/`↓` only move inside it, and `↑` on its first row starts the history again from the newest entry, putting the edited text aside as a draft. An empty prompt recalls with `↑` as ever. `alt+p` and `alt+n` (`history.previous`, `history.next`; `ctrl+p` stays the palette) walk the same list from any row. The slash menu, the mention popup, the palette, the queue (`alt+up`) and approval or question cards keep `↑`/`↓` while they are open. In vim mode `↑` on the first row still recalls. A recalled slash command is not completed by the slash menu: `Enter` runs it as entered, and the menu comes back with the first edit. A remote or peer connection cannot read or change this history (`prompt.history`, `prompt.record` and `prompt.history.delete` answer `forbidden`; a remote terminal keeps only what it enters, in memory).
+Press `↑` on the prompt's first drawn row, or `↓` on its last while browsing, to recall earlier entries newest first. All sessions of the project (the directory) share one list, which survives restarts.
+
+| History entry | Kept as |
+| --- | --- |
+| Sent messages | Entered text |
+| Slash commands | Arguments as typed, such as `/panel next` and `/btw question`; a menu selection counts as `/name` |
+| `!` shell lines | Recalled in shell mode, `!!cmd` included |
+| Discarded drafts | Draft entries |
+
+The list keeps 2,000 entries per project, oldest removed first. Text entered again moves to the top instead of repeating.
+
+Nothing is recorded for `/connect <name>`, since a pasted key could follow it. Lines containing only secret markers are not stored; pasted secrets remain markers, as in sent prompts ([secrets.md](secrets.md)).
+
+### Browse and edit a recalled entry
+
+Recalling puts your unsent text aside as the bottom entry. `↓` returns to it untouched, with its original cursor. A recalled entry starts with the cursor at its end.
+
+Until you edit it, moving the cursor does not count as an edit:
+
+- `↑` walks its rows, then from the first row goes to the next older entry.
+- `↓` walks its rows, then from the last row goes to the next newer entry or your original text.
+
+The first edit makes the recalled entry your current text. `↑`/`↓` then move only inside it; `↑` on its first row restarts history from the newest entry and puts the edited text aside as a draft.
+
+An empty prompt recalls with `↑` as ever, including in vim mode on the first row.
+
+| Key or condition | Behavior |
+| --- | --- |
+| `alt+p`, `alt+n` | `history.previous`, `history.next` from any row; `ctrl+p` stays the palette |
+| Open slash menu, mention popup, palette, queue (`alt+up`), approval or question card | Keeps `↑`/`↓` |
+| Recalled slash command | No slash-menu completion; `Enter` runs it as entered, and the first edit brings the menu back |
+
+Remote or peer connections cannot read or change this history. `prompt.history`, `prompt.record` and `prompt.history.delete` answer `forbidden`; a remote terminal keeps only its own entries, in memory.
+
+### Long entries
 
 A prompt over 16,000 characters is kept as a capped entry: its first 15,920 characters plus a closing note `… [truncated: N chars, first M kept]`, so recall stays bounded and the entry still exists (the full text stays in the session's own events). Recalling one shows a `truncated prompt, N chars originally` toast; the note is part of the text if you send it.
 
@@ -199,17 +317,51 @@ All editing actions are named `edit.<action>` (for example `edit.select-word-for
 
 ## Search earlier prompts
 
-`alt+r` or `/prompt-history [text]` opens a search bar over the project's newest 500 entries (the same list `↑`/`↓` walk, without repeats). The newest match shows in the prompt as you type, with its kind on the bar (`sent`, `command`, `shell` or `draft`); typing narrows it (case-insensitive unless the query has a capital), `ctrl+r` or `↑` goes to an older match, `↓` to a newer one, `Enter` keeps the match in the prompt without sending it (a shell match comes in shell mode), `Esc` puts back what you had. `ctrl+d` twice deletes the shown entry from the history. `/prompt-history clear-drafts` deletes every draft entry of the project. `ctrl+r` stays the draft restore.
+1. Press `alt+r` or run `/prompt-history [text]`. A search bar opens over the project's newest 500 entries, the same list `↑`/`↓` walk, without repeats.
+2. Type to narrow matches. Search is case-insensitive unless the query has a capital.
+3. Press `Enter` to keep the match without sending it, or `Esc` to put back what you had. A shell match returns in shell mode.
+
+The newest match appears in the prompt as you type, with its kind on the bar: `sent`, `command`, `shell` or `draft`.
+
+| Key or command | Does |
+| --- | --- |
+| `ctrl+r` or `↑` | Older match |
+| `↓` | Newer match |
+| `ctrl+d` twice | Delete the shown entry from history |
+| `/prompt-history clear-drafts` | Delete every draft entry of the project |
+
+Outside search, `ctrl+r` stays the draft restore.
 
 ## Discarded drafts
 
-Text that leaves the prompt without being sent is saved as a `draft` entry of the history when it is 12 or more characters or spans several lines (a shorter one-liner is never kept): when `ctrl+c`, `ctrl+u` or any other key empties the prompt (`esc` does not clear it), when a key opens another page such as the sessions picker with the text still in the prompt, when `↑` replaces it with an older entry (`↓` still returns to it), when `Enter` in the search bar replaces it with a match, when a session switch finds text in the prompt, and when the terminal quits or closes. `draft saved · ↑ to restore` appears once per clear; the other cases are silent. `↑` reaches a draft like any entry and shows a muted `draft · not sent` line; sent unchanged it moves to the top as a sent message, and the same text is never stored twice. A prompt that was stashed (`ctrl+x p`) or sent is not a discard. Drafts are the history's and are separate from the per-session unsent draft above, which `ctrl+r` and `/drafts` still handle. The minimalist tier keeps all of this and adds no chrome beyond that line.
+Text that leaves the prompt unsent becomes a `draft` history entry when it has 12 or more characters or spans several lines. A shorter one-liner is never kept.
+
+This happens when:
+
+- `ctrl+c`, `ctrl+u` or another key empties the prompt; `esc` does not clear it.
+- A key opens another page, such as the sessions picker, while text remains in the prompt.
+- `↑` replaces it with an older entry; `↓` still returns to it.
+- `Enter` in search replaces it with a match.
+- A session switch finds text in the prompt.
+- The terminal quits or closes.
+
+`draft saved · ↑ to restore` appears once per clear; other cases are silent. A stashed (`ctrl+x p`) or sent prompt is not a discard.
+
+Press `↑` to reach a draft like any entry. It shows a muted `draft · not sent` line; sent unchanged, it moves to the top as a sent message. The same text is never stored twice.
+
+These history drafts are separate from per-session unsent drafts, still handled by `ctrl+r` and `/drafts`. The minimalist tier keeps all this with no chrome beyond that line.
 
 ## Queued prompts and Esc Esc
 
 While a turn runs, prompts you send are queued (see the panel above the prompt). `↑` on an empty prompt (or `alt+up` from anywhere) removes the newest queued prompt and puts its text and attachments in the prompt, in front of what is already typed, so pressing it again rebuilds the order you queued them in. A message sent with comments comes back as your text plus its comment chips (as readable lines when other comments are pending), and `/queue` sends it here to be edited. A queued `!command` comes back in shell mode when the prompt is empty. Notices and compactions are not prompts and are only dropped (`ctrl+k`). A message that already started is reported, not pulled. With the queue empty, `↑` recalls earlier prompts as usual.
 
-An interrupt (`Esc` twice on a running turn) stops the turn and sends what is queued, as Codex and OpenCode do: the first queued message goes next (`interrupted · sending the queued message`) and the rest follow it in order. `queueRestore` in `/customize` (off by default) moves the queued messages back into the prompt instead, in order, so the interrupt and the rewrite are one gesture; shell lines and notices stay queued.
+### Interrupt with queued messages
+
+Press `Esc` twice on a running turn to stop it and send what is queued, as Codex and OpenCode do. The first queued message goes next (`interrupted · sending the queued message`); the rest follow in order.
+
+Set `queueRestore` in `/customize` (off by default) to move queued messages back into the prompt instead, in order. Interrupting and rewriting become one gesture; shell lines and notices stay queued.
+
+### Backtrack while idle
 
 With the session idle and an empty prompt, `Esc` shows `esc again to edit an earlier prompt` and a second `Esc` within two seconds opens the Backtrack picker (also `/backtrack`, or bind `backtrack.open`): the user's prompts, newest selected. `Enter` reverts the session to that prompt (as Revert in `/messages` does, including the file-conflict card) and puts its text and attachments in the prompt to edit and send again; `f` forks from it instead and leaves this session as it is; `Esc` leaves. `escBacktrack` (default on) turns the gesture off.
 
@@ -217,7 +369,19 @@ While a turn runs, the second `Esc` normally cancels it. When the model has not 
 
 ## Shortcut overlay, multiline and paste bursts
 
-`?` on an empty prompt shows a panel of the prompt's shortcuts as they are bound now (`keybindings.json` included); any other key closes it and acts as usual, `Esc` just closes it, and a second `?` types a literal `?`. `/shortcuts` opens it too. `shortcutOverlay` (default on) turns the `?` key off.
+### Show shortcuts
+
+Press `?` on an empty prompt, or run `/shortcuts`, to show the prompt's current bindings, including `keybindings.json`.
+
+| Key | Does |
+| --- | --- |
+| Any other key | Close the panel and act as usual |
+| `Esc` | Just close it |
+| A second `?` | Type a literal `?` |
+
+`shortcutOverlay` (default on) turns the `?` key off.
+
+### Use multiline input
 
 `/multiline [on|off|toggle]` (or the `multiline` row, off by default) makes `Enter` insert a newline; `alt+enter`, `shift+enter` and `ctrl+enter` (where the terminal tells them apart) send. A slash command, a shell line and the answer to a pending question still send on `Enter`.
 
@@ -225,11 +389,27 @@ Terminals without bracketed paste deliver a paste as plain text with raw newline
 
 ## Undo and redo
 
-Each edit is a step, with the cursor where it was. Word characters typed one after another are one step and a space starts the next, so `write the tests` undoes as `write the`, `write`, then nothing. A run of backspaces is one step; a paste, a newline, `ctrl+u`, `ctrl+w`, a completion and `ctrl+c` (clear) are a step each, so a prompt cleared by mistake comes back with undo. Moving the cursor ends a run. A new edit forgets what was undone. Up to 200 steps are kept. Sending a prompt starts a clean history. Keys that change nothing (backspace on an empty prompt) leave no step.
+Each edit is a step, with the cursor where it was. Up to 200 steps are kept; sending a prompt starts a clean history.
+
+| Edit | Undo step |
+| --- | --- |
+| Consecutive word characters | One step; a space starts the next |
+| Run of backspaces | One step |
+| Paste, newline, `ctrl+u`, `ctrl+w`, completion, `ctrl+c` (clear) | One step each |
+| Key that changes nothing, such as backspace on an empty prompt | No step |
+
+For example, `write the tests` undoes as `write the`, `write`, then nothing. A prompt cleared by mistake comes back with undo.
+
+Moving the cursor ends a run. A new edit forgets what was undone.
 
 ## Stash
 
-`ctrl+x p` saves the prompt text to a short list (20 entries, the oldest goes first) and clears the prompt. `ctrl+x o` restores the newest. If you are typing something when you restore, that text is stashed in its place, so nothing is lost and the two keys swap. The list lives in `<data dir>/tui/stash.json` (mode 600, written whole and renamed), so it survives the terminal and is shared by terminals on the same data dir. Text, mention tokens and attachment references travel together. Restoring swaps the current draft and its attachments into the stash; a failed write preserves both drafts.
+1. Press `ctrl+x p` to park the prompt and clear it. The list holds 20 entries, oldest removed first.
+2. Press `ctrl+x o` to restore the newest. If you are typing, that text is stashed in its place: nothing is lost and the two keys swap.
+
+Text, mention tokens and attachment references travel together. Restoring swaps the current draft and its attachments into the stash; a failed write preserves both drafts.
+
+The list lives in `<data dir>/tui/stash.json` (mode 600, written whole and renamed). It survives the terminal and is shared by terminals on the same data dir.
 
 Because a slash command is itself the text in the prompt, `/stash` cannot stash the prompt. It manages the list:
 
@@ -244,19 +424,52 @@ Ctrl+V asks the daemon for text first, falling back to image attachments. Bracke
 
 ## External editor
 
-`ctrl+x e` or `/editor` writes the prompt to a private temporary file (`prompt.md`), runs `$VISUAL` (else `$EDITOR`) on it, waits, and reads it back. Words in the variable are passed before the file (`VISUAL="code --wait"`), with quotes keeping a path with spaces together. While the editor runs the terminal is handed over: the client leaves the alternate screen and raw mode, and takes them back and repaints afterwards, even if the editor fails. The editor's final newline is dropped. If the file is unchanged the prompt and its undo history are left alone; otherwise the text replaces the prompt in one undo step. With neither variable set, a toast says so and the prompt stays. A non-zero exit leaves the prompt as it was.
+1. Press `ctrl+x e` or run `/editor`. MendCode writes the prompt to a private temporary file, `prompt.md`, and runs `$VISUAL`, otherwise `$EDITOR`, on it.
+2. Edit and close the file. MendCode waits, reads it back and drops the editor's final newline.
+
+Words in the variable precede the file (`VISUAL="code --wait"`). Quotes keep a path with spaces together.
+
+While the editor runs, the client hands over the terminal by leaving the alternate screen and raw mode. It restores both and repaints afterwards, even if the editor fails.
+
+| Result | Prompt behavior |
+| --- | --- |
+| File unchanged | Prompt and undo history stay untouched |
+| File changed | Text replaces the prompt in one undo step |
+| Neither variable set | Toast explains; prompt stays |
+| Non-zero exit | Prompt stays as it was |
 
 This is the one place the client runs another program, so it lives in `packages/editor-launch` and is loaded with a dynamic import the first time you use it; a terminal that never does pays nothing.
 
 ## Copy
 
-`/copy` copies the session transcript, including thinking, tools and assistant metadata according to the current display settings. A session too long for that (past the export bound or one clipboard sequence) copies its last answer instead and says so; `/export` saves it all. `/copy pick` opens a response picker with preview and history paging; Enter copies the selected response. `/messages` or a click on a chat message opens its Copy / Revert / Fork menu. In `/timeline`, `a` opens the selected message's actions. Revert restores its prompt text after rewinding; Fork switches sessions and prepares that prompt for editing.
+| Command or key | Copies |
+| --- | --- |
+| `/copy` | Session transcript, including thinking, tools and assistant metadata according to current display settings |
+| `ctrl+x y` | Last assistant answer |
+| `/copy n` | nth answer from the end; `/copy 2` is the one before last |
+| `/copy pick` | Opens a response picker with preview and history paging; Enter copies the selection |
 
-`ctrl+x y` still copies the last assistant answer. `/copy n` copies the nth answer from the end (`/copy 2` is the one before last). The client emits OSC 52, including tmux passthrough when `$TMUX` is set. Terminals that disable OSC 52 ignore it; clipboard success cannot be detected. One sequence carries about 55 KB; oversized or truncated responses are refused. `/export` offers file and editor destinations for longer transcripts.
+If the session exceeds the export bound or one clipboard sequence, `/copy` copies the last answer instead and says so. `/export` saves it all and offers file and editor destinations for longer transcripts.
+
+### Message actions
+
+Open Copy / Revert / Fork through `/messages` or a click on a chat message. In `/timeline`, press `a` for the selected message's actions.
+
+Revert restores its prompt after rewinding. Fork switches sessions and prepares that prompt for editing.
+
+### Clipboard limits
+
+The client emits OSC 52, including tmux passthrough when `$TMUX` is set. Terminals that disable OSC 52 ignore it; clipboard success cannot be detected.
+
+One sequence carries about 55 KB. Oversized or truncated responses are refused.
 
 ## Vim mode
 
-`/vim` (or `/vim on`, `/vim off`) switches the prompt to modal editing; `/customize` has the same row (`vimMode`, off by default, saved in `profile.json`). The prompt starts in insert mode and a row above it names the mode: `-- INSERT --`, `-- NORMAL --`, `-- VISUAL --` or `-- VISUAL LINE --`, followed by a half-typed command such as `2d`. The terminal cursor becomes a block outside insert mode on terminals that support it. Sending a prompt returns to insert mode.
+Run `/vim`, `/vim on` or `/vim off` to switch modal editing. `/customize` has the same `vimMode` row, off by default and saved in `profile.json`.
+
+The prompt starts in insert mode. A row above it shows `-- INSERT --`, `-- NORMAL --`, `-- VISUAL --` or `-- VISUAL LINE --`, followed by a half-typed command such as `2d`.
+
+On terminals that support it, the cursor becomes a block outside insert mode. Sending a prompt returns to insert mode.
 
 | mode | keys |
 |---|---|
@@ -284,13 +497,21 @@ Enter sends the prompt from normal mode too. Letters with no meaning in normal m
 | `Ctrl+X`, then a character | while waiting for a key, makes a leader chord (`ctrl+x w`) |
 | `Esc` | cancel, clear the filter, close |
 
-If the key is already held by another action the page says which and waits: `Enter` replaces it, `Esc` keeps things as they are. Reserved keys (`Ctrl+C`, `Enter`, `Esc`, `Tab`, `Backspace`) and keys the terminal reports without a name are refused with the reason. A `!` marks an action that shares a key with another one that hides it. Extension keys are listed but read-only.
+If another action holds the key, the page names it and waits. Press `Enter` to replace it or `Esc` to keep things as they are.
+
+- Reserved keys (`Ctrl+C`, `Enter`, `Esc`, `Tab`, `Backspace`) and unnamed terminal keys are refused with the reason.
+- `!` marks an action sharing a key with another action that hides it.
+- Extension keys are listed but read-only.
 
 Changes go to [`keybindings.json`](extensions-tui.md#keys) in the data dir: the file is edited as JSON (entries the editor does not know are kept), written whole through a temporary file, and read again at once, so the new keys work without a restart. A file that is not valid JSON is left untouched and the page says so.
 
 ## Terminal setup
 
-`/terminal-setup` detects the terminal from its environment (kitty, WezTerm, Ghostty, Alacritty, iTerm2, Terminal.app, VS Code, Windows Terminal, Zed, JetBrains, Konsole, GNOME Terminal; tmux and screen noted) and prints the setting that makes Shift+Enter send the newline sequence the prompt understands (`ESC [ 13 ; 2 u`), with where it goes. `↑ ↓` show the others. Under tmux it adds the `extended-keys` lines. The panel at the bottom reports what the terminal sends for any key you press, for example whether Shift+Enter arrives as a newline or as a plain Enter.
+1. Run `/terminal-setup`. It detects your terminal from its environment and prints the setting and location for Shift+Enter to send the understood newline sequence, `ESC [ 13 ; 2 u`.
+2. Use `↑ ↓` to see other terminals. Under tmux, the instructions add `extended-keys` lines.
+3. Press a key to inspect its report in the bottom panel, for example whether Shift+Enter arrives as a newline or plain Enter.
+
+Detection covers kitty, WezTerm, Ghostty, Alacritty, iTerm2, Terminal.app, VS Code, Windows Terminal, Zed, JetBrains, Konsole and GNOME Terminal; tmux and screen are noted.
 
 It prints instructions, and nothing is written to tmux's configuration or to any terminal's other than the three below. For kitty, Ghostty and Alacritty, whose setting is a plain config line, `a` adds the line the page shows to the terminal's own config file (see "Adding the setting from the page", below). Alt+Enter and Ctrl+J insert a newline everywhere with no setup (on a Mac Alt+Enter needs Option as Alt, below). On a Mac it asks the terminal for the kitty keyboard protocol itself (below); on Linux and Windows it never does, and it does not use modifyOtherKeys anywhere.
 
@@ -312,7 +533,13 @@ A Mac keyboard has Option, not Alt, and most macOS terminals type the character 
 
 #### Adding the setting from the page
 
-On the Option topic (a Mac) and on the Shift+Enter topic, `a` adds the line of the selected terminal (kitty, Ghostty or Alacritty; the page offers it only for those, and only when MendCode knows your home folder). It reads the config file, then asks: the page names the file and the lines, and `y` writes them; any other key, `esc` included, cancels and writes nothing. WezTerm (a Lua file), iTerm2, Terminal.app, VS Code, Zed and JetBrains keep their instructions only.
+On the Option topic (a Mac) and the Shift+Enter topic:
+
+1. Select kitty, Ghostty or Alacritty and press `a`. This is offered only for those terminals and only when MendCode knows your home folder.
+2. Review the config file and lines named by the page after it reads the file.
+3. Press `y` to write. Any other key, including `esc`, cancels without writing.
+
+WezTerm (a Lua file), iTerm2, Terminal.app, VS Code, Zed and JetBrains keep instructions only.
 
 The file is only appended to, or created, under a `# added by MendCode (/terminal-setup)` line; nothing already in it is rewritten, and a file that is not writable or not readable is left as it is. It refuses, and says why, when a line for the same setting is already there with another value (`macos-option-as-alt = left`, `macos_option_as_alt no`, `option_as_alt = "OnlyLeft"`, another action on Shift+Enter) or, for Alacritty, when the TOML cannot take the lines at its end because the `[window]` table or an inline `bindings` list exists already; the reason shows the line to add by hand. When the setting is already there it says so. The file is read again just before the write, and a file that changed meanwhile is not written.
 
@@ -350,7 +577,19 @@ When the terminal cannot report Option as Alt (Terminal.app, Alacritty and iTerm
 
 Every character in the table was read from the layout's own data with `UCKeyTranslate` on macOS (Option held, on the key that types the letter on that layout); nothing is written from memory. Left out on purpose: dead keys (Option+N is a tilde that waits for a letter, so `alt+n` cannot be reached this way), anything ASCII (Option+L is `@` on German, Option+Q is `@` on Latin American), and punctuation people write prose with (`«`, `“`, `‘`, `…`, `„`, `‚`); a layout where the key types such a character has no character for that binding, and it still needs the terminal setting or the `ctrl+x` chord.
 
-What keeps it from eating typing: macOS only; one character alone in its read, so a word, a burst of typing and a paste (bracketed or not, to the prompt) never match; the character must be the layout's own for that key and the keymap must still bind it; the binding must mean something right then (above), never inside text already typed, a comment being written, or the list; and it stops for the session as soon as one key arrives as a real Alt. The first time one runs, a toast says what happened and gives the terminal's fix (`Option typed œ: ran opt+q`). Remaining false positives: the first character of a prompt, typed alone into an empty prompt, that is also the Option character of the layout in use: `œ` for someone who writes French on an ABC keyboard, `π` or `®` for someone who types them on purpose. `/customize` > Input & keys > Option characters (`optionKeys`, `auto` or `off`) turns it off.
+The fallback avoids taking ordinary typing under these conditions:
+
+- macOS only.
+- One character alone in its read. A word, typing burst or paste (bracketed or not, to the prompt) never matches.
+- The character is the layout's own for that key, and the keymap still binds it.
+- The binding is meaningful right then, as above; never inside existing text, a comment being written or the list.
+- It stops for the session as soon as a key arrives as real Alt.
+
+The first use shows a toast explaining what happened and the terminal's fix: `Option typed œ: ran opt+q`.
+
+False positives remain when a prompt's first character, typed alone into an empty prompt, is the layout's Option character: `œ` for French on an ABC keyboard, or `π` and `®` typed deliberately.
+
+Turn it off in `/customize` > Input & keys > Option characters (`optionKeys`, `auto` or `off`).
 
 #### Chords for the alt keys
 
@@ -382,7 +621,13 @@ Hints name the Alt key by the platform: `opt+q` on macOS, `alt+q` elsewhere (the
 
 ## Bell
 
-`/customize` has a `bell` row (off by default, saved in `<data dir>/tui/profile.json` as `turnBell`). When on, the terminal bell rings when a turn of the current session completes or fails. A turn replayed from before the terminal opened, and a cancelled one, stay silent. With the default `notifyWhen: unfocused` the bell also stays silent while the terminal reports that its window has the focus (see [return](return.md)).
+Enable the `bell` row in `/customize` to ring when a current-session turn completes or fails. It is off by default and saved as `turnBell` in `<data dir>/tui/profile.json`.
+
+The bell stays silent for:
+
+- Turns replayed from before the terminal opened.
+- Cancelled turns.
+- A focused terminal window with the default `notifyWhen: unfocused`, when the terminal reports focus; see [return](return.md).
 
 `/doctor` checks what this terminal supports (colors, keys, clipboard, images, focus, tmux) and says how to fix each gap.
 
@@ -393,13 +638,15 @@ Hints name the Alt key by the platform: `opt+q` on macOS, `alt+q` elsewhere (the
 
 ## IDE context (Zed)
 
-IDE discovery starts after daemon settings arrive. An off bridge does not schedule background redraws; incidental renders before startup do not query the editor.
+1. Run `/ide` to open the project bridge and selection preview. It is off by default.
+2. Run `/ide on` to enable it for this project, or `/ide on /absolute/path/db.sqlite` to choose a Zed database.
+3. Run `/ide off` to disable it immediately. The choice persists in private `<data dir>/ide/` configuration; existing ACP sessions are unchanged.
 
-`/ide` opens the project bridge and selection preview. It is off by default. `/ide on`
-enables it for this project; `/ide on /absolute/path/db.sqlite` chooses a Zed database.
-The daemon also accepts `MENDCODE_ZED_DB`, else Zed's stable macOS/Linux database path.
-`/ide off` disables it immediately and persists the choice in private `<data dir>/ide/`
-configuration. Existing ACP sessions are unchanged.
+The daemon also accepts `MENDCODE_ZED_DB`, otherwise Zed's stable macOS/Linux database path.
+
+### Selection and limits
+
+IDE discovery starts after daemon settings arrive. An off bridge schedules no background redraws; incidental renders before startup do not query the editor.
 
 The daemon reads active panes from a read-only SQLite transaction, preferring the most
 specific matching workspace, then the most recent. Multiple/reversed UTF-8 ranges and
@@ -413,11 +660,22 @@ submission, without changing the displayed user message. Changes make it pending
 `/ide clear` dismisses that exact selection until it changes. Failed sends keep it pending.
 Selection text is never written to the IDE configuration or diagnostic logs.
 
-Page keys: `e` enables/disables, `c` clears, `o` opens the current file/range, `r` refreshes,
-arrows/PageUp/PageDown scroll the preview, Esc returns. `/ide open path:line:column` opens
-a project file in Zed using the daemon's `zed` executable, with one-based positions.
-Paths with spaces are accepted as the remaining argument, optionally surrounded by quotes.
-Opening is refused while off or for a missing, external or escaping symlink path.
+### Preview keys and opening files
+
+| Key | Does |
+| --- | --- |
+| `e` | Enable/disable |
+| `c` | Clear |
+| `o` | Open the current file/range |
+| `r` | Refresh |
+| Arrows/PageUp/PageDown | Scroll the preview |
+| Esc | Return |
+
+Use `/ide open path:line:column` to open a project file with the daemon's `zed` executable, using one-based positions.
+
+Paths with spaces are accepted as the remaining argument, optionally quoted. Opening is refused while off or for a missing, external or escaping symlink path.
+
+### Protocol
 
 The additive protocol commands are `ide.query`, `ide.configure`, `ide.open`; typed client
 helpers are `ideContext`, `configureIde`, `openIdeFile`. All are local-only and excluded
@@ -437,14 +695,51 @@ editor remains manual.
 | Fix Problems in File | types the file's errors and warnings (at most 20) into the prompt |
 | Connect Editor Context | sets `mendcode.shareContext` and types `/ide on vscode`; press Enter |
 
-Sharing the live selection is opt-in twice: `mendcode.shareContext` (default off, machine scope so a workspace cannot flip it) makes the extension publish the active file and selection to `<data dir>/ide/vscode/<hash>.json` (mode 600, replaced whole every change and every 30 s, removed on close), and `/ide on vscode` makes the daemon read it for that project. The terminal keeps the last text editor as the active one. The daemon applies the Zed rules: only files inside the project (real paths, so symlinks out are refused), at most 64 ranges and 32 KiB per range, one pending selection attached to the next prompt. A record not refreshed for 90 s reads as `unavailable`, so a crashed window never leaves old context behind. `/ide on zed` goes back to Zed; the choice is stored per project in the private IDE configuration (`editor`), and a database path only applies to Zed.
+### Share the live selection
+
+Sharing requires two opt-ins:
+
+1. Enable `mendcode.shareContext`, off by default and machine-scoped so a workspace cannot flip it. The extension publishes the active file and selection to `<data dir>/ide/vscode/<hash>.json`.
+2. Run `/ide on vscode` so the daemon reads it for this project.
+
+The record uses mode 600, is replaced whole on every change and every 30 s, and is removed on close. The terminal keeps the last text editor as active.
+
+The daemon applies the Zed rules:
+
+- Only files inside the project, using real paths so outward symlinks are refused.
+- At most 64 ranges and 32 KiB per range.
+- One pending selection attached to the next prompt.
+
+A record not refreshed for 90 s reads as `unavailable`, so a crashed window leaves no old context behind.
+
+Run `/ide on zed` to return to Zed. The choice is stored per project in private IDE configuration (`editor`); a database path applies only to Zed.
+
+### Open a file
 
 `/ide open path:line:column` runs the daemon's `code --goto` (`cursor`, `codium`, `windsurf` or `code-insiders` according to the editor the extension reports; `MENDCODE_VSCODE_BIN` overrides) with an argument array, only while the bridge is on and for project files. The extension never starts a process or opens a connection; the data it writes stays in the data dir.
 
 ## JetBrains and other ACP editors
 
-There is no JetBrains plugin. IDEs that host ACP agents embed v2 through `mendcode acp` (a stdio agent; sessions, approvals and history stay in the daemon, see [`automation.md`](automation.md)). In JetBrains AI Assistant add a custom agent whose command is `mendcode` with arguments `acp` (and `--cwd PROJECT` as a fallback project, `--dir DATA` for a separate data dir); Zed takes the same command under `agent_servers` in its settings. Check the IDE's own ACP documentation for the exact file or dialog, since it changes between releases. Selection context through `/ide` is available for Zed and VS Code only; ACP hosts send their own context as prompt blocks.
+There is no JetBrains plugin. ACP-hosting IDEs embed v2 through `mendcode acp`, a stdio agent. Sessions, approvals and history stay in the daemon; see [`automation.md`](automation.md).
+
+| IDE | Setup |
+| --- | --- |
+| JetBrains AI Assistant | Add a custom agent with command `mendcode` and arguments `acp`; use `--cwd PROJECT` for a fallback project and `--dir DATA` for a separate data dir |
+| Zed | Put the same command under `agent_servers` in settings |
+
+Check the IDE's ACP documentation for the exact file or dialog; it changes between releases.
+
+Selection context through `/ide` is available only for Zed and VS Code. ACP hosts send their own context as prompt blocks.
 
 ## Scratchpad editor
 
-The tray Scratchpad uses the same editor component and inline editing bindings as the prompt, with its own cursor, selection and undo history. `/scratch` or `ctrl+x s` focuses it; Enter adds a newline, Esc returns to the prompt. Changes autosave after 500 ms via the daemon's per-project `scratchpad.set`; Esc flushes outstanding changes. The note never becomes a prompt draft or model message. Long text wraps and scrolls within the panel, with a mini scrollbar.
+Open the tray Scratchpad with `/scratch` or `ctrl+x s`. It shares the prompt's editor component and inline editing bindings, but has its own cursor, selection and undo history.
+
+| Key | Does |
+| --- | --- |
+| Enter | Add a newline |
+| Esc | Flush outstanding changes and return to the prompt |
+
+Changes autosave after 500 ms through the daemon's per-project `scratchpad.set`. The note never becomes a prompt draft or model message.
+
+Long text wraps and scrolls within the panel, with a mini scrollbar.

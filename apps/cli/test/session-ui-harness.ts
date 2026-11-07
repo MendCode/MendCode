@@ -141,7 +141,21 @@ export function appHarness(options: HarnessOptions = {}) {
     await Bun.sleep(2)
     app.render()
   }
-  return { app, frames, committed, cursors, placements, sent, written, titles, subscriptions, size, text, type, sessionId, sentOf: (type: string) => sent.filter((command) => command.type === type) }
+  /**
+   * The screen with the latest notice's full text: a notice is one row cut to fit, so its whole message is read where the user
+   * reads it, on the F4 page, which Esc then closes. With nothing behind F4 the screen as it is.
+   */
+  const details = async () => {
+    const page = app.page
+    await app.onKey("\x1bOS")
+    app.render()
+    if (app.page === page) return text()
+    const shown = text()
+    await app.onKey("\x1b")
+    app.render()
+    return shown
+  }
+  return { app, frames, committed, cursors, placements, sent, written, titles, subscriptions, size, text, details, type, sessionId, sentOf: (type: string) => sent.filter((command) => command.type === type) }
 }
 export type Harness = ReturnType<typeof appHarness>
 

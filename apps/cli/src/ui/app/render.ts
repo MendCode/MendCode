@@ -30,7 +30,7 @@ import { goalPromptCard } from "../../view/goal"
 import { returnPromptCard } from "../../view/return-card"
 import { fit } from "../../view/deck"
 import { paneChildren } from "./session-children"
-import { attachSidebar } from "../../view/sidebar"
+import { attachSidebar, SIDEBAR_WIDTH } from "../../view/sidebar"
 import { renderAcpPage, renderAgentPicker, renderThemePicker, themeEntries, filterPalette, composeOverlay, renderToolsPage, renderChangesPage, renderContextPage, renderLoopsPage, renderMcpsPage, renderTasksPage, renderMemoryPage, renderMemoryAssistant, memoryAssistantCursor, renderPalette, renderModelQuick, renderSetupPage, renderStoragePage, renderUsagePage, renderAgentsPage, renderPackagesPage, renderPetPicker, renderWorkflowsPage, renderCustomizePage, renderSettingsPage, renderExtensionsPage, renderHooksPage, renderConnectPage, renderProvidersPage, renderSecretsPage, renderPermissionsPage, reviewerStatus, renderDiagramView, renderSidebarEditor } from "../lazy-pages"
 import type { Settings } from "@mendcode/protocol"
 import { activeTheme, themeList, themeModeState, themeSelection } from "../theme"
@@ -42,16 +42,16 @@ import { pageModel } from "../../view/page-views"
 import { sideChat, sideChatRows, sideInput } from "./aside"
 import { renderFetchCard } from "../../view/fetch-card"
 import { viewRows } from "./view-rows"
-import { toastBoxed, toastPosition, toastSpot } from "../../view/toast"
+import { DETAILS_HINT, toastCut, toastPosition, type Toast } from "../../view/toast"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { overlayLines } from "../../view/overlay"
 import type { HelpExtensions } from "../../view/help-page"
 import { renderHelpPage } from "../lazy-pages"
-import { renderSessionList } from "../../view/session-list"
+import { renderSessionList } from "../lazy-pages"
 import type { PresentationMode } from "../../view/transcript"
 import { mascotPhase } from "../../view/mascot"
 import { terminalTitle } from "../../view/terminal-title"
-import { lineWidth as lineWidthOf, textWidth, wrap } from "../../view/wrap"
+import { lineWidth as lineWidthOf, textWidth } from "../../view/wrap"
 import type { ImagePlacement } from "../image-layer"
 import type { Line } from "../theme"
 import type { AppContext } from "./context"
@@ -169,23 +169,22 @@ export function createRender(ctx: AppContext, actions: {
     const chatCols = width - leftWidth - (right.right ? right.right + 1 : 0)
     const sessionsSide = right.right ? "left" : state.tuiProfile.sidebarSide
     const chatOffset = sessionsSide === "left" ? leftWidth : 0
-    // One row unless the message needs more (an error with detail): the notice row above the prompt, never a box over the transcript. Pages keep the box.
+    // The one notice (docs/commands.md#notices): in the chat the notice row above the prompt, never a box over the transcript; a page has
+    // no prompt, so there the same row sits in the top right corner. What does not fit, or a summary's detail, is behind F4.
     const current = toasts.current
     const toastView = (inline: boolean, cols: number) => {
-      const cut = inline ? toastBoxed({ ...current!, oneLine: false }, cols) : wrap(current!.message.trim(), Math.max(1, Math.min(60, cols - 6) - 6)).length > 6
-      const hint = [current!.hint, ...(cut && !(current!.oneLine && current!.hint) && state.commandOutput?.message === current!.message ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
-      return ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(hint ? { hint } : {}) }, { width: cols, height: inline ? 1 : 8 }).lines
+      // In the chat the row may lie over the prompt's rule, which leaves PROMPT_MARGIN + 3 cells and 4 more at the end: judge the cut by that room.
+      const hint = noticeHint(current!, inline ? cols - PROMPT_MARGIN - 3 : Math.min(100, cols - 4), inline ? 2 : 1)
+      return ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(hint ? { hint } : {}) }, { width: cols, height: 1 }).lines
     }
-    const boxed = !!current && (state.page !== "chat" || toastBoxed(current, chatCols))
-    const toast = boxed ? toastView(false, chatCols) : []
+    const toast = current && state.page !== "chat" ? toastView(false, chatCols) : []
     const accentColors = ["#86efac", "#67e8f9", "#fcd34d", "#c4b5fd", "#fda4af"]
     const accentIndex = [...(state.sessionId ?? "")].reduce((hash, char) => (hash * 31 + char.charCodeAt(0)) >>> 0, 0) % accentColors.length
-    // In the chat the toast goes where it covers nothing (below the top bar and the pinned prompt); with no such place it is the
-    // one-line notice row above the prompt, and `place` is null. Pages have no transcript: top right, as in v1.
-    const withToast = (raw: Line[], place?: { row: number; col: number } | null) => {
+    const withToast = (raw: Line[]) => {
       const rows = state.tuiProfile.sessionAccent && state.page === "chat" ? raw.map((row) => row.map((span) => span.fg === "primary" || span.fg === "accent" ? { ...span, fgHex: accentColors[accentIndex]! } : span)) : raw
-      const position = place === undefined ? toastPosition(lineWidthOf(toast[0] ?? []), chatCols) : place
-      return toast.length && position ? overlayLines(rows, toast, { ...position, col: position.col + chatOffset }, width) : rows
+      if (!toast.length) return rows
+      const position = toastPosition(lineWidthOf(toast[0]!), chatCols)
+      return overlayLines(rows, toast, { ...position, col: position.col + chatOffset }, width)
     }
     if (state.page === "chat") {
       // Cards stay in the chat column to the right of the session list.
@@ -197,10 +196,7 @@ export function createRender(ctx: AppContext, actions: {
         // An open side chat is being typed in and keeps its sheet; the cards give the chat back its rows (`panelNarrow: hide`).
         return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now()) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
       } : undefined
-      let laid = chatRows(chatCols, height, undefined, bottomPanel, current && !boxed ? toastView(true, chatCols)[0] : undefined)
-      const spot = toast.length ? toastSpot({ rows: laid.rows, top: laid.body.top, bottom: laid.body.end, box: toast, width: chatCols }) : undefined
-      // A boxed toast with no empty place takes the notice row (the transcript gives one up) instead of covering text.
-      if (current && boxed && !spot) laid = chatRows(chatCols, height, undefined, bottomPanel, toastView(true, chatCols)[0])
+      const laid = chatRows(chatCols, height, undefined, bottomPanel, current ? toastView(true, chatCols)[0] : undefined)
       const { rows, cursor, placements, panel } = laid
       const bottom = Math.max(0, Math.min(cursor.row, laid.promptFirst ?? cursor.row) - 1)
       const asideCard = state.palette ? undefined : state.fetchFacts ? card("Fetch", renderFetchCard({ facts: state.fetchFacts, width: chatCols, bottom })) : undefined
@@ -223,11 +219,11 @@ export function createRender(ctx: AppContext, actions: {
       // An image under the palette, a card or a toast would cover them: it shows only on a clear prompt.
       if (state.scratchArea) state.scratchArea.left += chatOffset
       const shiftedCursor = state.sidebarFocus && sidebarOn
-        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 2 : width - 36 }
+        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 3 : width - SIDEBAR_WIDTH + 3 }
         : { ...cursor, col: cursor.col + chatOffset }
       const sideCursor = chat.open && chat.focused && (right.right || panel) ? { row: right.right ? ((state.rightChatArea?.top ?? 0) + (state.rightChatArea?.height ?? height) - 2) : panel!.top + panel!.height - 2, col: (right.right ? chatOffset + chatCols + 5 : chatOffset + 4) + sideInput(chat, right.right || chatCols).cursor } : shiftedCursor
 
-      input.screen.draw(withToast(layered(withSidebar), spot ?? null), paint ? paint.cursor : modal ? undefined : quick ? { row: quick.cursor.row, col: quick.cursor.col + chatOffset } : sideCursor, paint || modal || quick || asideCard || rewind || goalView || returnView || spot ? [] : placements.map((placement) => ({ ...placement, col: placement.col + chatOffset })))
+      input.screen.draw(withToast(layered(withSidebar)), paint ? paint.cursor : modal ? undefined : quick ? { row: quick.cursor.row, col: quick.cursor.col + chatOffset } : sideCursor, paint || modal || quick || asideCard || rewind || goalView || returnView ? [] : placements.map((placement) => ({ ...placement, col: placement.col + chatOffset })))
     } else {
       if (state.rightTick) {
         clearInterval(state.rightTick)
@@ -240,6 +236,15 @@ export function createRender(ctx: AppContext, actions: {
     }
   }
 
+  /**
+   * The notice's hint, with `F4 details` when the message summarises a longer detail, or when the row cuts it (a short notice
+   * that names its own next step, a memory saved with `/memory undo`, gives its room to the message instead).
+   */
+  function noticeHint(toast: Toast, cols: number, margin: number): string {
+    const more = !!state.commandOutput && !state.commandOutputReturn && (!!toast.detail || !(toast.oneLine && toast.hint) && toastCut(toast, cols, margin))
+    return [toast.hint, ...(more ? [DETAILS_HINT] : [])].filter(Boolean).join(" · ")
+  }
+
   /** Inline mode: the blocks that became final go above the region once; the region is the live blocks, the prompt and the footer. */
   function drawInline(width: number, height: number) {
     state.pet?.setVisible(false)
@@ -250,8 +255,7 @@ export function createRender(ctx: AppContext, actions: {
     const { finished, tail } = actions.inline.take(width)
     const start = actions.inline.startLine()
     const current = toasts.current
-    const fullHint = current && !(current.oneLine && current.hint) && toastBoxed({ ...current, oneLine: false }, width) && state.commandOutput?.message === current.message
-    const hint = [current?.hint, ...(fullHint ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
+    const hint = current ? noticeHint(current, width, 2) : ""
     const toast = current ? ctx.views.draw("notice", { kind: "toast", inline: true, variant: current.variant, ...(current.title ? { title: current.title } : {}), message: current.message, ...(hint ? { hint } : {}) }, { width, height: 1 }).lines[0] : undefined
     const { rows, cursor } = chatRows(width, height - (toast ? 1 : 0), { tail })
     input.screen.draw(toast ? [toast, ...rows] : rows, toast ? { ...cursor, row: cursor.row + 1 } : cursor, [], start ? [start, [], ...finished] : finished)
@@ -419,6 +423,7 @@ export function createRender(ctx: AppContext, actions: {
         ...(state.petList?.some((choice) => choice.ref === state.tuiProfile.homeMascot) ? { mascot: state.petList.find((choice) => choice.ref === state.tuiProfile.homeMascot)!.name } : {}),
         ...(state.promptReport ? { promptStatus: state.promptReport } : {}),
         graphIndex: state.settingsNow.codegraph_index ?? "auto",
+        replyLanguage: state.settingsNow.language ?? "auto",
         preview,
         facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}) },
         // The home's pet picture, placed over the preview's blank cells where the terminal draws pictures.

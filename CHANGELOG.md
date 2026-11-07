@@ -9,6 +9,96 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.5 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
+### Upgrade notes
+
+- Same code as v0.0.5-beta.1.
+
+## v0.0.5-beta.1 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
+### New
+
+- MendGirl, with neko ears and her little robot, ships as a built-in pet beside MendAscii: choose her in `/pet` or as the start screen's mascot with `/mascot mendgirl`.
+- Workflow scripts can pass text to a check's standard input with `check(command, { stdin })`.
+- With session recall on, an agent can find the session where something was done: `session_search` with `scope: "project"` looks through the titles and messages of this project's other sessions, newest first, and `session_read` can then open the ones it found.
+- Ask the agent to take you to a session it found and your terminal switches to it when its reply ends, as if you had chosen it in `/sessions`; elsewhere it gives you the `mendcode attach` command with the session's full id.
+- Replies stay in your language: each message you send restates it to the model, so a long stretch of tool output in another language no longer switches the answers. By default it follows the language of your latest message; `/language Español` (or the Reply language row of `/customize`, Chat) holds one language. Works with the native engine, Claude Code, Codex and pi.
+
+### Changed
+
+- The PR reviewer has cheap readers read all the changed code first and sends your main model their summaries and the risky hunks instead of the whole diff, so reviews use far fewer main-model tokens; `readers: { code: overflow }` in `.mendcode/review.yaml` brings back the old behaviour, and `/reviews` shows what the readers used.
+- MendCode's license is now Apache 2.0: still open source, and copies and forks must keep the notice that credits MendCode and its author. Earlier versions keep their MIT license. The MendCode name and logo are not licensed to forks.
+- MendAscii takes the theme's colors: under the default Ink theme it is a black and white robot with pink cheeks; the Mend theme and the others keep the mint and teal one.
+- Every notice is now one short row in words with the same look and place: a severity mark, the message and what to do next, with `F4 details` for the full text (`/tier` says the tier, its prompt and how many features are on, instead of a list of flag ids); errors stay until your next prompt or command.
+- `/profiles` → `o` groups what a profile overrides with plain names and before → after values, shows the selected one in a detail and tags the ones you kept `yours`; `k` there keeps your value, and the list's header shows a few keys with `?` for the rest.
+- `/sessions` has a search row on top ("Search sessions, folders or ids"): typing still searches at once and now also finds sessions by folder path and by id (full or short), including older sessions past the ones the page loads. Tab picks a folder to show only its sessions, the scope shows as a small this folder / all projects toggle, the header keeps a few keys with `?` for the rest, PgUp/PgDn and Home/End move through long lists, and Esc clears the search before it goes back.
+- `/marketplace` is redone: a search row on top, kind filters on Tab, one row per profile with its kind, author or source, a short description and an on, off or update badge, and a detail that shows what installing it takes over (before → after, read from the profile before anything installs) and where it comes from. Enter previews, then installs, updates or installs again after you confirm; `d` removes; each ends with one short notice. Empty, offline and failed catalogs say so in words. `/profiles` and `/marketplace` share three tabs, What it takes over | Installed | Marketplace, on `1` `2` `3`.
+- `/reviews` has a quieter header: a few keys with `?` for the rest, and only what needs attention (running, queued, waiting, failed) next to the tabs; the 24-hour totals stay in the Watches tab.
+- `@mendcode review` on a head that was already reviewed now replies with that review's result (its findings, the earlier ones now fixed and those still open) and suggests `@mendcode review full`, instead of a bare "skipped" with a terminal command.
+
+### Fixed
+
+- Forced service restarts validate the service before draining and no longer stall on a disconnected daemon; explicitly paused queues and disabled restart resumption stay held.
+- `/rename` targets the current session across projects, and message search refreshes when the session scope changes.
+- Compaction preserves percentage thresholds, validates model overrides, and reports reserve-derived thresholds correctly.
+- Marketplace removal cancels on Enter, filtered previews stay accurate, and the selected source remains visible.
+- Standalone Codex sessions follow the reply-language setting.
+- Workflow checks mark discarded output as truncated even when the captured output ends in whitespace.
+- ↑ in the prompt and `/prompt-history` show what you typed before again in projects with a long history (long pasted messages left the list empty); ↑ pressed while the daemon restarts no longer leaves it empty either.
+- A workflow script's `check()` that passes now gets the command's output in `detail`, as a failing one already did, instead of just "pass". It gets the whole output, so a script can read a JSON file or a long report through a check; very large output is cut and marked `truncated` instead of being shortened silently.
+- The first-run setup shows each tool and login it found (Codex, Claude Code, ChatGPT, API keys, pi) as a row you can act on: use Codex as its own harness, sign MendCode in with your ChatGPT account and come back with your choices kept, use Claude Code, or add a key. Using Codex this way works in every tier and leaves your tier as it is (`/tier codex_engine on|off`). With nothing that can answer yet, it no longer offers to start chatting with a model that does not exist; it offers to skip for now instead.
+- A compaction threshold written as a fraction (such as 0.8 for 80%) now compacts at that share of the context window instead of right away on an almost empty session; the threshold is a percent of the window, and a new value above 100 or not above 0 is refused with a message saying so.
+- The agent gives a session's full id (`ses_…`), which `mendcode attach` takes, instead of a short code, and `/sessions` finds a session by its full id or the short end of it.
+- In `/sessions`, typing `/` no longer adds a slash to the search (which made "/glass" find nothing), and the selection no longer jumps to another session while other sessions are working, so scrolling down a long list stays where you are.
+- `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on, then the daemon really restarts; anything it still has to stop is listed by command line to that session when the daemon starts again. A restart command that goes away during the wait leaves the sessions unpaused and interrupts nothing.
+- A forced restart no longer waits on a session that only waits for your approval or answer: it lists it as waiting for you, and its turn resumes after the restart. After the restart, messages queued during the wait are sent in order instead of staying held until you resumed each session; a session you paused yourself stays held.
+- Started in your home folder, `/sessions`, the home's Agent View and its Completed list no longer show every project under it: like any folder, they show the sessions started there. `/sessions` now opens on this folder's sessions with each child session nested under its parent; Ctrl+L still shows all projects.
+
+## v0.0.4-beta.5 - 2026-11-06
+
+Ink, black and white like the website, is the new default theme; the sessions sidebar fits one session per line with a
+state symbol; `/usage` counts every harness and call once with cache; `/reviews` shows each pull request's state.
+
+### New
+
+- PR reviews set a `MendCode review` commit status on the head, so a branch can require that its latest commit was reviewed and has nothing blocking.
+
+### Changed
+
+- Ink, the website's black and white, is the new default theme: if you never picked a theme you get Ink, and `/theme mend` brings the old look back.
+- The sessions sidebar shows one row per session with a state symbol (waiting for you, running, failed, unread reply, queued, idle), the age, child sessions and PR on the right, groups for pinned, today and earlier, and settled sessions folded into one row; only running and approval rows move.
+- Diagrams and charts no longer show art/copy labels; tables and code blocks keep copy.
+- `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
+- `/reviews` shows each pull request's GitHub state (merged, closed, draft, ready, failing checks or conflicts), and `f` can filter to ready, needs work or closed.
+- `/usage` totals count every call once (every harness, ACP agents, sub-agents, calls outside your turns, imported usage) with cache read and write, reasoning no longer counted twice (also in the sidebar, the footer and each turn's output figure), and show today, 7 and 30 days, a by-harness table and cache columns with hit rate per model; an unpriced cost says unknown.
+
+### Fixed
+
+- `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
+- Selecting text in a message drawn with its own background colour shows the highlight on that text again.
+
+## v0.0.4-beta.4 - 2026-11-06
+
+Large pull requests get reviewed through cheap readers instead of failing, merged pull requests count as reviewed only after
+a full review, and a child session's approvals no longer fill your queue.
+
+### Changed
+
+- Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
+
+### Fixed
+
+- PR reviews retain deferred files' changed lines, withhold full coverage for unread files, and keep small diffs batched.
+- Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
+- A session whose child waits for approval gets one notice that disappears once answered and stays out of your queue, and answering a card that just changed no longer shows "request is not pending".
+
 ## v0.0.4 - 2026-11-05
 
 Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and

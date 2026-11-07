@@ -130,7 +130,7 @@ export function createAgents(ctx: AppContext) {
 
   /**
    * The newest sessions of every project with their live state: what already runs or waits for the user in another terminal is in
-   * Agent View at once, not at its next change, and the home's Completed reads the project's tree (every project from `~`), as in v1.
+   * Agent View at once, not at its next change; Agent View and the home's Completed keep only the folder's own sessions.
    */
   async function loadAgentSessions(quiet = false): Promise<void> {
     const listed = await input.send({ type: "session.list", limit: 200, hideEmpty: true })

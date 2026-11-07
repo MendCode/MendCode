@@ -26,7 +26,7 @@ or copy/symlink this folder to `~/.vscode/extensions/mendcode.mendcode-0.1.0`.
 | setting | default | |
 |---|---|---|
 | `mendcode.command` / `mendcode.args` | `mendcode` / `[]` | run directly, never through a shell; machine scope, a workspace cannot change it |
-| `mendcode.dataDir` | empty (`~/.mendcode-v2`) | passed as `--dir`; where the context is published |
+| `mendcode.dataDir` | empty (`~/.mendcode`) | passed as `--dir`; where the context is published |
 | `mendcode.terminalLocation` | `panel` | or `editor` |
 | `mendcode.shareContext` | `false` | publish the active file and selection to `<data dir>/ide/vscode/<hash>.json` (mode 600) for `/ide on vscode`; removed when the window closes |
 

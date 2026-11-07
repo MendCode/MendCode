@@ -32,7 +32,7 @@ const RECENT_CONTEXTS = 8
 export function callSpeed(call: Pick<CallStats, "output" | "reasoning" | "firstTokenMs" | "durationMs">): number | undefined {
   if (call.durationMs === undefined || call.firstTokenMs === null) return undefined
   const generating = call.durationMs - call.firstTokenMs
-  const tokens = call.output + call.reasoning
+  const tokens = call.output
   return generating >= 200 && tokens > 0 ? tokens / (generating / 1000) : undefined
 }
 
@@ -126,7 +126,7 @@ export function createUsageNotes(options: { notice?: () => CompactNoticeConfig |
       if (compacting) {
         tally ??= { input: 0, output: 0, ...(previous ? { before: previous.context } : {}) }
         tally.input += event.input + event.cacheRead + event.cacheWrite
-        tally.output += event.output + event.reasoning
+        tally.output += event.output
         return []
       }
       const notes: UsageNote[] = []

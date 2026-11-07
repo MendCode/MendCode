@@ -48,6 +48,21 @@ test("threshold precedence matches model > provider > global, with absolute trig
   expect(compactionThreshold({}, { contextWindow: 128_000, inputLimit: 100_000 })).toBe(90_000)
 })
 
+test("a threshold is a percent of the window, and one written as a fraction (0.8) means the same 80%", () => {
+  expect(compactionThreshold({ threshold: 0.8 }, { contextWindow: 1_000_000 })).toBe(800_000)
+  expect(compactionThreshold({ threshold: 80 }, { contextWindow: 1_000_000 })).toBe(800_000)
+  expect(compactionThreshold({}, { contextWindow: 1_000_000, provider: { threshold: 0.5 } })).toBe(500_000)
+  expect(compactionThreshold({}, { contextWindow: 1_000_000, model: { threshold: 0.75 } })).toBe(750_000)
+  expect(compactionThreshold({ threshold: 1.5 }, { contextWindow: 1_000_000 })).toBe(15_000)
+})
+
+test("threshold 1 retains its historical 1% meaning at every configuration level", () => {
+  expect(compactionThreshold({ threshold: 1 }, { contextWindow: 100_000 })).toBe(1000)
+  expect(compactionThreshold({ threshold: 80 }, { contextWindow: 100_000, provider: { threshold: 1 } })).toBe(1000)
+  expect(compactionThreshold({ threshold: 80 }, { contextWindow: 200_000, inputLimit: 100_000, provider: { threshold: 90 }, model: { threshold: 1 } })).toBe(1000)
+  expect(compactionThreshold({ threshold: 100 }, { contextWindow: 100_000 })).toBe(100_000)
+})
+
 test("recent budget honors reserve, explicit zero and v1 default bounds", () => {
   expect(recentBudget({ reserved: 8000 }, { inputLimit: 10_000 })).toBe(2000)
   expect(recentBudget({}, { contextWindow: 200_000 })).toBe(8000)

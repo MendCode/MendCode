@@ -39,6 +39,17 @@ test("source registration is opt-in, persists, and is disabled until explicitly 
   expect(() => f.registry.removeSource("local")).toThrow("cannot be removed")
 })
 
+test("an entry carries its manifest's author when the manifest names one, and its description when the index has none", () => {
+  const f = fixture()
+  write(path.join(f.alpha, "mendcode-profile.json"), JSON.stringify({ name: "alpha", version: "1.2.0", description: "alpha from its manifest", author: "Acme" }))
+  write(path.join(f.source, "marketplace-index.json"), JSON.stringify({ version: 0, packs: [{ id: "alpha", version: "1.2.0", source: { url: "./alpha" } }, { id: "beta", version: "1.2.0", description: "beta from the index", source: { url: "./beta" } }] }))
+  f.registry.addSource("team", f.source, true)
+  const entries = f.registry.search("", "team").entries
+  expect(entries.find((item) => item.name === "alpha")).toMatchObject({ author: "Acme", description: "alpha from its manifest" })
+  expect(entries.find((item) => item.name === "beta")).toMatchObject({ description: "beta from the index" })
+  expect(entries.find((item) => item.name === "beta")).not.toHaveProperty("author")
+})
+
 test("show and preview do not install, execute extensions or change settings", () => {
   const f = fixture()
   write(path.join(f.alpha, "extensions", "never.ts"), "throw new Error('must not import in preview')")

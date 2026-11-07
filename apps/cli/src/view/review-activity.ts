@@ -25,11 +25,16 @@ export function reviewFooterWord(jobs: readonly ReviewActivityJob[], sessionId: 
   return `reviewing ${shortName(named[0]!)}${named.length > 1 ? ` +${named.length - 1}` : ""}`
 }
 
+/** A review's phase and its running step's detail: `analysis · 112 files · incremental`. */
+export function reviewStep(job: Pick<ReviewActivityJob, "phase" | "steps">): string {
+  const detail = job.steps.find((step) => step.endedAt === undefined)?.detail
+  return `${job.phase}${detail ? ` · ${detail}` : ""}`
+}
+
 /** The one live line of the review that started first: `Reviewing #25 · analysis · 112 files · incremental...`. */
 export function reviewPhase(jobs: readonly ReviewActivityJob[]): string {
   const job = jobs[0]!
-  const detail = job.steps.find((step) => step.endedAt === undefined)?.detail
-  return `Reviewing #${job.number} · ${job.phase}${detail ? ` · ${detail}` : ""}${jobs.length > 1 ? ` · +${jobs.length - 1}` : ""}...`
+  return `Reviewing #${job.number} · ${reviewStep(job)}${jobs.length > 1 ? ` · +${jobs.length - 1}` : ""}...`
 }
 
 /** When the oldest of `jobs` started, for the activity status's time. */

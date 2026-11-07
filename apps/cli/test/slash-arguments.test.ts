@@ -113,7 +113,7 @@ describe("/pr", () => {
     await h.key("\r")
     const saves = h.sent.filter((command) => command.type === "settings.set")
     expect(saves).toHaveLength(1)
-    expect(h.text()).toContain("pr_watch, pr_review off")
+    expect(h.text()).toMatch(/PR watch, PR review.*: off/)
   })
 
   test("/pr comments runs the daemon's pr-comments template with the PR; the old /pr-comments says where it went", async () => {

@@ -70,7 +70,7 @@ describe("profile keys for the parts of the screen that had none", () => {
     expect(plain(on.rows[0]!)).toContain("Sessions")
     const off = renderSessionSidebar({ sessions, current: "s1", focused: false, height: 12, now: NOW, header: false })
     expect(off.rows.map(plain).join("\n")).not.toContain("Sessions")
-    expect(plain(off.rows[0]!)).toContain("Active")
+    expect(plain(off.rows[0]!)).toContain("Today")
     expect(off.hits[0]!.row).toBe(on.hits[0]!.row - 2)
   })
 

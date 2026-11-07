@@ -44,6 +44,9 @@ export function createEvents(ctx: AppContext, actions: {
   reloadExtensions: (revision: number) => Promise<void>
   /** A turn of this session ended: a `/reload` or `/restart` that waited for it runs. */
   noteTurnEnded: () => void
+  /** The agent's `session_open` asked for this session: the same switch as choosing it in /sessions. */
+  openSession: (sessionId: import("@mendcode/protocol").SessionId) => Promise<void>
+
   chatWidth: () => number
   noteSecretMarkers: ReturnType<typeof createSecrets>["noteSecretMarkers"]
   loadPage: (name: Parameters<typeof preload>[0] | undefined) => Promise<void>
@@ -75,6 +78,8 @@ export function createEvents(ctx: AppContext, actions: {
   const savedToasts = new Map<string, number>()
   /** The memory toast on screen, so the transcript row for the same write (it arrives a moment later) can replace it. */
   let shownMemoryToast: { memoryId: string; toast: unknown } | undefined
+  /** A session the agent's `session_open` named in this turn: the terminal switches to it when the turn ends, so the turn finishes where it ran. */
+  let openAfterTurn: { from: string; to: import("@mendcode/protocol").SessionId } | undefined
 
   /** Entering plan mode says who plans and that nothing changes before the review; leaving it says what runs now (the models are asked again first). */
   function announcePlanMode(from: PermissionMode, to: PermissionMode) {
@@ -121,9 +126,13 @@ export function createEvents(ctx: AppContext, actions: {
     // Extensions listening to the stats hear about a call or a compaction when it lands, with no surface needing to draw it.
     if ((event.type === "usage.recorded" || event.type === "compaction.updated") && ctx.stats.listeners > 0) ctx.stats.read()
     if (event.type === "turn.started") state.rewindCard = undefined
+    if (event.type === "item.completed" && event.status === "ok" && typeof event.meta?.openSession === "string" && event.meta.openSession.startsWith("ses_")) openAfterTurn = { from: event.sessionId, to: event.meta.openSession as import("@mendcode/protocol").SessionId }
     if (["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"].includes(event.type)) {
       state.mflowWait = undefined
       actions.noteTurnEnded()
+      const open = openAfterTurn?.from === event.sessionId ? openAfterTurn.to : undefined
+      openAfterTurn = undefined
+      if (open) void actions.openSession(open).then(requestFrame)
     }
     noteSecretMarkers(event)
     followPet(state)

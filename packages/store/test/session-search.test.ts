@@ -1,10 +1,10 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIdFactory } from "@mendcode/protocol"
 import { openStore } from "../src"
-import { snippetAround } from "../src/session-search"
+import { FIND_BUDGET_MS, FIND_LIMIT, FIND_SCAN, snippetAround } from "../src/session-search"
 
 const ids = createIdFactory()
 const dirs: string[] = []
@@ -98,4 +98,83 @@ test("a snippet is one line around the match with ellipses where it was cut", ()
   expect(snippet.endsWith("…")).toBe(true)
   expect(snippet.length).toBeLessThanOrEqual(124)
   expect(snippetAround("short\ntext", 0, 5)).toBe("short text")
+})
+
+describe("project search (find)", () => {
+  /** A session in `directory` holding one user message. */
+  function seed(store: ReturnType<typeof openStore>, input: { directory: string; title: string; text: string; parentId?: string }) {
+    const id = ids("session")
+    store.createSession({ id, title: input.title, directory: input.directory, ...(input.parentId ? { parentId: input.parentId as never } : {}) })
+    const itemId = ids("item")
+    store.sessionSink.append({ sessionId: id, type: "item.started", turnId: ids("turn"), itemId, kind: "user_message" } as never)
+    store.sessionSink.append({ sessionId: id, type: "item.completed", itemId, status: "ok", text: input.text } as never)
+    return id
+  }
+
+  test("finds a phrase in the messages or title of the folder's other sessions, children and archived ones too, never another folder's", () => {
+    const { store } = open()
+    const current = seed(store, { directory: "/p", title: "now", text: "where did we migrate the billing tables?" })
+    const done = seed(store, { directory: "/p", title: "db work", text: "We migrated the billing tables to v2 today." })
+    const child = seed(store, { directory: "/p", title: "sub", text: "the billing tables migration needs a lock", parentId: done })
+    const titled = seed(store, { directory: "/p", title: "Billing tables cleanup", text: "nothing here" })
+    store.setSessionArchived(titled, true)
+    seed(store, { directory: "/other", title: "x", text: "billing tables in another project" })
+    seed(store, { directory: "/p/inner", title: "y", text: "billing tables in a folder inside" })
+    const page = store.sessionSearch.find({ text: "BILLING TABLES", directory: "/p", exclude: current })
+    expect(page.hits.map((hit) => hit.sessionId).sort()).toEqual([done, child, titled].sort())
+    expect(page.next).toBeUndefined()
+    expect(page.hits.find((hit) => hit.sessionId === titled)?.snippet).toBe("Billing tables cleanup")
+    expect(page.hits.find((hit) => hit.sessionId === done)).toMatchObject({ title: "db work", snippet: "We migrated the billing tables to v2 today." })
+    expect(store.sessionSearch.find({ text: "billing tables", directory: "/p" }).hits.map((hit) => hit.sessionId)).toContain(current)
+    expect(store.sessionSearch.find({ text: "a.b", directory: "/p" }).hits).toEqual([])
+  })
+
+  test("a page holds at most ten hits, reads at most FIND_SCAN sessions and its cursor continues where it stopped", () => {
+    const { store } = open()
+    for (let i = 0; i < 25; i++) seed(store, { directory: "/p", title: `s${i}`, text: `needle ${i}` })
+    const first = store.sessionSearch.find({ text: "needle", directory: "/p" })
+    expect(first.hits).toHaveLength(FIND_LIMIT)
+    expect(first.next).toBe(FIND_LIMIT)
+    expect(store.sessionSearch.find({ text: "needle", directory: "/p", limit: 500 }).hits).toHaveLength(FIND_LIMIT)
+    const seen = new Set(first.hits.map((hit) => hit.sessionId))
+    let next = first.next
+    while (next !== undefined) {
+      const page = store.sessionSearch.find({ text: "needle", directory: "/p", offset: next })
+      for (const hit of page.hits) seen.add(hit.sessionId)
+      next = page.next
+    }
+    expect(seen.size).toBe(25)
+    for (let i = 0; i < FIND_SCAN + 5; i++) seed(store, { directory: "/q", title: `q${i}`, text: "nothing" })
+    expect(store.sessionSearch.find({ text: "needle", directory: "/q" })).toEqual({ hits: [], next: FIND_SCAN })
+    expect(store.sessionSearch.find({ text: "needle", directory: "/q", offset: FIND_SCAN })).toEqual({ hits: [] })
+  })
+
+  test("the time budget ends a page early and leaves a cursor to the next session", () => {
+    const { store } = open()
+    for (let i = 0; i < 5; i++) seed(store, { directory: "/p", title: `s${i}`, text: "nothing" })
+    let tick = 0
+    const page = store.sessionSearch.find({ text: "needle", directory: "/p", clock: () => (tick++ === 0 ? 0 : FIND_BUDGET_MS + 1) })
+    expect(page).toEqual({ hits: [], next: 1 })
+  })
+
+  test("a page over a folder of many sessions reads only its bounded share of them", () => {
+    const { store } = open()
+    for (let i = 0; i < FIND_SCAN * 3; i++) {
+      const id = ids("session")
+      store.createSession({ id, title: `session ${i}`, directory: "/work/project" })
+      const turnId = ids("turn")
+      for (let m = 0; m < 12; m++) {
+        const itemId = ids("item")
+        store.sessionSink.append({ sessionId: id, type: "item.started", turnId, itemId, kind: m % 2 ? "agent_message" : "user_message" } as never)
+        store.sessionSink.append({ sessionId: id, type: "item.completed", itemId, status: "ok", text: `message ${m} of session ${i} about the store and its events `.repeat(20) } as never)
+      }
+    }
+    const started = performance.now()
+    const page = store.sessionSearch.find({ text: "a phrase nobody wrote", directory: "/work/project" })
+    const elapsed = performance.now() - started
+    expect(page).toEqual({ hits: [], next: FIND_SCAN })
+    // Bounded by FIND_SCAN sessions and FIND_BUDGET_MS whatever the folder holds; generous for a slow machine.
+    expect(elapsed).toBeLessThan(FIND_BUDGET_MS * 4)
+    if (process.env.MEND_FIND_REPORT) console.log(`find: ${FIND_SCAN} of ${FIND_SCAN * 3} sessions scanned in ${elapsed.toFixed(1)} ms`)
+  })
 })

@@ -312,7 +312,7 @@ test("the facts fold events into the numbers the panel draws and ignore replayed
   facts.apply({ ...base, seq: 3, type: "usage.recorded", turnId: "t2" as never, provider: "p", model: "m", input: 700, output: 80, reasoning: 20, cacheRead: 0, cacheWrite: 0 })
   facts.apply({ ...base, seq: 3, type: "usage.recorded", turnId: "t2" as never, provider: "p", model: "m", input: 700, output: 999, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
   const snapshot = facts.snapshot()
-  expect(snapshot).toMatchObject({ active: true, reason: "auto", phase: "capture", before: { context: 1_060 }, summaryTokens: 100 })
+  expect(snapshot).toMatchObject({ active: true, reason: "auto", phase: "capture", before: { context: 1_060 }, summaryTokens: 80 })
   expect(snapshot.history).toEqual([1_060])
   facts.apply({ ...base, seq: 4, type: "compaction.updated", turnId: "t2" as never, reason: "auto", state: "packed", followUp: "" })
   expect(facts.snapshot()).toMatchObject({ active: false, phase: "packed" })

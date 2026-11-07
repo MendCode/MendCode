@@ -392,10 +392,10 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
 }
 
 /**
- * The start screen's mascot: `mend` (ASCII) or a pet of the pet system by reference. `mendy` named a built-in sprite that
- * was removed; it is still accepted and read as `mend`.
+ * The start screen's mascot: `mend` (ASCII) or a pet of the pet system by reference (`builtin:mendgirl` ships with MendCode).
+ * `mendy` named a built-in sprite that was removed; it is still accepted and read as `mend`.
  */
-export const HOME_MASCOT = /^(mend|mendy|(user|codex|package):[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/
+export const HOME_MASCOT = /^(mend|mendy|(user|codex|package|builtin):[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/
 
 /**
  * What users call the part a key changes when the key's own name says something else (`showStatus` is the footer): a guessed name
@@ -434,7 +434,7 @@ export function tuiProblems(raw: unknown): string[] {
     if (key === "timestamps" && typeof value === "boolean") continue
     if (Array.isArray(expected) ? !Array.isArray(value) : typeof value !== typeof expected) problems.push(`${key}: expected ${Array.isArray(expected) ? "array" : typeof expected}`)
     else if (TUI_ENUMS[key] && !TUI_ENUMS[key]!.includes(value as string)) problems.push(`${key}: expected ${TUI_ENUMS[key]!.join("|")}`)
-    else if (key === "homeMascot" && !HOME_MASCOT.test(value as string)) problems.push("homeMascot: expected mend or a pet reference (user:<id>, codex:<id>, package:<id>; /pet lists them)")
+    else if (key === "homeMascot" && !HOME_MASCOT.test(value as string)) problems.push("homeMascot: expected mend or a pet reference (builtin:mendgirl, user:<id>, codex:<id>, package:<id>; /pet lists them)")
     else if (key === "slashGroups" || key === "slashCommands") problems.push(...slashProfileProblems(key, value))
     else if (key === "quotaRefresh") problems.push(...quotaRefreshProblems(value))
     else if (key === "footerRows") problems.push(...footerRowsProblems(value))

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { PrFinding } from "@mendcode/protocol"
-import { failingKey, failureExcerpt, failureFollowUp, hasWriteAccess, learningBullet, MAINTAINERS_ONLY, nothingNewReply, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
+import type { PrFinding, PrReviewResult } from "@mendcode/protocol"
+import { alreadyReviewedReply, failingKey, failureExcerpt, failureFollowUp, hasWriteAccess, learningBullet, MAINTAINERS_ONLY, nothingNewReply, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { runFix } from "../src/pr-review/fix"
@@ -111,6 +111,29 @@ describe("runPrCommand", () => {
     expect(outcome).toMatchObject({ kind: "review", posted: true })
     expect(posts.at(-1)!.body.startsWith(text)).toBe(true)
     expect(posts.at(-1)!.body).not.toContain("Reviewed the current head: published")
+  })
+  test("a head already reviewed: the reply gives that review's result and a comment the commenter can use, never a terminal command or a bare 'skipped'", async () => {
+    // Seen live: "@mendcode review" an hour after the push's review answered "skipped (… /pr review 29 full …)".
+    const finding = (id: string, severity: PrFinding["severity"], path: string, summary: string): PrFinding => ({ id, path, line: 7, endLine: 7, side: "RIGHT", severity, category: "correctness", summary, detail: "d", evidence: [], verdict: "confirmed" })
+    const head = "6fd1da2c0ffee000"
+    const fixedOnly = { version: 1 as const, lastHead: head, published: { a: { finding: finding("a", "major", "src/a.ts", "Drops the last row"), resolved: true } } }
+    const result = { head, base: "b".repeat(40), findings: [] } as unknown as PrReviewResult
+    const at = Date.parse("2026-11-06T10:00:00Z")
+    const text = alreadyReviewedReply({ head, state: fixedOnly, result, at, now: at + 3_600_000 })
+    expect(text).toBe("Already reviewed 6fd1da2 (1 hour ago): no new findings; the earlier major finding is fixed.\nComment `@mendcode review full` to review the whole pull request again.")
+    expect(text).not.toContain("/pr review")
+    // Findings on that head and earlier ones still open are counted by severity and listed; a pruned job leaves out when and what it found.
+    const mixed = { ...fixedOnly, published: { ...fixedOnly.published, b: { finding: finding("b", "minor", "src/b.ts", "A stale label") }, c: { finding: finding("c", "major", "src/c.ts", "Leaks the handle"), resolved: true } } }
+    expect(alreadyReviewedReply({ head, state: mixed, result: { ...result, findings: [mixed.published.b.finding] }, at, now: at + 2 * 86_400_000 })).toBe([
+      "Already reviewed 6fd1da2 (2 days ago): 1 new finding (1 minor); 2 earlier findings are fixed (2 major).",
+      "Still open (1):",
+      "- `src/b.ts:7` (minor) A stale label",
+      "Comment `@mendcode review full` to review the whole pull request again.",
+    ].join("\n"))
+    expect(alreadyReviewedReply({ head, state: { version: 1, published: {} } }).split("\n")[0]).toBe("Already reviewed 6fd1da2: no findings.")
+    const { gh, posts } = fakeGh()
+    await runPrCommand({ kind: "review" }, deps(gh, issue("@mendcode review"), { review: async () => ({ status: "skipped", reason: "head 6fd1da2c0ffee000 was already reviewed", posted: false, text }) }))
+    expect(posts.at(-1)!.body.startsWith(text)).toBe(true)
   })
   test("pause and resume set the flag and leave a marker GitHub can be read back from", async () => {
     const { gh, posts } = fakeGh()

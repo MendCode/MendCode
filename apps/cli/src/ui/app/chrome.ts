@@ -7,7 +7,8 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { reviewActivityView } from "../lazy-pages"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
-import { chatColumns, projectSessions, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
+import { chatColumns, projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
+import { SPINNER_FRAMES } from "../../view/tool-card"
 import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import type { McpStatusReport } from "@mendcode/protocol"
@@ -151,10 +152,30 @@ export function createChrome(ctx: AppContext, actions: {
 
   /** The project's sessions, with hit rows for mouse navigation. */
   function sidebarRows(height: number): Line[] {
-    const sessions = projectSessions(state.sessions, input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}) }))
-    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader } })
-    state.sidebarHits = drawn.hits.filter((hit) => hit.action === "open" && typeof hit.arg === "string").map((hit) => ({ row: hit.row, sessionId: hit.arg as string }))
+    const sessions = projectSessions(state.sessions, input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
+    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader } })
+    state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
     return drawn.lines
+  }
+
+  /**
+   * Sessions with a reply finished since this terminal last showed them. A session is seen when the list first draws it and
+   * whenever it is the open one; nothing is written anywhere, so a fresh start has nothing unread.
+   */
+  function unreadSessions(sessions: ReadonlyArray<{ sessionId: string; updatedAt: number; state: string }>): string[] {
+    const seen = (state.sidebarSeen ??= new Map())
+    const unread: string[] = []
+    for (const session of sessions) {
+      if (session.sessionId === state.sessionId || !seen.has(session.sessionId)) seen.set(session.sessionId, session.updatedAt)
+      else if (session.updatedAt > seen.get(session.sessionId)! && session.state === "idle") unread.push(session.sessionId)
+    }
+    return unread
+  }
+
+  /** The activity tick's frame and blink, only while that tick already runs (a busy turn or a busy row in this list). */
+  function sidebarMotion(): { spinner?: string; blink?: boolean } {
+    if (!state.pulse || state.reducedMotion) return {}
+    return { spinner: SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!, blink: state.pulseOn }
   }
 
   async function loadSidebarMcp() {

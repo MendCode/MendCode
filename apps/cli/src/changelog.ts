@@ -48,12 +48,18 @@ export function itemKey(item: string): string {
 }
 
 /** Which items of `section` (in `sectionItems` order) are new since `seen`; none on a first look (nothing to compare with). */
-export function freshItems(section: ChangelogEntry, seen: ChangelogSeen | undefined): boolean[] {
+export function freshItems(section: ChangelogEntry, seen: ChangelogSeen | undefined, entries?: readonly ChangelogEntry[]): boolean[] {
   const items = sectionItems(section)
   if (!seen) return items.map(() => false)
   if (section.name === "Unreleased") {
     const known = new Set(seen.unreleased)
     return items.map((item) => !known.has(itemKey(item)))
+  }
+  // The list is newest first, so a section above the seen one is new: a beta cut after a stable is newer though lower by semver.
+  const seenAt = seen.version && entries ? entries.findIndex((entry) => entry.name === seen.version) : -1
+  if (seenAt >= 0) {
+    const fresh = entries!.indexOf(section) < seenAt
+    return items.map(() => fresh)
   }
   const at = parseVersion(section.name)
   const before = seen.version ? parseVersion(seen.version) : undefined
@@ -62,7 +68,7 @@ export function freshItems(section: ChangelogEntry, seen: ChangelogSeen | undefi
 }
 
 /** How many items of `section` are new since `seen`. */
-export const newItems = (section: ChangelogEntry, seen: ChangelogSeen | undefined): number => freshItems(section, seen).filter(Boolean).length
+export const newItems = (section: ChangelogEntry, seen: ChangelogSeen | undefined, entries?: readonly ChangelogEntry[]): number => freshItems(section, seen, entries).filter(Boolean).length
 
 const seenFile = (dataDir: string) => path.join(dataDir, "tui", "changelog-seen")
 

@@ -1,39 +1,126 @@
 # Environment credentials and optional chat encryption
 
-Both controls work in the **minimal, balanced and full** terminal views. The **minimalist tier** hides `/env` and `/privacy`, like other commands outside its 20-command set; use `/tier balanced` or list either command explicitly in the command editor. No release, protocol-version or database-schema bump is required.
+Use `/env` to store named credentials and `/privacy` to encrypt local chats. Both pages draw the same in every chat presentation (`minimal`, `balanced` and `full`, the `presentation` setting); that is how the chat looks, not which tier is on.
+
+The **tier** decides whether the commands are offered:
+
+- **Balanced and full** list `/env` and `/privacy` in the slash menu, `/help` and the palette.
+- **Minimalist** lists only its 21-command set, which leaves both out. Typed by hand there, either one runs nothing and answers in one row with the tier that has it. Use `/tier balanced`, or list the command in the command editor (`hidden: false` in `slashCommands`).
+
+What is already stored is not tied to the tier: credentials saved with `/env` stay in the vault, and chat encryption stays on or off as you set it. No release, protocol-version or database-schema bump is required.
 
 ## `/env`
 
-Open the local credential panel:
+Run `/env` to open the local credential panel.
 
-- **a** adds a name and a hidden value; **tab** switches fields; **Enter** advances/saves.
-- **Ctrl+S** selects project (default), session or global scope.
-- **e** replaces a selected value without revealing the previous one.
-- **x**, then **y**, removes a selected credential.
-- **i** imports a dotenv file inside the current project. Enter previews names only; **y** imports after confirmation. A content digest prevents importing a file that changed since preview. The source file is not modified, deleted or encrypted.
-- **Paste** a single `NAME=value` or a whole `.env` (anywhere on the page, or into the value field of **a**). MendCode finds every variable and lists the **names only**, each with a checkbox and a status: `new`, `replaces existing`, `refused` (with the reason) or `empty value, skipped`, under a count such as `12 found · 10 new · 1 replaces · 1 refused (PATH)`. **Space** toggles the highlighted name, **a** selects all or none, **Enter** encrypts and saves the selected ones (project scope by default; **Ctrl+S** switches to session or global and refreshes the statuses), **Esc** drops the pasted text. A name defined twice is listed once and the last definition wins. The pasted text is held in memory only until you save or cancel: it is never written to disk unencrypted, never enters the prompt history or the chat, and the daemon's replies carry names and statuses, never values. In a screen-reader or ASCII terminal the list is plain text with `[x]` / `[ ]` boxes. Single plain secrets (no `NAME=` start) pasted into the value field stay one hidden value.
-- **r** reloads; **Esc** cancels an edit or leaves. Values never appear in rendered frames, prompt history, a chat message or a toast.
+### Add, replace or remove a credential
 
-Project scope means the session's stored project directory. Session overrides project; project overrides global. Pasted and imported values are literal (the protocol's `env.import` takes either `path` or pasted `content`, plus `digest` and optionally `names` to apply a subset): quotes, comments, `export` and multiline quoted values are supported, but there is no shell execution or `${VARIABLE}` expansion. Empty imported assignments are skipped. Runtime configuration names such as `PATH`, `BASH_ENV`, `NODE_OPTIONS` and `LD_*` are refused; imports are validated and saved atomically.
+| Key | Does |
+|---|---|
+| **a** | adds a name and a hidden value |
+| **tab** | switches fields |
+| **Enter** | advances/saves |
+| **Ctrl+S** | selects project (default), session or global scope |
+| **e** | replaces a selected value without revealing the previous one |
+| **x**, then **y** | removes a selected credential |
+| **r** | reloads |
+| **Esc** | cancels an edit or leaves |
 
-The vault is `environment.enc`, an authenticated AES-256-GCM file with its own random 32-byte key in `keys/environment.key`. Credential values are encrypted regardless of chat encryption. Names/scopes are returned by `env.list`; there is no agent tool to reveal a value.
+Values never appear in rendered frames, prompt history, a chat message or a toast.
 
-In the **native engine**, the model receives available names and instructions to use them directly, without asking the user again. Built-in `shell` and `shell_session` processes (including background commands) receive the applicable credentials. They do not require `keepSecrets: true`, and custom/overridden tools do not receive vault injection.
+### Import a dotenv file
+
+1. Press **i** and choose a dotenv file inside the current project.
+2. Press Enter to preview names only.
+3. Press **y** to import after confirmation. A content digest prevents importing a file that changed since preview.
+
+The source file is not modified, deleted or encrypted.
+
+### Paste credentials
+
+1. Paste a single `NAME=value` or a whole `.env` anywhere on the page, or into the value field of **a**. MendCode finds every variable and lists the **names only**, each with a checkbox and status.
+2. Choose the names to save with the keys below.
+3. Press **Enter** to encrypt and save the selected ones. Project scope is the default.
+
+| Status | Meaning |
+|---|---|
+| `new` | a new name |
+| `replaces existing` | replaces an existing value |
+| `refused` | cannot be imported; the reason is shown |
+| `empty value, skipped` | an empty assignment is skipped |
+
+The count looks like `12 found · 10 new · 1 replaces · 1 refused (PATH)`.
+
+| Key | In the pasted-name list |
+|---|---|
+| **Space** | toggles the highlighted name |
+| **a** | selects all or none |
+| **Ctrl+S** | switches to session or global scope and refreshes statuses |
+| **Enter** | encrypts and saves selected names |
+| **Esc** | drops the pasted text |
+
+A name defined twice is listed once; the last definition wins. Single plain secrets with no `NAME=` start, pasted into the value field, stay one hidden value.
+
+Pasted text stays in memory only until you save or cancel. It is never written to disk unencrypted and never enters prompt history or chat. Daemon replies carry names and statuses, never values.
+
+In a screen-reader or ASCII terminal the list is plain text with `[x]` / `[ ]` boxes.
+
+### Scope and import rules
+
+Project scope means the session's stored project directory. Session overrides project; project overrides global.
+
+Pasted and imported values are literal. Quotes, comments, `export` and multiline quoted values are supported, but there is no shell execution or `${VARIABLE}` expansion.
+
+- Empty imported assignments are skipped.
+- Runtime configuration names such as `PATH`, `BASH_ENV`, `NODE_OPTIONS` and `LD_*` are refused.
+- Imports are validated and saved atomically.
+
+The protocol's `env.import` takes either `path` or pasted `content`, plus `digest` and optionally `names` to apply a subset.
+
+### Use credentials in the native engine
+
+The **native engine** gives the model available names and instructions to use them directly, without asking you again. Built-in `shell` and `shell_session` processes, including background commands, receive the applicable credentials.
+
+They do not require `keepSecrets: true`. Custom/overridden tools do not receive vault injection.
 
 ```python
 import os
 key = os.environ["MY_API_KEY"]
 ```
 
-The daemon registers configured values with its existing secret masker before tool execution. Exact values and their JSON-escaped forms, including streaming chunks, become `‹env:NAME›` in results. These markers are output masks, not substitution tokens. Already-running processes keep their original environment; replacement/removal applies to new processes. Recently used values remain masked while their session is cached.
+The daemon registers configured values with its existing secret masker before tool execution. Exact values and their JSON-escaped forms, including streaming chunks, become `‹env:NAME›` in results. These markers are output masks, not substitution tokens.
 
-**Claude Code, Codex, pi and ACP agents** get the same credentials too: the values go into the environment of the process MendCode starts for the session, so their own shells inherit them, and Claude Code, Codex and pi are told the names in their system prompt (`--append-system-prompt`, Codex `developerInstructions`). ACP has no system prompt, so its agent only finds them in its environment. Codex normally drops inherited variables named like a key, secret or token; MendCode turns that filter off for the credentials while still excluding the daemon's own such variables by name. A credential added or changed later starts a new process at the next turn. Claude Code waits for that while one of its background agents runs, because a new process would stop the agent.
+Already-running processes keep their original environment; replacement/removal applies to new processes. Recently used values remain masked while their session is cached.
+
+### Use credentials in other engines
+
+**Claude Code, Codex, pi and ACP agents** get the same credentials in the environment of the process MendCode starts for the session. Their own shells inherit them.
+
+| Engine | How it learns the names |
+|---|---|
+| Claude Code, Codex and pi | system prompt (`--append-system-prompt`, Codex `developerInstructions`) |
+| ACP | no system prompt; its agent only finds them in its environment |
+
+Codex normally drops inherited variables named like a key, secret or token. MendCode turns that filter off for credentials while still excluding the daemon's own such variables by name.
+
+A credential added or changed later starts a new process at the next turn. Claude Code waits for that while one of its background agents runs, because a new process would stop the agent.
 
 These engines print through their own tools, so MendCode **cannot mask** a value they print as `‹env:NAME›`; their models are told never to print them. To keep credentials native-only, set `engineEnvironment` to `false` (`settings.set { patch: { engineEnvironment: false } }` or the daemon's settings file; local clients only).
 
+### Vault storage
+
+The vault is `environment.enc`, an authenticated AES-256-GCM file with its own random 32-byte key in `keys/environment.key`. Credential values are encrypted regardless of chat encryption.
+
+Names/scopes are returned by `env.list`; there is no agent tool to reveal a value.
+
 ## `/privacy`
 
-Opens the same panel with an encryption confirmation. **p**, then **y**, changes the setting. It is **off by default**; turning it off again restores ordinary SQLite/files for local analyzers. Conversion waits until active turns and scheduled jobs finish.
+1. Run `/privacy`. It opens the same panel with an encryption confirmation.
+2. Press **p**, then **y**, to change the setting. Conversion waits until active turns and scheduled jobs finish.
+
+Encryption is **off by default**. Turning it off again restores ordinary SQLite/files for local analyzers.
+
+### What encryption covers
 
 When enabled:
 
@@ -44,18 +131,64 @@ When enabled:
 - A failed database write stops further database operations until the store is reopened; it is not acknowledged as durable success. File replacement failures leave conversion pending for the next open.
 - Disabling restores plaintext storage without losing sessions. Encryption does not depend on the tier and changing a tier does not turn it off.
 
-The key is `keys/chats.key` (0600, inside a 0700 directory). Back up `keys/` separately: missing, invalid or wrong keys fail closed instead of resetting data. This protects a copy of the data **without its keys**, not an attacker who can also read the keys. The encrypted mode holds the database in RAM and serializes it on writes; large histories cost additional RAM, CPU and disk I/O compared with plain SQLite. Opening decrypts the file in slices straight into the in-memory database (no second copy of the ciphertext), a write is encrypted and written in slices too, and a statement that changes nothing (no row, schema, user version or page layout) writes nothing. Each real write still rewrites the whole encrypted file. Attachments are encrypted as they are: an encrypted blob is its plaintext plus 36 bytes. Offline SQLite maintenance/inspection requires disabling encryption first.
+### Back up keys and inspect storage
 
-Conversion intent is stored as JSON in the existing `mendd.db` table `meta`, key `privacy_conversion`; no schema change, migration or sidecar is needed. It records the ON/OFF target before changing the database or any stored file, using a durable SQLite commit (or the encrypted database's atomic snapshot). An interrupted first pass is repeated with full blob SHA-256 comparisons, even when the target is OFF and a damaged sealed header looks plain. After a full pass, the marker records only pending blob hashes and relative private file names, including unreadable files. Later opens retry that list without reading or hashing healthy files again. Successfully converted or user-removed files leave the list; the marker is cleared only when the completed pass has no pending or unreadable files. A crash before the first conversion or after the last conversion but before clearing the marker safely repeats the work. The panel continues to show INCOMPLETE and the pending count until those files are resolved.
+The key is `keys/chats.key` (0600, inside a 0700 directory).
 
-Conversion recognizes plaintext blobs by their SHA-256 filename, including plaintext starting with `MENDENC1`; other blob bytes must authenticate as sealed data. Without a marker, ordinary plaintext blob reads and ordinary opens with encryption off add no full-file reads, hashes or rewrites; opening retains the existing cheap header checks. Private files are not content-addressed and still use the magic header: a plaintext private file starting with `MENDENC1` is ambiguous and will be left unreadable if authentication fails.
+**Warning:** Back up `keys/` separately. Missing, invalid or wrong keys fail closed instead of resetting data. This protects a copy of the data **without its keys**, not an attacker who can also read the keys.
 
-On open, cleanup removes only `<exact-final-name>.<UUID>.tmp` regular files with one link, after the final file exists and opens in its current format. Missing, unreadable or damaged finals keep their temporaries. Other `.tmp` names, links and directories are left alone. Database authentication errors still prevent opening the database and preserve its temporaries.
+Offline SQLite maintenance/inspection requires disabling encryption first.
+
+### Memory and write costs
+
+Encrypted mode holds the database in RAM and serializes it on writes. Large histories cost additional RAM, CPU and disk I/O compared with plain SQLite.
+
+Opening decrypts the file in slices straight into the in-memory database, with no second copy of the ciphertext. A write is encrypted and written in slices too.
+
+A statement that changes nothing, meaning no row, schema, user version or page layout, writes nothing. Each real write still rewrites the whole encrypted file.
+
+Attachments are encrypted as they are: an encrypted blob is its plaintext plus 36 bytes.
+
+### How conversion resumes
+
+Conversion intent is stored as JSON in the existing `mendd.db` table `meta`, key `privacy_conversion`. No schema change, migration or sidecar is needed.
+
+1. Before changing the database or any stored file, conversion records the ON/OFF target using a durable SQLite commit, or the encrypted database's atomic snapshot.
+2. An interrupted first pass is repeated with full blob SHA-256 comparisons, even when the target is OFF and a damaged sealed header looks plain.
+3. After a full pass, the marker records only pending blob hashes and relative private file names, including unreadable files. Later opens retry that list without reading or hashing healthy files again.
+4. Successfully converted or user-removed files leave the list. The marker is cleared only when the completed pass has no pending or unreadable files.
+
+A crash before the first conversion, or after the last conversion but before clearing the marker, safely repeats the work. The panel continues to show INCOMPLETE and the pending count until those files are resolved.
+
+### How file formats are recognized
+
+Conversion recognizes plaintext blobs by their SHA-256 filename, including plaintext starting with `MENDENC1`. Other blob bytes must authenticate as sealed data.
+
+Without a marker, ordinary plaintext blob reads and ordinary opens with encryption off add no full-file reads, hashes or rewrites. Opening retains the existing cheap header checks.
+
+Private files are not content-addressed and still use the magic header. A plaintext private file starting with `MENDENC1` is ambiguous and will be left unreadable if authentication fails.
+
+### Temporary-file cleanup
+
+On open, cleanup removes only `<exact-final-name>.<UUID>.tmp` regular files with one link, after the final file exists and opens in its current format.
+
+- Missing, unreadable or damaged finals keep their temporaries.
+- Other `.tmp` names, links and directories are left alone.
+- Database authentication errors still prevent opening the database and preserve its temporaries.
 
 ## Boundaries
 
-This is encryption **at rest**, not password unlocking, OS Keychain integration, or isolation from other programs running as the same user. The authenticated local owner can toggle it, read chat APIs and access the key files; a tool with shell/network access can also attempt to exfiltrate credentials. Existing tool approvals and sandbox policy still matter.
+This is encryption **at rest**, not password unlocking, OS Keychain integration, or isolation from other programs running as the same user.
 
-Explicit exports/shares, previous backups, files in the user's checkout (including imported `.env`), provider copies, adapter-owned session logs, and separately enabled debug traces are outside this encryption boundary. Encryption does not retroactively erase old plaintext copies or promise secure deletion on SSDs. To let another local AI analyze encrypted chats, deliberately export them or disable encryption; protect the exported copy yourself.
+The authenticated local owner can toggle it, read chat APIs and access the key files. A tool with shell/network access can also attempt to exfiltrate credentials. Existing tool approvals and sandbox policy still matter.
+
+These are outside the encryption boundary:
+
+- Explicit exports/shares and previous backups.
+- Files in your checkout, including imported `.env`.
+- Provider copies and adapter-owned session logs.
+- Separately enabled debug traces.
+
+Encryption does not retroactively erase old plaintext copies or promise secure deletion on SSDs. To let another local AI analyze encrypted chats, deliberately export them or disable encryption; protect the exported copy yourself.
 
 Masking shares the existing `docs/secrets.md` limitations: encoded/transformed values, screenshots and unknown credentials are not covered. Do not print secrets or assume a shell process cannot read the values that it needs to use.

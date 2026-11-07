@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test"
 import { writeFileSync } from "node:fs"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
+import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, prCell, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
 import { reviewsCommand, reviewsPageKey } from "../src/view/reviews-keys"
 import { textWidth } from "../src/view/wrap"
+import { createTicks } from "../src/ui/app/ticks"
 
 const NOW = Date.UTC(2026, 9, 30, 12, 0, 0)
 const MIN = 60_000
@@ -70,7 +71,9 @@ describe("reviews page render", () => {
       const out = screen(rows)
       expect(out).toContain("Reviews")
       expect(out).toContain("1 Jobs")
-      expect(out).toContain("1/2 running")
+      expect(out).toContain("⠋ 1 running · 1 queued · 1 waiting · 1 failed")
+      expect(out).toContain("enter detail · / search · ? keys")
+      expect(out).not.toMatch(/24h|\d+ done|\d out\b|2 watches/)
       // 80x24 shows the list above a detail preview, so only the first groups fit; the selected job is the first one.
       const labels = height >= 40 ? ["Running", "Fixing · validating", "Waiting · offline", "Checkpointed", "Pending"] : ["Running", "Fixing · validating"]
       const order = labels.map((label) => out.indexOf(label))
@@ -165,8 +168,38 @@ describe("reviews page render", () => {
   })
 
   test("metrics never invent a number: without a dashboard the summary is empty", () => {
-    expect(metricsSummary(undefined, 200)).toBe("")
-    expect(metricsSummary(dashboard([]), 30)).toBe("1/2 running")
+    expect(metricsSummary(undefined, 200)).toEqual([])
+  })
+
+  test("the tab row counts only what needs attention: non-zero running, queued, waiting and failed, else idle", () => {
+    const words = (spans: ReturnType<typeof metricsSummary>) => spans.map((span) => span.text).join("")
+    const base = dashboard([])
+    expect(words(metricsSummary(base, 200, "⠙"))).toBe("⠙ 1 running · 1 queued · 1 waiting · 1 failed")
+    expect(words(metricsSummary(base, 20))).toBe("⠋ 1 running")
+    const some = { ...base, metrics: { ...base.metrics, running: 0, waiting: 0 } }
+    expect(words(metricsSummary(some, 200))).toBe("1 queued · 1 failed")
+    const idle = { ...base, metrics: { ...base.metrics, running: 0, queued: 0, waiting: 0, failed24h: 0 } }
+    expect(metricsSummary(idle, 200)).toEqual([{ text: "idle", fg: "muted", dim: true }])
+  })
+
+  test("? lists every key under the tabs and hides it again; esc hides it before it unpins or leaves", () => {
+    const data = dashboard(populated())
+    const opened = reviewsPageKey(createReviewsPageState(), "?", data).state
+    expect(opened.keys).toBe(true)
+    const out = screen(render(ready(), opened, 200, 40))
+    for (const meaning of ["open PR", "retry (asks why)", "config", "state filter", "repo filter", "select", "refresh", "follow latest, back", "take over, release", "hide keys"]) expect(out).toContain(meaning)
+    expect(out).toContain("enter detail · / search · ? hide keys")
+    exactSize(render(ready(), opened, 80, 24), 80, 24)
+    expect(reviewsPageKey(opened, "?", data).state.keys).toBeUndefined()
+    const escaped = reviewsPageKey(opened, "\x1b", data)
+    expect(escaped.action.type).toBe("none")
+    expect(escaped.state.keys).toBeUndefined()
+    expect(screen(render(ready(), createReviewsPageState(), 200, 40))).not.toContain("retry (asks why)")
+  })
+
+  test("the header names one context key at most: esc clear filter while a filter is on", () => {
+    const filtered = reviewsPageKey(createReviewsPageState(), "f", dashboard(populated())).state
+    expect(screen(render(ready(), filtered, 200, 40))).toContain("? keys · esc clear filter")
   })
 })
 
@@ -331,14 +364,163 @@ describe("one row per pull request", () => {
     const activity = [{ jobId: "run", sessionId: "ses_watch" as never, repo: "acme/payments", number: 25, phase: "analysis", startedAt: NOW - 80_000, steps: [{ label: "Fetching #25", detail: "head 51fe4047", startedAt: NOW - 80_000, endedAt: NOW - 76_000 }, { label: "Analysis", detail: "112 files", startedAt: NOW - 76_000 }] }]
     const list = screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width: 100, height: 30, now: NOW, activity }))
     expect(list).toMatch(/Running {2}1/)
-    expect(list).toContain("analysis · 1m 20s")
+    expect(list).toContain("⠋ analysis · 112 files · 1m 20s")
     const detail = screen(renderReviewsPage({ data: ready(jobs), state: { ...createReviewsPageState(), selectedId: "run", detail: true }, width: 100, height: 30, now: NOW, activity }))
     expect(detail).toContain("state      running · analysis · 1m 20s · attempt 1")
+    expect(detail).toContain("           ⠋ analysis · 112 files · 1m 20s")
     expect(detail).toContain("steps      Fetching #25 · head 51fe4047 · 4s")
     expect(detail).toContain("Analysis · 112 files · 1m 16s so far")
     if (process.env.CAPTURE_DIR) {
       writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-list-100x30.txt`, list)
       writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-detail-100x30.txt`, detail)
     }
+  })
+})
+
+describe("the selection follows the latest review until one is picked", () => {
+  type Activity = NonNullable<Parameters<typeof renderReviewsPage>[0]["activity"]>
+  const running = (jobId: string, number: number, startedAt: number): Activity[number] => ({ jobId, sessionId: "ses_watch" as never, repo: "acme/payments", number, phase: "analysis", startedAt, steps: [{ label: "Analysis", detail: "112 files", startedAt }] })
+  const selectedRow = (out: string) => out.split("\n").find((line) => line.includes("❯"))
+  const draw = (jobs: PrJobSummary[], state: ReviewsPageState, activity: Activity = []) => screen(renderReviewsPage({ data: ready(jobs), state, width: 160, height: 48, now: NOW, activity }))
+
+  test("follows the running job, the one started last when several run", () => {
+    const jobs = [job({ id: "old-run", number: 30, state: "running", phase: "analysis" }), job({ id: "new-run", number: 31, state: "running", phase: "analysis" }), job({ id: "fresh-done", number: 32, state: "done", updatedAt: NOW - 1_000 })]
+    const activity = [running("old-run", 30, NOW - 10 * MIN), running("new-run", 31, NOW - MIN)]
+    expect(selectedRow(draw(jobs, createReviewsPageState(), activity))).toContain("#31")
+    expect(reviewsPageKey(createReviewsPageState(), "s", dashboard(jobs), activity).state.selectedId).toBeUndefined()
+  })
+
+  test("follows the newest job when none runs, and moves on its own when a new review starts", () => {
+    const idle = [job({ id: "older", number: 40, state: "done", updatedAt: NOW - 60 * MIN }), job({ id: "newer", number: 41, state: "failed", updatedAt: NOW - 2 * MIN })]
+    const state = createReviewsPageState()
+    expect(selectedRow(draw(idle, state))).toContain("#41")
+    const started = [...idle, job({ id: "started", number: 42, state: "running", phase: "discovery", updatedAt: NOW - 30 * MIN })]
+    expect(selectedRow(draw(started, state, [running("started", 42, NOW - 5_000)]))).toContain("#42")
+  })
+
+  test("an arrow pins the selection, says so in the detail title and the hints, and a new review does not move it", () => {
+    const jobs = [job({ id: "a", number: 50, state: "done", updatedAt: NOW - MIN }), job({ id: "b", number: 51, state: "done", updatedAt: NOW - 9 * MIN })]
+    const unpinned = draw(jobs, createReviewsPageState())
+    expect(unpinned).not.toContain("pinned")
+    expect(unpinned).not.toContain("esc follow latest")
+    const state = reviewsPageKey(createReviewsPageState(), "\x1b[B", dashboard(jobs)).state
+    expect(state.selectedId).toBe("b")
+    const pinned = draw(jobs, state)
+    expect(selectedRow(pinned)).toContain("#51")
+    expect(pinned).toContain("#51 · pinned")
+    expect(pinned).toContain("esc follow latest")
+    const later = [...jobs, job({ id: "c", number: 52, state: "running", phase: "analysis" })]
+    expect(selectedRow(draw(later, state, [running("c", 52, NOW - 1_000)]))).toContain("#51")
+  })
+
+  test("esc on a pinned selection unpins and follows again; a second esc leaves the page", () => {
+    const data = dashboard(populated())
+    const pinned = reviewsPageKey(reviewsPageKey(createReviewsPageState(), "j", data).state, "\r", data).state
+    expect(pinned).toMatchObject({ selectedId: "child", detail: true })
+    const list = reviewsPageKey(pinned, "\x1b", data)
+    expect(list.state).toMatchObject({ selectedId: "child", detail: false })
+    const following = reviewsPageKey(list.state, "\x1b", data)
+    expect(following.action.type).toBe("none")
+    expect(following.state.selectedId).toBeUndefined()
+    expect(reviewsPageKey(following.state, "\x1b", data).action).toEqual({ type: "close" })
+  })
+
+  test("a running row shows the activity spinner with its phase, running step and time", () => {
+    const jobs = [job({ id: "run", number: 60, state: "running", phase: "analysis" }), job({ id: "idle", number: 61, state: "done" })]
+    const activity = [running("run", 60, NOW - 75_000)]
+    const frame = (spinner: string) => screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width: 160, height: 48, now: NOW, activity, spinner }))
+    // The list row, left of a wide page's detail pane.
+    const rowOf = (out: string, number: number) => out.split("\n").map((line) => line.split("│ │")[0]!).find((line) => line.includes(`#${number} Refresh`))!
+    expect(rowOf(frame("⠙"), 60)).toContain("⠙ analysis · 112 files · 1m 15s")
+    expect(rowOf(frame("⠙"), 61)).not.toContain("⠙")
+    for (const width of [80, 100, 120]) {
+      const narrow = screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width, height: 24, now: NOW, activity }))
+      expect(rowOf(narrow, 60)).toMatch(/❯ #60 Refresh[^\n]*⠋ analysis[^\n]* · 1m 15s/)
+    }
+  })
+
+  test("no redraw timer runs on the page while no review runs; one pulse runs while one does", () => {
+    const state = { page: "reviews", settingsPageState: { row: 9 }, transcript: { foreground: "idle", blocks: () => [] }, agentSessions: new Map(), turnState: {}, reviewActivity: [] as Activity[number][], reducedMotion: false, pulse: undefined as ReturnType<typeof setInterval> | undefined, pulseOn: true, loopsTick: undefined as ReturnType<typeof setInterval> | undefined, spinFrame: 0 }
+    const ticks = createTicks({ state, schedule() {}, input: {} } as never, { chatWidth: () => 100, sessionTitle: () => "", render() {} })
+    try {
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeUndefined()
+      expect(state.loopsTick).toBeUndefined()
+      state.reviewActivity = [running("run", 60, NOW)]
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeDefined()
+      expect(state.loopsTick).toBeUndefined()
+      state.reviewActivity = []
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeUndefined()
+      expect(state.loopsTick).toBeUndefined()
+    } finally {
+      if (state.pulse) clearInterval(state.pulse)
+      if (state.loopsTick) clearInterval(state.loopsTick)
+    }
+  })
+})
+
+describe("the pull request's GitHub state", () => {
+  type Pr = NonNullable<PrJobSummary["pullRequest"]>
+  const open: Pr = { state: "open", draft: false, mergeable: "mergeable", checks: "passing" }
+  const cases: Array<{ name: string; pr: Pr; blocking?: number; text: string; fg: string }> = [
+    { name: "merged", pr: { ...open, state: "merged" }, text: "merged", fg: "muted" },
+    { name: "closed", pr: { ...open, state: "closed" }, text: "closed", fg: "muted" },
+    { name: "draft", pr: { ...open, draft: true }, text: "draft", fg: "muted" },
+    { name: "ready", pr: open, text: "open · ready", fg: "success" },
+    { name: "ready without any check", pr: { ...open, checks: "none" }, text: "open · ready", fg: "success" },
+    { name: "a failed check", pr: { ...open, checks: "failing", failing: ["lint", "e2e"] }, text: "open · CI ✗", fg: "error" },
+    { name: "checks running", pr: { ...open, checks: "pending" }, text: "open · CI …", fg: "muted" },
+    { name: "a conflict", pr: { ...open, mergeable: "conflicting" }, text: "open · conflict", fg: "warning" },
+    { name: "an open major finding", pr: open, blocking: 1, text: "open · findings", fg: "warning" },
+  ]
+  const withPr = (pr: Pr | undefined, blocking?: number, patch: Partial<PrJobSummary> = {}) => job({ state: "done", ...(pr ? { pullRequest: pr } : {}), findings: { confirmed: blocking ?? 0, plausible: 0, candidates: 0, resolved: 0, ...(blocking ? { blocking } : {}) }, ...patch })
+
+  for (const entry of cases) {
+    test(`${entry.name}: the row says ${entry.text} in ${entry.fg}, and so does the detail's pull request line`, () => {
+      const target = withPr(entry.pr, entry.blocking)
+      expect(prCell(target)).toEqual({ text: entry.text, fg: entry.fg as never })
+      const rows = render(ready([target]), createReviewsPageState(), 160, 48)
+      const span = rows.flat().find((item) => item.text === entry.text)
+      expect(span?.fg).toBe(entry.fg as never)
+      expect(screen(rows)).toContain(`pull request  ${entry.text}`)
+    })
+  }
+
+  test("the detail names the failing checks; an unknown state shows no cell and no pull request line", () => {
+    const failing = render(ready([withPr({ ...open, checks: "failing", failing: ["lint", "e2e", "build"] })]), createReviewsPageState(), 160, 48)
+    expect(screen(failing)).toContain("failing lint, e2e, build")
+    const unknown = render(ready([withPr(undefined)]), createReviewsPageState(), 160, 48)
+    expect(screen(unknown)).not.toContain("pull request  ")
+    expect(prCell(withPr(undefined))).toBeUndefined()
+  })
+
+  test("f reaches ready, needs work and closed after the review states; each keeps only its pull requests", () => {
+    const jobs = [
+      withPr(open, undefined, { id: "ready" }),
+      withPr({ ...open, checks: "failing" }, undefined, { id: "ci" }),
+      withPr({ ...open, mergeable: "conflicting" }, undefined, { id: "conflict" }),
+      withPr(open, 2, { id: "blocking" }),
+      withPr({ ...open, state: "merged" }, undefined, { id: "merged" }),
+      withPr({ ...open, state: "closed" }, undefined, { id: "closed" }),
+      withPr({ ...open, draft: true }, undefined, { id: "draft" }),
+      withPr(undefined, undefined, { id: "unknown" }),
+    ]
+    const board = dashboard(jobs)
+    let state = createReviewsPageState()
+    const seen: string[] = []
+    for (let step = 0; step < 12; step++) { state = reviewsPageKey(state, "f", board).state; seen.push(state.filter.state) }
+    expect(seen.slice(-3)).toEqual(["ready", "needs-work", "closed"])
+    const ids = (filter: ReviewsPageState["filter"]["state"]) => filterJobs(jobs, { text: "", state: filter }).map((entry) => entry.id).sort()
+    expect(ids("ready")).toEqual(["ready"])
+    expect(ids("needs-work")).toEqual(["blocking", "ci", "conflict"])
+    expect(ids("closed")).toEqual(["closed", "merged"])
+    const prompt = screen(render({ status: "ready", dashboard: board, fetchedAt: NOW }, { ...createReviewsPageState(), filter: { text: "", state: "needs-work" } }, 120, 40))
+    expect(prompt).toContain("· needs work")
+    expect(reviewsPageKey(createReviewsPageState(), "F", board).state.filter.state).toBe("closed")
   })
 })

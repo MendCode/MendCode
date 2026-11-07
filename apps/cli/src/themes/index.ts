@@ -1,6 +1,7 @@
 import type { Theme } from "./define"
 import amber from "./amber"
 import fjord from "./fjord"
+import ink from "./ink"
 import matrix from "./matrix"
 import mend from "./mend"
 import mint from "./mint"
@@ -11,7 +12,7 @@ import { V1_THEMES } from "./v1"
 
 export { BACKGROUND_ROLES, COLOR_NAMES, defineTheme, mix, type ColorName, type Palette, type Theme } from "./define"
 
-export const DEFAULT_THEME = "mend"
+export const DEFAULT_THEME = "ink"
 
 /** One entry per theme file. Adding a theme = a new file here plus one import above; v1's come from ./v1. */
-export const THEMES: Theme[] = [mend, matrix, mint, amber, fjord, paper, mono, terminal, ...V1_THEMES]
+export const THEMES: Theme[] = [ink, mend, matrix, mint, amber, fjord, paper, mono, terminal, ...V1_THEMES]

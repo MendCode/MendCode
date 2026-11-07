@@ -1,29 +1,38 @@
 # PR reviewer: team setup
 
+Set up MendCode's [PR reviewer](pr-review.md) for your team, including developers whose laptops are sometimes off, asleep or offline. This page is the how-to; use [the reference](pr-review.md) for what each key or rule does.
+
 ## One-step setup
 
-In a local session in the repository clone, run **`/pr setup [all|requested]`**. It checks the origin, `gh` login and
-`.mendcode/review.yaml` on the origin base branch, then shows one confirmation listing what will change. Enter enables the
-reviewer, starts the watch and allows publishing reviews to GitHub using your login. Escape changes nothing. Already-enabled
-steps are skipped; failures and their fixes stay on a scrollable page. The result opens PR repositories.
+1. In a local session in the repository clone, run **`/pr setup [all|requested]`**. It checks the origin, `gh` login and `.mendcode/review.yaml` on the origin base branch.
+2. Read the confirmation listing what will change. Already-enabled steps are skipped; failures and their fixes stay on a scrollable page.
+3. Press Enter to enable the reviewer, start the watch and allow publishing reviews to GitHub using your login. Escape changes nothing. The result opens PR repositories.
 
-The default is `all` when the base config's `reviewers` is `all`, otherwise `requested`. The balanced tier or a permitted
-`pr_review` override is required; when the tier does not include it (unset or minimalist), setup lists "Allow the PR reviewer in this tier (features.pr_review: true; the tier stays …)" among its changes and writes it on confirmation. Safe mode and an explicit `features.pr_review: false` stay problems it will not override; the latter says how to turn it back on. Setup never changes the tier, model, repository files or remotes. A `public` remote with
-review enabled is identified when origin lacks it; use a clone of that repository rather than silently redirecting origin.
-The quick path currently checks GitHub; the manual commands below remain available for GitLab and Gitea.
+The default is `all` when the base config's `reviewers` is `all`, otherwise `requested`.
+
+### Requirements and unchanged settings
+
+The balanced tier or a permitted `pr_review` override is required. When the tier does not include it (unset or minimalist), setup lists "Allow the PR reviewer in this tier (features.pr_review: true; the tier stays …)" among its changes and writes it on confirmation.
+
+Safe mode and an explicit `features.pr_review: false` stay problems setup will not override. The latter says how to turn it back on.
+
+Setup never changes the tier, model, repository files or remotes. If origin lacks review configuration but a `public` remote has it enabled, setup identifies that remote. Use a clone of that repository rather than silently redirecting origin.
+
+The quick path currently checks GitHub. Manual commands below remain available for GitLab and Gitea.
 
 A development daemon ([dev mode](dev-mode.md)) records the watch but never runs it; setup says so. When something needs attention, nothing is applied, even with `--yes`, and the output ends with "Nothing changed".
 
-Headless: `mendcode pr setup [all|requested] --session ID`. It uses that session's checkout and model and asks once in a terminal.
-For automation, add `--yes` to consent to the listed changes, including model calls and GitHub publishing; without consent it
-returns a preview and exit code 4. `--json` is noninteractive. `--dir DATA` selects the daemon storage.
+The base config and machine credentials still need to exist. Setup does not commit configuration, install programs, start a system service or obtain credentials. A missing base ref reports how to fetch origin and set its default branch.
 
-The base config and machine credentials still need to exist; setup does not commit configuration, install programs, start a
-system service or obtain credentials. A missing base ref reports how to fetch origin and set its default branch.
+### Headless setup
 
-How to set up MendCode's [PR reviewer](pr-review.md) for a team, including a team whose developers use laptops that are
-sometimes off, asleep or offline. This page is the how-to. For what each key or rule does, follow the links to
-[the reference](pr-review.md).
+Run `mendcode pr setup [all|requested] --session ID`. It uses that session's checkout and model and asks once in a terminal.
+
+| Option | Does |
+|---|---|
+| `--yes` | Consent to the listed changes for automation, including model calls and GitHub publishing; without consent, return a preview and exit code 4 |
+| `--json` | Noninteractive |
+| `--dir DATA` | Select the daemon storage |
 
 ## Pick a topology
 
@@ -33,9 +42,9 @@ sometimes off, asleep or offline. This page is the how-to. For what each key or 
 | **B. One always-on server, plus optional personal reviewers** (recommended) | A VPS or any machine that stays on; laptops optional | Laptops that sleep; fixes; GitHub, GitLab and Gitea / Forgejo | One machine to run, with `gh` (or `glab`, or a Gitea token) and a model it can use without a browser |
 | **C. Personal reviewers only** | Each developer's laptop | Small teams where everyone reviews their own requests | A PR waits while the laptop of the reviewer it is routed to is off |
 
-The main question is whether a PR may wait for one person's laptop. With B, the server reviews every PR and laptops add
-personal reviews when they are on. With C, nothing reviews a PR routed to a laptop that is off. It waits, with its reason shown,
-until that laptop comes back.
+The main question is whether a PR may wait for one person's laptop. With B, the server reviews every PR and laptops add personal reviews when they are on.
+
+With C, nothing reviews a PR routed to a laptop that is off. It waits, with its reason shown, until that laptop comes back.
 
 You can combine A with personal reviewers on laptops (`/pr watch-repo requested`). Only one MendCode review is posted per PR
 head: whichever reviewer posts first, the others keep theirs in their own session
@@ -61,14 +70,15 @@ You can do the steps below by hand, or ask your MendCode session in the reposito
    A `global` change edits the checkout's working-tree `review.yaml` only; you commit it to the base branch. The `/pr` commands
    (`/pr on`, `/pr watch-repo`, `/pr publish on`) you type yourself.
 
-To review a PR now, the session uses the `pr_review` tool (`review`, which asks your approval outside full access) or you run `/pr review <n>`. A
-session never posts `@mendcode`, or anything else, from your account to start a review.
+To review a PR now, run `/pr review <n>` or let the session use the `pr_review` tool (`review`, which asks your approval outside full access).
+
+A session never posts `@mendcode`, or anything else, from your account to start a review.
 
 ## Before any topology: the repository config
 
-Commit `.mendcode/review.yaml` to the base branch (usually `main`). Nothing is posted until it says `enabled: true`. The base
-branch is the trust root: a PR's own copy of the file can only add path instructions
-([repository config](pr-review.md#repository-config)). A minimal team file:
+Commit `.mendcode/review.yaml` to the base branch, usually `main`. Nothing is posted until it says `enabled: true`.
+
+The base branch is the trust root: a PR's own copy can only add path instructions ([repository config](pr-review.md#repository-config)). Start with this minimal team file:
 
 ```yaml
 enabled: true
@@ -94,9 +104,9 @@ fixes: true                        # @mendcode fix may push one commit
 fix: { mode: fix-once, push: true } # fix the confirmed findings once, automatically, and push
 ```
 
-A fix is never force-pushed and never merged. It is pushed only when the branch is still where the fix started, and only when the
-reviewer may push there (a fork must allow edits from maintainers). In every other case it is kept on a local ref
-`refs/mendcode/fix/<pr>/<time>` with the reason ([fix modes](pr-review.md#fix-modes-and-taking-over)).
+A fix is never force-pushed and never merged. It is pushed only when the branch is still where the fix started and the reviewer may push there. A fork must allow edits from maintainers.
+
+Otherwise, the fix stays on a local ref `refs/mendcode/fix/<pr>/<time>` with the reason; see [fix modes](pr-review.md#fix-modes-and-taking-over).
 
 Who may post and who may ask:
 
@@ -119,12 +129,15 @@ mendcode --dir /tmp/mend-ci github install --hosted --model openai/MODEL --relea
    API key (a local server, a subscription login) is refused at install.
 4. Commit the workflow and `.mendcode/review.yaml` with `enabled: true`. MendCode never pushes the workflow for you.
 
-It reviews on `pull_request` (opened, synchronize, ready for review) and on an `@mendcode` comment from an owner, member or
-collaborator. A fork's PR gets no secret. Its run says so in the job summary, and a maintainer's `@mendcode review` reviews it
-from the base repository. Details: [hosted PR reviewer](github.md#hosted-pr-reviewer).
+It reviews on `pull_request` (opened, synchronize, ready for review) and on an `@mendcode` comment from an owner, member or collaborator.
 
-Limits of this topology: the job's token cannot push, so `@mendcode fix` and `fix.mode` do nothing useful. A hosted review runs
-no `checks`, explains no failing check, and does not apply the repository's filters to an `@mendcode` comment yet.
+A fork's PR gets no secret. Its run says so in the job summary; a maintainer's `@mendcode review` reviews it from the base repository. Details: [hosted PR reviewer](github.md#hosted-pr-reviewer).
+
+Limits of this topology:
+
+- The job's token cannot push, so `@mendcode fix` and `fix.mode` do nothing useful.
+- A hosted review runs no `checks` and explains no failing check.
+- It does not apply the repository's filters to an `@mendcode` comment yet.
 
 ## B. Always-on server, plus personal reviewers on laptops
 
@@ -149,9 +162,10 @@ The server is one MendCode daemon that watches the repository with `all`. Steps:
    mendcode daemon status
    ```
 
-   On Linux this is a systemd user unit (`Restart=always`). systemd normally runs a user's units only while that user is logged
-   in. `loginctl enable-linger <user>` keeps them running, and MendCode does not set it for you. On macOS it is a launchd agent
-   (`RunAtLoad`, `KeepAlive`).
+   | Platform | Service behavior |
+   |---|---|
+   | Linux | systemd user unit (`Restart=always`); normally runs only while the user is logged in. `loginctl enable-linger <user>` keeps it running; MendCode does not set that for you |
+   | macOS | launchd agent (`RunAtLoad`, `KeepAlive`) |
 6. **Start the watch from a session on that machine.** Over SSH, in the clone, run `mendcode`, pick the model (`/model`), then:
 
    ```text
@@ -197,17 +211,19 @@ routing:
 
 - Give the global reviewer the server's `login`. A global reviewer without a login runs on every daemon that watches with `all`,
   including a laptop's.
-- `global: always` is the choice for laptops that are often off: every PR gets the server's review, and personal reviewers add
-  theirs when their laptop is on. Only one review is posted per head, so a personal review of a head the server already posted
-  stays in that developer's session, and both reviews spend tokens.
+- `global: always` is the choice for laptops that are often off: every PR gets the server's review, and personal reviewers add theirs when their laptop is on.
+  Only one review is posted per head. A personal review of a head the server already posted stays in that developer's session, and both reviews spend tokens.
 - `global: personal-only` (with `fallback`) sends the server only the PRs no personal reviewer matched. A PR routed to Alice
   then waits for Alice's laptop, and the server does not take it over, however long it is off.
-- `capabilities` (default: all of `review`, `fix`, `publish`) is enforced. A reviewer without `publish` keeps its reviews in its
-  owner's session and posts no claim comment. One without `fix` runs no automatic fix, and its `@mendcode fix` gets one reply
-  saying so. `review.yaml` still decides whether a capability is used.
+- `capabilities` is enforced; the default is all of `review`, `fix`, `publish`. `review.yaml` still decides whether a capability is used.
 - A `login` follows the checkout's forge. On GitLab and Gitea it may hold `_` and `.`, but not end in `.`.
 - A typo or an unknown key (such as `memory:`) makes the whole file a problem. The implicit global reviewer is then used, and the
   problem is named. The file never holds memory, profiles or credentials.
+
+| Missing capability | Result |
+|---|---|
+| `publish` | Reviews stay in the owner's session; no claim comment is posted |
+| `fix` | No automatic fix runs; `@mendcode fix` gets one reply saying so |
 
 ### On each laptop (a personal reviewer)
 
@@ -220,23 +236,23 @@ routing:
    /pr setup requested
    ```
 
-`requested` runs your personal reviewer. It reviews the PRs that request a review from your login or are assigned to you, and the
-PRs that `reviewers.yaml` routes to your personal reviewer by area or label. It never runs the global reviewer. A watch with
-`all` would also run a global reviewer without a `login`, so give the global reviewer the server's login as above.
+`requested` runs your personal reviewer. It reviews PRs that request a review from your login, are assigned to you, or are routed to your personal reviewer by area or label in `reviewers.yaml`.
+
+It never runs the global reviewer. A watch with `all` would also run a global reviewer without a `login`, so give the global reviewer the server's login as above.
 
 To push fixes from a personal reviewer, the repository must also set `fix.personal: true`. Without it, the fix is committed and
 kept locally, never pushed.
 
-Your personal profile (tone, cap, stricter filters, your own memory) lives in `<dir>/pr-review/profiles/`, never in the
-repository. It can only narrow the repository's config. Change it by asking your session ("make my review of this repo quiet"):
-the `review_config` tool shows the before and after and asks you first
-([configuration layers](pr-review.md#configuration-layers), [memory in reviews](pr-review.md#memory-in-reviews)).
+Your personal profile (tone, cap, stricter filters, your own memory) lives in `<dir>/pr-review/profiles/`, never in the repository. It can only narrow the repository's config.
+
+Ask your session to change it: "make my review of this repo quiet". The `review_config` tool shows the before and after and asks you first ([configuration layers](pr-review.md#configuration-layers), [memory in reviews](pr-review.md#memory-in-reviews)).
 
 ## C. Personal reviewers only
 
-Every developer runs the laptop steps above with `/pr watch-repo requested`, and nobody runs a server. Request a reviewer on
-GitHub (or assign the PR) to start that person's review. A PR whose requested reviewer's laptop is off waits for it. The hosted
-workflow (A) can be the shared reviewer instead of a server.
+1. Every developer runs the laptop steps above with `/pr watch-repo requested`. Nobody runs a server.
+2. Request a reviewer on GitHub, or assign the PR, to start that person's review.
+
+A PR whose requested reviewer's laptop is off waits for it. The hosted workflow (A) can be the shared reviewer instead of a server.
 
 ## GitLab and Gitea / Forgejo
 
@@ -254,41 +270,53 @@ Topologies B and C work the same way on these forges. There is no hosted workflo
   git config mendcode.forgeUrl http://git.example:8929  # for an ssh remote, another port or scheme
   ```
 
-The `/pr watch-repo` answer names what the forge lacks: no explanation of failing checks on either forge, and no thread
-resolution on Gitea / Forgejo. Logins in `reviewers.yaml` and in `review.yaml`'s `reviewers` and `publishers` follow the forge's
-username syntax: `_` and `.` are allowed, but not a trailing `.`.
+The `/pr watch-repo` answer names what the forge lacks: no explanation of failing checks on either forge, and no thread resolution on Gitea / Forgejo.
+
+Logins in `reviewers.yaml` and in `review.yaml`'s `reviewers` and `publishers` follow the forge's username syntax: `_` and `.` are allowed, but not a trailing `.`.
 
 ## When a laptop is off, asleep or offline
 
 Nothing depends on an event the laptop missed. The provider's current state is the source of truth
 ([jobs, restarts and remote effects](pr-review.md#jobs-restarts-and-remote-effects)).
 
-**While the laptop is off.** The server (or any other daemon) records each PR routed to the laptop's personal reviewer as a
-`waiting` job with its reason: `waiting for @alice's MendCode (offline or another device) …`. It is never run there and never
-counted as a failure. Every 10 minutes the waiting daemon reads that PR again. Once Alice's login has submitted a review of the
-head, the waiting job closes as `done`, naming the device that ran it.
+### While the laptop is off
 
-**When it stays away (opt-in).** Add `routing.offline_fallback: { after_minutes: 30 }` to `.mendcode/reviewers.yaml` and the
-server's global reviewer takes such a PR after 30 minutes, unless the laptop claims or reviews it first. The waiting job names the
-reviewer and the time (`offline fallback: team reviews this pull request at … unless @alice's MendCode (alice-backend) claims or
-reviews its head first`). When the laptop comes back after the fallback posted, it sees that review and posts nothing. Without
-the key nothing changes. Details: [offline fallback](pr-review.md#reviewers-routing-and-devices).
+The server, or any other daemon, records each PR routed to the laptop's personal reviewer as a `waiting` job with its reason: `waiting for @alice's MendCode (offline or another device) …`.
 
-**When the laptop comes back.** Its daemon's first listing is a catch-up. It reads the open PRs, review requests and assignees,
-and the changed files of at most the 20 newest unreviewed PRs for area routing. It starts what is routed to it and not yet
-reviewed at the current head. The backlog also runs then: open PRs with no review of their head, within `backlog.max_prs` and
-`backlog.window_days`. PRs opened, heads pushed and `@mendcode` comments written meanwhile are read then. Heads that were already
-reviewed are skipped.
+That job is never run there and never counted as a failure. Every 10 minutes the waiting daemon reads the PR again. Once Alice's login has reviewed the head, the waiting job closes as `done`, naming the device that ran it.
 
-**Two devices, one reviewer** (Alice's laptop and desktop both watching). Each review job claims its PR with a hidden comment
-(two hours, renewed every hour while it runs, edited to "released" when it ends). The other device's job waits and names the
-holder. When the holder releases the claim early, the comment edit wakes the waiting device at its next poll (about a minute
-live), instead of after the full two hours. Right before each write, the job checks that it still holds its claim, so a laptop
-that went to sleep mid-review and lost its claim posts nothing. Claims are best-effort, not compare-and-swap. Two devices that
-claim within the same few seconds can both start. The check before each write and the per-head review marker are what keep the
-posts single ([one writer per pull request](pr-review.md#reviewers-routing-and-devices)).
+### When it stays away (opt-in)
 
-**Sleep and network loss** ([outages and sleep](pr-review.md#on-your-machine-pr-review-and-the-repo-watch)):
+Add `routing.offline_fallback: { after_minutes: 30 }` to `.mendcode/reviewers.yaml`. The server's global reviewer takes such a PR after 30 minutes, unless the laptop claims or reviews it first.
+
+The waiting job names the reviewer and time: `offline fallback: team reviews this pull request at … unless @alice's MendCode (alice-backend) claims or
+reviews its head first`.
+
+When the laptop comes back after the fallback posted, it sees that review and posts nothing. Without the key, nothing changes. Details: [offline fallback](pr-review.md#reviewers-routing-and-devices).
+
+### When the laptop comes back
+
+Its daemon's first listing is a catch-up:
+
+1. Read open PRs, review requests and assignees, plus changed files of at most the 20 newest unreviewed PRs for area routing.
+2. Start what is routed to it and not yet reviewed at the current head.
+3. Run the backlog: open PRs with no review of their head, within `backlog.max_prs` and `backlog.window_days`.
+
+PRs opened, heads pushed and `@mendcode` comments written meanwhile are read then. Heads already reviewed are skipped.
+
+### Two devices, one reviewer
+
+When Alice's laptop and desktop both watch, each review job claims its PR with a hidden comment. The claim lasts two hours, renews every hour while running, and is edited to "released" when it ends.
+
+The other device's job waits and names the holder. An early release edits the comment and wakes the waiting device at its next poll, about a minute live, rather than after the full two hours.
+
+Right before each write, the job checks that it still holds its claim. A laptop that slept mid-review and lost its claim posts nothing.
+
+Claims are best-effort, not compare-and-swap. Two devices claiming within the same few seconds can both start. The check before each write and per-head review marker keep posts single ([one writer per pull request](pr-review.md#reviewers-routing-and-devices)).
+
+### Sleep and network loss
+
+See [outages and sleep](pr-review.md#on-your-machine-pr-review-and-the-repo-watch).
 
 - The watch counts failing time in awake time. The daemon compares the wall clock with a monotonic clock that stops while the
   machine sleeps, so the hours a laptop sleeps with its lid closed do not count, and neither do its dark wakes without network.
@@ -302,27 +330,51 @@ posts single ([one writer per pull request](pr-review.md#reviewers-routing-and-d
   spending one of its 5 attempts. The wait is at most 15 minutes, and this holds for up to 24 hours after the first such failure.
 - A missing or logged-out `gh` pauses the watch instead, with one notice. The watch retries every 5 minutes.
 
-**Closing the lid in the middle of a fix.** A fix is committed and kept on its local ref before anything is pushed. A push is
-refused when the branch moved, and MendCode never force-pushes. The kept commit and the job's checkpoint survive a restart.
+### Closing the lid in the middle of a fix
+
+A fix is committed and kept on its local ref before anything is pushed. A push is refused when the branch moved, and MendCode never force-pushes. The kept commit and job checkpoint survive a restart.
 
 ## Day to day
 
-For each developer:
+### Review jobs and keys
 
-- **`/reviews`** (or `/pr dashboard`) is the page of review jobs, grouped by state and stack. Use `enter` for a job's detail
-  (stages, findings, stop reason, tokens), `o` to open the PR, `s` for the review session and `S` for the fix session. `p` and
-  `u` pause and resume, `x` cancels, and `R` retries (it asks for a reason). `t` takes a job's fix session over, or releases it.
-  `c` shows the job's effective config and where each key came from, `/` filters, and `2` shows the watches and reviewers with
-  each one's device and availability.
-- **`/pr list`** shows each watched PR and, for a PR that is not reviewed, why (`draft: waits for ready for review`, `label
-  \`no-review\` excluded`). It also shows `jobs: N queued, M waiting`.
-- **`/pr review 42`** reviews one PR now, in your session. Asking your session ("review PR 42") does the same through the
-  `pr_review` tool, which asks your approval first unless the session has full access. Nothing is commented on the PR to start it, and the review is posted only as
-  `/pr publish` allows.
-- **Notices.** A failed or stopped job's notice names the repository, the PR, the head's first 12 characters, the reason, the
-  next retry time and the attempts left, with a `Head: <sha12>` line.
-- **Taking over a fix.** `t` on a job that is fixing pauses it, and no automatic fix or push runs. You get its fix session to
-  steer. Releasing it (`t` again) continues from the kept fix and does not count the interrupted round.
+Open `/reviews` (or `/pr dashboard`) for review jobs grouped by state and stack.
+
+| Key | Does |
+|---|---|
+| `enter` | Job detail: stages, findings, stop reason, tokens |
+| `o` | Open the PR |
+| `s`, `S` | Open the review session or fix session |
+| `p`, `u` | Pause or resume |
+| `x` | Cancel |
+| `R` | Retry; asks for a reason |
+| `t` | Take over the job's fix session, or release it |
+| `c` | Show effective config and where each key came from |
+| `/` | Filter |
+| `2` | Show watches and reviewers, with each device and its availability |
+| `?` | List every key under the tabs |
+
+The header names only `enter detail · / search · ? keys`, plus `esc follow latest` while a job is pinned. Next to the tabs, the page counts only what needs attention: running, queued, waiting, failed; otherwise it says `idle`.
+
+The Watches tab's ledger keeps the 24-hour totals and tokens.
+
+### Inspect or start a review
+
+`/pr list` shows each watched PR and why an unreviewed PR is waiting: `draft: waits for ready for review`, or `label
+  \`no-review\` excluded`. It also shows `jobs: N queued, M waiting`.
+
+Run `/pr review 42` to review one PR now in your session. Asking your session "review PR 42" does the same through `pr_review`, which asks approval first unless the session has full access.
+
+Nothing is commented on the PR to start it. The review is posted only as `/pr publish` allows.
+
+A failed or stopped job's notice names the repository, PR, head's first 12 characters, reason, next retry time and attempts left, with a `Head: <sha12>` line.
+
+### Take over a fix
+
+1. Press `t` on a job that is fixing. It pauses; no automatic fix or push runs, and you get its fix session to steer.
+2. Press `t` again to release it. Work continues from the kept fix, without counting the interrupted round.
+
+### Commands in a pull request
 
 In a pull request (write access needed):
 
@@ -335,9 +387,9 @@ In a pull request (write access needed):
 | `@mendcode pause` / `resume` | Stop or restart automatic reviews of new pushes on this PR. |
 | `@mendcode learn <text>` | Replies with the line to add to `.mendcode/review-learnings.md` on the base branch. |
 
-A command is checked in one order: the commenter's write access, then the filters, then whether the head was reviewed. A comment
-from the daemon's own login runs like `/pr review` (its `@mendcode fix` still needs write access), and anything it is refused is
-said in the session only. Full rules: [commands in a pull request](pr-review.md#commands-in-a-pull-request).
+A command is checked in order: the commenter's write access, then the filters, then whether the head was reviewed.
+
+A comment from the daemon's own login runs like `/pr review`; its `@mendcode fix` still needs write access. Anything it is refused is said in the session only. Full rules: [commands in a pull request](pr-review.md#commands-in-a-pull-request).
 
 ## Troubleshooting
 

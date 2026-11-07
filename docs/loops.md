@@ -1,6 +1,14 @@
 # Loops
 
-A loop is recurring or long-running agent work: an objective, a trigger (when it wakes), a budget (how it finishes) and a root session. Each wakeup is a **run**: a normal message in a session, so the session actor keeps its queue, cancel and approvals. The CLI side (`mendcode loop …`) is in [automation.md](automation.md); this page is the model and the daemon commands.
+A loop runs recurring or long-running agent work. This guide explains how to choose its schedule, budget and permissions, follow its runs, and use the model and daemon commands.
+
+A loop has an objective, a trigger (when it wakes), a budget (how it finishes) and a root session. Each wakeup is a **run**: a normal message in a session, so the session actor keeps its queue, cancel and approvals.
+
+For the CLI side (`mendcode loop …`), see [automation.md](automation.md).
+
+## Start with an objective
+
+The loop runs in its own session and does not see the conversation, so say what to do on each run. Open `/loops` to create a loop with the form, or use `/loop` with a phrase or strict schedule.
 
 `loops daemon` and `loops service …` control the shared [user daemon service](automation.md#user-daemon-service-b68).
 There is no competing service per repository; persisted loop triggers remain authoritative.
@@ -19,15 +27,33 @@ Text form (`parseTrigger`): `every 30m`, `daily 09:00`, `daily 09:00 Europe/Madr
 
 ### Daily and time zones
 
-With a `timezone` the next run is computed on that zone's calendar, so a day is 23 hours long when clocks go forward and 25 when they go back. A time that does not exist (02:30 on the spring-forward day in Madrid) runs at the same offset shifted past the gap (03:30); a time that happens twice (02:30 when clocks go back) runs the first time. Without `timezone` the machine's local clock is used, as before.
+With a `timezone`, the next run is computed on that zone's calendar. A day is 23 hours long when clocks go forward and 25 when they go back.
+
+| Clock change | Run time |
+|---|---|
+| Time does not exist, such as 02:30 on the spring-forward day in Madrid | same offset shifted past the gap: 03:30 |
+| Time happens twice, such as 02:30 when clocks go back | first occurrence |
+| No `timezone` | machine's local clock, as before |
 
 ### Adaptive
 
-An adaptive loop starts at `everyMs`. After each run its interval **doubles** (up to `maxMs`) when the run found nothing and **halves** (down to `minMs`) when it acted; a run that reports no activity, or that failed, keeps the pace. The run says which in its checkpoint: the prompt of an adaptive loop asks for `activity: idle | acted`. Bounds default to a quarter and eight times `everyMs` (at least one minute, at most 30 days) and must satisfy `minMs <= everyMs <= maxMs`. The current pace is `Loop.adaptiveMs`.
+An adaptive loop starts at `everyMs`. Its prompt asks the run to report `activity: idle | acted` in its checkpoint.
+
+| Run result | Next interval |
+|---|---|
+| Found nothing | **doubles**, up to `maxMs` |
+| Acted | **halves**, down to `minMs` |
+| Reports no activity, or failed | keeps the pace |
+
+Bounds default to a quarter and eight times `everyMs`, at least one minute and at most 30 days. They must satisfy `minMs <= everyMs <= maxMs`. The current pace is `Loop.adaptiveMs`.
 
 ### External
 
-`loop.fire { loopId, note? }` starts a run now. `note` (what happened: a CI URL, an alert) is shown to the run, and the run is recorded with `trigger: "external"`. While a run is in progress a fire waits (several count once, the last note wins) and the next run starts as soon as the loop is free. Only `external` loops accept a fire, and only while active; paused, blocked, stopped or finished loops refuse it (`busy`).
+`loop.fire { loopId, note? }` starts a run now. The `note`, such as a CI URL or alert describing what happened, is shown to the run. The run is recorded with `trigger: "external"`.
+
+While a run is in progress, a fire waits: several count once and the last note wins. The next run starts as soon as the loop is free.
+
+Only active `external` loops accept a fire. Paused, blocked, stopped or finished loops refuse it (`busy`).
 
 ```bash
 # from cron or CI (apps/cli):
@@ -66,11 +92,24 @@ A report-only run has no plan to submit. It is not offered `plan_submit`, `plan_
 | `/loop revisa el CI cada 10 minutos` | the schedule can come anywhere |
 | `/loop adaptive …`, or no schedule at all | `adaptive 10m` |
 
-Numbers can be written out (`cada cinco minutos`, `every five minutes`). Flags go after the schedule (`/loop cada 10 minutos --goal arregla los tests until: pasan`). A schedule the parser does not know (`cada tercer jueves`) is converted by the small model role (`loop.interpret`, one short call, listed as `loopInterpret` in [usage](usage.md)); if it cannot, the command says to use the strict form. Seconds, or spans under 1 minute or over 30 days, are refused.
+Numbers can be written out (`cada cinco minutos`, `every five minutes`). Flags go after the schedule (`/loop cada 10 minutos --goal arregla los tests until: pasan`).
+
+A schedule the parser does not know (`cada tercer jueves`) is converted by the small model role (`loop.interpret`, one short call, listed as `loopInterpret` in [usage](usage.md)); if it cannot, the command says to use the strict form.
+
+Seconds, or spans under 1 minute or over 30 days, are refused.
 
 With no interval the loop is `adaptive`: it starts at 10 minutes and the runs set the pace, like `/loop` without an interval in Claude Code.
 
-A phrase is not started at once. One line shows what will run: `loop: every 5m · full access · <objective>` with `enter start · e edit` as its hint. Enter starts it; `e` puts the strict form back in the prompt; typing `ask`, `smart` or `edits` lowers the permission the loop starts with (never above the session's); anything else drops the loop. The strict form (`/loop every 30m …`) starts at once, as before, and its confirmation names the permission too.
+A phrase is not started at once. One line shows what will run: `loop: every 5m · full access · <objective>` with `enter start · e edit` as its hint.
+
+| Input | Result |
+|---|---|
+| Enter | starts the loop |
+| `e` | puts the strict form back in the prompt |
+| `ask`, `smart` or `edits` | lowers the starting permission, never above the session's |
+| Anything else | drops the loop |
+
+The strict form (`/loop every 30m …`) starts at once, as before. Its confirmation names the permission too.
 
 The loop runs in its own session and does not see the conversation, so say what to do on each run.
 
@@ -87,7 +126,18 @@ A loop never has more than its creator: the permission it starts with is capped 
 
 The `loop` tool takes `reads` (absolute paths outside the project the runs will need). The creation approval lists them, so one approval covers the loop; they are saved with it (`Loop.reads`).
 
-A run that asks waits as **needs input**: the footer says `↻ 1 loop · needs input`, and `/loops` shows what it asked for (`waiting on you`) and answers it in the loop's session: `a` allows once, `o` allows for the loop's session, `x` refuses (`request.resolve`). A question or plan review is answered by opening the session (`enter`). If nobody answers in 15 minutes the run is cancelled and ends as failed with `no answer to "…" in 15m`; the loop stays active and the next run is scheduled.
+### Answer a waiting run
+
+A run that asks waits as **needs input**. The footer says `↻ 1 loop · needs input`, and `/loops` shows what it asked for (`waiting on you`).
+
+| Key in `/loops` | Answer in the loop's session |
+|---|---|
+| `a` | allows once |
+| `o` | allows for the loop's session |
+| `x` | refuses (`request.resolve`) |
+| `enter` | opens the session to answer a question or plan review |
+
+If nobody answers in 15 minutes, the run is cancelled and ends as failed with `no answer to "…" in 15m`. The loop stays active and the next run is scheduled.
 
 ## Notices in the creator session
 
@@ -97,7 +147,13 @@ When a run ends, the creator session gets one short notice (`notify: "creator"`,
 [loop "Avance sesión" · run 3 continue] the other repo has 3 new commits (next 14:35Z · session ses_… · /loop open lop_…)
 ```
 
-It is a transcript card (a `session.orchestration` event keyed by the loop), not a message: it starts no model turn, so a run costs the creator session no tokens and no reply, and it is one event row of about 200 bytes with no turn, queue or usage rows. While you have not written since, the next run of the same loop replaces the card (`... · 3 runs`) instead of adding another, so unread notices cost nothing more on disk. The model reads them only with your next message, as one line: `[loops since your last message]` with the latest notice of each loop and how many earlier runs it stands for (at most 5 loops, kept in memory). A session without loops stores nothing extra. `/loop open <loop id>` (or a `ses_…` id) opens the loop's session, as `enter` does in `/loops`. Set `notify: "none"` on `loop.create` / `loop.update` (or in the `loop` tool) to get no notices.
+It is a transcript card (a `session.orchestration` event keyed by the loop), not a message: it starts no model turn, so a run costs the creator session no tokens and no reply, and it is one event row of about 200 bytes with no turn, queue or usage rows.
+
+While you have not written since, the next run of the same loop replaces the card (`... · 3 runs`) instead of adding another, so unread notices cost nothing more on disk.
+
+The model reads them only with your next message, as one line: `[loops since your last message]` with the latest notice of each loop and how many earlier runs it stands for (at most 5 loops, kept in memory).
+
+A session without loops stores nothing extra. `/loop open <loop id>` (or a `ses_…` id) opens the loop's session, as `enter` does in `/loops`. Set `notify: "none"` on `loop.create` / `loop.update` (or in the `loop` tool) to get no notices.
 
 ## Worktree lease
 
@@ -112,7 +168,9 @@ Edits made in a worktree session do not see project memories or profile of the o
 
 ## The `loop` tool
 
-The agent can `create`, `list` and `pause` loops of its session's project (permission `write`: it asks in `ask` and `smart` mode, like `tell`, and runs without asking in `edits` and `full`). Loops the agent creates are report-only unless it sets `reportOnly: false`. The approval shows the schedule, budget and what a run may do, or the problems found. Resume, stop, delete and accept stay with you. Sub-agents do not get the tool.
+The agent can `create`, `list` and `pause` loops of its session's project (permission `write`: it asks in `ask` and `smart` mode, like `tell`, and runs without asking in `edits` and `full`). Loops the agent creates are report-only unless it sets `reportOnly: false`.
+
+The approval shows the schedule, budget and what a run may do, or the problems found. Resume, stop, delete and accept stay with you. Sub-agents do not get the tool.
 
 ## Commands
 
@@ -132,7 +190,9 @@ The agent can `create`, `list` and `pause` loops of its session's project (permi
 
 Existing loop records stay valid: every new field is optional.
 
-New lifecycle changes persist a journal bounded to 200 events with increasing sequence numbers. Drafts use `state: "paused"` plus the optional `draft` marker, so existing clients still recognize their disabled state. Snapshots and journal reads redact secret-bearing historical text; all new B20 commands require full-access peers. Typed client helpers are `loopSnapshot` and `loopEvents`. The CLI spellings and monitor behavior are documented in [automation.md](automation.md).
+New lifecycle changes persist a journal bounded to 200 events with increasing sequence numbers. Drafts use `state: "paused"` plus the optional `draft` marker, so existing clients still recognize their disabled state.
+
+Snapshots and journal reads redact secret-bearing historical text; all new B20 commands require full-access peers. Typed client helpers are `loopSnapshot` and `loopEvents`. The CLI spellings and monitor behavior are documented in [automation.md](automation.md).
 
 ## v1 comparison
 
@@ -142,7 +202,25 @@ Left out: v1's OS service for waking loops while the app is closed (the daemon w
 
 ## The /loops page
 
-`/loops` (terminal UI) lists this project's loops with the state, the trigger and the next wake. Keys: `↑↓` select, `enter` open, `tab` scope, `1`/`2` tabs, `p` pause or resume, `n` run now, `a` accept, `s` stop, `d` delete, `m` lower the permission mode (one step: full to edits to ask), `esc` back. On a loop that waits on a tool permission, `a` allows it once, `o` for the loop's session and `x` refuses (see [Permissions and approvals](#permissions-and-approvals)).
+`/loops` (terminal UI) lists this project's loops with the state, the trigger and the next wake.
+
+| Key | Does |
+|---|---|
+| `↑↓` | select |
+| `enter` | open |
+| `tab` | scope |
+| `1`/`2` | tabs |
+| `p` | pause or resume |
+| `n` | run now |
+| `a` | accept |
+| `s` | stop |
+| `d` | delete |
+| `m` | lower permission one step: full to edits to ask |
+| `esc` | back |
+
+On a loop waiting on a tool permission, `a` allows once, `o` allows for the loop's session and `x` refuses. See [Permissions and approvals](#permissions-and-approvals).
+
+### Create or edit a loop
 
 - **`c` new loop** opens a form: name, objective, trigger (`←→`: manual, interval, daily, adaptive, external), the fields that trigger needs, budget (monitor, goal, fixed), report-only, worktree lease, run now. Interval, `min` and `max` take a span such as `30m`, `2h` or `1d`; daily takes `HH:MM` and an optional IANA time zone. `enter` moves to the next row and saves on the last one; the line under the form shows what will be sent, or what is missing.
 - **`t` new from a template** starts the same form on a template (the daemon's `loop.templates`, else the four in this document). Rows left as `template` are not sent, so the template's trigger, budget and report-only apply; set a row to override it. The objective you type becomes the template's "Specifically" line.
@@ -162,9 +240,15 @@ These are opt-in: existing loops have no token/USD cap, rubric or additional act
 
 `/loop now --goal --max-tokens 50000 --max-cost 2 --require-approval push,deploy <objective>` sets caps and policy; `--unknown-cost allow` is an explicit opt-in under a USD cap. The agent cannot review, accept or approve gates.
 
-The page fills a bordered panel grid, with Budget and Gates / Rubric panels. Under 70 columns it uses one scrollable column. `pgup` / `pgdn` scroll details and evidence; `w` prefills a waiver of the first failed quality gate, `o` prefills an action approval, and `a` prefills completion acceptance. Add a reason before submitting. Hints stay in the header.
+The page fills a bordered panel grid, with Budget and Gates / Rubric panels. Under 70 columns it uses one scrollable column.
 
-The client sends `loop.review { loopId, action: "waive" | "accept" | "approve", run, checkpointHash, reviewer, reason, gateId?, approvalAction? }` using the latest finished run/hash. `/loop waive <id> "<gate id>" <reason>`, `/loop approve <id> <action> <reason>` and `/loop accept <id> <reason>` use that evidence after opening `/loops`. A stale hash/run or blank reviewer/reason is refused. Each reviewed gate records actor, reason, time and checkpoint hash. Approving a policy gate re-runs verification before completion. A waiver stays blocked until explicit acceptance or resume, so review alone never schedules more spending.
+`pgup` / `pgdn` scroll details and evidence; `w` prefills a waiver of the first failed quality gate, `o` prefills an action approval, and `a` prefills completion acceptance. Add a reason before submitting. Hints stay in the header.
+
+The client sends `loop.review { loopId, action: "waive" | "accept" | "approve", run, checkpointHash, reviewer, reason, gateId?, approvalAction? }` using the latest finished run/hash.
+
+`/loop waive <id> "<gate id>" <reason>`, `/loop approve <id> <action> <reason>` and `/loop accept <id> <reason>` use that evidence after opening `/loops`. A stale hash/run or blank reviewer/reason is refused. Each reviewed gate records actor, reason, time and checkpoint hash.
+
+Approving a policy gate re-runs verification before completion. A waiver stays blocked until explicit acceptance or resume, so review alone never schedules more spending.
 
 Budget/policy gates, missing inspections, changed audit workspaces and mandatory rubric blockers cannot be waived or accepted. Acceptance requires a completion proposal and a failed quality gate or prior waiver. The legacy reason-only `loop.control accept` remains available for unconfigured loops; it cannot bypass protected evidence gates. The artifact ledger is described below (B69).
 
@@ -172,13 +256,21 @@ Editing review rules or their evidence inputs invalidates the current claim for 
 
 ## Evidence ledger (B69)
 
-`b` on `/loops` opens events, artifacts and completion receipts, with the same keys and export preview as [workflows](workflows.md). `loop.events`, `loop.artifacts`, `loop.receipt`, `loop.export` accept `run`, `before` and `limit` (default 50, maximum 100; receipt default 1), plus `format: json | markdown` for export. Events and artifacts outlive the 20-run projection: the ledger retains 50 wakeups, capped at 512 entries each, protecting the latest evidence per key during trimming. Deleting the loop removes its ledger.
+`b` on `/loops` opens events, artifacts and completion receipts, with the same keys and export preview as [workflows](workflows.md). `loop.events`, `loop.artifacts`, `loop.receipt`, `loop.export` accept `run`, `before` and `limit` (default 50, maximum 100; receipt default 1), plus `format: json | markdown` for export.
 
-Artifacts record checkpoints/evidence/hash, run memory (the checkpoint summary and next action; no generated global memories), actual token/USD usage including unknown cost, host gates and waivers, independent judgments, rubric, action approvals, worktree retention and user overrides. Receipts are immutable revisions: a worker claim alone, a waived gate, or a manual override is never labelled verified. Old rows seed only the available snapshot (`historical: false`). Pagination/export reports retention truncation and cannot reconstruct discarded history. No background export or external service is enabled.
-# On-demand metric experiments
+Events and artifacts outlive the 20-run projection: the ledger retains 50 wakeups, capped at 512 entries each, protecting the latest evidence per key during trimming. Deleting the loop removes its ledger.
 
-Scheduler text edits preserve the existing due time. Workspace creation rechecks the attempt and revision before dispatch, so an intervening edit/stop/delete cannot submit the old prompt or revive a removed loop. An unused lease is released through the existing lifecycle; cleanup failure is retained for inspection. A queue ACK still records dispatch rather than successful completion.
+Artifacts record checkpoints/evidence/hash, run memory (the checkpoint summary and next action; no generated global memories), actual token/USD usage including unknown cost, host gates and waivers, independent judgments, rubric, action approvals, worktree retention and user overrides.
 
-The optional `mendcode-autoresearch` data profile reuses loops, checks, audit, caps and receipts. `acceptExperiment` in `@mendcode/loops` accepts a numeric improvement only with passing unwaived correctness gates, finite metrics, known cost, and iteration/token/cost caps. It does not run a process or edit a checkout. Metric, direction, checks, budget and worktree must be provided explicitly; unknown cost is never zero.
+Receipts are immutable revisions: a worker claim alone, a waived gate, or a manual override is never labelled verified. Old rows seed only the available snapshot (`historical: false`). Pagination/export reports retention truncation and cannot reconstruct discarded history. No background export or external service is enabled.
+## On-demand metric experiments
+
+Scheduler text edits preserve the existing due time. Workspace creation rechecks the attempt and revision before dispatch, so an intervening edit/stop/delete cannot submit the old prompt or revive a removed loop.
+
+An unused lease is released through the existing lifecycle; cleanup failure is retained for inspection. A queue ACK still records dispatch rather than successful completion.
+
+The optional `mendcode-autoresearch` data profile reuses loops, checks, audit, caps and receipts. `acceptExperiment` in `@mendcode/loops` accepts a numeric improvement only with passing unwaived correctness gates, finite metrics, known cost, and iteration/token/cost caps. It does not run a process or edit a checkout.
+
+Metric, direction, checks, budget and worktree must be provided explicitly; unknown cost is never zero.
 
 Use `workspace: "in-place"` only in a separately user-authorized isolated checkout for these experiments. Loop-managed `workspace: "worktree"` has its own commit-on-release behavior and is not selected by this profile. The profile never commits, resets or reverts automatically. Numeric evaluation is a host helper; a dedicated automated measurement tool is not activated by installing the skill.

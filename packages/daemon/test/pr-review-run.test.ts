@@ -4,10 +4,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PrTokenUsage } from "@mendcode/protocol"
 import { EMPTY_TREE, runAudit } from "../src/pr-review/audit"
-import { gitRun } from "../src/pr-review/context"
+import { alreadyReviewed } from "../src/pr-review/already-reviewed"
+import { gitRun, MAX_DIFF_BYTES, type GitRun } from "../src/pr-review/context"
 import { createEffectLedger } from "../src/pr-review/effects"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
+import { ACTIONS_BOT, hostedReview } from "../src/pr-review/hosted"
 import { reviewerMarker, type GhCall } from "../src/pr-review/publish"
 import { reviewNotice, runConfigKey, runPrReview } from "../src/pr-review/run"
 import { ReviewTurnError, ReviewTurnOverBudget } from "../src/pr-review/sessions"
@@ -87,12 +89,121 @@ function fakeGh(read?: (endpoint: string) => unknown) {
     if (input.argv[1] === "graphql") return { code: 0, out: "{}" }
     return { code: 0, out: "[]" }
   }
-  const posts = () => calls.filter((call) => call.argv.includes("POST"))
-  return { gh, calls, posts }
+  const isStatus = (call: { argv: string[] }) => /\/statuses\//.test(call.argv[1] ?? "")
+  /** Every POST but the commit statuses (commit-status.ts), which `statuses` reads as `{ state, description, ... }`. */
+  const posts = () => calls.filter((call) => call.argv.includes("POST") && !isStatus(call))
+  const statuses = () => calls.filter(isStatus).map((call) => JSON.parse(call.stdin ?? "{}") as { state: string; description: string; context: string; target_url: string })
+  return { gh, calls, posts, statuses }
 }
 
 const baseInput = (repo: { dir: string; base: string; head: string }, sessionFactory: ReviewSessionFactory) => ({
   repo: "acme/app", number: 12, directory: repo.dir, base: repo.base, head: repo.head, state: emptyState(), sessionFactory, publish: false,
+})
+
+describe("oversized code uses bounded cheap readers", () => {
+  async function largeRepo(config = "") {
+    const repo = await repository({ baseConfig: `enabled: true\nbudget:\n  tokens_per_pr: 1000000\n  context_tokens: 2000000\n${config}` })
+    const word = (i: number) => `f${Bun.hash(String(i)).toString(36)}`
+    const text = Array.from({ length: 1000 }, (_, i) => `export function ${word(i)}(${word(i + 1)}: string) { return ${word(i + 2)}.concat("${word(i + 3)}", ${word(i + 4)}) }\n`).join("")
+    expect(text.length * 54).toBeGreaterThan(6 * 1024 * 1024)
+    for (let i = 0; i < 54; i++) write(repo.dir, `src/code-${String(i).padStart(2, "0")}.ts`, text)
+    await git(repo.dir, "add", "-A"); await git(repo.dir, "commit", "-qm", "large release")
+    return { ...repo, head: await git(repo.dir, "rev-parse", "HEAD") }
+  }
+
+  for (const tier of ["balanced", "full"] as const) test(`${tier}: a six MiB code release reviews and publishes through the fake forge`, async () => {
+    const repo = await largeRepo("readers:\n  parallel: 1\n  code: overflow\n")
+    const review = children({ findings: [] })
+    const forge = fakeGh()
+    const pieces: string[] = []
+    let reading = false
+    const runner: GitRun = async (...args) => {
+      const result = await gitRun(...args)
+      if (args[0][0] === "diff" && args[0].includes("-U3")) {
+        expect(Buffer.byteLength(result.out)).toBeLessThanOrEqual(MAX_DIFF_BYTES)
+        expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBeLessThanOrEqual(100)
+        if (reading) { expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBe(1); pieces.push(args[0].at(-1)!) }
+      }
+      return result
+    }
+    const readerPrompts: string[] = []
+    const factory: ReviewSessionFactory = async () => ({
+      async send(prompt) {
+        readerPrompts.push(prompt)
+        const groups = [...prompt.matchAll(/<group id="(g\d+)">([\s\S]*?)<\/group>/g)].map((match) => ({ id: match[1], contains: "changed exported helpers", risks: [{ path: /--- (src\/[^\n]+)/.exec(match[2]!)![1], line: 1, detail: "export contract risk" }] }))
+        return { text: JSON.stringify({ groups }), tokens: { input: 1000, output: 100 } }
+      }, async close() {},
+    })
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, git: runner, progress: (step) => { if (step.phase === "readers") reading = true }, readers: { tier, source: () => ({ ok: true, model: "claude-haiku", factory }) } })
+    expect(run.status).toBe("published")
+    expect(readerPrompts.length).toBeGreaterThan(0)
+    expect(pieces.length).toBeGreaterThan(1)
+    expect(review.turns.map((turn) => turn.prompt).join("\n")).toContain("export contract risk")
+    expect(forge.posts().length).toBeGreaterThan(0)
+    expect(run.info!.notes.join("\n")).toContain("Not read in full by the review pass")
+    expect(run.info!.fullBase).toBe(repo.base)
+    const resumed = await runPrReview({ ...baseInput(repo, review.factory), checkpoint: run.checkpoint, readers: { tier, source: () => { throw new Error("cached summaries must not pick a model") } } })
+    expect(resumed.status).toBe("reviewed")
+    expect(resumed.info!.notes.join("\n")).toContain("not read again")
+    expect(resumed.info!.fullBase).toBe(repo.base)
+  }, 60_000)
+
+  test("spent reader share publishes with every remaining file listed as not read, without loading it", async () => {
+    const repo = await largeRepo("readers:\n  parallel: 1\n  code: overflow\n")
+    const review = children({ findings: [] })
+    let calls = 0
+    let loads = 0
+    const factory: ReviewSessionFactory = async () => ({ async send(prompt) {
+      calls++
+      const ids = [...prompt.matchAll(/<group id="(g\d+)">/g)].map((match) => match[1])
+      return { text: JSON.stringify({ groups: ids.map((id) => ({ id, contains: "helpers" })) }), tokens: { input: 100_000, output: 0 } }
+    }, async close() {} })
+    let reading = false
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, progress: (step) => { if (step.phase === "readers") reading = true }, git: async (...args) => {
+      if (reading && args[0].includes("-U3")) loads++
+      return gitRun(...args)
+    }, readers: { tier: "balanced", source: () => ({ ok: true, model: "claude-haiku", factory }) } })
+    expect(run.status).toBe("published")
+    expect(calls).toBe(2)
+    expect(loads).toBe(8)
+    expect(run.info!.notes.join("\n")).toContain("Not read: src/code-")
+    expect(forge.posts().map((post) => post.stdin ?? "").join("\n")).toContain("not read")
+    expect(run.info!.fullBase).toBeUndefined()
+    const body = JSON.parse(forge.posts()[0]!.stdin!).body as string
+    expect(body).not.toContain("mendcode:full-review")
+    const commits = (await git(repo.dir, "rev-list", "--reverse", `${repo.base}..${repo.head}`)).split("\n").map((sha) => ({ sha }))
+    const historical = (text: string) => fakeGh((endpoint) => {
+      if (endpoint.includes("/pulls?state=closed")) return [{ number: 12, merged_at: "2026-11-01T00:00:00Z", merge_commit_sha: repo.head, head: { sha: repo.head }, base: { sha: repo.base } }]
+      if (endpoint.includes("/commits?")) return commits
+      if (endpoint.includes("/reviews?")) return [{ body: `${text}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: repo.head })}`, commit_id: repo.head, state: "COMMENTED", submitted_at: "2026-11-01T00:00:00Z", user: { login: "review-bot" } }]
+    }).gh
+    const coverage = { git: gitRun, directory: repo.dir, repo: "acme/app", number: 99, base: repo.base, head: repo.head, self: "review-bot" }
+    expect(await alreadyReviewed({ ...coverage, gh: historical(body) })).toBeUndefined()
+    // Positive control: the same history would be skipped if we incorrectly certified it.
+    expect(await alreadyReviewed({ ...coverage, gh: historical(`${body}\n<!-- mendcode:full-review base=${repo.base} -->`) })).toEqual({ base: repo.head, prs: [12] })
+  }, 60_000)
+
+  test.each(["unavailable", "failed"])("%s readers publish without certifying full coverage", async (mode) => {
+    const repo = await largeRepo()
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: forge.gh, readers: { tier: "balanced", source: () => mode === "unavailable" ? { ok: false, reason: "no cheap model" } : { ok: true, model: "claude-haiku", factory: async () => { throw new Error("reader failed") } } } })
+    expect(run.status).toBe("published")
+    expect(run.info!.notes.join("\n")).toContain("Not read:")
+    expect(run.info!.fullBase).toBeUndefined()
+    expect(forge.posts().map((post) => post.stdin ?? "").join("\n")).not.toContain("mendcode:full-review")
+  }, 60_000)
+
+  for (const mode of ["minimalist", "disabled"] as const) test(`${mode} keeps the four MiB failure before any model or publication`, async () => {
+    const repo = await largeRepo(mode === "disabled" ? "readers:\n  enabled: false\n" : "")
+    const review = children()
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, review.factory), publish: true, gh: forge.gh, readers: { tier: mode === "minimalist" ? "minimalist" : "balanced", source: () => { throw new Error("must not pick a reader") } } })
+    expect(run.status).toBe("failed")
+    expect(run.reason).toContain("more than the 4.0 MiB a review reads")
+    expect(review.turns).toEqual([])
+    expect(forge.posts()).toEqual([])
+  }, 60_000)
 })
 
 describe("runPrReview: already reviewed merged pull requests", () => {
@@ -130,11 +241,11 @@ describe("runPrReview: already reviewed merged pull requests", () => {
     }
     return { ...repo, head: await git(repo.dir, "rev-parse", "HEAD"), prs }
   }
-  const review = (head: string, extra: Record<string, unknown> = {}) => ({
-    body: `${reviewMarker(head)}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: head })}`, commit_id: head,
+  const review = (head: string, extra: Record<string, unknown> = {}, base?: string) => ({
+    body: `${reviewMarker(head)}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: head })}${base ? `\n<!-- mendcode:full-review base=${base} -->` : ""}`, commit_id: head,
     state: "COMMENTED", submitted_at: "2026-11-01T00:00:00Z", user: { login: "review-bot" }, ...extra,
   })
-  function githubFor(repo: Awaited<ReturnType<typeof release>>, reviews = (head: string) => [review(head)]) {
+  function githubFor(repo: Awaited<ReturnType<typeof release>>, reviews = (head: string) => [review(head, {}, repo.prs.find((pr) => pr.head.sha === head)!.base.sha)]) {
     return fakeGh((endpoint) => {
       if (endpoint === "user") return { login: "review-bot" }
       if (endpoint.includes("/pulls?state=closed")) return [...repo.prs].reverse()
@@ -144,6 +255,82 @@ describe("runPrReview: already reviewed merged pull requests", () => {
       return pr ? reviews(pr.head.sha) : undefined
     })
   }
+
+  test.each(["stacked", "incremental", "unknown"])("%s completion does not prove full merged coverage", async (kind) => {
+    const repo = await release({ fastForward: true })
+    const pr = repo.prs[0]!
+    const historical = fakeGh()
+    await runPrReview({ ...baseInput({ ...repo, base: pr.base.sha, head: pr.head.sha }, children({ findings: [{ path: "src/reviewed-82.ts", line: 1, summary: "Review candidate" }] }).factory), number: pr.number, gh: historical.gh, publish: true,
+      ...(kind === "stacked" ? { stack: { base: pr.commits[0]!, parent: 81, parentFindings: [] } } : {}),
+      ...(kind === "incremental" ? { state: { ...emptyState(), lastHead: pr.commits[0]! } } : {}),
+    })
+    const body = kind === "unknown" ? review(pr.head.sha).body : JSON.parse(historical.posts()[0]!.stdin!).body
+    const github = githubFor(repo, (head) => head === pr.head.sha ? [review(head, { body })] : [review(head, {}, repo.prs.find((item) => item.head.sha === head)!.base.sha)])
+    const kids = children({ findings: [] })
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), gh: github.gh })
+    expect(run.incremental).toBe(false)
+    expect(kids.turns[0]!.prompt).toContain("src/reviewed-82-first.ts")
+  })
+
+  test("full review publishes base evidence even with scope sections hidden", async () => {
+    const repo = await repository({ baseConfig: "enabled: true\ntemplate:\n  sections:\n    - id: verdict\n      enabled: false\n    - id: details\n      enabled: false\n" })
+    const github = fakeGh()
+    await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), gh: github.gh, publish: true })
+    expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain(`<!-- mendcode:full-review base=${repo.base} -->`)
+  })
+
+  test.each([ACTIONS_BOT, "personal-publisher", "configured-bot"])("hosted coverage uses %s without repeating /user discovery", async (login) => {
+    const repo = await release()
+    const github = githubFor(repo, (head) => [review(head, { user: { login } }, repo.prs.find((pr) => pr.head.sha === head)!.base.sha)])
+    let users = 0
+    const gh: GhCall = async (input) => {
+      const endpoint = input.argv[1] ?? ""
+      if (endpoint === "user") { users++; return login === ACTIONS_BOT ? { code: 1, out: "" } : { code: 0, out: input.argv.includes("--jq") ? login : JSON.stringify({ login }) } }
+      if (endpoint === "repos/acme/app/pulls/12") return { code: 0, out: JSON.stringify({ head: { sha: repo.head }, base: { sha: repo.base } }) }
+      if (input.argv.includes("--paginate")) return { code: 0, out: "" }
+      return github.gh(input)
+    }
+    const kids = children({ findings: [] })
+    const run = await hostedReview({ directory: repo.dir, event: JSON.stringify({ eventName: "pull_request", repo: { owner: "acme", repo: "app" }, payload: { action: "opened", pull_request: { number: 12 } } }), gh, publish: false, sessionFactory: kids.factory, ...(login === "configured-bot" ? { self: login } : {}) })
+    expect(run.status).toBe("reviewed")
+    expect(kids.turns).toEqual([])
+    expect(users).toBe(login === "configured-bot" ? 0 : 1)
+  })
+
+  test.each(["wrong-base", "newer-incremental", "cut-trees", "missing-tree"])("%s cannot establish coverage", async (kind) => {
+    const repo = await release()
+    const github = githubFor(repo, (head) => {
+      const pr = repo.prs.find((item) => item.head.sha === head)!
+      return kind === "wrong-base" ? [review(head, {}, head)] : kind === "newer-incremental"
+        ? [review(head, {}, pr.base.sha), review(head, { submitted_at: "2026-11-02T00:00:00Z" })]
+        : [review(head, {}, pr.base.sha)]
+    })
+    const runner: GitRun = async (...args) => {
+      const done = await gitRun(...args)
+      return args[0][0] !== "rev-parse" ? done : kind === "cut-trees" ? { ...done, cut: true } : kind === "missing-tree" ? { ...done, out: "" } : done
+    }
+    expect(await alreadyReviewed({ gh: github.gh, git: runner, directory: repo.dir, repo: "acme/app", number: 12, base: repo.base, head: repo.head })).toBeUndefined()
+  })
+
+  test.each([0, 1000])("tree discovery stays batched with %i uncovered tail commits", async (tail) => {
+    const repo = await release()
+    const github = githubFor(repo)
+    const commits = (await git(repo.dir, "rev-list", "--first-parent", "--reverse", `${repo.base}..${repo.head}`)).split("\n")
+    const trees = new Map<string, string>()
+    for (const ref of [repo.base, ...commits, ...repo.prs.map((pr) => pr.head.sha)]) trees.set(ref, await git(repo.dir, "rev-parse", `${ref}^{tree}`))
+    for (let i = 0; i < tail; i++) { const sha = (i + 1).toString(16).padStart(40, "0"); commits.push(sha); trees.set(sha, "f".repeat(40)) }
+    const calls: string[][] = []
+    const runner: GitRun = async (args, cwd, max) => {
+      calls.push(args)
+      if (args[0] === "rev-list") return { code: 0, out: commits.join("\n") }
+      if (args[0] === "rev-parse") return { code: 0, out: args.slice(1).filter((arg) => !arg.startsWith("--")).map((ref) => trees.get(ref.replace(/\^\{tree\}$/, ""))!).join("\n") }
+      return gitRun(args, cwd, max)
+    }
+    expect(await alreadyReviewed({ gh: github.gh, git: runner, directory: repo.dir, repo: "acme/app", number: 12, base: repo.base, head: commits.at(-1)! })).toEqual({ base: repo.head, prs: [82, 83, 84] })
+    expect(calls.filter((args) => args[0] === "rev-parse")).toHaveLength(1)
+    expect(calls.length).toBeLessThanOrEqual(5)
+    expect(github.calls.length).toBeLessThanOrEqual(5)
+  })
 
   test("fast-forwarded PRs with several commits each count as reviewed", async () => {
     const repo = await release({ large: true, fastForward: true })
@@ -231,7 +418,7 @@ describe("runPrReview: already reviewed merged pull requests", () => {
         ? Array.from({ length: 100 }, () => ({ ...repo.prs[0], merge_commit_sha: repo.base }))
         : [...repo.prs, ...Array.from({ length: 97 }, () => ({ ...repo.prs[0], merge_commit_sha: repo.base }))]
       const pr = repo.prs.find((pr) => endpoint.includes(`/pulls/${pr.number}/reviews?`))
-      return pr ? [review(pr.head.sha)] : undefined
+      return pr ? [review(pr.head.sha, {}, pr.base.sha)] : undefined
     })
     const run = await runPrReview({ ...baseInput(repo, kids.factory), gh: github.gh, publish: true })
     expect(run.status).toBe("published")
@@ -354,6 +541,9 @@ describe("runPrReview: coverage and stacks", () => {
     expect(run.incremental).toBe(false)
     const same = await runPrReview({ ...baseInput(repo, children().factory), state: { version: 1, published: {}, lastHead: repo.head } })
     expect(same.status).toBe("skipped")
+    // The skip says why, so an `@mendcode review` reply can give that head's earlier result instead of a bare "skipped".
+    expect(same.reviewedBefore).toBe(true)
+    expect(run.reviewedBefore).toBeUndefined()
   })
 })
 
@@ -795,5 +985,100 @@ describe("runPrReview: a review that reaches the cap closes as a partial one", (
     expect(run.status).toBe("published")
     expect(run.stop).toMatchObject({ kind: "budget", resumable: true })
     expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("## MendCode partial review")
+  })
+})
+
+describe("runPrReview: the commit status on the PR head", () => {
+  const PR_URL = "https://github.com/acme/app/pull/12"
+  const statusCalls = (calls: Array<{ argv: string[] }>, head: string) => calls.filter((call) => call.argv[1] === `repos/acme/app/statuses/${head}` && call.argv.includes("POST"))
+
+  test("a clean review sets pending, then success with No findings linked to the posted review", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("published")
+    expect(statusCalls(github.calls, repo.head)).toHaveLength(2)
+    expect(github.statuses()).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review", target_url: PR_URL },
+      { state: "success", description: "No findings", context: "MendCode review", target_url: `${PR_URL}#pullrequestreview-101` },
+    ])
+    // The pending status goes out before the review is posted.
+    const order = github.calls.filter((call) => call.argv.includes("POST")).map((call) => /statuses/.test(call.argv[1]!) ? "status" : "review")
+    expect(order).toEqual(["status", "review", "status"])
+  })
+
+  test("a re-review of a new head that posts nothing still says the head was reviewed: success with No new findings", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const first = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: github.gh })
+    write(repo.dir, "README.md", "notes\n")
+    await git(repo.dir, "add", "-A"); await git(repo.dir, "commit", "-qm", "docs")
+    const head = await git(repo.dir, "rev-parse", "HEAD")
+    const again = await runPrReview({ ...baseInput({ ...repo, head }, children({ findings: [] }).factory), state: first.state, publish: true, gh: github.gh })
+    expect(again.status).toBe("published")
+    expect(again.report?.posted).toBe(false)
+    expect(github.posts()).toHaveLength(1)
+    expect(statusCalls(github.calls, head)).toHaveLength(2)
+    expect(github.statuses().slice(2)).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review", target_url: PR_URL },
+      { state: "success", description: "No new findings", context: "MendCode review", target_url: PR_URL },
+    ])
+  })
+
+  test("a critical or major finding open on the head is a failure; a personal reviewer has its own context", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const effects = createEffectLedger({ file: path.join(temp("mc-run-effects-"), "effects.json") })
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh, publishAs: { effects, reviewer: "personal:alice", configKey: "cfg1", jobId: "job1", isCurrent: () => true } })
+    expect(run.status).toBe("published")
+    expect(github.statuses().map(({ state, description, context }) => ({ state, description, context }))).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review (personal:alice)" },
+      { state: "failure", description: "2 blocking findings", context: "MendCode review (personal:alice)" },
+    ])
+  })
+
+  test("a review that stops at the token budget is an error, never a success, even when its partial review is posted", async () => {
+    const repo = await repository({ baseConfig: "enabled: true\nbudget:\n  tokens_per_pr: 10000\n" })
+    const github = fakeGh()
+    const kids = children({ tokens: { input: 20_000, output: 100 }, fail: { purpose: "verify", error: new Error("[PR_REVIEW]: the closing check crashed") } })
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
+    expect(run.stop).toMatchObject({ kind: "budget" })
+    expect(github.statuses().map(({ state, description }) => ({ state, description }))).toEqual([
+      { state: "pending", description: "Reviewing…" },
+      { state: "error", description: "Paused at the token budget" },
+    ])
+  })
+
+  test("a failed review is an error naming the cause, bounded to GitHub's 140 characters", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ fail: { purpose: "review", error: new Error(`[PR_REVIEW]: the review turn failed: ${"x".repeat(300)}`) } }).factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("failed")
+    const last = github.statuses().at(-1)!
+    expect(last.state).toBe("error")
+    expect(last.description.startsWith("Review failed: ")).toBe(true)
+    expect(last.description.length).toBeLessThanOrEqual(140)
+  })
+
+  test("no status is set when the run does not publish, or when status: false", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    await runPrReview({ ...baseInput(repo, children().factory), publish: false, gh: github.gh })
+    expect(github.statuses()).toEqual([])
+    const off = await repository({ baseConfig: "enabled: true\nstatus: false\n" })
+    const run = await runPrReview({ ...baseInput(off, children().factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("published")
+    expect(github.statuses()).toEqual([])
+  })
+
+  test("a token without statuses permission (403) does not fail the review, and the final status is not attempted", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const gh: GhCall = (input) => /\/statuses\//.test(input.argv[1] ?? "") ? (github.calls.push(input), Promise.resolve({ code: 1, out: "", err: "gh: Resource not accessible by integration (HTTP 403)" })) : github.gh(input)
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh })
+    expect(run.status).toBe("published")
+    expect(run.report?.posted).toBe(true)
+    expect(github.posts()).toHaveLength(1)
+    expect(statusCalls(github.calls, repo.head)).toHaveLength(1)
   })
 })

@@ -305,7 +305,7 @@ describe("a head that moves during the review", () => {
     expect(pushed).not.toBe(old)
     expect(brain.asked).toEqual(["review", "verify"])
     expect(ana.jobs()[0]).toMatchObject({ head: old, state: "stale", stop: { kind: "superseded", resumable: false } })
-    expect(hub.posts).toEqual([])
+    expect(hub.posts.filter((post) => !post.endpoint.includes("/statuses/"))).toEqual([])
     expect(hub.reviews.get(12) ?? []).toEqual([])
     expect(ana.service.platform.effects.pending()).toEqual([])
   })
@@ -437,6 +437,6 @@ describe("an automatic fix on a fork", () => {
     expect(ana.jobs()[0]!.stop?.detail).not.toContain("`fix.push` is off")
     // The review itself was posted once; nothing else went to GitHub for the fix.
     expect(reviewsBy(hub, 12, "ana")).toHaveLength(1)
-    expect(hub.posts.filter((post) => !post.endpoint.endsWith("/reviews"))).toEqual([])
+    expect(hub.posts.filter((post) => !post.endpoint.endsWith("/reviews") && !post.endpoint.includes("/statuses/"))).toEqual([])
   })
 })

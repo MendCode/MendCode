@@ -18,7 +18,7 @@ const checks: SetupChecks = {
     engine: "gpt-6",
     model: "gpt-6-luna",
     effort: "low",
-    dataDir: "/Users/mendcode/.mendcode-v2",
+    dataDir: "/Users/mendcode/.mendcode",
     pid: 12345,
     login: { ok: true },
   },

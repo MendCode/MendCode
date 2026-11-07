@@ -132,8 +132,16 @@ describe("release notes", () => {
     expect(notes).toContain("gh release download nightly --repo")
     expect(notes).toContain("release.yml@refs/tags/v0.0.2-nightly.20261030.3")
     expect(notes).not.toContain("This exact build")
-    expect(() => releaseNotes(input("v0.0.2-nightly.20261030.3", { previousChangelog: CHANGELOG }))).toThrow('[RELEASE_NOTES]: nothing to say: "## Unreleased" in CHANGELOG.md has no item that v0.0.2-nightly.20261029.1 did not have')
+    expect(() => releaseNotes(input("v0.0.2-nightly.20261030.3", { previousChangelog: CHANGELOG }))).toThrow("[RELEASE_NOTES]: nothing to say: CHANGELOG.md has no item that v0.0.2-nightly.20261029.1 did not have")
     expect(() => releaseNotes(input("v0.0.2-nightly.20261030.3", { tagChangelog: undefined }))).toThrow("nothing to say")
+  })
+
+  test("a nightly after a beta cut still lists the items the cut moved out of Unreleased, when its previous release lacked them", () => {
+    // Cutting a beta moves every unreleased item into its section and leaves `## Unreleased` empty.
+    const cut = CHANGELOG.replace("## Unreleased", "## Unreleased\n\n## v0.0.2-beta.9 - 2026-10-30\n\nA beta.")
+    const before = CHANGELOG.replace("- Release titles name the channel.", "- Something older.")
+    const notes = releaseNotes(input("v0.0.2-nightly.20261030.3", { tagChangelog: cut, previousChangelog: before }))
+    expect(notes).toContain("- Release titles name the channel.")
   })
 
   test("a release of the same tree as its previous one says so instead of failing", () => {

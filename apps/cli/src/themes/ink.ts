@@ -1,0 +1,52 @@
+import { defineTheme } from "./define"
+
+/**
+ * MendCode's default since the rebrand: the website's black and white (mendcode.dev: background #0a0a0a, raised #141414,
+ * ink #fafafa; borders lighter than the site's lines, to reach 3:1) with white for what is active. Hue only where it means
+ * something (state, diff, syntax, callouts), soft and at one lightness, as pi's and OpenCode's defaults keep theirs.
+ */
+export default defineTheme({
+  name: "ink",
+  label: "Ink",
+  dark: true,
+  background: "#0a0a0a",
+  colors: {
+    primary: "#fafafa",
+    text: "#fafafa",
+    body: "#e5e5e5",
+    muted: "#8a8a8a",
+    border: "#606060",
+    heading: "#fafafa",
+    code: "#e5c07b",
+    link: "#8ab4f8",
+    success: "#7fd88f",
+    warning: "#f5c26b",
+    error: "#f07178",
+    accent: "#b4a7f5",
+    secondary: "#a3a3a3",
+    info: "#7dc4e4",
+    borderActive: "#a3a3a3",
+    panel: "#141414",
+    element: "#1e1e1e",
+    promptBg: "#111111",
+    diffAddedBg: "#12261a",
+    diffRemovedBg: "#2e1517",
+    synComment: "#808080",
+    synKeyword: "#b4a7f5",
+    synString: "#e5c07b",
+    synNumber: "#f5a97f",
+    synFunction: "#8ab4f8",
+    synType: "#7dcfcf",
+    synFlag: "#8ab4f8",
+    synPrompt: "#8a8a8a",
+    mdHeading3: "#e5e5e5",
+    mdHeading4: "#d4d4d4",
+    mdQuote: "#a3a3a3",
+    mdQuoteBar: "#606060",
+    mdDiagramLine: "#a3a3a3",
+    mdDiagramAccent: "#fafafa",
+    commentMark: "#fafafa",
+    commentRule: "#7dc4e4",
+    commentQuote: "#c4c4c4",
+  },
+})

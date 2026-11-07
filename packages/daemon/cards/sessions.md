@@ -15,7 +15,7 @@ The user types these (the model cannot run slash commands: say which one):
   Earlier prompts: /prompt-history searches this project's prompts; /backtrack edits an earlier prompt and resends it (esc esc). Directory: /pwd shows the session's directory, /cd PATH moves an idle session and its children to an existing directory (refused while work runs, and for remote terminals). /quit (/exit) leaves; sessions are kept.
   Tidy: /rename, /title, /pin, /settle (archives, history kept; ctrl+a in /sessions); /limit resumes a turn a usage limit paused ({{program}} docs usage).
 
-Model tools: session_meta (own session: rename, title, link a PR, settle; tier balanced, /tier session_meta on) and session_search, session_read, session_notes (earlier messages and versioned notes of this session and its children; off until the user turns on experimental.session_recall in /experimental). Other sessions: {{program}} docs threads.
+Model tools: session_meta (own session: rename, title, link a PR, settle; tier balanced, /tier session_meta on) and session_search, session_read, session_notes, session_open (history, notes, open a found session; off until the user turns on experimental.session_recall in /experimental). Other sessions: {{program}} docs threads.
 
 Data honesty: history is the daemon's stored events, not the model's compacted context. A fork copies the transcript up to the message, not file snapshots. Old streaming detail is compacted after [[setting:retentionDays]] (7 to 3650); editing past messages needs [[setting:allowMessageEdits]], off by default.
 

@@ -1,13 +1,12 @@
-# View slots
+Replace how named parts of the terminal are drawn with a user file or profile. Views cover messages, tool cards, the approval box, the prompt frame, bars, the home screen and more.
 
-A user file or a profile can replace how any named part of the terminal is drawn: messages, tool cards, the
-approval box, the prompt frame, the bars, the home screen and more. Every slot follows one contract, and the
-built-in look is drawn through the same contract, so what a custom view receives is exactly what the default
-receives.
+## View slots
 
-Views are off until installed, work in every tier and cost nothing when absent (a terminal without extensions never
-loads the machinery). Types for authors live in `@mendcode/extension-api/views` (types and one small constant table;
-no zod, nothing that grows the terminal's startup).
+Start with a view file or profile using the installation steps below. Views are off until installed, work in every tier and cost nothing when absent: a terminal without extensions never loads the machinery.
+
+Every slot follows one contract. The built-in look uses the same contract, so a custom view receives exactly what the default receives.
+
+Types for authors live in `@mendcode/extension-api/views`: types and one small constant table, no zod and nothing that grows the terminal's startup.
 
 ```ts
 import type { ViewRenderer } from "@mendcode/extension-api/views"
@@ -37,30 +36,53 @@ export default {
 
 ## Installing, finding and managing views
 
-- **User file**: `<data dir>/extensions/<name>.ts`. A session's own model may write the starter too (it is MendCode's template in a new file); `--force`, which replaces a view you already have, is refused from a session, and the code it then writes goes through `customize_ui`, which asks you. `mendcode view scaffold <slot>` (or `/customize` > Views >
-  New view file) writes a commented starter, `view-<slot>.ts`, and never overwrites a file (`--force` does).
-  `mendcode view list` prints every slot. Both work on files only and never start a daemon.
-- **Profile**: a profile's `extensions/` folder, like any terminal extension. A profile that wants to own the look lists its views in `activate.views` (slot to module) and they load only while it owns the look ([profiles](packages.md#make-your-own-mendcode-in-10-minutes)); `mendcode profile new` writes two to start from, and `examples/profiles/retro/` is a full reskin. A view that never returns cannot be interrupted from inside the process: the 4 ms budget and three strikes bound a view across frames, not inside one call; use `--safe-mode` to start without it.
-- **Project files** load only where the project is trusted, the same rule as every project extension. Remote terminals
-  and pure (`--safe-mode`) terminals never load extensions, so a peer or a remote session cannot install a view in
-  another terminal.
-- **Hot reload**: edits are picked up by the daemon's existing watcher (`extensions.changed`); finished transcript
-  rows are laid out again.
-- **`/customize` > Views** states above its rows that views are not sandboxed, and lists the slots that have a custom view (and the one you are on) with the owner
-  (`user <name>`, `project <name>`, `profile <name>`, or built-in), the number of faults, the last error and the
-  average time per call. Left/right pick a slot, Enter turns its custom view off or on (`disabledViews` in the
-  profile), `r` resets it (clears faults and the off switch), and the next row writes a starter for the picked slot.
+### Create a user view
+
+1. Run `mendcode view list` to print every slot.
+2. Run `mendcode view scaffold <slot>`, or choose `/customize` > Views > New view file. It writes a commented starter, `view-<slot>.ts`, under `<data dir>/extensions/<name>.ts`.
+3. Edit the starter. The daemon's existing watcher (`extensions.changed`) picks up edits, and finished transcript rows are laid out again.
+
+Both commands work on files only and never start a daemon. Scaffolding never overwrites a file unless you use `--force`.
+
+A session's own model may write the starter too: it is MendCode's template in a new file. `--force`, which replaces a view you already have, is refused from a session. The code it then writes goes through `customize_ui`, which asks you.
+
+### Use a profile or project view
+
+| Source | Loading rules |
+|---|---|
+| Profile | Uses the profile's `extensions/` folder, like any terminal extension |
+| Profile that owns the look | Lists views in `activate.views` (slot to module); they load only while it owns the look |
+| Project files | Load only where the project is trusted, like every project extension |
+| Remote or pure (`--safe-mode`) terminal | Never loads extensions; a peer or remote session cannot install a view in another terminal |
+
+See [profiles](packages.md#make-your-own-mendcode-in-10-minutes). `mendcode profile new` writes two views to start from; `examples/profiles/retro/` is a full reskin.
+
+**Warning:** A view that never returns cannot be interrupted from inside the process. The 4 ms budget and three strikes bound a view across frames, not inside one call. Use `--safe-mode` to start without it.
+
+### Manage views
+
+`/customize` > Views states above its rows that views are not sandboxed. It lists slots with a custom view, and the one you are on, with the owner, number of faults, last error and average time per call.
+
+Owners appear as `user <name>`, `project <name>`, `profile <name>`, or built-in.
+
+| Key or row | Does |
+|---|---|
+| Left/right | Pick a slot |
+| Enter | Turn its custom view off or on (`disabledViews` in the profile) |
+| `r` | Reset it: clear faults and the off switch |
+| Next row | Write a starter for the picked slot |
 
 ## How custom code is isolated
 
-**What was verified, plainly:** view code runs in this process, with your permissions. It is **not sandboxed**. Installing a
-view is trusting its author, exactly as installing an extension is. `/customize` > Views says the same above its rows.
-The contract below limits how a faulty view can hurt the screen; it does not limit what a hostile one can do.
+**Warning:** View code runs in this process with your permissions. It is **not sandboxed**. Installing a view is trusting its author, exactly as installing an extension is. `/customize` > Views says the same above its rows.
 
-Be clear about what this is not: a view is ordinary extension code. It is imported into the terminal process and runs
-with the user's privileges. There is **no operating-system sandbox**, and a view can do whatever any extension can do.
-That is why project views need project trust and why remote or pure terminals do not load extensions at all. What
-the contract adds is that a view's faults never reach the screen:
+A view is ordinary extension code, imported into the terminal process with the user's privileges. There is **no operating-system sandbox**; it can do whatever any extension can do.
+
+That is why project views need project trust and remote or pure terminals do not load extensions at all. The contract limits how a faulty view can hurt the screen, not what a hostile one can do.
+
+### Fault handling
+
+The contract keeps a view's faults from reaching the screen:
 
 - The input is a structured clone, deep-frozen. A view cannot mutate the app's data, cannot reach a function, a
   session or the daemon through it.
@@ -114,12 +136,28 @@ A custom `approval` or `question` view restyles; it cannot change what a decisio
 
 ### message.user, message.assistant, message.reasoning
 
-Drawn once per finished item. `message.user` input: `itemId`, `turnId`, `text`, `at?`, `time` (formatted, or `""` when
-timestamps are off; a `!command` always has it), `mode` (`minimal | balanced | full`), `style` (`layout`, `icon`,
-`lead`, `label`, `tint`), `variant` (`message | shell | notice`), `local?`, `attachments?`, `images`, `username`,
-`expanded`, and for a sent set of comments on an answer (docs/editor.md) `comments?`: the `comments` (`n`, `of`, `quote`, `cut`, `text`), the `note`, `head?` and `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by. The terminal draws a set of comments (the typed message and the card) even when a `message.user` view is installed; a view takes them over only by declaring it, `api.view("message.user", render, { handles: ["comments"] })`, and then receives `comments` and draws them. `builtin` is unchanged. `message.assistant` adds `renderer`, `details`, `detailsAll` and `body`: the message as rows (Markdown as the
-renderer allows, no lead or time), laid out 4 cells narrower than `width` so a rail or an indent fits. `message.reasoning`:
-`text`, `running`, `ms?`, `rows`, `oneLine`, `hidden`. Actions: none.
+Drawn once per finished item. Actions: none.
+
+| `message.user` input | Meaning or shape |
+|---|---|
+| `itemId`, `turnId`, `text`, `at?` | Item and turn data |
+| `time` | Formatted, or `""` when timestamps are off; a `!command` always has it |
+| `mode` | `minimal | balanced | full` |
+| `style` | `layout`, `icon`, `lead`, `label`, `tint` |
+| `variant` | `message | shell | notice` |
+| `local?`, `attachments?`, `images`, `username`, `expanded` | Message presentation data |
+| `comments?` | Sent comments on an answer (docs/editor.md): `comments` (`n`, `of`, `quote`, `cut`, `text`), `note`, `head?`, `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by |
+
+The terminal draws a set of comments, including the typed message and card, even when a `message.user` view is installed.
+
+A view takes them over only by declaring `api.view("message.user", render, { handles: ["comments"] })`. It then receives `comments` and draws them. `builtin` is unchanged.
+
+| Other message slot | Input |
+|---|---|
+| `message.assistant` | Adds `renderer`, `details`, `detailsAll` and `body`: the message as rows, Markdown as the renderer allows, no lead or time |
+| `message.reasoning` | `text`, `running`, `ms?`, `rows`, `oneLine`, `hidden` |
+
+The assistant's `body` is laid out 4 cells narrower than `width`, so a rail or an indent fits.
 
 A custom view of `message.user` or `message.assistant` (and of `turn.status`) also gets `builtin`: the built-in's own rows of
 that item. Return `[...input.builtin, footer]` to add your own text under a message (or above it) and keep everything else as
@@ -127,37 +165,67 @@ it is; the example [message-footer](#example-your-own-text-under-each-answer) do
 
 ### tool.card
 
-A tool call card. Return `undefined` for kinds you do not draw; the built-in card (with the legacy `renderTool` hook)
-draws them. Input: `kind` (`read`, `shell`, `edit`, `grep`, `mcp__server__tool`...), `detail` (path, command, pattern),
-`title?`, `status` (`running | ok | error | cancelled | interrupted | unknown`), `text`, `output` (non-empty lines, at most
-400), `summary?`, `level` (`summary | preview | full`), `expanded`, `page`, `counts` (`lines`, `entries`, `matches`),
-`pattern?`, `elapsedMs?`, `exitCode?`, `toolCalls?`, `agent?`, `model?`, `awaiting?`, `compact?`, `density?` (the full view's `toolDensity` for this call: `line` keeps a finished call to its header row, `brief` a short preview capped by kind; absent, the level decides), `meta?`, `frame`
-(spinner), `tailLines`, `mode`, `render?`. A running card is not remembered between frames. Actions: `toggle` (fold or
-open the card, as clicking its fold row does), `page` (next page of a `full` card). The minimal view draws one-line
-tool rows instead of cards, so this slot is not called there; saved-memory notes and submitted plans are not cards.
+A tool call card. Return `undefined` for kinds you do not draw; the built-in card, with the legacy `renderTool` hook, draws them.
+
+| Input | Meaning or shape |
+|---|---|
+| `kind` | `read`, `shell`, `edit`, `grep`, `mcp__server__tool`... |
+| `detail` | Path, command, pattern |
+| `status` | `running | ok | error | cancelled | interrupted | unknown` |
+| `output` | Non-empty lines, at most 400 |
+| `level` | `summary | preview | full` |
+| `counts` | `lines`, `entries`, `matches` |
+| `density?` | The full view's `toolDensity` for this call: `line` keeps a finished call to its header row; `brief` gives a short preview capped by kind; absent, the level decides |
+| `frame` | Spinner |
+| Other fields | `title?`, `text`, `summary?`, `expanded`, `page`, `pattern?`, `elapsedMs?`, `exitCode?`, `toolCalls?`, `agent?`, `model?`, `awaiting?`, `compact?`, `meta?`, `tailLines`, `mode`, `render?` |
+
+| Action | Does |
+|---|---|
+| `toggle` | Fold or open the card, as clicking its fold row does |
+| `page` | Next page of a `full` card |
+
+A running card is not remembered between frames. The minimal view draws one-line tool rows instead of cards, so this slot is not called there. Saved-memory notes and submitted plans are not cards.
 
 ### approval
 
-The box above the prompt while a request waits. Input: `requestId`, `variant` (`panel`, or `inline` in the minimal
-view), `title`, `tool?`, `permission?`, `subject` (the text being approved), `detail` (the built-in's rows, already
-wrapped: head, diff, reviewer verdict), `explain?` (the rows of `?`), `options` (`{ label, key, choice }` in order),
-`choice` (highlighted index), `hint`, `plan`, `optionRows` (rows of the terminal's option block). Actions: none; the
-options are the terminal's block, placed with a `{options}` row. Rules above apply.
+The box above the prompt while a request waits. Actions: none. The options are the terminal's block, placed with a `{options}` row; the safety rules above apply.
+
+| Input | Meaning or shape |
+|---|---|
+| `requestId`, `title`, `tool?`, `permission?`, `hint`, `plan` | Request data |
+| `variant` | `panel`, or `inline` in the minimal view |
+| `subject` | Text being approved |
+| `detail` | Built-in rows, already wrapped: head, diff, reviewer verdict |
+| `explain?` | Rows of `?` |
+| `options` | `{ label, key, choice }` in order |
+| `choice` | Highlighted index |
+| `optionRows` | Rows of the terminal's option block |
 
 ### question
 
-Input: `requestId`, `variant` (`single | batch`), `title`, `detail`, `multiple`, `options` (`{ label, description? }`), `choice`,
-`picked`, `typing` (the reader is typing in the card's "Type your own answer" field), `optionRows`; `questions` (`header`, `question`,
-`context?`, `options`, `multiple?`, `custom?`; a single question is a batch of one) and `draft` (`tab`, `choice`, `answers`, `custom`,
-`editing`, `scroll`). Actions: none; the answers with that field (and, for a batch, the tabs) are the terminal's block, placed with a
-`{options}` row, and the terminal puts its cursor in the field. The built-in card stands where the prompt is ([layout](layout.md#question-batches-and-todo-lists-b57)).
+The built-in card stands where the prompt is; see [layout](layout.md#question-batches-and-todo-lists-b57). Actions: none.
+
+| Input | Meaning or shape |
+|---|---|
+| `requestId`, `title`, `detail`, `multiple`, `choice`, `picked`, `optionRows` | Question data |
+| `variant` | `single | batch` |
+| `options` | `{ label, description? }` |
+| `typing` | The reader is typing in the card's "Type your own answer" field |
+| `questions` | `header`, `question`, `context?`, `options`, `multiple?`, `custom?`; a single question is a batch of one |
+| `draft` | `tab`, `choice`, `answers`, `custom`, `editing`, `scroll` |
+
+The answers and that field, plus the tabs for a batch, are the terminal's block. Place it with a `{options}` row. The terminal puts its cursor in the field.
 
 ### prompt.frame
 
-The rules or box around the input. Input: `preset` (`box | top-bottom | minimal | ascii-box`), `border`, `lead`,
-`borders`. Return `{ top, bottom, left?, right? }`: at most 3 rows above and below, and the cells before and after each
-input row (at most a quarter of the width each). The input row itself, its cursor and the status-in-border line stay the
-terminal's. Not called in the minimal view's bare mode. Actions: none.
+The rules or box around the input. Input: `preset` (`box | top-bottom | minimal | ascii-box`), `border`, `lead`, `borders`. Actions: none.
+
+Return `{ top, bottom, left?, right? }`:
+
+- At most 3 rows above and below.
+- Cells before and after each input row, at most a quarter of the width each.
+
+The input row itself, its cursor and the status-in-border line stay the terminal's. This slot is not called in the minimal view's bare mode.
 
 ### topbar
 
@@ -167,36 +235,56 @@ for the whole header. Actions: none.
 
 ### sessions.sidebar
 
-The left session list, `height` rows by 38 cells. Input: `sessions` (`sessionId`, `title`, `state`, `queued`,
-`updatedAt`, `archivedAt?`, `lifecycle?`, `draft?`: `preview`, `chars`, `attachments`, `images`, `updatedAt` of the unsent
-draft; an untitled session with one reads `Draft · preview`), `current`, `selected?`, `focused`. Actions: `open` with `arg` = a listed
-`sessionId` (switches to it, like a click).
+The left session list, `height` rows by 38 cells. Action: `open` with `arg` = a listed `sessionId`, switching to it like a click.
+
+| Input | Meaning or shape |
+|---|---|
+| `sessions` | `sessionId`, `title`, `state`, `queued`, `updatedAt`, `archivedAt?`, `lifecycle?`, `parentId?`, `tool?`, `paused?`, `draft?` |
+| `draft?` | `preview`, `chars`, `attachments`, `images`, `updatedAt` of the unsent draft; an untitled session with one reads `Draft · preview` |
+| `current`, `selected?`, `focused`, `settledOpen?` | List state |
+| `unread?` | Session ids with a reply finished since this terminal last showed them |
+| `spinner?`, `blink?` | Activity tick's frame and on/off, present only while it runs |
 
 ### notice
 
-Three kinds, one slot. `kind: "toast"`: `variant`, `title?`, `message` (return rows of equal width; they float at the top right).
-`kind: "limit"`: `view` (`state`, `provider?`, `message`, `resetsAt?`) and `chips` (`action`, `label`). `kind: "queue"`:
-`previews`, `delivery`, `held`, `heldBy?` (`cancel`, `restart` or `interrupt`: what ended the last turn), `paused`, `mode?`, `shell`. Actions: `send` (queue: send the queued message now) and, for
-a limit bar, the actions of `chips` (`resume`, `schedule`, `cancel`, `snooze`, `dismiss`). Return `undefined` for kinds you
-do not draw. For `kind: "toast"`, `inline: true` asks for the one-row form the inline live region uses (the message in the
-variant's color, `width` cells); a floating box does not fit there.
+Three kinds share one slot. Return `undefined` for kinds you do not draw.
+
+| Kind | Input and output |
+|---|---|
+| `kind: "toast"` | `variant`, `title?`, `message`; return equal-width rows that float at the top right |
+| `kind: "limit"` | `view` (`state`, `provider?`, `message`, `resetsAt?`) and `chips` (`action`, `label`) |
+| `kind: "queue"` | `previews`, `delivery`, `held`, `heldBy?` (`cancel`, `restart` or `interrupt`: what ended the last turn), `paused`, `mode?`, `shell` |
+
+| Action | Does |
+|---|---|
+| `send` | Queue: send the queued message now |
+| `resume`, `schedule`, `cancel`, `snooze`, `dismiss` | Limit bar: actions of `chips` |
+
+For `kind: "toast"`, `inline: true` asks for the one-row form the inline live region uses: the message in the variant's color, `width` cells. A floating box does not fit there.
 
 ### footer
 
-The row or rows under the prompt (at most 4). Input: `leftItems?`, `rightItems?`, `separator?`, `agent?`, `agentColor?`,
-`model?`, `effort?`, `fast?` (`{ mark, applies }`; `model` no longer carries the mark), `provider?`, `counters?`, `segments?`
-and `detail?` (the placed footer segments of the first row and of the full view's second row, each `{ id, spans, rank, compact? }`),
-`divider?`, `plainMarks?`, `permission?`, `permissionLabel?`, `profile?`, `pr?`, `loops`, `goal?`, `workflows?`, `notice?`,
-`connection?`, `shell?`, script segments, and `extraRows`. The legacy `footer.*` slots add to or replace the built-in row inside
-the built-in only. Actions: none.
+The row or rows under the prompt, at most 4. Actions: none.
+
+| Input | Meaning or shape |
+|---|---|
+| `fast?` | `{ mark, applies }`; `model` no longer carries the mark |
+| `segments?`, `detail?` | Placed footer segments of the first row and the full view's second row, each `{ id, spans, rank, compact? }` |
+| Other fields | `leftItems?`, `rightItems?`, `separator?`, `agent?`, `agentColor?`, `model?`, `effort?`, `provider?`, `counters?`, `divider?`, `plainMarks?`, `permission?`, `permissionLabel?`, `profile?`, `pr?`, `loops`, `goal?`, `workflows?`, `notice?`, `connection?`, `shell?`, script segments, `extraRows` |
+
+The legacy `footer.*` slots add to or replace the built-in row inside the built-in only.
 
 ### home
 
-The new-chat screen. Input: `screenHeight?`, `version?`, `root`, `bare`, `sessions` (`id?`, `title`, `state`, `updatedAt`,
-`startedAt?`, `detail?`), `selectedId?`, `spinner`, `look` (the `/customize` home profile), `tip?`, `footer?`. The home's
-keyboard selection stays the terminal's. Actions: `open` with `arg` = the `id` of a listed session (switches to it, like a
-click on the built-in Agent View row; an `arg` that names no listed session is invalid output). The legacy `welcome.replace`
-slot takes priority.
+The new-chat screen. The home's keyboard selection stays the terminal's; the legacy `welcome.replace` slot takes priority.
+
+| Input | Meaning or shape |
+|---|---|
+| `sessions` | `id?`, `title`, `state`, `updatedAt`, `startedAt?`, `detail?` |
+| `look` | The `/customize` home profile |
+| Other fields | `screenHeight?`, `version?`, `root`, `bare`, `selectedId?`, `spinner`, `tip?`, `footer?` |
+
+Action: `open` with `arg` = the `id` of a listed session. It switches to it like a click on the built-in Agent View row. An `arg` that names no listed session is invalid output.
 
 ### panel.widget
 
@@ -206,18 +294,29 @@ none.
 
 ### file.viewer
 
-The [file viewer](file-viewer.md): the open file in the right slot (`variant: slot`) or as a full page on a narrow terminal (`page`).
-Input: `path`, `name`, `language`, `kind` (`text`, `binary`, `special`, `large`, `directory`, `missing`, `loading`, `error`), `size`,
-`lines`, `mime?`, `note?` (the one line a file that is not text gets), `top`, `rows` (the visible lines: `line`, `text`, the highlighted
-`spans`, `mark?` = `added` / `modified` / `deleted` from Git, `selected`, `hit`, `pending?`), `selection?`, `search?`, `focused`, `panel`
-(the right panel exists in the same slot), `options` (`lineNumbers`, `wrap` as resolved for this file, `left`, `prose?` for Markdown and
-text, which wrap at spaces), `notice?`, `openLink?` (the editor link for the file; the built-in header does not attach it to `o open`,
-which would let a terminal underline the hint), `redacted`, `keys?` (`focus`, `switch`, `close`: the keys of the hints as the user has
-them bound and labelled, `opt+}` or `ctrl+x }`; a key that is not bound is absent, so leave its hint out: never write a key by hand),
-and for a `directory` `entries` (`name`, `kind` = `up` / `dir` / `file` / `link` / `other`, `size?`), `cursor` and `entriesTotal`.
-Actions: `close`, `switch` (only while `panel`), `open`, `ask`, `copy` (no `arg`), `line` with `arg` = a line number among `rows` (a
-press selects it; a drag extends), `entry` with `arg` = an index of `entries` (a press enters the folder or opens the file). The terminal
-keeps the keyboard, the reads and the selection; the view only draws.
+The [file viewer](file-viewer.md) shows the open file in the right slot (`variant: slot`) or as a full page on a narrow terminal (`page`). The terminal keeps the keyboard, reads and selection; the view only draws.
+
+| Input | Meaning or shape |
+|---|---|
+| `path`, `name`, `language`, `size`, `lines`, `mime?`, `top` | File data |
+| `kind` | `text`, `binary`, `special`, `large`, `directory`, `missing`, `loading`, `error` |
+| `note?` | The one line a file that is not text gets |
+| `rows` | Visible lines: `line`, `text`, highlighted `spans`, `mark?` = `added` / `modified` / `deleted` from Git, `selected`, `hit`, `pending?` |
+| `selection?`, `search?`, `focused`, `notice?`, `redacted` | Viewer state |
+| `panel` | The right panel exists in the same slot |
+| `options` | `lineNumbers`, `wrap` as resolved for this file, `left`, `prose?` for Markdown and text, which wrap at spaces |
+| `openLink?` | Editor link for the file; the built-in header does not attach it to `o open`, which would let a terminal underline the hint |
+| `keys?` | `focus`, `switch`, `close`: hint keys as the user has them bound and labelled, `opt+}` or `ctrl+x }` |
+| For a `directory` | `entries` (`name`, `kind` = `up` / `dir` / `file` / `link` / `other`, `size?`), `cursor`, `entriesTotal` |
+
+A key that is not bound is absent. Leave its hint out; never write a key by hand.
+
+| Action | Argument and behavior |
+|---|---|
+| `close`, `open`, `ask`, `copy` | No `arg` |
+| `switch` | No `arg`; only while `panel` |
+| `line` | `arg` = a line number among `rows`; a press selects it, a drag extends |
+| `entry` | `arg` = an index of `entries`; a press enters the folder or opens the file |
 
 ### slash.menu
 
@@ -230,59 +329,132 @@ navigation always works.
 The transcript rows that are not message or tool cards. All three are blocks: they are laid out once when they finish and
 cached, and have no clickable regions (actions: none). Return `undefined` for a variant you do not draw.
 
-- `tool.row`: a tool call drawn as a row, not a card. `variant`: `minimal` (the minimal view's one-line row: `title`,
-  `status`, `run` = how many successful tools this row stands for, `folded` = a later row already stands for it, `reason`
-  = the last line of a failure), `memory` (a saved-memory note: `text`, `hint` = the muted `/memory undo` at the row's right edge, `detail` = the whole memory text and `open` = the reader opened it), `orientation` (the engine's injected code map folded to one row: `text`, `hint`; open, the block draws as a `tool.card`, which `codeMapCard` makes the default in the full view), `plan` (a submitted plan, `text` is Markdown) or
-  `images` (the image line under a tool that made pictures, `images` and `where`).
-- `compaction.card`: the card of a turn that packed the conversation. `state`, `reason`, `idle?` (it ran while idle, before the prompt cache expired), `summary`, `followUp`, `method?`,
-  `tailTurns?`, `tailTokens?`, `fallbackReason?`, `cachedPrefix?` (the summary request repeated the session's last request), the resolved `style`/`presentation`, `progress`, `scratchpad`, and
-  `expanded` (the reader opened it). `summaryRows` is the summary already rendered as Markdown rows.
-- `turn.status`: the rows between turns. `variant`: `end` (the outcome with `end { outcome, input, output, reasoning?, ms?,
-  reason?, error? }`, drawn as the status line or the error box), `goal` (`goal`), `limit` (`limit`), `note` (`note`, a cache
-  note), `undone` (`undone` = messages removed by a rewind) or `checkpoint`. `meta` is the profile's message-meta level and
-  `mode` the presentation mode. `at` is when the row was made (a turn end: when the turn ended) and `time` that time
-  formatted, or `""` while `timestamps` is `off`; with it on the built-in ends the meta line with `done 5:25 PM`. An `end` also
-  has `timestamps` (`bottom`, `top` or `off`), `textColumn` (where the answer's text starts) and, on the latest turn while
-  `timestamps` is `bottom`, `running { shells, agents }`: with `meta: off` the built-in draws its closing line
-  (`took 2m 14s · ended 2:04 PM · 1 shell still running`) from these. A message's own `time` is set only with `timestamps: top`.
+#### Tool rows
+
+`tool.row` is a tool call drawn as a row, not a card.
+
+| `variant` | Input and meaning |
+|---|---|
+| `minimal` | Minimal view's one-line row: `title`, `status`, `run` = how many successful tools this row stands for, `folded` = a later row already stands for it, `reason` = last line of a failure |
+| `memory` | Saved-memory note: `text`, `hint` = muted `/memory undo` at the row's right edge, `detail` = whole memory text, `open` = reader opened it |
+| `orientation` | Engine's injected code map folded to one row: `text`, `hint`; open, it draws as a `tool.card`, which `codeMapCard` makes the default in the full view |
+| `plan` | Submitted plan; `text` is Markdown |
+| `images` | Image line under a tool that made pictures: `images`, `where` |
+
+#### Compaction cards
+
+`compaction.card` is the card of a turn that packed the conversation.
+
+| Input | Meaning or shape |
+|---|---|
+| `idle?` | Ran while idle, before the prompt cache expired |
+| `cachedPrefix?` | Summary request repeated the session's last request |
+| `expanded` | Reader opened it |
+| `summaryRows` | Summary already rendered as Markdown rows |
+| Other fields | `state`, `reason`, `summary`, `followUp`, `method?`, `tailTurns?`, `tailTokens?`, `fallbackReason?`, resolved `style`/`presentation`, `progress`, `scratchpad` |
+
+#### Turn status
+
+`turn.status` draws the rows between turns.
+
+| `variant` | Input and meaning |
+|---|---|
+| `end` | Outcome with `end { outcome, input, output, reasoning?, ms?, reason?, error? }`, drawn as the status line or error box |
+| `goal` | `goal` |
+| `limit` | `limit` |
+| `note` | `note`, a cache note |
+| `undone` | `undone` = messages removed by a rewind |
+| `checkpoint` | Checkpoint |
+
+`meta` is the profile's message-meta level; `mode` is the presentation mode. `at` is when the row was made, or when the turn ended for a turn end.
+
+`time` is that time formatted, or `""` while `timestamps` is `off`. With timestamps on, the built-in ends the meta line with `done 5:25 PM`.
+
+An `end` also has:
+
+| Input | Meaning |
+|---|---|
+| `timestamps` | `bottom`, `top` or `off` |
+| `textColumn` | Where the answer's text starts |
+| `running { shells, agents }` | On the latest turn while `timestamps` is `bottom` |
+
+With `meta: off`, the built-in draws its closing line (`took 2m 14s · ended 2:04 PM · 1 shell still running`) from these. A message's own `time` is set only with `timestamps: top`.
 
 ### page, overlay, bar (the envelope slots)
 
-These three wrap everything on screen that is not a transcript block or one of the slots above. In each, the terminal draws
-the built-in first and hands its rows to the view in the model (`body` for a page, `rows` for the others): return them
-restyled, reordered, framed or replaced, or `undefined` to keep them. The model is only built while a custom view exists.
+These three wrap everything on screen that is not a transcript block or one of the slots above. The model is only built while a custom view exists.
 
-**`page`**: every full-screen page goes through this ONE shape. Input: `page` (the id: `settings`, `customize`, `usage`,
-`sessions`, `agents`, `memory`, `model`, `mcps`, `permissions`, `workflows`, `loops`, `changes`, `help`, `intro`, `setup`,
-`theme`... all pages of the terminal, see `PAGE_TITLES` in `apps/cli/src/view/page-views.ts`), `title`, `hints?` (the
-built-in's `esc ...` hint line), `selected?` (the row the built-in highlighted, read from what it drew), `scroll?` (the
-scroll offset, for the pages that keep one: `help`), `body` (the built-in rows of the page, `height` of them at most) and
-`status` (the status rows the terminal appends under every page). Selection, scroll, typing and every key stay the
-terminal's: the view only draws, so a view cannot trap the user. A page always shows how to leave it: if the rows you return
-contain no `esc` hint the terminal adds `esc back` (replacing the last row only when the page is full). Actions: none, and
-pages have no mouse regions (the terminal ignores the mouse on pages).
+The terminal draws the built-in first and hands its rows to the view: `body` for a page, `rows` for the others. Return them restyled, reordered, framed or replaced, or `undefined` to keep them.
 
-What the shape does **not** give you: a per-page typed model (rows of a settings page as `{label, value}`, the tabs of the
-usage page as a list). The page modules own their layout, so `body` carries the drawn rows and `selected`/`hints` are read
-from them. A view that wants the data of a page can match on `page` and parse `body`; a typed model per page needs that
-page's state split from its renderer and is not done. `/status` has one (`page.status`, below) and goes through both: its
-view draws the body, then `page` wraps it.
+#### Full-screen pages
 
-**`overlay`**: the command palette, the theme and model pickers opened as palettes, and the floating cards (fetch, rewind,
-goal and return prompts, and the quick model switch `/model` opens over the chat, `variant: "card"` with `title: "Model"`). Input: `variant` (`palette`, `picker` or `card`), `title`, `query`, `selected`, `matches` and the
-built-in card as `rows`. A custom palette is drawn from the top left; typing, selection and running an item stay the
-terminal's. Cards keep their place.
+Every full-screen page goes through the one `page` shape.
 
-**`bar`**: the rows around the prompt that are not a card: `variant` is `working` (the working row), `find`, `search`,
-`attachments`, `ide`, `voice`, `vim`, `daemon`, `shortcuts`, `mention` (the `@` popup) or `agents` (the live sub-agents strip). A bar is drawn only while the
-terminal shows it; the view restyles its rows, it cannot make one appear.
+| Input | Meaning or shape |
+|---|---|
+| `page` | ID: `settings`, `customize`, `usage`, `sessions`, `agents`, `memory`, `model`, `mcps`, `permissions`, `workflows`, `loops`, `changes`, `help`, `intro`, `setup`, `theme`... all terminal pages; see `PAGE_TITLES` in `apps/cli/src/view/page-views.ts` |
+| `title` | Page title |
+| `hints?` | Built-in's `esc ...` hint line |
+| `selected?` | Row the built-in highlighted, read from what it drew |
+| `scroll?` | Scroll offset for pages that keep one: `help` |
+| `body` | Built-in page rows, at most `height` |
+| `status` | Status rows the terminal appends under every page |
 
-The first-run screen (`setup`, drawn by `onboarding-page.ts`, the Import picker inside it by `onboarding-import.ts`,
-previews by `onboarding-sample.ts`) and `/tutorial`
-(`tutorial`, `tutorial-page.ts`) are pages like the rest: their rows reach a custom `page` view as `body`. Their previews
-are not mock-ups: the chat preview replays a transcript through the real `createTranscript`, the approval preview is the
-real `renderApprovalPanel`, and the tutorial's practice chat is the real terminal app drawing into the page's rectangle
-(see [setup](setup.md)). Inside the practice chat no extension or custom view is loaded, so it shows the built-in look.
+Selection, scroll, typing and every key stay the terminal's. The view only draws, so it cannot trap the user.
+
+A page always shows how to leave it. If returned rows contain no `esc` hint, the terminal adds `esc back`, replacing the last row only when the page is full.
+
+Actions: none. Pages have no mouse regions; the terminal ignores the mouse on pages.
+
+The shape does **not** give you a per-page typed model, such as settings rows as `{label, value}` or usage tabs as a list. The page modules own their layout.
+
+`body` carries the drawn rows; `selected`/`hints` are read from them. To get a page's data, a view can match on `page` and parse `body`.
+
+A typed model per page needs that page's state split from its renderer and is not done. `/status` has one (`page.status`, below): its view draws the body, then `page` wraps it.
+
+#### Overlays
+
+`overlay` covers:
+
+- The command palette.
+- Theme and model pickers opened as palettes.
+- Floating cards: fetch, rewind, goal and return prompts, and the quick model switch `/model` opens over the chat (`variant: "card"` with `title: "Model"`).
+
+Input: `variant` (`palette`, `picker` or `card`), `title`, `query`, `selected`, `matches` and the built-in card as `rows`.
+
+A custom palette is drawn from the top left. Typing, selection and running an item stay the terminal's. Cards keep their place.
+
+#### Bars
+
+`bar` covers rows around the prompt that are not a card:
+
+| `variant` | Row |
+|---|---|
+| `working` | Working row |
+| `find`, `search`, `attachments`, `ide`, `voice`, `vim`, `daemon`, `shortcuts` | Corresponding prompt rows |
+| `mention` | The `@` popup |
+| `agents` | Live sub-agents strip |
+
+A bar is drawn only while the terminal shows it. The view restyles its rows; it cannot make one appear.
+
+#### Setup and tutorial pages
+
+The first-run screen and `/tutorial` are pages like the rest. Their rows reach a custom `page` view as `body`; see [setup](setup.md).
+
+| Page or part | Implementation |
+|---|---|
+| First-run `setup` | `onboarding-page.ts` |
+| Import picker inside it | `onboarding-import.ts` |
+| Previews | `onboarding-sample.ts` |
+| `tutorial` | `tutorial-page.ts` |
+
+Their previews are not mock-ups:
+
+- The chat preview replays a transcript through the real `createTranscript`.
+- The approval preview uses the real `renderApprovalPanel`.
+- The tutorial's practice chat is the real terminal app drawing into the page's rectangle.
+
+Inside the practice chat no extension or custom view is loaded, so it shows the built-in look.
 
 ### page.status (pages)
 
@@ -374,8 +546,16 @@ export default {
 
 ## Where the pieces are
 
-The input and output types, `VIEW_SLOTS` (every slot with its action set and row cap), the budget and the strike limit are in
-`packages/extension-api/src/views.ts`. The host and built-in table are `apps/cli/src/view/views.ts` and `view-builtins.ts`;
-the registry (breaker, budget, validation, memo) is `apps/cli/src/extensions/views.ts`; the safety rules are
-`apps/cli/src/view/view-safety.ts`. Tests: `apps/cli/test/views-golden.test.ts` (the default look is unchanged through the
-contract), `views-custom.test.ts`, `views-manage.test.ts` and `views-docs.test.ts` (the two examples above run as written).
+| File | Holds |
+|---|---|
+| `packages/extension-api/src/views.ts` | Input and output types, `VIEW_SLOTS` (every slot with its action set and row cap), budget and strike limit |
+| `apps/cli/src/view/views.ts`, `view-builtins.ts` | Host and built-in table |
+| `apps/cli/src/extensions/views.ts` | Registry: breaker, budget, validation, memo |
+| `apps/cli/src/view/view-safety.ts` | Safety rules |
+
+| Test | Checks |
+|---|---|
+| `apps/cli/test/views-golden.test.ts` | Default look is unchanged through the contract |
+| `views-custom.test.ts` | Custom views |
+| `views-manage.test.ts` | View management |
+| `views-docs.test.ts` | The two examples above run as written |

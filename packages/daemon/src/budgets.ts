@@ -31,7 +31,8 @@ export function createBudgets(input: { dir: string; settings(): Settings; seed()
     if (![usage.input, usage.output, usage.reasoning ?? 0, usage.cacheRead ?? 0, usage.cacheWrite ?? 0].every((n) => Number.isSafeInteger(n) && n >= 0)) return undefined
     const rates = policy().prices[usage.model] ?? policy().prices[`${usage.provider}:${usage.model}`]
     if (!rates || usage.cacheRead && rates.cacheRead === undefined || usage.cacheWrite && rates.cacheWrite === undefined) return undefined
-    const micros = Math.round(usage.input * rates.input + (usage.output + (usage.reasoning ?? 0)) * rates.output + (usage.cacheRead ?? 0) * (rates.cacheRead ?? 0) + (usage.cacheWrite ?? 0) * (rates.cacheWrite ?? 0))
+    // Reasoning is part of `output` in every engine's count (engine-native `recordContext`): priced once, not twice.
+    const micros = Math.round(usage.input * rates.input + usage.output * rates.output + (usage.cacheRead ?? 0) * (rates.cacheRead ?? 0) + (usage.cacheWrite ?? 0) * (rates.cacheWrite ?? 0))
     return Number.isSafeInteger(micros) && micros >= 0 ? micros : undefined
   }
   function record(usage?: BudgetUsage) {

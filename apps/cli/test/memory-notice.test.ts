@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { SessionEvent } from "@mendcode/protocol"
 import { memoryToast } from "../src/view/memory-notice"
-import { renderToast, renderToastRow, toastSpot } from "../src/view/toast"
+import { renderToast, renderToastRow } from "../src/view/toast"
 import { createTranscript } from "../src/view/transcript"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_PRESETS } from "../src/view/sidebar-spec"
@@ -49,36 +49,18 @@ describe("memory toast text", () => {
   })
 })
 
-describe("toast placement", () => {
-  const body = (rows: string[]): Line[] => rows.map((row) => [{ text: row }])
+describe("toast shape", () => {
   const box = renderToast({ variant: "success", title: "Memory saved", message: "project", hint: "/memory undo" }, 60)
 
-  test("the hint is a muted row of its own; the one-line form keeps it whole when the message is cut", () => {
-    expect(box.map((row) => row.map((span) => span.text).join("")).some((row) => row.includes("/memory undo"))).toBe(true)
+  test("the hint is muted after the message on the same row; the row keeps it whole when the message is cut", () => {
+    expect(box).toHaveLength(1)
+    expect(box[0]!.map((span) => span.text).join("")).toContain("Memory saved · project · /memory undo")
     expect(box.flat().find((span) => span.text.includes("/memory undo"))).toMatchObject({ fg: "muted" })
     const row = renderToastRow({ variant: "success", title: "Memory saved", message: `project · "${"x".repeat(80)}"`, hint: "/memory undo" }, 40, 2)
     const text = row.map((span) => span.text).join("")
     expect(textWidth(text)).toBeLessThanOrEqual(40)
     expect(text).toEndWith(" · /memory undo")
     expect(text).toContain("…")
-  })
-
-  test("the toast takes the first empty place below the top rows and never text", () => {
-    const rows = body(["top bar", "pinned prompt", "ab", "ab", "ab", "ab", "ab", "ab", "ab", "ab"])
-    const spot = toastSpot({ rows, top: 2, bottom: 10, box, width: 60 })
-    expect(spot).toEqual({ row: 2, col: 60 - 2 - textWidth(box[0]!.map((span) => span.text).join("")) })
-    // Text across the width pushes it down; a fully written body leaves no place.
-    const wide = "w".repeat(60)
-    expect(toastSpot({ rows: body(["top", "pin", wide, ...Array(8).fill("ab")]), top: 2, bottom: 11, box, width: 60 })?.row).toBe(3)
-    expect(toastSpot({ rows: body(Array(12).fill(wide)), top: 2, bottom: 12, box, width: 60 })).toBeUndefined()
-    // Rows above `top` (the top bar and the pinned prompt) are never offered.
-    expect(toastSpot({ rows, top: 8, bottom: 10, box, width: 60 })).toBeUndefined()
-  })
-
-  test("a filled row is not empty even where it has no text", () => {
-    const tinted: Line[] = [[{ text: " ".repeat(60), bg: "promptBg" }]]
-    const rows = [...tinted, ...tinted, ...tinted, ...tinted, ...tinted, ...tinted]
-    expect(toastSpot({ rows, top: 0, bottom: 6, box, width: 60 })).toBeUndefined()
   })
 })
 
@@ -152,7 +134,7 @@ describe("memory notice in the app", () => {
     expect(h.text().join("\n")).toContain("Memory saved")
   })
 
-  test("short toasts are one row; only a message that needs more lines is boxed, and then covers nothing", () => {
+  test("every toast is one row, a long one too: never a box, its rest behind F4, and it covers nothing", () => {
     for (const [width, height] of sizes) {
       const h = scene(width, height, { turns: 3, answer: LONG })
       const before = h.text()
@@ -165,9 +147,9 @@ describe("memory notice in the app", () => {
       h.app.onGlobal({ type: "extension.feedback", gseq: 3, at: NOW, extension: "demo", text: detail, level: "error" } as never)
       h.app.render()
       const rows = h.text()
-      // A box where it covers nothing; on a screen with no such place (60 columns of list) the notice row, still not over text.
-      expect(rows.some((row) => row.includes("demo"))).toBe(true)
-      if (width > 60) expect(rows.some((row) => row.includes("┃") && row.includes("demo"))).toBe(true)
+      // The notice row, cut with `F4 details`: never a box over the transcript.
+      expect(rows.some((row) => row.includes("demo") && row.includes("F4 details") && !row.includes("┃"))).toBe(true)
+      expect(rows.filter((row) => row.includes("The extension could not load"))).toHaveLength(1)
       expect(rows[0]).toBe(before[0]!)
       expect(messageRows(rows)).toEqual(messageRows(before))
     }

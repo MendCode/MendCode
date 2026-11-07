@@ -1,23 +1,25 @@
 # Terminal Mermaid diagrams
 
-The `full` message renderer draws Mermaid fences as themed Unicode diagrams. `/diagram [n]`
-opens a session diagram on a scrollable canvas. Arrows or `hjkl` pan, Shift moves a page,
-`+`/`-` zoom, `0` resets, `n`/`p` switch diagrams, and Esc returns to chat. Labels use the
-same grapheme and terminal-cell measurement as the rest of the CLI, including CJK,
-combining marks and emoji sequences. Source fences remain available when layout fails.
+The `full` message renderer draws Mermaid fences as themed Unicode diagrams. Open a session diagram on a scrollable canvas with `/diagram [n]`; source fences remain available when layout fails.
 
-`view/mermaid.ts` dispatches to one module per family in `view/mermaid/`. The registry,
-parsers and layouts load through `mermaid-lazy.ts` only when a Mermaid fence is encountered.
-No dependencies or protocol runtime schemas are added to startup.
+## Explore a diagram
+
+| Key | Does |
+|---|---|
+| Arrows or `hjkl` | Pan. |
+| Shift | Moves a page. |
+| `+`/`-` | Zoom. |
+| `0` | Resets. |
+| `n`/`p` | Switch diagrams. |
+| Esc | Returns to chat. |
+
+Labels use the same grapheme and terminal-cell measurement as the rest of the CLI, including CJK, combining marks and emoji sequences.
 
 ## Legacy inventory and coverage
 
-Reference inspected read-only: v1 `src/mendcode/packages/opencode/src/cli/cmd/tui/util/markdown-render.ts`
-(`renderSimpleMermaid` and its family renderers), `component/styled-plan-markdown.tsx`, and
-`test/cli/tui/markdown-render.test.ts`. The current v1 source has **30 families**: the ten
-families called new in UI-9 already exist in that checkout. They are new to MendCode. Eight more
-v1 families are retained as part of parity. The table describes the terminal subset,
-not the complete browser Mermaid grammar. Style directives use the terminal theme.
+The table describes the terminal subset, not the complete browser Mermaid grammar. Style directives use the terminal theme.
+
+The current v1 source has **30 families**. The ten families called new in UI-9 already exist in that checkout; they are new to MendCode. Eight more v1 families are retained as part of parity.
 
 | Family / headers | Syntax carried from legacy MendCode and drawn here |
 | --- | --- |
@@ -52,58 +54,88 @@ not the complete browser Mermaid grammar. Style directives use the terminal them
 | Cynefin / `cynefin-beta` | Title, complex/complicated/clear/chaotic/confusion domains, quoted items and labeled domain transitions; domain regions. |
 | TreeView / `treeView-beta` | Indentation or tree-drawing prefixes, labels/descriptions, metadata; connected hierarchy boxes. |
 
-Traditional flow shapes include rectangles, rounded/stadium, circle/double-circle,
-diamond, cylinder, subroutine, parallelogram, trapezoid, hexagon and asymmetric nodes.
-The v1 extended shape alias/marker vocabulary is carried in `legacy-shared.ts`, including
-cloud, bang, hourglass, bolt, braces, lean/trap variants, datastore/delay/cylinder variants,
-document/framed/lined/divided rectangles, flag, triangle and text/icon/image forms.
+### Flow shapes
+
+Traditional flow shapes include rectangles, rounded/stadium, circle/double-circle, diamond, cylinder, subroutine, parallelogram, trapezoid, hexagon and asymmetric nodes.
+
+The v1 extended shape alias/marker vocabulary is carried in `legacy-shared.ts`:
+
+- Cloud, bang, hourglass, bolt and braces.
+- Lean/trap variants and datastore/delay/cylinder variants.
+- Document/framed/lined/divided rectangles, flag, triangle and text/icon/image forms.
+
 These terminal markers preserve v1 semantics without relying on a browser renderer.
 
 ## Flowchart layout
 
-Flowcharts are drawn as layers (longest-path layering, barycenter ordering, orthogonal
-channels between layers), with or without subgraphs. A subgraph is a cluster: its members
-stay contiguous in every layer the cluster spans, no outside node enters its column range,
-long edges travel inside the deepest subgraph both ends share, and a frame with the title in
-its top border (`┌─ Title ───┐`; a title row inside for LR/RL) surrounds it. Nested subgraphs
-nest their frames. An edge crossing a frame border is drawn as a crossing, not a break.
+Flowcharts are drawn as layers, with or without subgraphs: longest-path layering, barycenter ordering and orthogonal channels between layers.
 
-When the layered layout is wider than the available columns, the same flow is laid out once
-more with tight spacing and node labels wrapped at 16 cells (a `<br/>` stays a line break). A
-left-to-right flow that still overflows is laid out top-down (RL as BT), which needs the width of
-one layer instead of the whole chain. A flowchart with subgraphs then falls back to the stacked
-single-column scene (each box under the previous one, connections on side channels). Only when
-none of these fits is the source shown, with a note saying it was too wide even compacted or even
-rotated; `/diagram` draws it at full size. The stacked scene is also what `graph-scene.ts` still provides to the class, state, ER, architecture and
-event-modeling families. Known limits: in LR/RL a back edge leaves a one-line box on the same
-row a forward edge enters, so the two share a segment; subgraphs are keyed by title, so two
-subgraphs with the same title are drawn as one frame.
+### Subgraphs
+
+A subgraph is a cluster:
+
+- Its members stay contiguous in every layer the cluster spans; no outside node enters its column range.
+- Long edges travel inside the deepest subgraph both ends share.
+- A surrounding frame has the title in its top border (`┌─ Title ───┐`), or a title row inside for LR/RL.
+- Nested subgraphs nest their frames. An edge crossing a frame border is drawn as a crossing, not a break.
+
+### When the flow is too wide
+
+1. If the layered layout exceeds the available columns, the same flow is laid out once more with tight spacing and node labels wrapped at 16 cells. A `<br/>` stays a line break.
+2. A left-to-right flow that still overflows is laid out top-down (RL as BT). This needs the width of one layer instead of the whole chain.
+3. A flowchart with subgraphs then falls back to the stacked single-column scene: each box under the previous one, connections on side channels.
+4. Only when none fits is the source shown, with a note saying it was too wide even compacted or even rotated. `/diagram` draws it at full size.
+
+The stacked scene is also what `graph-scene.ts` still provides to the class, state, ER, architecture and event-modeling families.
+
+### Known limits
+
+- In LR/RL a back edge leaves a one-line box on the same row a forward edge enters, so the two share a segment.
+- Subgraphs are keyed by title, so two subgraphs with the same title are drawn as one frame.
 
 ## Bounded layout and fallback
 
-Inputs are limited to 16,000 characters, 256 lines, 2,048 characters per source line
-and 1,500 structural delimiters. Graph families also bound nodes/edges; hierarchy depth
-is capped at 16. Cell grids are capped **before allocation** at 1,600 columns, 600 rows
-and 160,000 cells; path enumeration and annotation searches are bounded. Packet fields
-must be ordered, non-overlapping and within 4,096 bits. Invalid dates, missing dependency
-IDs, unknown references, malformed numeric values and unclosed blocks fail safely.
+| Input or layout | Limit |
+|---|---|
+| Input characters | 16,000 |
+| Input lines | 256 |
+| Characters per source line | 2,048 |
+| Structural delimiters | 1,500 |
+| Hierarchy depth | 16 |
+| Cell grid, capped **before allocation** | 1,600 columns, 600 rows and 160,000 cells |
+| Packet fields | Ordered, non-overlapping and within 4,096 bits |
 
-The renderer returns rows within the requested cell width or a one-line reason with the
-original code fence. Labels wrap where a family supports reflow. Diagrams that need more
-space render at up to 1,600 columns in `/diagram`, with horizontal/vertical panning.
-Oversized or unsupported constructs retain source rather than dropping nodes/fields.
-As in v1, CSS/click directives, C4 layout/update hints, and chart display hints do not
-control terminal styling. Gantt supports the v1 date/day subset; browser-only calendars
-and alternative date formats fall back rather than guessing dates.
+Graph families also bound nodes/edges; path enumeration and annotation searches are bounded. Invalid dates, missing dependency IDs, unknown references, malformed numeric values and unclosed blocks fail safely.
+
+### Source fallback
+
+The renderer returns rows within the requested cell width or a one-line reason with the original code fence. Labels wrap where a family supports reflow.
+
+Diagrams that need more space render at up to 1,600 columns in `/diagram`, with horizontal/vertical panning. Oversized or unsupported constructs retain source rather than dropping nodes/fields.
+
+- As in v1, CSS/click directives, C4 layout/update hints, and chart display hints do not control terminal styling.
+- Gantt supports the v1 date/day subset. Browser-only calendars and alternative date formats fall back rather than guessing dates.
+
+## Implementation
+
+`view/mermaid.ts` dispatches to one module per family in `view/mermaid/`. The registry, parsers and layouts load through `mermaid-lazy.ts` only when a Mermaid fence is encountered. No dependencies or protocol runtime schemas are added to startup.
+
+Reference inspected read-only: v1 `src/mendcode/packages/opencode/src/cli/cmd/tui/util/markdown-render.ts` (`renderSimpleMermaid` and its family renderers), `component/styled-plan-markdown.tsx`, and `test/cli/tui/markdown-render.test.ts`.
 
 ## Evidence
 
-`apps/cli/test/fixtures/mermaid-ui9.json` contains two distinct fixtures per family,
-including v1 matrix/regression sources. `ui-9.test.ts` checks structure, labels,
-relationships, cell width, malformed inputs, Unicode, budgets and the fake app harness.
-The existing renderer/viewer/lazy/footprint tests remain active.
+`apps/cli/test/fixtures/mermaid-ui9.json` contains two distinct fixtures per family, including v1 matrix/regression sources.
 
-`bun scripts/render-ui9-frames.ts .agents/runs/frames/ui-9` writes
-`<kind>-<n>-100.txt` (100×30) and `-180.txt` (180×50) through the app harness.
-Matching `.canvas.txt` files contain the full diagram, including content reached by
-panning. All data/project directories are temporary; no real provider or user data is used.
+`ui-9.test.ts` checks structure, labels, relationships, cell width, malformed inputs, Unicode, budgets and the fake app harness. The existing renderer/viewer/lazy/footprint tests remain active.
+
+### Render frames
+
+Run `bun scripts/render-ui9-frames.ts .agents/runs/frames/ui-9` to write frames through the app harness:
+
+| Output | Size or content |
+|---|---|
+| `<kind>-<n>-100.txt` | 100×30 |
+| `-180.txt` | 180×50 |
+| Matching `.canvas.txt` files | The full diagram, including content reached by panning. |
+
+All data/project directories are temporary; no real provider or user data is used.

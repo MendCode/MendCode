@@ -39,8 +39,18 @@ export function checkProblems(checks: readonly string[]): string[] {
   })
 }
 
-/** `timeoutSeconds` bounds the run (the runner picks its own default when absent); a runner that times a check out kills it and says so in `output`. */
-export type CheckRunner = (input: { argv: string[]; cwd: string; signal: AbortSignal; timeoutSeconds?: number }) => Promise<{ exitCode: number; output: string }>
+/**
+ * `timeoutSeconds` bounds the run (the runner picks its own default when absent); a runner that times a check out kills it and says so in `output`.
+ * `stdin` is written to the command's stdin, which is then closed; without it stdin is ignored.
+ * `fullOutput: true` (only a workflow script's `check()` asks for it) keeps the start of the output too, up to
+ * FULL_OUTPUT_BYTES: `full` holds it, past that size by at most one chunk when there was more (the caller cuts it).
+ * `fullTruncated` is true only when the runner discarded decoded output from `full`.
+ * Without it the runner keeps only its usual tail in `output`.
+ */
+export type CheckRunner = (input: { argv: string[]; cwd: string; signal: AbortSignal; timeoutSeconds?: number; stdin?: string; fullOutput?: boolean }) => Promise<{ exitCode: number; output: string; full?: string; fullTruncated?: boolean }>
+
+/** How much of a check's output (UTF-8 bytes, from its start) `fullOutput` keeps. */
+export const FULL_OUTPUT_BYTES = 1_048_576
 
 const DETAIL_CHARS = 1_500
 
@@ -48,7 +58,7 @@ const DETAIL_CHARS = 1_500
  * Runs checks in order; every check runs even after a failure, so the next run sees all of them.
  * `timeouts[i]` is the timeout in seconds of `checks[i]` (none = the runner's default).
  */
-export async function runChecks(input: { checks: readonly string[]; cwd: string; signal: AbortSignal; run: CheckRunner; timeouts?: readonly (number | undefined)[]; keepOutput?: boolean }): Promise<LoopGate[]> {
+export async function runChecks(input: { checks: readonly string[]; cwd: string; signal: AbortSignal; run: CheckRunner; timeouts?: readonly (number | undefined)[]; keepOutput?: boolean; stdin?: string }): Promise<LoopGate[]> {
   const gates: LoopGate[] = []
   for (const [index, check] of input.checks.entries()) {
     if (input.signal.aborted) break
@@ -58,7 +68,7 @@ export async function runChecks(input: { checks: readonly string[]; cwd: string;
       gates.push({ id: check, status: "fail", detail: parsed.error })
       continue
     }
-    const result = await input.run({ argv: parsed.argv, cwd: input.cwd, signal: input.signal, ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }) }).catch((error: unknown) => ({ exitCode: -1, output: error instanceof Error ? error.message : String(error) }))
+    const result = await input.run({ argv: parsed.argv, cwd: input.cwd, signal: input.signal, ...(timeoutSeconds === undefined ? {} : { timeoutSeconds }), ...(input.stdin === undefined ? {} : { stdin: input.stdin }) }).catch((error: unknown) => ({ exitCode: -1, output: error instanceof Error ? error.message : String(error) }))
     const tail = result.output.replace(/\s+$/, "").slice(-DETAIL_CHARS)
     gates.push({ id: check, status: result.exitCode === 0 ? "pass" : "fail", ...(result.exitCode === 0 && !input.keepOutput ? {} : { detail: `exit ${result.exitCode}${tail ? `\n${tail}` : ""}` }) })
   }

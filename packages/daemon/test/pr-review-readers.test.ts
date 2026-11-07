@@ -232,9 +232,9 @@ describe("runPrReview with readers (a benchmark PR: many result JSON files, litt
     expect(main).toContain("diff --git a/benchmarks/experiments/results/train_gap/binary_s9.json")
     expect(readers.prompts.join("\n")).toContain("\"train_acc\": 41.18")
     expect(asked).toEqual([undefined])
-    // One group of 30 files is one reader call, accounted as review-pass work.
+    // One group of 30 files is one reader call, accounted as its own purpose (cheap-model tokens show apart from the review pass).
     expect(readers.prompts).toHaveLength(1)
-    expect(accounted.filter((entry) => entry.input === 3_000).map((entry) => entry.purpose)).toEqual(["review"])
+    expect(accounted.filter((entry) => entry.input === 3_000).map((entry) => entry.purpose)).toEqual(["read"])
     const notes = run.info!.notes.join("\n")
     expect(notes).toContain("Readers: 30 files went to readers instead of the review pass whole: 30 files by claude-haiku (1 call, up to 3 at once")
     expect(run.checkpoint?.readers?.[0]?.paths).toHaveLength(30)
@@ -257,7 +257,7 @@ describe("runPrReview with readers (a benchmark PR: many result JSON files, litt
     const review = reviewKids()
     const run = await runPrReview({
       repo: "acme/bench", number: 23, directory: repo.dir, base: repo.base, head: repo.head, state: emptyState(), sessionFactory: review.factory, publish: false,
-      readers: { tier: "minimalist", source: () => ({ ok: false, reason: "claude-opus's provider has no cheap reader model" }) },
+      readers: { tier: "balanced", source: () => ({ ok: false, reason: "claude-opus's provider has no cheap reader model" }) },
     })
     expect(review.prompts[0]).toContain("Reader summary (local scan, no model, unverified)")
     expect(review.prompts[0]).toContain("keys: model, seed, epochs")

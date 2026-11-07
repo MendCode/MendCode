@@ -70,7 +70,7 @@ function buildSchemas() {
     rounds: z.array(z.object({ at: z.number(), open: z.array(z.string().max(80)).max(1000), commit: z.string().max(64).optional(), interrupted: z.literal(true).optional(), kept: z.string().max(200).optional() })).max(100),
     decisions: z.array(z.object({ phase: z.string().max(60), action: z.enum(["added", "skipped", "kept"]), reason: z.string().max(600) })).max(100),
     sections: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), z.string().max(8000)).refine((value) => Object.keys(value).length <= 20, "at most 20 sections").optional(),
-    readers: z.array(z.object({ id: z.string().max(20), paths: z.array(z.string().max(4096)).max(2000), text: z.string().max(2000), by: z.string().max(200) })).max(500).optional(),
+    readers: z.array(z.object({ id: z.string().max(20), paths: z.array(z.string().max(4096)).max(2000), text: z.string().max(2000), by: z.string().max(200), code: z.array(z.object({ path: z.string().max(4096), changed: z.string().max(600), risks: z.array(z.object({ start: z.number().int().positive(), end: z.number().int().positive(), kind: z.string().max(40), why: z.string().max(400) })).max(12), nothingRisky: z.boolean() })).max(40).optional() })).max(500).optional(),
   })
   const Job = z.object({
     id: z.string().min(1).max(80),
@@ -98,6 +98,7 @@ function buildSchemas() {
     control: z.enum(["reviewer", "user"]).optional(),
     checkpoint: Checkpoint,
     tokens: PrTokenUsage,
+    readTokens: PrTokenUsage.optional(),
     stop: PrStopReason.optional(),
     error: z.string().max(2000).optional(),
     transient: z.object({ since: z.number(), waits: z.number().int().nonnegative() }).optional(),
@@ -224,13 +225,15 @@ export function createJobLedger({ file, now = Date.now, random, retainTerminal =
       const job = jobs[index]!
       return replace(index, { ...job, checkpoint: { ...job.checkpoint, ...patch }, updatedAt: now() })
     },
-    addTokens(id, tokens) {
+    addTokens(id, tokens, read) {
       const index = indexOf(id)
       const job = jobs[index]!
       const sum = (a: number | undefined, b: number | undefined) => a === undefined && b === undefined ? undefined : (a ?? 0) + (b ?? 0)
-      const cached = sum(job.tokens.cached, tokens.cached), unreported = sum(job.tokens.unreported, tokens.unreported)
-      const total = { input: job.tokens.input + tokens.input, output: job.tokens.output + tokens.output, ...(cached === undefined ? {} : { cached }), ...(unreported === undefined ? {} : { unreported }) }
-      return replace(index, { ...job, tokens: total, updatedAt: now() })
+      const add = (before: PrTokenUsage) => {
+        const cached = sum(before.cached, tokens.cached), unreported = sum(before.unreported, tokens.unreported)
+        return { input: before.input + tokens.input, output: before.output + tokens.output, ...(cached === undefined ? {} : { cached }), ...(unreported === undefined ? {} : { unreported }) }
+      }
+      return replace(index, { ...job, tokens: add(job.tokens), ...(read ? { readTokens: add(job.readTokens ?? { input: 0, output: 0 }) } : {}), updatedAt: now() })
     },
     list(filter = {}) {
       return jobs.filter((job) => (filter.repo === undefined || job.repo === filter.repo) && (filter.number === undefined || job.number === filter.number) && (filter.reviewer === undefined || job.reviewer === filter.reviewer) && (!filter.states || filter.states.includes(job.state))).map(copy)
@@ -293,6 +296,7 @@ export function toSummary(job: ReviewJob): PrJobSummary {
     // `resolved` needs the PR's thread state, which the ledger does not keep: the page reads it from the review state.
     findings: { confirmed: verdict("confirmed"), plausible: verdict("plausible"), candidates: job.checkpoint.candidates.length, resolved: 0 },
     tokens: job.tokens,
+    ...(job.readTokens ? { readTokens: job.readTokens } : {}),
     stop: job.stop,
     error: clip(job.error, 600),
     stack: job.stack,

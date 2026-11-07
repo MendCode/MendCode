@@ -1,8 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { buildReviewContext, gitRun, MAX_DIFF_BYTES, parseNumstat, type ContextReaders } from "../src/pr-review/context"
+import { buildReviewContext, gitRun, HARD_DIFF_BYTES, MAX_DIFF_BYTES, MAX_DIFF_FILES, parseNumstat, parseUnifiedDiff, type ContextReaders, type GitRun } from "../src/pr-review/context"
+import { inDiff } from "../src/pr-review/engine"
+import { groupFiles, parseReaderAnswer, readerPrompt, readGroups } from "../src/pr-review/readers"
+import { graftCallers } from "../src/pr-review/readers-graft"
 
 /**
  * A pull request whose diff against its base is far larger than 4 MiB because of data and generated files (the Symbex #23 incident:
@@ -59,6 +62,22 @@ describe("a diff far larger than 4 MiB made of data is not refused: triage separ
     expect(context.readTokens).toBeGreaterThan(1_000_000)
   }, 60_000)
 
+  test("a generated file whose bounded sample holds fewer changed lines than triage needs stays a reader's file, and an unread one withholds full coverage", async () => {
+    // The first added line is longer than the readers' sample, so the sample keeps the header and no changed line at all.
+    const generated = `export const blob = "${"x".repeat(1_600_000)}"\n` + Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i}\n`).join("")
+    const repo = await fixture({ "gen/out.ts": generated, "src/a.ts": code("alpha") })
+    const attributes = "gen/** linguist-generated\n"
+    for (const by of ["local", "not read"]) {
+      const seen: string[][] = []
+      const readers: ContextReaders = async ({ data }) => { seen.push(data.map((entry) => entry.file.path)); return data.map((entry) => ({ id: "g1", paths: [entry.file.path], text: "generated constants", by })) }
+      const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers, attributes })
+      expect(seen).toEqual([["gen/out.ts"]])
+      if (by === "local") expect(context.diff).toContain("generated constants")
+      expect(context.diff).toContain("+export function alpha")
+      expect(context.unread?.includes("gen/out.ts") ?? false).toBe(by === "not read")
+    }
+  }, 60_000)
+
   test("with readers off the data file is a bounded sample the budget cuts, not an error", async () => {
     const repo = await fixture({ "results/run-1.json": results(150_000), "src/a.ts": code("alpha") })
     const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 40_000 })
@@ -77,12 +96,36 @@ describe("a diff far larger than 4 MiB made of data is not refused: triage separ
     expect(context.diff).toContain("+export function alpha")
   }, 60_000)
 
-  test("the safety bound is on the reviewable part: too much code is refused with a message that names the part and the way out", async () => {
+  test("a code file beyond the main bound is deferred, not retained, and readers off still fails", async () => {
     const word = (i: number) => Bun.hash(String(i)).toString(36)
     const lines = Array.from({ length: 60_000 }, (_, i) => `export function ${word(i)}(${word(i + 1)}: string) { return ${word(i + 2)}.concat("${word(i + 3)}", ${word(i + 4)}) }`).join("\n") + "\n"
     const repo = await fixture({ "src/generated-looking-but-code.ts": lines, "results/run.json": results(2_000) })
-    const readers: ContextReaders = async ({ data }) => [{ id: "g1", paths: data.map((entry) => entry.file.path), text: "results", by: "local" }]
-    await expect(buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers })).rejects.toThrow(/reviewable part of the diff is .*4\.0 MiB.*set aside for readers.*split the pull request/)
+    let loaded = false
+    const readers: ContextReaders = async ({ cut, load }) => {
+      expect(cut[0]!.text).toBe("")
+      expect(cut[0]!.bytes).toBeGreaterThan(MAX_DIFF_BYTES)
+      expect(cut[0]!.right.has(60_000)).toBe(true)
+      const piece = await load!(cut[0]!)
+      expect(Buffer.byteLength(piece.text)).toBeLessThanOrEqual(MAX_DIFF_BYTES)
+      expect(piece.right.has(60_000)).toBe(false)
+      expect(cut[0]!.right.has(60_000)).toBe(true)
+      loaded = true
+      return [{ id: "g1", paths: cut.map((file) => file.path), text: "export contract risk at src/generated-looking-but-code.ts:1", by: "claude-haiku" }]
+    }
+    const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers })
+    expect(loaded).toBe(true)
+    expect(context.files.find((file) => file.deferred)!.text).toBe("")
+    expect(context.diff).toContain("export contract risk")
+    const finding = { id: "late", path: "src/generated-looking-but-code.ts", line: 60_000, side: "RIGHT" as const, severity: "major" as const, category: "correctness" as const, summary: "late change", detail: "d", evidence: [] }
+    expect(inDiff(finding, context)).toBe(true)
+    expect(inDiff({ ...finding, line: 60_001 }, context)).toBe(false)
+    for (const by of ["not read", "claude-haiku"]) {
+      const withoutLoading = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers: async ({ cut }) => cut.map((file) => ({ id: "cached", paths: [file.path], by, text: by === "not read" ? "no reader funded" : "cached summary" })) })
+      expect(inDiff(finding, withoutLoading)).toBe(true)
+      expect(withoutLoading.files.find((file) => file.deferred)!.text).toBe("")
+      expect(withoutLoading.unread?.includes(finding.path) ?? false).toBe(by === "not read")
+    }
+    await expect(buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000 })).rejects.toThrow(/reviewable part of the diff is .*4\.0 MiB.*readers are off.*split the pull request/)
   }, 60_000)
 
   test("a normal change and paths with spaces keep working", async () => {
@@ -92,9 +135,121 @@ describe("a diff far larger than 4 MiB made of data is not refused: triage separ
     expect(context.diff).toContain("+export function spaced")
   }, 30_000)
 
+  test.each([100, 201])("a normal %s-file PR fetches batches of up to a hundred, without per-file scans", async (count) => {
+    const repo = await fixture(Object.fromEntries(Array.from({ length: count }, (_, i) => [`src/file ${i}.ts`, code(`value${i}`)])))
+    for (const readers of [undefined, async () => []]) {
+      const calls: string[][] = []
+      const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers, git: async (...args) => { calls.push(args[0]); expect(args[3]).not.toBe(true); return gitRun(...args) } })
+      expect(context.files).toHaveLength(count)
+      expect(calls).toHaveLength(1 + Math.ceil(count / 100))
+      expect(calls.slice(1).map((args) => args.filter((arg) => arg.startsWith(":(literal)")).length)).toEqual(count === 100 ? [100] : [100, 100, 1])
+      expect(context.files.every((file) => !file.deferred && file.right.has(90))).toBe(true)
+    }
+  })
+
+  test("streamed coordinates match the full diff across later hunks, deletions and unchanged gaps", async () => {
+    const original = Array.from({ length: 2000 }, (_, i) => `export const value${i} = ${i}\n`)
+    const repo = await fixture({ "src/sparse.ts": original.join("") })
+    const changed = [...original]
+    changed[0] = `export const value0 = '${"x".repeat(80_000)}'\n`
+    changed[1000] = "export const value1000 = -1\n"
+    changed.splice(1500, 1)
+    writeFileSync(path.join(repo.dir, "src/sparse.ts"), changed.join(""))
+    await git(repo.dir, "add", "-A"); await git(repo.dir, "commit", "-qm", "sparse edits")
+    const args = ["diff", "--no-ext-diff", "-U3", `${repo.head}...HEAD`, "--", "src/sparse.ts"]
+    const full = parseUnifiedDiff((await gitRun(args, repo.dir)).out)[0]!
+    const scanned = await gitRun(args, repo.dir, 64 * 1024, true)
+    expect(scanned.cut).toBe(true)
+    expect(scanned.coordinates!.right).toEqual(full.right)
+    expect(scanned.coordinates!.touched).toEqual(full.touched)
+    expect(scanned.coordinates!.right.has(1001)).toBe(true)
+    expect(scanned.coordinates!.right.has(500)).toBe(false)
+  })
+
+  test("code omitted by the context budget needs a model reader to prove coverage", async () => {
+    const repo = await fixture({ "src/large.ts": code("larger").repeat(50) })
+    for (const by of [undefined, "not read", "local", "claude-haiku"]) {
+      const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 2_000, readers: by ? async ({ cut }) => cut.map((file) => ({ id: "g1", paths: [file.path], text: "summary", by })) : undefined })
+      expect(context.unread?.includes("src/large.ts") ?? false).toBe(by !== "claude-haiku")
+    }
+  })
+
   test("parseNumstat reads text and binary rows, and nothing else", () => {
     expect(parseNumstat("1\t2\ta.ts\0-\t-\timg.png\0")).toEqual([{ path: "a.ts", added: 1, removed: 2, binary: false }, { path: "img.png", added: 0, removed: 0, binary: true }])
     expect(parseNumstat("diff --git a/x b/x\n")).toBeUndefined()
     expect(parseNumstat("")).toEqual([])
+  })
+
+  test("the hard byte and file bounds fail before readers, without giant output strings", async () => {
+    for (const tooManyFiles of [false, true]) {
+      let called = false
+      const runner: GitRun = async (args) => args.includes("--numstat")
+        ? { code: 0, out: tooManyFiles ? Array.from({ length: MAX_DIFF_FILES + 1 }, (_, i) => `1\t0\tsrc/a${i}.ts\0`).join("") : "1\t0\tsrc/a.ts\0" }
+        : { code: 0, out: "diff --git a/src/a.ts b/src/a.ts\n--- /dev/null\n+++ b/src/a.ts\n@@ -0,0 +1 @@\n+export const a = 1\n", bytes: HARD_DIFF_BYTES + 1, cut: true }
+      await expect(buildReviewContext({ directory: "/unused", base: "base", head: "head", budgetTokens: 400_000, git: runner, readers: async () => { called = true; return [] } })).rejects.toThrow(/reviewable part of the diff is .*64\.0 MiB.*20,000 files.*split the pull request/)
+      expect(called).toBe(false)
+    }
+  })
+
+  test("real git counts beyond the hard bound while retaining only a small prefix", async () => {
+    const block = Array.from({ length: 1000 }, (_, i) => `export const f${Bun.hash(String(i)).toString(36)} = () => caller${Bun.hash(String(i + 1)).toString(36)}()\n`).join("")
+    const repo = await fixture({ "src/absurd.ts": block.repeat(Math.ceil((HARD_DIFF_BYTES + 1024) / block.length)) })
+    let maximum = 0
+    const runner: GitRun = async (...args) => { const done = await gitRun(...args); maximum = Math.max(maximum, Buffer.byteLength(done.out)); if (args[3]) expect(Buffer.byteLength(done.out)).toBeLessThanOrEqual(64 * 1024); return done }
+    await expect(buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, git: runner, readers: async () => { throw new Error("must fail before readers") } })).rejects.toThrow(/reviewable part of the diff is .*64\.0 MiB/)
+    expect(maximum).toBeLessThanOrEqual(MAX_DIFF_BYTES)
+  }, 60_000)
+
+  test("risk order prefers source, changed import targets and changed lines, with no graph", async () => {
+    const names = ["docs/notes.md", "test/a.test.ts", "src/a.ts", "src/b.ts", "src/contract.ts"]
+    const runner: GitRun = async (args, _cwd, _max, count) => {
+      if (args.includes("--numstat")) return { code: 0, out: names.map((name, i) => `${i === 2 ? 200 : 100}\t0\t${name}\0`).join("") }
+      if (args.filter((arg) => arg.startsWith(":(literal)")).length > 1) return { code: 0, out: "", cut: true, bytes: MAX_DIFF_BYTES + 1 }
+      const name = args.at(-1)!.replace(":(literal)", "")
+      const out = `diff --git a/${name} b/${name}\n--- /dev/null\n+++ b/${name}\n@@ -0,0 +1,2 @@\n+import { contract } from './contract'\n+export const value = contract()\n`
+      return { code: 0, out, bytes: count ? 1_500_000 : Buffer.byteLength(out) }
+    }
+    // Full reads report their actual fixture size, so selection is asserted through fetch order.
+    const fetched: string[] = []
+    await buildReviewContext({ directory: "/unused", base: "base", head: "head", budgetTokens: 400_000, readers: async () => [], git: async (...args) => {
+      if (args[0][0] === "diff" && args[0].filter((arg) => arg.startsWith(":(literal)")).length === 1 && !args[3]) fetched.push(args[0].at(-1)!)
+      return runner(...args)
+    } })
+    expect(fetched.slice(0, 3)).toEqual([":(literal)src/contract.ts", ":(literal)src/a.ts", ":(literal)src/b.ts"])
+  })
+
+  test("spent reader allowance fetches no deferred text and labels every remaining path not read", async () => {
+    let loads = 0
+    const files = Array.from({ length: 8 }, (_, i) => ({ path: `src/f${i}.ts`, text: "", right: new Set<number>(), touched: [], deleted: false, deferred: true }))
+    const read = await readGroups({ groups: groupFiles({ data: [], cut: files }), source: { ok: true, model: "claude-haiku", factory: async () => { throw new Error("must not start") } }, parallel: 3, allowance: 0, load: async (file) => { loads++; return file } })
+    expect(loads).toBe(0)
+    expect(read.notRead).toEqual(files.map((file) => file.path))
+    expect([...read.summaries.values()].every((summary) => summary.by === "not read")).toBe(true)
+  })
+
+  test("code readers retain both diff sides, hunk coordinates and concrete file:line risks; absent graft is harmless", async () => {
+    const file = { path: "src/api.ts", text: "diff --git a/src/api.ts b/src/api.ts\n--- a/src/api.ts\n+++ b/src/api.ts\n@@ -42 +42 @@\n-export function api(x: string) {}\n+export function api(x: number) {}\n", right: new Set([42]), touched: [42], deleted: false }
+    const groups = groupFiles({ data: [], cut: [file] })
+    const prompt = readerPrompt(groups)
+    expect(prompt).toContain("-export function api(x: string)")
+    expect(prompt).toContain("@@ -42 +42 @@")
+    expect(prompt).toContain("changed signature, export, config key, schema or behaviour")
+    const parsed = parseReaderAnswer(JSON.stringify({ groups: [{ id: "g1", contains: "API change", risks: [{ path: "src/api.ts", line: 42, detail: "string callers no longer typecheck" }] }] }), groups, "claude-haiku")
+    expect(parsed![0]!.text).toContain("src/api.ts:42: string callers no longer typecheck")
+    expect(await graftCallers("/nonexistent-review-repository", [file])).toBeUndefined()
+    expect(readerPrompt(groupFiles({ data: [], cut: [{ ...file, path: "config.json" }] }))).toContain("@@ -42 +42 @@")
+  })
+
+  test("optional graft names callers using argument-safe changed exports and skips a failed CLI", async () => {
+    const repo = await fixture({ "src/api.ts": code("api") })
+    mkdirSync(path.join(repo.dir, "graft"))
+    const cli = path.join(repo.dir, "fake-graft")
+    writeFileSync(cli, '#!/bin/sh\n[ "$1" = callers ] && [ "$2" = api ] || exit 1\nprintf "src/caller.ts:7 calls api\\n"\n')
+    chmodSync(cli, 0o755)
+    const file = { path: "src/api.ts", text: "+export function api() {}\n", right: new Set<number>(), touched: [], deleted: false }
+    expect(await graftCallers(repo.dir, [file], cli)).toContain("src/caller.ts:7 calls api")
+    writeFileSync(cli, "#!/bin/sh\nexit 1\n")
+    expect(await graftCallers(repo.dir, [file], cli)).toBeUndefined()
+    expect(await graftCallers(repo.dir, [file], path.join(repo.dir, "missing-cli"))).toBeUndefined()
   })
 })

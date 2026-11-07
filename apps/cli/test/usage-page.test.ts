@@ -350,7 +350,9 @@ describe("Tokens, Models, Tools, Sessions", () => {
       const order = ["summary · gpt-6-luna", "summary · claude-haiku-5", "title · gpt-6-luna"].map((label) => all.findIndex((line) => line.includes(label)))
       expect(order.every((index) => index >= 0)).toBe(true)
       expect([...order].sort((a, b) => a - b)).toEqual(order)
-      expect(all[order[0]!]).toMatch(/summary · gpt-6-luna +12 +74K +2,100 +—/)
+      // Tokens and input first (output, cache and calls when they fit); a role with no price says unknown, never $0.00.
+      expect(all[order[0]!]).toMatch(width > 100 ? /summary · gpt-6-luna +76\.1K +74K +2,100 / : /summary · gpt-6-luna +76\.1K +74K /)
+      expect(all[order[0]!]).toContain("unknown")
       for (const line of lines) expect(textWidth(text(line))).toBe(width)
     }
     expect(joined(render({ state: state({ tab: 3 }) }))).not.toContain("Auxiliary calls")

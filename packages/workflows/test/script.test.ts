@@ -154,6 +154,211 @@ describe("script runs", () => {
     expect(h.ran).toHaveLength(2)
   })
 
+  test("check() with stdin hands exactly that text to the runner and stores only its size; without stdin nothing is passed", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const fed = await check("bun run lint", { stdin: ["MARK", "ER-stdin-text\\nline two"].join("") })
+      const plain = await check("bun test")
+      return { fed: fed.ok, plain: plain.ok }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ fed: true, plain: true })
+    expect(h.checkStdins).toEqual(["MARKER-stdin-text\nline two", undefined])
+    expect(done.tasks[0]!.title).toBe("bun run lint (with 1 KB on stdin)")
+    const stored = JSON.stringify([...h.rows.values(), ...h.saved.values()])
+    expect(stored).not.toContain("MARKER-stdin-text")
+    expect(stored).toMatch(/stdinBytes\\*":26/)
+  })
+
+  test("a passing check() gives the script the command's output, after an exit line, so it can read what the command printed", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const passed = await check("git rev-parse --show-toplevel")
+      return { ok: passed.ok, last: passed.detail.split("\\n").at(-1), first: passed.detail.split("\\n")[0] }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ ok: true, last: "ok", first: "exit 0" })
+  })
+
+  const bigJson = JSON.stringify({ head: "HEAD-MARK", items: Array.from({ length: 120 }, (_, n) => ({ n, rubric: `criterion ${n} of the plan` })) })
+  const readJson = `JSON.parse(read.detail.slice(read.detail.indexOf("\\n") + 1))`
+  /** The journal without the script's own return value (which may echo what it read). */
+  const journalCalls = (rows: Map<string, string>) => [...rows].filter(([key]) => !key.endsWith("\u0000result")).map(([, payload]) => payload)
+  const checkEntry = (rows: Map<string, string>) => JSON.parse(journalCalls(rows).find((payload) => payload.startsWith('{"kind":"check"'))!)
+
+  test("check() gives the script the whole output: 5 KB of JSON arrives whole and parses, the journal keeps only the tail", async () => {
+    expect(bigJson.length).toBeGreaterThan(5_000)
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => `${bigJson}\n` })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      return { ok: read.ok, first: read.detail.split("\\n")[0], head: data.head, items: data.items.length, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ ok: true, first: "exit 0", head: "HEAD-MARK", items: 120, truncated: false })
+    expect(h.checkFullOutput).toEqual([true])
+    // The run row and the journal hold only the tail (the script's own return value echoes what it read, so it is left out).
+    expect(JSON.stringify([...journalCalls(h.rows), ...[...h.saved.values()].map((row) => row.tasks)])).not.toContain("HEAD-MARK")
+    const entry = checkEntry(h.rows)
+    expect(entry).toMatchObject({ kind: "check", ok: true, long: true })
+    expect(entry.detail.length).toBeLessThanOrEqual(2_000)
+    expect(entry.truncated).toBeUndefined()
+  })
+
+  test("check() output past 1024 KB is cut at that size and says so with truncated: true", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "é".repeat(600_000) })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      const body = read.detail.slice(read.detail.indexOf("\\n") + 1)
+      return { truncated: read.truncated, chars: body.length, clean: !body.includes("\\ufffd") }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ truncated: true, chars: 524_288, clean: true })
+    const stored = checkEntry(h.rows)
+    expect(JSON.stringify(stored).length).toBeLessThan(2_500)
+    expect(stored).toMatchObject({ long: true, truncated: true })
+  })
+
+  test("check() preserves runner overflow even when trimming the captured prefix leaves only a header", async () => {
+    // The runner keeps a prefix past its byte limit; a later meaningful line is only in its discarded tail.
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "HEADER\n" + " \n".repeat(600_000) })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      return { detail: read.detail, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ detail: "exit 0\nHEADER", truncated: true })
+    expect(checkEntry(h.rows)).toMatchObject({ truncated: true })
+  })
+
+  test("check() trims ordinary trailing whitespace without reporting truncation", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: () => "HEADER\n \n" })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/dump.ts")
+      return { detail: read.detail, truncated: read.truncated }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ detail: "exit 0\nHEADER", truncated: false })
+    expect(checkEntry(h.rows).truncated).toBeUndefined()
+  })
+
+  test("a failing check() also gets its whole output", async () => {
+    const h = scriptHarness({ responder: () => "x", checkExit: () => 2, checkOutput: () => bigJson })
+    const run = h.start(wf(`
+      const read = await check("bun scripts/integrity.ts")
+      const data = ${readJson}
+      return { ok: read.ok, first: read.detail.split("\\n")[0], items: data.items.length }
+    `))
+    await settle(30)
+    expect(JSON.parse(h.get(run).script!.result!)).toEqual({ ok: false, first: "exit 2", items: 120 })
+  })
+
+  test("a replay after a restart runs a long-output check again, so the script sees the whole output, not the stored tail", async () => {
+    const saved = new Map()
+    const rows = new Map<string, string>()
+    const source = wf(`
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      const answer = await agent("after")
+      return { head: data.head, items: data.items.length, answer }
+    `)
+    const first = scriptHarness({ saved, rows, responder: () => "HOLD", checkOutput: () => bigJson })
+    const run = first.start(source)
+    await settle(30)
+    expect(first.get(run).tasks.map((task) => task.state)).toEqual(["done", "running"])
+    expect([...rows.values()].join("\n")).not.toContain("HEAD-MARK")
+    first.service.dispose()
+
+    const second = scriptHarness({ saved, rows, responder: () => "x", checkOutput: () => bigJson })
+    second.service.start()
+    await settle(40)
+    const resumed = second.get(run)
+    expect(resumed.state).toBe("completed")
+    expect(second.ran).toHaveLength(1)
+    expect(JSON.parse(resumed.script!.result!)).toEqual({ head: "HEAD-MARK", items: 120, answer: "x" })
+    expect(journalCalls(rows).join("\n")).not.toContain("HEAD-MARK")
+    expect(checkEntry(rows)).toMatchObject({ kind: "check", ok: true, long: true })
+  })
+
+  test("the whole output is dropped once the script has it: a pause and resume runs the check again; a short output replays from the journal", async () => {
+    const h = scriptHarness({ responder: () => "x", checkOutput: (argv) => (argv.includes("short") ? "tiny" : bigJson) })
+    const run = h.start(wf(`
+      const small = await check("bun short")
+      const read = await check("bun scripts/plan.ts")
+      const data = ${readJson}
+      await ask("go on?")
+      return { small: small.detail, items: data.items.length }
+    `))
+    await settle(30)
+    expect(h.get(run).state).toBe("needs_input")
+    expect(h.ran).toHaveLength(2)
+    h.service.control(run.workflowId, "pause")
+    await settle(10)
+    h.service.control(run.workflowId, "resume")
+    await settle(40)
+    expect(h.ran.map((argv) => argv.at(-1))).toEqual(["short", "scripts/plan.ts", "scripts/plan.ts"])
+    const asked = h.get(run).tasks.find((task) => task.kind === "human")!
+    h.service.control(run.workflowId, "approve", { taskId: asked.id })
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ small: "exit 0\ntiny", items: 120 })
+  })
+
+  test("check() refuses stdin over 1024 KB or that is not a string, without running anything", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const errors = []
+      try { await check("bun test", { stdin: "x".repeat(1_048_577) }) } catch (error) { errors.push(error.message) }
+      try { await check("bun test", { stdin: 42 }) } catch (error) { errors.push(error.message) }
+      const exact = await check("bun test", { stdin: "é".repeat(524_288) })
+      return { errors, exact: exact.ok }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ errors: [expect.stringContaining("stdin is 1025 KB; the limit is 1024 KB"), expect.stringContaining("stdin must be a string")], exact: true })
+    expect(h.ran).toHaveLength(1)
+    expect(h.checkStdins[0]).toHaveLength(524_288)
+  })
+
+  test("two checks that differ only by stdin are two calls, and a restart feeds the unfinished one its stdin again", async () => {
+    const saved = new Map()
+    const rows = new Map<string, string>()
+    const source = wf(`
+      const a = await check("bun run verify", { stdin: "alpha" })
+      const b = await check("bun run verify", { stdin: "beta" })
+      return [a.ok, b.ok]
+    `)
+    const first = scriptHarness({ saved, rows, responder: () => "x", checkExit: (_argv, _cwd, stdin) => (stdin === "beta" ? new Promise<number>(() => {}) : 0) })
+    const run = first.start(source)
+    await settle(30)
+    expect(first.checkStdins).toEqual(["alpha", "beta"])
+    expect(first.get(run).tasks.map((task) => task.state)).toEqual(["done", "running"])
+    first.service.dispose()
+
+    const second = scriptHarness({ saved, rows, responder: () => "x", checkExit: (_argv, _cwd, stdin) => (stdin === "beta" ? 1 : 0) })
+    second.service.start()
+    await settle(40)
+    const resumed = second.get(run)
+    expect(resumed.state).toBe("completed")
+    expect(second.checkStdins).toEqual(["beta"])
+    expect(JSON.parse(resumed.script!.result!)).toEqual([true, false])
+    expect([...rows.values()].join("\n")).not.toMatch(/alpha|beta/)
+  })
+
   test("ask() waits for the user: an answer resumes the script, a bad option is refused, a rejection rejects the call", async () => {
     const h = scriptHarness({ responder: () => "x" })
     const run = h.start(wf(`

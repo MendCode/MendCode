@@ -98,13 +98,13 @@ export function createTurnState() {
           break
         case "usage.recorded":
           liveOutput = 0
-          // The session's totals keep the cache apart (as /usage does): `input` is what was not read from or written to it; output counts the reasoning.
+          // The session's totals keep the cache apart (as /usage does): `input` is what was not read from or written to it; output already holds the reasoning (every engine counts it there).
           totals.input += event.input
           totals.cacheRead += event.cacheRead
           totals.cacheWrite += event.cacheWrite
-          totals.output += event.output + event.reasoning
+          totals.output += event.output
           if (startedAt !== undefined) {
-            output += event.output + event.reasoning
+            output += event.output
             input += event.input + event.cacheRead + event.cacheWrite
             cached += event.cacheRead
           }

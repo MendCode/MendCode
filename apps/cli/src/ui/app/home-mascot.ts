@@ -7,7 +7,7 @@ import { activeTheme } from "../theme"
 import type { AppContext } from "./context"
 
 /** `homeMascot` values that are a pet of the pet system (`pets/manifest.ts`); `mend` is the ASCII mascot. */
-export const isPetMascot = (value: string) => /^(user|codex|package):/.test(value)
+export const isPetMascot = (value: string) => /^(user|codex|package|builtin):/.test(value)
 
 /** How many times its own pixels the built-in Mend is drawn at each `mascotSize`. */
 const MEND_SCALES = { small: 1, medium: 2, large: 3 } as const

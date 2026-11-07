@@ -419,7 +419,7 @@ describe("diagrams", () => {
     chart: 'xychart-beta\n  title "Per day"\n  x-axis [mon, tue, wed]\n  y-axis "n" 0 --> 100\n  bar [20, 55, 80]\n  line [20, 55, 80]',
     pie: 'pie title Pets\n  "Dogs" : 386\n  "Cats" : 85',
   }
-  test("flowchart, sequence, state, bar/line charts and pie render sized to the width, with art and source buttons", () => {
+  test("flowchart, sequence, state, bar/line charts and pie render sized to the width, with no buttons and the source for the key", () => {
     for (const [kind, body] of Object.entries(KINDS)) {
       for (const width of [60, 80, 120, 200]) {
         const rows = draw(FENCE(body), width)
@@ -428,27 +428,16 @@ describe("diagrams", () => {
         expect(text.some((row) => row.includes("loading diagram")), kind).toBe(false)
         for (const row of text) expect(textWidth(row), `${kind}@${width}`).toBeLessThanOrEqual(width)
         for (const row of rows) expect(copyOf(row)!.at(-1), kind).toMatchObject({ text: body, label: "diagram" })
-        const hint = visible(rows)
-        if (hint.length) {
-          const [art, source] = hint
-          expect(art).toMatchObject({ label: "diagram as drawn" })
-          expect(source).toMatchObject({ text: body, label: "diagram" })
-          expect(art!.text.split("\n").length, kind).toBeGreaterThan(3)
-          expect(art!.text.split("\n").length, kind).toBeLessThanOrEqual(rows.length)
-        }
+        expect(visible(rows), `${kind}@${width}`).toEqual([])
+        expect(text.some((row) => /\bart\b|\bcopy\b/.test(row)), `${kind}@${width}`).toBe(false)
       }
     }
   })
 
-  test("the art and copy hint sit on the first row beside the diagram, only where those cells are blank", () => {
-    const rows = draw(FENCE(KINDS.flowchart!), 80)
-    const [art, source] = copyOf(rows[0]!)!
-    expect(plain([rows[0]!])[0]!.slice(art!.from, art!.to)).toBe("art")
-    expect(plain([rows[0]!])[0]!.slice(source!.from, source!.to)).toBe("copy")
-    expect(gutterOf(rows[0]!)).toBeGreaterThanOrEqual(30)
-    expect(visible(draw(FENCE(KINDS.flowchart!), 80, { copy: "code" }))).toEqual([])
-    const crowded = draw(FENCE(KINDS.flowchart!), 30)
-    expect(visible(crowded).every((region) => region.to <= 30)).toBe(true)
+  test("a chart's title row draws only the title: no art or copy beside it", () => {
+    const rows = draw(FENCE('xychart-beta\n  title "Cups per month"\n  x-axis [jan, feb, mar]\n  y-axis "n" 0 --> 100\n  bar [20, 55, 80]'), 100)
+    expect(plain(rows)[0]!.trim()).toBe("Cups per month")
+    expect(copyOf(rows[0]!)).toEqual([{ from: 0, to: 0, text: 'xychart-beta\n  title "Cups per month"\n  x-axis [jan, feb, mar]\n  y-axis "n" 0 --> 100\n  bar [20, 55, 80]', label: "diagram" }])
   })
 
   test("the classic style draws the diagram without a header", () => {

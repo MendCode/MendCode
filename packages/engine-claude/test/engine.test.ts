@@ -128,6 +128,30 @@ test("Claude Code's own sub-agents are told about MendCode's tools through a Sub
   h.engine.stop()
 })
 
+test("the reply language reaches Claude Code once per message through a UserPromptSubmit hook, never in the message itself", async () => {
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push({ type: "control_request", request_id: "hook-1", request: { subtype: "hook_callback", callback_id: "mendcode-reply-language", input: { hook_event_name: "UserPromptSubmit", prompt: "arregla el test que falla, por favor" } } })
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const asked: Array<[string, string]> = []
+  const h = engineWith([fake], { replyLanguage: async (sessionId: string, text: string) => (asked.push([sessionId, text]), "Reply in Spanish, the language of the user's latest message.") })
+  const turn = turnInput({ text: "arregla el test que falla, por favor" })
+  expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+  expect(fake.written[0]).toMatchObject({ type: "control_request", request: { subtype: "initialize", hooks: { UserPromptSubmit: [{ hookCallbackIds: ["mendcode-reply-language"] }] } } })
+  expect(asked).toEqual([[turn.input.sessionId, "arregla el test que falla, por favor"]])
+  const answers = fake.written.filter((message) => message.type === "control_response" && message.response.request_id === "hook-1")
+  expect(answers).toEqual([{ type: "control_response", response: { subtype: "success", request_id: "hook-1", response: { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: "Reply in Spanish, the language of the user's latest message." } } } }])
+  expect(JSON.stringify(fake.written.filter((message) => message.type === "user"))).not.toContain("Reply in")
+  // Without the option no hook is registered: Claude Code is not asked a question per message for nothing.
+  const plain = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-2" }); api.push(result()) } })
+  const other = engineWith([plain])
+  await other.engine.runTurn(turnInput().input)
+  expect(JSON.stringify(plain.written[0])).not.toContain("UserPromptSubmit")
+  h.engine.stop()
+  other.engine.stop()
+})
+
 test("One tree hears Bash output and file writes through a PostToolUse hook, and its line goes back as that call's context", async () => {
   const fake = fakeClaude({ onUser(api) {
     api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
@@ -1359,6 +1383,30 @@ describe("claude sub-agents", () => {
 })
 
 describe("claude engine background tasks", () => {
+  test("each background task is reported with the command line it runs, from the call that started it (streamed or whole)", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_bash", "Bash", { command: "while sleep 5; do date; done\necho never", description: "Tick", run_in_background: true })
+        api.push({ type: "system", subtype: "task_started", task_id: "b1", tool_use_id: "toolu_bash", description: "Tick", task_type: "local_bash" })
+        api.push({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_mon", name: "Monitor", input: { command: "tail -f build.log", description: "Watch" } }] }, parent_tool_use_id: null })
+        api.push({ type: "system", subtype: "task_started", task_id: "m1", tool_use_id: "toolu_mon", description: "Watch", task_type: "monitor" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Tick" }, { task_id: "m1", task_type: "monitor", description: "Watch" }, { task_id: "x1", task_type: "local_bash", description: "Orphan" }] })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bash", content: "Command running in background with ID: b1." }] } })
+        api.push(result())
+      },
+    })
+    const reported: unknown[] = []
+    const h = engineWith([fake], { notify: () => {}, onBackground: (_sessionId, tasks) => void reported.push(tasks) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    expect(reported.at(-1)).toEqual([
+      { id: "b1", description: "Tick", kind: "local_bash", command: "while sleep 5; do date; done" },
+      { id: "m1", description: "Watch", kind: "monitor", command: "Monitor: tail -f build.log" },
+      { id: "x1", description: "Orphan", kind: "local_bash" },
+    ])
+    h.engine.stop()
+  })
+
   test("a background command that ends after the turn: its task list is reported, the daemon gets a notice, and that notice shows the answer Claude Code gave on its own without sending anything", async () => {
     const fake = fakeClaude({
       onUser(api) {

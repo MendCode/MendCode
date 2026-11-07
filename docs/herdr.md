@@ -1,17 +1,77 @@
 # herdr and tuios
 
-Run `mendcode` in a [herdr](https://herdr.dev) pane, or in a [tuios](https://tuios.dev) pane, and the multiplexer's sidebar shows what the session is doing, as it does for its built-in agents: nothing to install, no hook, no plugin.
+The [herdr](https://herdr.dev) and [tuios](https://tuios.dev) sidebars show what your MendCode session is doing, just as they do for built-in agents. There is nothing to install: no hook and no plugin.
 
-- **Working** while a turn runs (answering, running a tool, compacting).
-- **Blocked** while a tool call waits for approval, with the request as its message (`approve shell: git push`). tuios lists it as `needs_input` in its Inbox.
-- **Idle** when nothing runs. herdr and tuios show a turn that just ended as done until someone looks at the pane.
-- The session id goes with each report, with the command that resumes it (`mendcode --session <id>`), so the multiplexer can bring the session back after a restart.
-- Quitting MendCode releases the pane. A MendCode that is killed leaves it to the multiplexer, which clears it once the pane's shell prompt is back.
+Run `mendcode` in a herdr or tuios pane to see the session's state in the sidebar.
 
-MendCode reports when it finds herdr's pane variables, `HERDR_SOCKET_PATH` and `HERDR_PANE_ID` (herdr sets them in its panes, and tuios sets them in every pane, since it answers herdr's socket API). Each change of state is one `pane.report_agent` request on that socket, with source `mendcode`, and the same state again sends nothing. A multiplexer that is gone or slow costs the session nothing: a report gives up after two seconds. `MENDCODE_HERDR=0` turns it off.
+## Read the pane's state
 
-Inside tuios, `tuios get-agent-state` and `tuios list-agents` name the harness `mendcode`; `ask-agent`, `wait-for` and `fan` can then tell when the pane is busy. The state is the terminal's own session, the one on screen: the side chat (`/btw`) does not change it. A sub-agent waiting on an approval or a question holds the pane as **blocked** too, with the sub-agent and what it waits on as the message (`Fix the flaky test: Allow shell`): herdr has no sub-agent rows, so that is how a waiting child shows there.
+| State | What it means |
+|---|---|
+| **Working** | A turn is running: answering, running a tool or compacting. |
+| **Blocked** | A tool call waits for approval. The request is its message (`approve shell: git push`); tuios lists it as `needs_input` in its Inbox. |
+| **Idle** | Nothing runs. herdr and tuios show a turn that just ended as done until someone looks at the pane. |
 
-In a tuios pane (`TUIOS_ENV=1`) the rail also shows three facts under MendCode's row, as `tuios set-agent-meta` would write them with source `mendcode`: `model` (the session's model), `context` (how full the context is, as the prompt's status shows it) and `cost` (what the session has cost, when it has a price). They are sent on tuios's own socket (`TUIOS_SOCKET`, for the pane `TUIOS_PANE_ID`) only when one changes; a fact that goes away is removed, and tuios drops them all when MendCode leaves the pane. `tuios get-agent-state --json` lists them under `meta`. `MENDCODE_HERDR=0` turns this off too.
+The state is the terminal's own session, the one on screen. The side chat (`/btw`) does not change it.
 
-tuios also lists the session's sub-agents under MendCode's row, the same ones the Agents strip shows: the daemon's child tasks (`task` and `delegate_task`, on any engine) and the sub-agents an engine runs inside the session (Claude Code's Agent calls, in the foreground or the background). Each is sent with `report-agent-activity` on tuios's socket: it starts with its type (agent, model and engine, as `explore · Sonnet 5.5 · claude`), says what it was asked and the tool it runs, and ends as it ended, done with the first line of its answer, failed with its error, or stopped. `tuios list-agents --json` shows them in `subagent_list` and counts the running ones in `subagents`. Only changes are sent. Another session opened in the pane, and the first report of a new MendCode process, start with `session_start`, so tuios forgets the children it had and none is left from a session switch, a crash or a restart; a child that leaves the list while running is stopped, and quitting clears them. The reports carry the harness `mendcode` and the session's id, so tuios never puts them on another agent. A sub-agent Codex or pi runs inside its own turn is not reported: those engines do not tell MendCode about them.
+A sub-agent waiting on an approval or a question holds the pane as **blocked** too. The message names the sub-agent and what it waits on (`Fix the flaky test: Allow shell`). herdr has no sub-agent rows, so this is how a waiting child shows there.
+
+### Resume or leave a session
+
+Each report includes the session id and its resume command (`mendcode --session <id>`), so the multiplexer can bring the session back after a restart.
+
+Quitting MendCode releases the pane. If MendCode is killed, the multiplexer clears it once the pane's shell prompt is back.
+
+## Inspect a session in tuios
+
+Inside tuios, `tuios get-agent-state` and `tuios list-agents` name the harness `mendcode`. This lets `ask-agent`, `wait-for` and `fan` tell when the pane is busy.
+
+### Model, context and cost
+
+In a tuios pane (`TUIOS_ENV=1`), the rail shows three facts under MendCode's row:
+
+| Fact | Shows |
+|---|---|
+| `model` | The session's model. |
+| `context` | How full the context is, as the prompt's status shows it. |
+| `cost` | What the session has cost, when it has a price. |
+
+`tuios get-agent-state --json` lists these facts under `meta`. A fact that goes away is removed, and tuios drops them all when MendCode leaves the pane.
+
+The facts are sent as `tuios set-agent-meta` would write them, with source `mendcode`, on tuios's own socket (`TUIOS_SOCKET`, for the pane `TUIOS_PANE_ID`). They are sent only when one changes. `MENDCODE_HERDR=0` turns this off too.
+
+### Follow sub-agents
+
+Under MendCode's row, tuios lists the same session sub-agents that the Agents strip shows:
+
+- The daemon's child tasks (`task` and `delegate_task`, on any engine).
+- Sub-agents an engine runs inside the session: Claude Code's Agent calls, in the foreground or the background.
+
+A sub-agent Codex or pi runs inside its own turn is not reported: those engines do not tell MendCode about them.
+
+Each sub-agent's activity starts with its type: agent, model and engine, as `explore · Sonnet 5.5 · claude`. It says what the sub-agent was asked and the tool it runs, then ends with its outcome:
+
+| Outcome | Shows |
+|---|---|
+| Done | The first line of its answer. |
+| Failed | Its error. |
+| Stopped | That it stopped. |
+
+`tuios list-agents --json` shows the children in `subagent_list` and counts the running ones in `subagents`.
+
+### When the child list clears
+
+Another session opened in the pane, and the first report of a new MendCode process, start with `session_start`. tuios forgets the children it had, so none is left from a session switch, a crash or a restart.
+
+- A child that leaves the list while running is stopped.
+- Quitting clears the children.
+
+## How reporting works
+
+MendCode reports when it finds herdr's pane variables, `HERDR_SOCKET_PATH` and `HERDR_PANE_ID`. herdr sets them in its panes; tuios sets them in every pane because it answers herdr's socket API.
+
+Each change of state is one `pane.report_agent` request on that socket, with source `mendcode`. The same state again sends nothing.
+
+A multiplexer that is gone or slow costs the session nothing: a report gives up after two seconds. `MENDCODE_HERDR=0` turns reporting off.
+
+Sub-agent activity uses `report-agent-activity` on tuios's socket, and only changes are sent. These reports carry the harness `mendcode` and the session's id, so tuios never puts them on another agent.

@@ -11,13 +11,19 @@ export const historyTokens = (messages: readonly ModelMessage[]) => messages.red
 /** The share of the window the default compaction point never passes (Codex caps its own at the same 90%). */
 export const DEFAULT_COMPACTION_PERCENT = 90
 
+/**
+ * A `threshold` as the percent of the window it means, 1 to 100. Values strictly between 0 and 1 are fractions (0.8 = 80%).
+ * The historical integer percentage 1 remains 1%; use 100 for 100%.
+ */
+export const thresholdPercent = (threshold: number) => Math.max(1, Math.min(100, threshold > 0 && threshold < 1 ? threshold * 100 : threshold))
+
 export function compactionThreshold(config: CompactionConfig, limits: CompactionLimits, legacy?: number) {
   const window = limits.inputLimit ?? limits.contextWindow
   const absolute = limits.model?.token_limit ?? limits.provider?.token_limit ?? legacy ?? config.token_limit
   if (absolute !== undefined) return window ? Math.min(window, absolute) : absolute
   if (!window) return 160_000
   const percent = limits.model?.threshold ?? limits.provider?.threshold ?? config.threshold
-  if (percent !== undefined) return Math.max(1, Math.floor(window * Math.max(1, Math.min(100, percent)) / 100))
+  if (percent !== undefined) return Math.max(1, Math.floor(window * thresholdPercent(percent) / 100))
   // By default the next request must still fit its reply: a context window shares its room with the output (pi keeps 16k free,
   // opencode 20k or the output limit), an input limit does not. Whichever comes first, 90% or that reserve, is the point.
   const reserve = limits.inputLimit ? 0 : config.reserved ?? Math.min(20_000, limits.outputLimit ?? 20_000)

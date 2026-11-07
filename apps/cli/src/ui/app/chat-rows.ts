@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { reviewActivityView } from "../lazy-pages"
 import { HOME_RECENT_MS, HOME_WORKING, inProject } from "../../view/project-scope"
 import { featureOn, ideSelectionKey } from "@mendcode/protocol/wire"
@@ -56,7 +55,7 @@ import type { AppContext } from "./context"
 import { asciiChrome } from "./glyph-mode"
 import { overlayRule, ruleRight } from "../../view/status-line"
 import { BUSY, DOUBLE_ESC_MS, MAX_EDITOR_ROWS } from "./constants"
-import { queuePolicy } from "./queue-policy"
+import { internalQueued, queuePolicy } from "./queue-policy"
 import { readableText } from "../../view/reply-comments"
 import { waitingNotice } from "./daemon"
 
@@ -191,7 +190,7 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Rows the question card takes in the prompt's place, besides the one prompt row the room sums below already count. */
     const cardRows = asking ? Math.max(0, request!.rows.length - 1) : 0
     const shellQueued = new Set(state.transcript.queue.flatMap((entry, index) => (state.turnState.isShellQueued(entry.queueId) ? [index] : [])))
-    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
+    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (internalQueued(entry) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
     const sendHit = queueDrawn.hits.find((hit) => hit.action === "send")
     const queue = { rows: queueDrawn.lines, sendChip: sendHit ? { row: sendHit.row, from: sendHit.from, to: sendHit.to } : undefined }
     // A turn paused by the provider's usage limit: the bar offers Resume at reset and Snooze until reset (docs/usage-limit.md).
@@ -534,8 +533,8 @@ export function createChatRows(ctx: AppContext, actions: {
 
   /** The running sessions as the home's Agent View lists them. */
   const homeSessions = (): HomeSession[] => {
-    // This project and the folders inside it (another project's sessions belong to its own home); from the user's home every project, as in v1.
-    const scope = input.directory === homedir() ? undefined : input.directory
+    // This folder's sessions only (another folder's belong to its own home), the user's home included.
+    const scope = input.directory
     const sessions: HomeSession[] = [...state.agentSessions.values()].filter((s) => HOME_WORKING.has(s.state) && inProject(s.directory, scope)).map((s) => ({
       id: s.sessionId, title: s.title || s.sessionId, state: s.state === "waiting_approval" ? "needs_input" : "working", updatedAt: s.updatedAt,
       ...(s.since !== undefined ? { startedAt: s.since } : {}), ...(s.tool || s.pending ? { detail: s.tool ?? s.pending! } : {}),
@@ -548,7 +547,7 @@ export function createChatRows(ctx: AppContext, actions: {
     }
     // v1 lists the project's last finished conversations under Completed: root sessions of the last 30 days, not archived.
     const since = now() - HOME_RECENT_MS
-    // What changed since attach (`sessions`, kept current by activity) wins over the list read at attach (`homeRecent`, every project).
+    // What changed since attach (`sessions`, kept current by activity) wins over the list read at attach (`homeRecent`, every project, filtered here).
     const known = new Map([...state.homeRecent, ...state.sessions].map((s) => [s.sessionId, s]))
     for (const s of known.values()) {
       if (!inProject(s.directory, scope) || s.parentId || s.archivedAt !== undefined || s.sessionId === state.sessionId || s.updatedAt < since || sessions.some((session) => session.id === s.sessionId)) continue
@@ -646,13 +645,14 @@ export function createChatRows(ctx: AppContext, actions: {
   }
 
   /** The cells of the pet as it would be drawn in a transcript `room` rows tall; undefined when there is none or it does not fit. */
-  /** A notice row as it lies over the prompt's rule: the message cut to the room and its hint kept. */
+  /** A notice row as it lies over the prompt's rule: the message (its widest span that is not the muted hint) cut to the room, the mark and hint kept. */
   function ruleNotice(row: Line, room: number): Line {
     const spans = row.filter((span) => span.text.trim() !== "")
     if (!spans.length) return []
     const over = spans.reduce((sum, span) => sum + textWidth(span.text), 0) - room
-    const first = over > 0 ? { ...spans[0]!, text: truncateEnd(spans[0]!.text, Math.max(1, textWidth(spans[0]!.text) - over)) } : spans[0]!
-    return [first, ...spans.slice(1)]
+    if (over <= 0) return spans
+    const cut = spans.reduce((best, span, index) => span.fg !== "muted" && textWidth(span.text) > textWidth(spans[best]!.text) ? index : best, 0)
+    return spans.map((span, index) => index === cut ? { ...span, text: truncateEnd(span.text, Math.max(1, textWidth(span.text) - over)) } : span)
   }
 
   /** Mend stands beside the prompt when chosen, and in place of a pet that half blocks would draw as noise (no pictures here). */

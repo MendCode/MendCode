@@ -132,18 +132,50 @@ describe("top bar", () => {
 
 describe("toasts", () => {
   test("one at a time, replaced by the next, with a single timer that ends with the toast", () => {
-    const timers: Array<{ fn: () => void; cleared: boolean }> = []
+    const timers: Array<{ fn: () => void; cleared: boolean; ms: number }> = []
     let changes = 0
-    const toasts = createToasts(() => changes++, { set: (fn) => (timers.push({ fn, cleared: false }), timers.at(-1)), clear: (handle) => void ((handle as { cleared: boolean }).cleared = true) })
+    const toasts = createToasts(() => changes++, { set: (fn, ms) => (timers.push({ fn, cleared: false, ms }), timers.at(-1)), clear: (handle) => void ((handle as { cleared: boolean }).cleared = true) })
     expect(toasts.pending).toBe(false)
     toasts.show({ variant: "info", message: "one" })
-    toasts.show({ variant: "error", message: "two" })
+    toasts.show({ variant: "warning", message: "two" })
     expect(toasts.current?.message).toBe("two")
     expect(timers.map((timer) => timer.cleared)).toEqual([true, false])
     timers[1]!.fn()
     expect(toasts.current).toBeUndefined()
     expect(toasts.pending).toBe(false)
     expect(changes).toBe(3)
+  })
+
+  test("duration by severity: info and success 5 s, a warning 8 s, an error has no timer and stays until dismissed", () => {
+    const timers: Array<{ ms: number; cleared: boolean }> = []
+    const toasts = createToasts(() => {}, { set: (_fn, ms) => (timers.push({ ms, cleared: false }), timers.at(-1)), clear: (handle) => void ((handle as { cleared: boolean }).cleared = true) })
+    toasts.show({ variant: "success", message: "saved" })
+    toasts.show({ variant: "info", message: "note" })
+    toasts.show({ variant: "warning", message: "careful" })
+    toasts.show({ variant: "info", message: "asked longer" }, 12_000)
+    expect(timers.map((timer) => timer.ms)).toEqual([5_000, 5_000, 8_000, 12_000])
+    toasts.show({ variant: "error", message: "failed" }, 3_000)
+    expect(timers).toHaveLength(4)
+    expect(timers.every((timer) => timer.cleared)).toBe(true)
+    expect(toasts.pending).toBe(false)
+    expect(toasts.current?.message).toBe("failed")
+    toasts.dismiss()
+    expect(toasts.current).toBeUndefined()
+  })
+
+  test("an error notice stays after its time and goes with the next prompt sent", async () => {
+    const h = harness({ send: (command) => (command.type === "session.fork" ? { ok: false, error: { code: "unknown_session", message: "[DAEMON]: unknown session" } } : daemon(command)) })
+    h.message()
+    await h.app.onKey("\x10")
+    await Bun.sleep(5)
+    for (const key of "Fork session") await h.app.onKey(key)
+    await h.app.onKey("\r")
+    await Bun.sleep(5)
+    expect(h.text().some((row) => row.includes("✗ unknown session"))).toBe(true)
+    for (const key of "hello") await h.app.onKey(key)
+    await h.app.onKey("\r")
+    await Bun.sleep(5)
+    expect(h.text().some((row) => row.includes("unknown session"))).toBe(false)
   })
 
   test("a short error result lies over the prompt's top rule: no box and no row of its own", async () => {
@@ -294,7 +326,7 @@ describe("exit summary", () => {
     now += 125_000
     const summary = h.app.exitSummary()
     expect(summary).toContain("MendCode · Fix tests")
-    expect(summary).toContain("GPT-6-Luna · ↑1,000 +30K cached ↓250 · 1 turn · 2m 5s")
+    expect(summary).toContain("GPT-6-Luna · ↑1,000 +30K cached ↓200 · 1 turn · 2m 5s")
     expect(summary).toContain(`--session ${h.sessionId}`)
   })
 })

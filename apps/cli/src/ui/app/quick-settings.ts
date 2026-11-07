@@ -20,6 +20,10 @@ export const FAST_USAGE = "usage: /fast [on|off|status]"
 export const OUTPUT_STYLE_USAGE = `usage: /output-style [${OUTPUT_STYLES.join("|")}]`
 export const EXPERIMENTAL_USAGE = "usage: /experimental [flag [on|off]]"
 export const GRAPH_USAGE = "usage: /graph [on|off|auto] · /graph default on|off|auto"
+/** What `/language next` (the /customize row) steps through; any other language name is typed: `/language Deutsch`. */
+export const LANGUAGE_PRESETS = ["auto", "English", "Español", "Português", "Français"] as const
+export const LANGUAGE_USAGE = "usage: /language [auto|<language name>|next]"
+const LANGUAGE_NAME = /^\p{L}[\p{L}\p{M} ()-]{0,39}$/u
 const flagIds = new Set<string>(EXPERIMENTAL_FLAGS.map((flag) => flag.id))
 type ConfigLayer = { id: string; label: string; source: string; present: boolean; entries: string[]; note?: string }
 
@@ -137,7 +141,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       return
     }
     if (extra.length || value !== undefined && !["on", "off", "toggle"].includes(value.toLowerCase()) || !flagIds.has(name)) {
-      say(flagIds.has(name) ? EXPERIMENTAL_USAGE : `unknown flag ${name} · ${[...flagIds].join(" ")}`, "warning")
+      say(flagIds.has(name) ? EXPERIMENTAL_USAGE : `unknown flag ${name} · /experimental lists them`, "warning", flagIds.has(name) ? {} : { detail: `Flags: ${[...flagIds].join(", ")}` })
       return
     }
     const was = flagOn(await currentSettings(), name)
@@ -160,8 +164,11 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     const saved = await save({ experimental: Object.keys(experimental).length ? experimental : null })
     if (!saved) return false
     const left = next ? names.filter((name) => !flagOn(saved, name)) : []
-    if (left.length) say(`${left.join(", ")} ${left.length > 1 ? "are" : "is"} saved on but the ${saved.tier ?? "safe-mode"} tier leaves ${left.length > 1 ? "them" : "it"} out · ${left.map((name) => `/tier ${Object.entries(FEATURES).find(([, spec]) => spec.flag === name)?.[0] ?? name} on`).join(" · ")}`, "warning")
-    else say(`${names.join(", ")} ${next ? "on" : "off"}`, next ? "warning" : "success")
+    // Named in words (the feature's label, else the flag's summary); the command to type keeps its id.
+    const feature = (name: string) => Object.entries(FEATURES).find(([, spec]) => spec.flag === name)
+    const label = (name: string) => feature(name)?.[1].label ?? EXPERIMENTAL_FLAGS.find((flag) => flag.id === name)?.summary ?? name
+    if (left.length) say(`${left.map(label).join(", ")}: saved on, but ${saved.tier ? `the ${saved.tier} tier` : "safe mode"} leaves ${left.length > 1 ? "them" : "it"} out`, "warning", { hint: left.map((name) => `/tier ${feature(name)?.[0] ?? name} on`).join(" · ") })
+    else say(`${names.map(label).join(", ")}: ${next ? "on" : "off"}`, next ? "warning" : "success")
     return left.length === 0
   }
 
@@ -201,8 +208,8 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       return
     }
     if (isTier(first) && second === undefined) {
-      const applied = await applyTierBundle(ctx, { tier: first, changeProfile: actions.changeProfile })
-      if (applied) { requestFrame(); say(applied.summary, "success") }
+      const applied = await applyTierBundle(ctx, { tier: first, before: settings.tier, changeProfile: actions.changeProfile })
+      if (applied) { requestFrame(); say(applied.notice.message, "success", { hint: applied.notice.hint, detail: applied.notice.detail }) }
       return
     }
     // The thread bridge's own switch is per engine: `/tier thread_mcp on claude codex acp:<name>` turns the feature on with them.
@@ -227,10 +234,10 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       if (second === "default") delete features[first]
       else features[first] = second === "on"
       if (!await save({ features: Object.keys(features).length ? features : null })) return
-      say(`${first} ${FEATURES[first].optIn ? second === "on" ? "on" : second === "default" ? "off · its default" : "off" : second === "default" ? "follows the tier again" : second === "on" ? "included" : "off"}${second === "on" && FEATURES[first].mode === "permit" && !FEATURES[first].optIn ? ` · still needs its own switch (${FEATURES[first].own})` : ""}`, second === "off" ? "success" : "warning")
+      say(`${FEATURES[first].label}: ${FEATURES[first].optIn ? second === "on" ? "on" : second === "default" ? "off · its default" : "off" : second === "default" ? "follows the tier again" : second === "on" ? "included" : "off"}${second === "on" && FEATURES[first].mode === "permit" && !FEATURES[first].optIn ? ` · still needs its own switch (${FEATURES[first].own})` : ""}`, second === "off" ? "success" : "warning")
       return
     }
-    say(`usage: /tier [${TIERS.join("|")}|off] · /tier <feature> on|off|default · features: ${Object.keys(FEATURES).join(" ")}`, "warning")
+    say(`usage: /tier ${TIERS.join("|")}|off · /tier <feature> on|off|default`, "warning", { hint: "/tier lists the features", detail: `Features: ${Object.keys(FEATURES).join(", ")}` })
   }
 
   async function debugConfigCommand() {
@@ -294,6 +301,21 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     if (await save({ projectConfig: Object.keys(entry).length ? { ...others, [directory]: entry } : others })) say(first === "auto" ? "graph auto here · indexes a git repo under the size limit" : `graph ${first} here`, "success")
   }
 
+  /**
+   * `/language [auto|<name>|next]`: the language replies are in (`language`, docs/prompt-modes.md). `auto` (unset) follows the user's latest
+   * message; a name holds; `next` steps through `LANGUAGE_PRESETS` (the /customize row); bare `/language` says what holds.
+   */
+  async function languageCommand(args: string) {
+    const word = args.trim()
+    const current = state.settingsNow.language ?? "auto"
+    if (!word) { say(`reply language: ${current}${current === "auto" ? " (the language of your latest message)" : ""} · ${LANGUAGE_USAGE}`); return }
+    const next = word.toLowerCase() === "next" ? LANGUAGE_PRESETS[(LANGUAGE_PRESETS.indexOf(current as never) + 1) % LANGUAGE_PRESETS.length]! : word.toLowerCase() === "auto" ? "auto" : word
+    if (next !== "auto" && !LANGUAGE_NAME.test(next)) { say(LANGUAGE_USAGE, "warning"); return }
+    if (readOnly()) { say("settings are read-only for this terminal", "warning"); return }
+    if (!await save({ language: next === "auto" ? null : next })) return
+    say(`reply language: ${next} · applies from the next message`, "success")
+  }
+
   async function cdCommand(args: string) {
     const target = args.trim()
     if (!target) { say(`in ${input.directory ?? "."} · usage: /cd <directory>`); return }
@@ -305,7 +327,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
 
   /** True when the text was one of these commands. */
   async function quickCommand(text: string): Promise<boolean> {
-    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph)(?:\s+(.*))?$/s.exec(text.trim())
+    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph|language)(?:\s+(.*))?$/s.exec(text.trim())
     if (!match) return false
     const args = match[2] ?? ""
     switch (match[1]) {
@@ -318,6 +340,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       case "cd": await cdCommand(args); break
       case "pwd": say(input.directory ?? "."); break
       case "graph": await graphCommand(args); break
+      case "language": await languageCommand(args); break
     }
     return true
   }

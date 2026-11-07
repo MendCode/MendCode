@@ -88,6 +88,8 @@ export type PiEngineOptions = {
   environment?(sessionId: SessionId): EngineEnvironment | undefined
   /** Text for a project directory added after pi's own system prompt (`--append-system-prompt`, which keeps it): what MendCode draws that pi's terminal does not. */
   appendSystem?(cwd: string): string | undefined
+  /** The `language` setting's line for a turn (docs/prompt-modes.md): sent after the user's text in the prompt, as the plan note is; MendCode's transcript keeps what the user typed. */
+  replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   /** Existing project-tools trust, checked before every turn and compaction. Absent means untrusted. */
   projectTrusted?(cwd: string): boolean
   sandbox?(input: { sessionId: SessionId; cwd: string }): SandboxPolicy | undefined
@@ -612,6 +614,8 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
       const body = await content(input, connection)
       const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.message = `${body.message}\n${planNote}`
+      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined)
+      if (language) body.message = `${body.message}\n(${language})`
       // A cancel while pi started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
         if (!connection.closed) connection.idle = clock.setTimer(processIdleMs, () => close(connection))
