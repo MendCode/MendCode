@@ -100,6 +100,21 @@ export function cheapSubagentModel(main: ModelChoice, catalog: ModelCatalog): Mo
 }
 
 /**
+ * A one-off helper call that must stay cheap (`/today`'s triage): the memory or `small` role the user set, else the main model's
+ * cheaper peer (Luna for Sol), else the main model only when it is not a large one. Undefined when only a large model, or a model
+ * of an external engine, would answer.
+ */
+export function cheapAuxiliaryModel(input: { roles: ModelRoles; catalog: ModelCatalog }): ModelChoice | undefined {
+  const { roles, catalog } = input
+  const chosen = roles.memoryAssistant || roles.memoryExtractor || roles.small
+  const main = usableEffort(roles.main ?? catalog.defaults, catalog)
+  const picked = chosen ? resolveModel({ role: "memoryAssistant", roles, catalog }) : cheapSubagentModel(main, catalog) ?? main
+  if (modelEngine(picked, catalog) || picked.model.startsWith("acp:")) return undefined
+  if (!chosen && LARGE_MODEL.test(catalogModel(catalog, picked.model)?.id ?? picked.model)) return undefined
+  return picked
+}
+
+/**
  * A choice whose effort the model does not support falls back to the model's default (or none); a model the catalog does not know is kept as asked.
  * A model named by its `mendcode models` reference (`claude/claude-opus`) comes back as its catalog id, the one engines and providers take.
  */

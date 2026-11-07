@@ -280,7 +280,7 @@ import { searchFiles } from "./files-index"
 import { createInteractiveProcesses } from "./interactive-processes"
 import { createBackgroundTasks, type BackgroundPort, type InteractivePort, type LoopPort, type PeerPort, type ReviewPort, type WorkflowPort } from "@mendcode/tools"
 import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-notice"
-import { catalogId, catalogModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
+import { catalogId, catalogModel, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
 import { createLiveTokens } from "./live-tokens"
@@ -4616,6 +4616,20 @@ export async function startDaemon(options: DaemonOptions) {
           const answer = await completeBudgeted({ system: LOOP_INTERPRET_SYSTEM, prompt: loopInterpretRequest(redactSecrets(command.text).text), signal: AbortSignal.timeout(LOOP_INTERPRET_TIMEOUT_MS), ...(model ? { model } : {}), auxiliary: { role: "loopInterpret", ...(directory ? { directory } : {}) } })
           const read = readInterpretation(answer)
           return read ? reply(connection, command.id, { ok: true, result: read }) : reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: the model did not return a schedule; write it as /loop every 30m <what to do>" })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
+        }
+      }
+      case "today.triage": {
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: triage needs the native engine" })
+        const directory = command.directory ?? options.defaultDirectory
+        const model = cheapAuxiliaryModel({ roles: rolesFor(store.settings.get(), directory), catalog })
+        if (!model) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: no cheap model is available for triage; set the small role in /model" })
+        const { TODAY_TRIAGE_SYSTEM, TODAY_TRIAGE_TIMEOUT_MS, readTriage, todayTriageRequest } = await import("./today-triage")
+        try {
+          const answer = await completeBudgeted({ system: TODAY_TRIAGE_SYSTEM, prompt: todayTriageRequest(command.items.map((item) => ({ ...item, title: redactSecrets(item.title).text, why: redactSecrets(item.why).text }))), signal: AbortSignal.any([...(connection.signal ? [connection.signal] : []), AbortSignal.timeout(TODAY_TRIAGE_TIMEOUT_MS)]), model, auxiliary: { role: "todayTriage", ...(directory ? { directory: canonicalDir(directory) } : {}) } })
+          const groups = readTriage(answer, command.items)
+          return groups ? reply(connection, command.id, { ok: true, result: { model: model.model, groups } }) : reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${model.model} did not return groups; try again` })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
         }

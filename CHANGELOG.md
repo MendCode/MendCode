@@ -12,6 +12,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - `/today` lists what needs you, the sessions to pick up and Dream's memory proposals in one read-only page.
+- On `/today`, each tab says what it holds (Attention: blocked until you answer; Pick up: left half-done) and each row says what Enter does.
+- `/today` `m` pins rows into a Today group at the top until midnight.
+- `/today` `t` asks a cheap model once to group the rows and propose one action per group; nothing happens until you accept a group, and approvals and memory decisions stay yours.
 - In /memory Pending, `A` and `X` approve or reject every proposal the list shows, after one confirmation.
 - Pending proposals nobody decides are archived after a while (`memoryPendingDays`; 0 keeps them).
 - Claude Code and Codex sessions receive the same memory block as native ones.
@@ -23,6 +26,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Page tabs draw their shortcut number dim and apart, so it no longer reads as the tab's count; `/today` shows each count once.
 - The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.
 - On a small diff the reviewer says the review pass reads the code itself, instead of calling the readers' share spent.
 - A workflow started from a plan or smart session keeps that mode instead of falling back to ask.
