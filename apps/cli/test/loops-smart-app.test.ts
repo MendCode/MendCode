@@ -67,7 +67,8 @@ describe("/loop with a phrase asks for one line of confirmation (AE)", () => {
     h.event({ type: "session.permission", mode: "full" })
     await h.type("/loop every five minutes tell me what changed")
     await h.key("\r")
-    expect(h.text()).toContain("loop: every 5m · full access · tell me")
+    // The objective is cut to the notice row beside its severity mark; the mode is what this checks.
+    expect(h.text()).toContain("loop: every 5m · full access · tell")
     await h.type("edits")
     await h.key("\r")
     expect(h.text()).toContain("loop: every 5m · edits · tell me what")

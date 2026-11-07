@@ -137,7 +137,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       return
     }
     if (extra.length || value !== undefined && !["on", "off", "toggle"].includes(value.toLowerCase()) || !flagIds.has(name)) {
-      say(flagIds.has(name) ? EXPERIMENTAL_USAGE : `unknown flag ${name} · ${[...flagIds].join(" ")}`, "warning")
+      say(flagIds.has(name) ? EXPERIMENTAL_USAGE : `unknown flag ${name} · /experimental lists them`, "warning", flagIds.has(name) ? {} : { detail: `Flags: ${[...flagIds].join(", ")}` })
       return
     }
     const was = flagOn(await currentSettings(), name)
@@ -160,8 +160,11 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     const saved = await save({ experimental: Object.keys(experimental).length ? experimental : null })
     if (!saved) return false
     const left = next ? names.filter((name) => !flagOn(saved, name)) : []
-    if (left.length) say(`${left.join(", ")} ${left.length > 1 ? "are" : "is"} saved on but the ${saved.tier ?? "safe-mode"} tier leaves ${left.length > 1 ? "them" : "it"} out · ${left.map((name) => `/tier ${Object.entries(FEATURES).find(([, spec]) => spec.flag === name)?.[0] ?? name} on`).join(" · ")}`, "warning")
-    else say(`${names.join(", ")} ${next ? "on" : "off"}`, next ? "warning" : "success")
+    // Named in words (the feature's label, else the flag's summary); the command to type keeps its id.
+    const feature = (name: string) => Object.entries(FEATURES).find(([, spec]) => spec.flag === name)
+    const label = (name: string) => feature(name)?.[1].label ?? EXPERIMENTAL_FLAGS.find((flag) => flag.id === name)?.summary ?? name
+    if (left.length) say(`${left.map(label).join(", ")}: saved on, but ${saved.tier ? `the ${saved.tier} tier` : "safe mode"} leaves ${left.length > 1 ? "them" : "it"} out`, "warning", { hint: left.map((name) => `/tier ${feature(name)?.[0] ?? name} on`).join(" · ") })
+    else say(`${names.map(label).join(", ")}: ${next ? "on" : "off"}`, next ? "warning" : "success")
     return left.length === 0
   }
 
@@ -201,8 +204,8 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       return
     }
     if (isTier(first) && second === undefined) {
-      const applied = await applyTierBundle(ctx, { tier: first, changeProfile: actions.changeProfile })
-      if (applied) { requestFrame(); say(applied.summary, "success") }
+      const applied = await applyTierBundle(ctx, { tier: first, before: settings.tier, changeProfile: actions.changeProfile })
+      if (applied) { requestFrame(); say(applied.notice.message, "success", { hint: applied.notice.hint, detail: applied.notice.detail }) }
       return
     }
     // The thread bridge's own switch is per engine: `/tier thread_mcp on claude codex acp:<name>` turns the feature on with them.
@@ -227,10 +230,10 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       if (second === "default") delete features[first]
       else features[first] = second === "on"
       if (!await save({ features: Object.keys(features).length ? features : null })) return
-      say(`${first} ${FEATURES[first].optIn ? second === "on" ? "on" : second === "default" ? "off · its default" : "off" : second === "default" ? "follows the tier again" : second === "on" ? "included" : "off"}${second === "on" && FEATURES[first].mode === "permit" && !FEATURES[first].optIn ? ` · still needs its own switch (${FEATURES[first].own})` : ""}`, second === "off" ? "success" : "warning")
+      say(`${FEATURES[first].label}: ${FEATURES[first].optIn ? second === "on" ? "on" : second === "default" ? "off · its default" : "off" : second === "default" ? "follows the tier again" : second === "on" ? "included" : "off"}${second === "on" && FEATURES[first].mode === "permit" && !FEATURES[first].optIn ? ` · still needs its own switch (${FEATURES[first].own})` : ""}`, second === "off" ? "success" : "warning")
       return
     }
-    say(`usage: /tier [${TIERS.join("|")}|off] · /tier <feature> on|off|default · features: ${Object.keys(FEATURES).join(" ")}`, "warning")
+    say(`usage: /tier ${TIERS.join("|")}|off · /tier <feature> on|off|default`, "warning", { hint: "/tier lists the features", detail: `Features: ${Object.keys(FEATURES).join(", ")}` })
   }
 
   async function debugConfigCommand() {

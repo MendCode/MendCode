@@ -1,59 +1,104 @@
 # File reads and attachments
 
-`read { path, offset?, limit? }` reads text, directories, PNG/JPEG/GIF/WebP images and PDFs. Text keeps
-1-based line numbers; offset/limit also page sorted directory entries (directories end in `/`). The default
-is 2,000 lines/entries, with bounded output and a continuation offset. Long text lines stop at 2,000 characters.
-Inline images/PDFs are sniffed by bytes and limited to 5 MiB per file. Binary files and special files are rejected.
+Read project files or attach text, images, PDFs and directories to a message. Attachments stay where you place them in the prompt so the model reads them in order.
 
-Nearby `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, or legacy `CONTEXT.md` below the session directory accompany
-file reads as a system reminder (first match per directory, outermost first, `@include` lines followed, at most 16 KB).
-This is the same loader as the system prompt's ([instruction files](resources-config.md#instruction-files)), so file
-precedence, includes, limits and the fallback and root-marker settings agree. Native history remembers each loaded file
-and its version (path, inode, size, mtime and ctime): re-reading does not repeat unchanged instructions, an edited file is injected
-again, and compaction can make them eligible again. Root/global instructions are in the system prompt.
+## Read a file or directory
 
-`/attach <path>` and dropped/pasted paths use the daemon. Project files/directories insert `@path` (quoted for
-spaces). External text files are read up to 200 KiB; external directories are bounded sorted listings.
-Existing pasted-image limits remain 20 MiB; pasted PDFs have the 5 MiB limit.
+Use `read { path, offset?, limit? }` for text, directories, PNG/JPEG/GIF/WebP images and PDFs.
 
-Bracketed text pastes remain literal across stdin reads. Empty paste events do nothing; only the
-explicit clipboard action probes images and reports a missing image. Successfully attached pasted
-paths become attachments and do not remain as raw escaped prompt text.
+| Input | Limits and output |
+|---|---|
+| Text | 1-based line numbers; long lines stop at 2,000 characters. |
+| Directories | Sorted entries, with `/` after directory names; offset/limit page the entries. |
+| Text or directories | Default 2,000 lines/entries, bounded output and a continuation offset. |
+| Inline images/PDFs | Sniffed by bytes; 5 MiB per file. |
+| Binary or special files | Rejected. |
+
+### Nearby instructions
+
+Nearby `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, or legacy `CONTEXT.md` below the session directory accompany file reads as a system reminder:
+
+- First match per directory, outermost first.
+- `@include` lines followed.
+- At most 16 KB.
+
+This uses the system prompt's loader ([instruction files](resources-config.md#instruction-files)), so file precedence, includes, limits and the fallback and root-marker settings agree. Root/global instructions are in the system prompt.
+
+Native history remembers each loaded file and its version: path, inode, size, mtime and ctime. Re-reading does not repeat unchanged instructions; an edited file is injected again, and compaction can make them eligible again.
+
+## Attach or paste a path
+
+Use `/attach <path>`, or drop/paste a path. All use the daemon.
+
+| Input | What happens |
+|---|---|
+| Project file/directory | Inserts `@path`, quoted for spaces. |
+| External text file | Reads up to 200 KiB. |
+| External directory | Inserts a bounded sorted listing. |
+| Pasted image | Existing 20 MiB limit remains. |
+| Pasted PDF | 5 MiB limit. |
+
+Successfully attached pasted paths become attachments, not raw escaped prompt text.
+
+Bracketed text pastes remain literal across stdin reads. Empty paste events do nothing; only the explicit clipboard action probes images and reports a missing image.
 
 ## Long pastes
 
-A message is at most 64 KB of text. When the pastes in the prompt make it longer, Enter sends the largest of them as text
-attachments (`text/plain`, up to 4 MiB each, `attachment.put` in pieces of 140 KB) until the rest fits; each keeps its
-`[Pasted Content N chars]` label in the message, the transcript shows that label and a `txt` chip, and the model reads the whole
-text right where the label stands, in that turn and in every later one. The native engine reads it from the attachment (in the
-ordered parts and in the plain text, so every provider gets it); Claude Code, Codex, pi and ACP agents get it put back into the
-message text, including a message that joins a running turn. Text typed by hand (not pasted) over 64 KB, or a single paste over
-4 MiB, is not sent: the prompt stays as it was and says why.
+A message is at most 64 KB of text. When pastes make the prompt longer, press Enter:
+
+1. The largest pastes become text attachments until the rest fits: `text/plain`, up to 4 MiB each, sent with `attachment.put` in pieces of 140 KB.
+2. Each keeps its `[Pasted Content N chars]` label in the message. The transcript shows that label and a `txt` chip.
+3. The model reads the whole text where the label stands, in that turn and every later one.
+
+The native engine reads the attachment in both the ordered parts and the plain text, so every provider gets it. Claude Code, Codex, pi and ACP agents get it put back into the message text, including messages joining a running turn.
+
+Text typed by hand (not pasted) over 64 KB, or a single paste over 4 MiB, is not sent. The prompt stays as it was and says why.
 
 ## Long text from `run` and `session send`
 
-A message is at most 64 KiB (65,536 characters) of text, less room the daemon keeps for what it adds. A positional prompt, piped
-stdin or a `--file` text that would pass it is sent once as a `text/plain` attachment instead (`prompt.txt`, or the file's name with
-`.txt`); the message keeps only its `[name]` label and the model reads the whole text where the label stands, in that turn and the
-next ones. The largest piece moves first, so a short prompt next to one big file stays as typed. Nothing is stored twice: a text that
-fits stays in the message, one that does not is stored only as the attachment. Each prompt or text file is limited to 200 KiB
-(204,800 bytes); over that, the command stops before sending and says which one, its size and the limit (`the prompt is 250,021
-bytes; the limit is 204,800`, `huge.md ... larger than 200 KB (250,021 bytes; the limit is 204,800)`). A command the daemon
-still refuses for length names the field, the size sent and the limit (`daemon rejected user.submit · text is 65,537 characters;
-the limit is 65,536`).
+A message is at most 64 KiB (65,536 characters) of text, less room the daemon keeps for what it adds.
+
+A positional prompt, piped stdin or a `--file` text that would pass this limit is sent once as a `text/plain` attachment: `prompt.txt`, or the file's name with `.txt`.
+
+The message keeps only its `[name]` label. The model reads the whole text where the label stands, in that turn and the next ones.
+
+The largest piece moves first, so a short prompt next to one big file stays as typed. Nothing is stored twice: text that fits stays in the message; text that does not is stored only as the attachment.
+
+### Size refusals
+
+Each prompt or text file is limited to 200 KiB (204,800 bytes). Over that, the command stops before sending and names the input, its size and the limit:
+
+- `the prompt is 250,021 bytes; the limit is 204,800`
+- `huge.md ... larger than 200 KB (250,021 bytes; the limit is 204,800)`
+
+A command the daemon still refuses for length names the field, the size sent and the limit: `daemon rejected user.submit · text is 65,537 characters; the limit is 65,536`.
 
 ## Inline tokens
 
 An attachment that is not a project mention enters the prompt as a token at the cursor, where it will be read:
-`[Image #1]` for an image (numbered on from the images the session already sent: after three, the next is `[Image #4]`), `[PDF design-spec.pdf]`, `[notes.txt]` for an external text file, `[codeconfig/]` for a
-folder. This holds for a paste, a drop (several paths land in drop order, one space apart), `/attach` and the clipboard
-key. A space is added only where one is needed: pasted in the middle of a word, the token is set off by spaces; after
-a space, no second space. The token is one character for the editor ([docs/editor.md](editor.md#attachment-tokens)):
-the cursor never rests inside it, and a delete, cut, word motion or selection takes it whole. Deleting the token
-removes its attachment; undo brings both back. Image numbers go up and are not reused while their token can come back.
-A name with brackets, line breaks or more than 28 cells is made safe and shortened (it keeps its extension); a second
-`[PDF a.pdf]` is `[PDF a.pdf #2]`. A refusal (not a file, over the limit, an unsupported type) is one line and inserts
-nothing, token or path.
+
+| Attachment | Token |
+|---|---|
+| Image | `[Image #1]`; numbered on from images the session already sent, so after three the next is `[Image #4]`. |
+| PDF | `[PDF design-spec.pdf]` |
+| External text file | `[notes.txt]` |
+| Folder | `[codeconfig/]` |
+
+This holds for a paste, a drop, `/attach` and the clipboard key. Several dropped paths land in drop order, one space apart.
+
+A space is added only where needed. In the middle of a word, the token is set off by spaces; after a space, no second space is added.
+
+### Edit attachment tokens
+
+The token is one character for the editor ([docs/editor.md](editor.md#attachment-tokens)). The cursor never rests inside it; a delete, cut, word motion or selection takes it whole.
+
+Deleting the token removes its attachment; undo brings both back. Image numbers go up and are not reused while their token can come back.
+
+- A name with brackets, line breaks or more than 28 cells is made safe and shortened, keeping its extension.
+- A second `[PDF a.pdf]` is `[PDF a.pdf #2]`.
+- A refusal (not a file, over the limit, an unsupported type) is one line and inserts nothing, token or path.
+
+### Choose where attachments appear
 
 The setting `attachmentChips` (`/customize`, "Attachments") chooses where an attachment shows while the message is
 written:
@@ -99,12 +144,25 @@ carry the refs with their tokens; data written before tokens (refs with no label
 text. The prompt history (up-arrow) keeps text only, as it always has: a recalled `[Image #1]` is plain text that no
 attachment stands behind.
 
-Native `@path` mentions resolve files and directories within the project, including quoted names. Symlinks
-escaping the root are omitted. Text is bounded at 100 KiB per file / 300 KiB per message; directories show
-at most 200 entries and share that byte budget. There are at most 32 distinct paths, and inline media is
-bounded at four files / 20 MiB total (5 MiB each). Missing files remain literal mentions; skipped binary or
-over-limit files get a reason. `@file?start=10&end=20` reads an inclusive line range. Nearby instructions
-load once for mentions too. Text content passes through the session secret masker before persistence.
+## Mention project files
+
+Native `@path` mentions resolve files and directories within the project, including quoted names. Use `@file?start=10&end=20` to read an inclusive line range.
+
+| Resource | Limit |
+|---|---|
+| Text | 100 KiB per file / 300 KiB per message. |
+| Directories | At most 200 entries; share the text byte budget. |
+| Distinct paths | At most 32. |
+| Inline media | Four files / 20 MiB total, 5 MiB each. |
+
+- Symlinks escaping the root are omitted.
+- Missing files remain literal mentions.
+- Skipped binary or over-limit files get a reason.
+- Nearby instructions load once for mentions too.
+
+Text content passes through the session secret masker before persistence.
+
+## How media is stored and read
 
 The native engine stores media as session-owned blobs and resolves bytes only for model requests.
 Tool results allow at most two media attachments / 5 MiB each. PDF uses `input_file` in Responses,

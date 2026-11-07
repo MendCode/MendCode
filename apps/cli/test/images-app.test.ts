@@ -7,6 +7,7 @@ import { createScreen } from "../src/ui/screen"
 import type { ImagePlacement } from "../src/ui/image-layer"
 import type { Line } from "../src/ui/theme"
 import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
+import { mendChatLines } from "../src/view/mend-sprite"
 import { tuiProfilePath } from "../src/view/tui-profile"
 import { scratch } from "./extensions-harness"
 
@@ -153,7 +154,9 @@ describe("image protocol app integration", () => {
 })
 
 /** Whether Mend is drawn in half blocks: a cell in its mint face color. */
-const mendBlocks = (rows: Line[]) => rows.some((row) => row.some((span) => span.fgHex === "#d4f9d9" || span.bgHex === "#d4f9d9"))
+/** The half-block robot's head color under the active theme: its antenna's tip, the first colored cell it draws. */
+const mendHead = () => mendChatLines("idle")[0]!.find((span) => span.fgHex)!.fgHex
+const mendBlocks = (rows: Line[]) => rows.some((row) => row.some((span) => span.fgHex === mendHead() || span.bgHex === mendHead()))
 
 test("beside the prompt the built-in Mend is a picture in a pet's cells where kitty draws pictures, half blocks where it does not", async () => {
   const kitty = await harness({ profile: '{"images":"kitty","pet":"mend"}' })

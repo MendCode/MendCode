@@ -1,8 +1,12 @@
 # Advisor
 
-The advisor is a second model the session's main model consults at the moments where the quality of the plan decides the result: before a plan is followed, when the same thing keeps failing, and before a turn that edited files ends. A cheaper or faster model does the work; the advisor reads a summary and answers a verdict. It is off until you pick the advisor model.
+Use an advisor as a second model that reads a summary and returns a verdict while a cheaper or faster model does the work. It is off until you pick the advisor model.
 
-It applies to native sessions with any model of the catalog (a ChatGPT subscription model, an API provider's model), so the executor and the advisor can come from different families. Claude Code sessions get Claude Code's own advisor (`--advisor`) instead.
+Run `/advisor` to check the model and whether it applies to your session.
+
+The main model consults it before a plan is followed, when the same thing keeps failing, and before a turn that edited files ends.
+
+It applies to native sessions with any catalog model, including a ChatGPT subscription model or an API provider's model. The executor and advisor can come from different families; Claude Code sessions get Claude Code's own advisor (`--advisor`) instead.
 
 ## Turning it on
 
@@ -13,11 +17,21 @@ It applies to native sessions with any model of the catalog (a ChatGPT subscript
 | `/advisor <model>#<effort>` | with an effort, e.g. `/advisor gpt-6.1-sol#high` |
 | `/advisor off` | removes the role; nothing is consulted |
 
-The role is the `advisor` entry of `models` in settings, so it also works per profile and per project like any other role, and the `/model` page lists it. Unlike the other auxiliary roles it has **no fallback**: without its own setting there is no advisor, never "same as main".
+### Choose a model
 
-The advisor must differ from the main model in model or effort. MendCode does not rank models by intelligence, so it does not require a "more capable" one; pick the one you trust more for judgment.
+1. Pick the model you trust more for judgment. It must differ from the main model in model or effort; MendCode does not rank intelligence or require a "more capable" model.
+2. Set it with `/advisor <model>` or `/advisor <model>#<effort>`.
+3. Check `/advisor` for status and the account consultations draw on.
 
-The `advisor` feature belongs to the balanced and full tiers as a permit: the tier only allows it, and nothing happens until the role is set. Minimalist never offers it. `features.advisor: false` turns it off whatever the role says.
+The role is the `advisor` entry of `models` in settings. It works per profile and per project like any other role, and the `/model` page lists it.
+
+**Note:** Unlike other auxiliary roles, it has **no fallback**. Without its own setting there is no advisor, never "same as main".
+
+### Tier and feature limits
+
+- Balanced and full permit the `advisor` feature; nothing happens until the role is set.
+- Minimalist never offers it.
+- `features.advisor: false` turns it off whatever the role says.
 
 ## When it is consulted
 
@@ -29,20 +43,64 @@ The main agent has an `advisor` tool and calls it when it decides to (its descri
 | `repeat_error` | the second time a tool call fails with the same arguments and the same first error line | the verdict joins the history as an `advisor` call, so the next step sees it |
 | `completion` | the agent answers without tool calls, the turn's edits touched at least 2 files or changed at least 20 lines, and no consultation happened after the last edit | `revise` or `stop` gives the agent exactly one more step to address it (or to stop and tell you); `proceed` ends the turn as usual |
 
-A trivial turn (one file, fewer than 20 changed lines: a config value, a one-line fix) ends without the `completion` sign-off: the review would make you wait after the answer for a change you can read at a glance. The agent can still call the advisor itself, and `plan` and `repeat_error` are unaffected. Lines are counted from the edits themselves (each replacement's larger side, a write's content, a patch's `+`/`-` lines), summed over the turn.
+### Small edits
 
-Each checkpoint runs at most once per turn. Only the main agent is advised: sub-agents never get the tool or the checkpoints, on any engine (a child on another engine is not lent it, and Claude Code's own sub-agents are refused it). A scripted run's tool allow-list and an agent's tool list apply to the tool as to any other; permission rules can deny `advisor`.
+A trivial turn (one file, fewer than 20 changed lines: a config value, a one-line fix) ends without the `completion` sign-off. This avoids waiting after the answer for a change you can read at a glance.
+
+The agent can still call the advisor itself; `plan` and `repeat_error` are unaffected.
+
+Lines are counted from the edits themselves, summed over the turn: each replacement's larger side, a write's content, or a patch's `+`/`-` lines.
+
+### Who gets advice
+
+Each checkpoint runs at most once per turn. Only the main agent is advised.
+
+Sub-agents never get the tool or checkpoints, on any engine. A child on another engine is not lent it, and Claude Code's own sub-agents are refused it.
+
+A scripted run's tool allow-list and an agent's tool list apply as to any other tool. Permission rules can deny `advisor`.
 
 Checkpoint calls appear in the transcript as ordinary `advisor` tool rows (marked as made by the engine), so you see every consultation and its verdict. While one runs, the working row reads "Consulting advisor...".
 ## What the advisor sees
 
-Not the whole conversation. A brief of at most `maxBriefTokens` (24,000 by default, 4 characters each): the checkpoint and question, your latest request in full, the plan, the working tree's `git diff HEAD` (bounded), and as much of the current turn's transcript as fits. The turn starts at your last message; an image a tool read during the turn does not count as your request. The brief lists the files this turn edited and the checks it ran (tests, typecheck, lint, build) apart from earlier turns'. The images attached to your request go with it when the advisor model accepts images. Secrets are redacted before the brief leaves the process. The advisor has no tools.
+The advisor sees a brief, not the whole conversation. It is bounded by `maxBriefTokens` (24,000 by default, 4 characters each) and contains:
 
-It answers JSON: `verdict` (`proceed`, `revise` or `stop`), a short `summary`, up to 8 `findings` (claim, evidence, severity), up to 6 `next` steps and, when it shows the change better than words, an `example`: a short code snippet or ASCII sketch. An answer that cannot be read becomes a neutral `proceed` with the text as its summary. A timeout (60 s), a provider error or a refused budget is reported in the tool row and the turn continues without the advice; the advisor never fails a turn.
+- The checkpoint and question.
+- Your latest request in full and the plan.
+- The working tree's `git diff HEAD` (bounded).
+- As much of the current turn's transcript as fits.
+- The files this turn edited and checks it ran (tests, typecheck, lint, build), listed apart from earlier turns'.
+
+The turn starts at your last message. An image a tool read during the turn does not count as your request; images attached to your request go with it when the advisor model accepts images.
+
+Secrets are redacted before the brief leaves the process. The advisor has no tools.
+
+### Verdict and failures
+
+It answers JSON:
+
+| Field | Content |
+|---|---|
+| `verdict` | `proceed`, `revise` or `stop` |
+| `summary` | short summary |
+| `findings` | up to 8 findings: claim, evidence, severity |
+| `next` | up to 6 steps |
+| `example` | a short code snippet or ASCII sketch, when it shows the change better than words |
+
+An answer that cannot be read becomes a neutral `proceed` with the text as its summary.
+
+A timeout (60 s), provider error or refused budget is reported in the tool row. The turn continues without advice; the advisor never fails a turn.
 
 ## Usage and limits
 
-Consultations use tokens of the advisor model's account: your ChatGPT subscription quota for a ChatGPT model, your API key for a provider's model, your Claude subscription for Claude Code's advisor. `/advisor` says which. Each consultation is a usage event under the advisor's model, so `/usage` counts it with the session. The budget guard runs before every consultation.
+Run `/advisor` to see which account consultations draw on.
+
+| Advisor model | Account |
+|---|---|
+| ChatGPT model | your ChatGPT subscription quota |
+| Provider's model | your API key |
+| Claude Code's advisor | your Claude subscription |
+
+Each consultation is a usage event under the advisor's model, so `/usage` counts it with the session. The budget guard runs before every consultation.
 
 | setting (`advisor` in settings) | default | range |
 |---|---|---|
@@ -65,11 +123,28 @@ An API or ChatGPT model cannot advise a Claude Code session. `/advisor` shows "n
 
 ### Claude as the advisor of a native session
 
-A Claude Code model (`/advisor claude-opus#high`) can advise a native session, on your Claude subscription. Each consultation is one headless `claude -p` run: the bounded, redacted brief goes on stdin, the call has no tools, saves no session, runs no hooks and loads no `CLAUDE.md` or auto memory (it starts in the daemon's empty probe folder, never in your project), and the answer is read from Claude Code's JSON result. It finds `claude` the way the Claude Code engine does (`MENDCODE_CLAUDE_BIN`, else `claude` on `PATH`) and uses Claude Code's own login; MendCode reads no credential.
+A Claude Code model (`/advisor claude-opus#high`) can advise a native session on your Claude subscription. Each consultation is one headless `claude -p` run.
 
-The child's environment is the daemon's own without a Claude Code shell's session variables (the list the launcher drops: `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT`…) and without `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL`, which would move the run off the Claude login onto an API key or another endpoint. A missing or signed-out `claude`, an error answer, a bad exit and the timeout (90 s, then the process is killed) become the same neutral verdict as any failed consultation; the turn goes on.
+- The bounded, redacted brief goes on stdin; the answer is read from Claude Code's JSON result.
+- The call has no tools, saves no session and runs no hooks.
+- It loads no `CLAUDE.md` or auto memory: it starts in the daemon's empty probe folder, never in your project.
 
-The tokens `claude` reports come back as a usage event of the turn under the advisor's model with provider `claude`, so `/usage` counts them with the session once, and the tool row names the account ("Claude subscription"). They are not also recorded as an [auxiliary call](usage.md#auxiliary-calls): a consultation is part of a turn, and counting it in both places would count it twice.
+It finds `claude` the way the Claude Code engine does: `MENDCODE_CLAUDE_BIN`, else `claude` on `PATH`. It uses Claude Code's own login; MendCode reads no credential.
+
+#### Child environment and failures
+
+The child uses the daemon's own environment, without:
+
+- A Claude Code shell's session variables: the launcher drops `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_ENTRYPOINT`…
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL`, which would move the run off the Claude login onto an API key or another endpoint.
+
+A missing or signed-out `claude`, an error answer, a bad exit and the timeout (90 s, then the process is killed) become the same neutral verdict as any failed consultation. The turn goes on.
+
+#### Usage accounting
+
+The tokens `claude` reports return as a usage event of the turn under the advisor's model with provider `claude`. `/usage` counts them with the session once; the tool row names the account ("Claude subscription").
+
+They are not also recorded as an [auxiliary call](usage.md#auxiliary-calls). A consultation is part of a turn; recording it in both places would count it twice.
 
 ## How it differs from
 
@@ -79,7 +154,11 @@ The tokens `claude` reports come back as a usage event of the turn under the adv
 
 ## Measured on the evaluation kit
 
-`bun .agents/evals/harness/run.ts --harness mendcode --advisor gpt-6.1-sol#high …` sets the advisor role for a run ([the kit](../.agents/evals/harness/README.md)). One run per task, six tasks (bug-async-race, bug-boundary, false-cause-rounding, feat-lru-ttl, refuse-weaken-test, rootcause-logs), balanced tier, ChatGPT subscription, main effort `medium`, 2026-11-01. One run per cell is a sample, not a distribution: the differences below are within what a repeat could change.
+`bun .agents/evals/harness/run.ts --harness mendcode --advisor gpt-6.1-sol#high …` sets the advisor role for a run ([the kit](../.agents/evals/harness/README.md)).
+
+Evaluation date: 2026-11-01. It used one run per task, balanced tier, ChatGPT subscription and main effort `medium`. Its six tasks were bug-async-race, bug-boundary, false-cause-rounding, feat-lru-ttl, refuse-weaken-test and rootcause-logs.
+
+**Note:** One run per cell is a sample, not a distribution. The differences below are within what a repeat could change.
 
 | arm | solved | input tokens (cached) | output tokens | agent time | advisor consultations |
 |---|---|---|---|---|---|

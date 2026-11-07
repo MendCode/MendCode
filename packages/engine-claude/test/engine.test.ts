@@ -1359,6 +1359,30 @@ describe("claude sub-agents", () => {
 })
 
 describe("claude engine background tasks", () => {
+  test("each background task is reported with the command line it runs, from the call that started it (streamed or whole)", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_bash", "Bash", { command: "while sleep 5; do date; done\necho never", description: "Tick", run_in_background: true })
+        api.push({ type: "system", subtype: "task_started", task_id: "b1", tool_use_id: "toolu_bash", description: "Tick", task_type: "local_bash" })
+        api.push({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "toolu_mon", name: "Monitor", input: { command: "tail -f build.log", description: "Watch" } }] }, parent_tool_use_id: null })
+        api.push({ type: "system", subtype: "task_started", task_id: "m1", tool_use_id: "toolu_mon", description: "Watch", task_type: "monitor" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Tick" }, { task_id: "m1", task_type: "monitor", description: "Watch" }, { task_id: "x1", task_type: "local_bash", description: "Orphan" }] })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_bash", content: "Command running in background with ID: b1." }] } })
+        api.push(result())
+      },
+    })
+    const reported: unknown[] = []
+    const h = engineWith([fake], { notify: () => {}, onBackground: (_sessionId, tasks) => void reported.push(tasks) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    expect(reported.at(-1)).toEqual([
+      { id: "b1", description: "Tick", kind: "local_bash", command: "while sleep 5; do date; done" },
+      { id: "m1", description: "Watch", kind: "monitor", command: "Monitor: tail -f build.log" },
+      { id: "x1", description: "Orphan", kind: "local_bash" },
+    ])
+    h.engine.stop()
+  })
+
   test("a background command that ends after the turn: its task list is reported, the daemon gets a notice, and that notice shows the answer Claude Code gave on its own without sending anything", async () => {
     const fake = fakeClaude({
       onUser(api) {

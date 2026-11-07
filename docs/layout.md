@@ -1,12 +1,13 @@
 # Terminal layout: breakpoints, sidebar, dock, long transcripts
 
-How `apps/cli` adapts to the terminal's size. Spec: `specs/master-plan.md` sections 52 (responsive TUI), 54 and 55 (sidebar,
-project panel); v1 reference: its session sidebar and the widgets dock (`ctrl+t`).
+Use this guide to choose how the chat, images, sidebars and dock fit your terminal, and to navigate long transcripts. Open `/customize` to change the layout controls described below.
 
 ## Inline images
 
-`/customize` → `images`: left/right or enter cycles `auto` (default), `kitty`, `iterm2`, `sixel`, `off`.
-The terminal-local `images` field is saved in `<dataDir>/tui/profile.json`; changes apply immediately.
+1. Open `/customize` → `images`.
+2. Press left/right or enter to cycle `auto` (default), `kitty`, `iterm2`, `sixel`, `off`. Changes apply immediately.
+
+The terminal-local `images` field is saved in `<dataDir>/tui/profile.json`.
 
 | Terminal / evidence in `auto` | Backend |
 |---|---|
@@ -15,31 +16,52 @@ The terminal-local `images` field is saved in `<dataDir>/tui/profile.json`; chan
 | An already available primary device-attributes reply with attribute `4` | Sixel |
 | Unknown terminal, tmux/screen/tuios, SSH | Half-block pet fallback |
 
-Sixel requires an explicit selection in the CLI unless a host supplies an existing
-DA1 reply through `imageAnswers`. Forced protocols bypass environment detection, SSH and color-depth guards;
-tmux, screen and tuios (`TERM_PROGRAM=TUIOS` or `TUIOS_ENV`) stay disabled for every protocol, even an explicit profile mode. Only an explicit mode shows `images disabled in tmux` (or `screen`, `tuios`) once; on `auto` the fallback is silent: a multiplexer did not draw the picture, so a forced mode left a blank band of reserved rows under a message with an image.
-`MENDCODE_PET_IMAGES=0` vetoes auto images; `=1` forces auto to Kitty (or keeps the profile's explicit mode), even inside tmux, screen, tuios or over SSH. Otherwise the profile's explicit mode wins, except inside a multiplexer.
-Kitty keeps its existing truecolor guard in auto mode; iTerm2 and sixel do not require truecolor text support.
+### Protocol overrides and multiplexers
 
-Kitty pets remain animated. iTerm2 and sixel use the first frame of each state (idle, working, waiting, review, etc.)
-to avoid repeated full-image transfers. Unchanged images are not resent; text writes under an inline image redraw it.
-Moving, resizing, replacing or removing an inline image overwrites its old rows and restores their text before placement.
-Encoded payloads are cached by content and cell size (up to 64 unused/active cached frames, like Kitty).
+Sixel requires an explicit selection in the CLI unless a host supplies an existing DA1 reply through `imageAnswers`. Forced protocols bypass environment detection, SSH and color-depth guards.
 
-Sixel uses a fixed RGB332 palette (up to 256 colors); alpha below 128 is transparent. All backends share
-integer nearest-neighbour sizing and transparent letterboxing. The native atlas cell is retained across states,
-so a greeting cannot change the source canvas dimensions. If 1× fits, only integer enlargement is allowed;
-otherwise the smallest common integer divisor that fits both dimensions is used (no color averaging). A frame
-with no exact fit has no raster preview. Half blocks use one pixel per column and two per row, with exact RGB colors.
-Chat reserves 16×8 graphics cells, or 24×13 half-block cells; it hides a pet when that box cannot fit above the prompt. The pet otherwise stays put while the transcript scrolls: a row that reaches its cells ends in an ellipsis before it, and the jump pill stops to its left.
+tmux, screen and tuios (`TERM_PROGRAM=TUIOS` or `TUIOS_ENV`) stay disabled for every protocol, even an explicit profile mode. Only an explicit mode shows `images disabled in tmux` (or `screen`, `tuios`) once; on `auto` the fallback is silent.
 
-Before the first graphic placement, a real TTY requests CSI 16/14/18 t. A direct cell report wins over window
-pixels divided by text-area cells; replies are consumed before key parsing, including split replies. After 150 ms,
-a terminal without a valid reply uses the documented 8×16 default. Geometry is frozen for the graphics session,
-so a delayed reply cannot produce an intermediate resize. Host-provided `imageAnswers.cellPixels` (including
-ioctl-derived values) or `MENDCODE_CELL_PIXELS=10x20` bypass queries. Non-TTY harnesses use the default immediately.
-Kitty uploads are transmit-only and the first placement already names the final cell box; iTerm2 receives a
-pre-sized PNG, and sixel the same raster. Formats: [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
+A multiplexer did not draw the picture, so a forced mode left a blank band of reserved rows under a message with an image.
+
+| Override | Effect |
+|---|---|
+| `MENDCODE_PET_IMAGES=0` | Vetoes auto images |
+| `=1` | Forces auto to Kitty, or keeps the profile's explicit mode, even inside tmux, screen, tuios or over SSH |
+| Otherwise | The profile's explicit mode wins, except inside a multiplexer |
+
+Kitty keeps its existing truecolor guard in auto mode. iTerm2 and sixel do not require truecolor text support.
+
+### Animation and sizing
+
+Kitty pets remain animated. iTerm2 and sixel use the first frame of each state (idle, working, waiting, review, etc.) to avoid repeated full-image transfers.
+
+Unchanged images are not resent; text writes under an inline image redraw it. Moving, resizing, replacing or removing an inline image overwrites its old rows and restores their text before placement.
+
+Encoded payloads are cached by content and cell size, up to 64 unused/active cached frames, like Kitty.
+
+Sixel uses a fixed RGB332 palette (up to 256 colors); alpha below 128 is transparent. All backends share integer nearest-neighbour sizing and transparent letterboxing. The native atlas cell is retained across states, so a greeting cannot change the source canvas dimensions.
+
+- If 1× fits, only integer enlargement is allowed.
+- Otherwise the smallest common integer divisor that fits both dimensions is used, with no color averaging.
+- A frame with no exact fit has no raster preview.
+- Half blocks use one pixel per column and two per row, with exact RGB colors.
+
+Chat reserves 16×8 graphics cells, or 24×13 half-block cells. It hides a pet when that box cannot fit above the prompt.
+
+Otherwise the pet stays put while the transcript scrolls. A row reaching its cells ends in an ellipsis before it, and the jump pill stops to its left.
+
+### Cell geometry and formats
+
+Before the first graphic placement, a real TTY requests CSI 16/14/18 t. A direct cell report wins over window pixels divided by text-area cells. Replies are consumed before key parsing, including split replies.
+
+After 150 ms, a terminal without a valid reply uses the documented 8×16 default. Geometry is frozen for the graphics session, so a delayed reply cannot produce an intermediate resize.
+
+Host-provided `imageAnswers.cellPixels` (including ioctl-derived values) or `MENDCODE_CELL_PIXELS=10x20` bypass queries. Non-TTY harnesses use the default immediately.
+
+Kitty uploads are transmit-only and the first placement already names the final cell box. iTerm2 receives a pre-sized PNG, and sixel the same raster.
+
+Formats: [Kitty graphics](https://sw.kovidgoyal.net/kitty/graphics-protocol/),
 [iTerm2 OSC 1337](https://iterm2.com/documentation-images.html) and
 [xterm sixel / DA1](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-Sixel-Graphics).
 
@@ -48,40 +70,61 @@ pasted images remain attachment labels. `off` disables graphics and keeps the ha
 
 ## Images in the transcript
 
-With a graphics protocol active (above), the images a session holds are drawn in the transcript: pasted or attached images in your
-messages, and the images tools return (a read image, a screenshot, a generated image). The card keeps its `■ N images` line; the picture
-takes rows under it, at most 72 columns by 16 rows, keeping its shape and never enlarged past its pixels. A generated image takes
-the box its wait canvas held instead ([web and image tools](tools-web.md#while-an-image-is-generated)). `transcriptImages`
-(`/customize` > Chat > Transcript images, default on) turns it off; `images off` and a remote client never draw them either.
+With a graphics protocol active (above), the session's images are drawn in the transcript. These include pasted or attached images in your messages and images tools return: a read image, screenshot or generated image.
 
-The client asks the daemon for the images of the blocks on screen with `attachment.read` (a session, a hash and an offset; chunks of
-96 KB; only blobs that session's events reference, never a path; local clients only, not in the read-only set). Up to 8 MB per image is
-decoded here, PNG, WebP, JPEG (baseline) and GIF (first frame), and kept at most 1280 px on its longest side (24 images are kept). A
-progressive JPEG, an oversized or broken file, or a failed read leaves the text card as it was and takes no rows. A picture partly scrolled
-out of view keeps the rows of it that are still on screen, cut at the edge; the rows under the pet or a label at the screen's edge are cut the same way.
-No picture is drawn while a palette, card or toast covers the chat. Inline mode (`--no-alt-screen`) keeps the text cards.
+The card keeps its `■ N images` line. The picture takes rows under it, at most 72 columns by 16 rows, keeping its shape and never enlarged past its pixels.
+
+A generated image takes the box its wait canvas held instead ([web and image tools](tools-web.md#while-an-image-is-generated)). `transcriptImages` (`/customize` > Chat > Transcript images, default on) turns transcript pictures off.
+
+`images off` and remote clients never draw them either. Inline mode (`--no-alt-screen`) keeps the text cards. No picture is drawn while a palette, card or toast covers the chat.
+
+### Loading and clipping
+
+The client requests images for on-screen blocks with `attachment.read`: a session, hash and offset, in chunks of 96 KB. It reads only blobs that session's events reference, never a path. This is local clients only and not in the read-only set.
+
+| Decode limit | Value |
+|---|---|
+| Per image | Up to 8 MB |
+| Formats | PNG, WebP, JPEG (baseline), GIF (first frame) |
+| Longest side retained | At most 1280 px |
+| Images kept | 24 |
+
+A progressive JPEG, oversized or broken file, or failed read leaves the text card unchanged and takes no rows.
+
+A picture partly scrolled out of view keeps its on-screen rows, cut at the edge. Rows under the pet or a label at the screen's edge are cut the same way.
 
 ## Links
 
-URLs and file paths in the transcript are OSC 8 hyperlinks (`hyperlinks`, default on; `MENDCODE_HYPERLINKS=0` or `TERM=dumb|linux` never send them),
-so ctrl or cmd click opens them in terminals that support it (a terminal that does not just shows the text). A URL in message markdown
-(`[label](url)`, `<url>`, a bare address) links to `http`/`https` only; a URL cut across rows by the layout points at the whole address on
-both rows. A path like `src/config/load.ts:42:7`, `./README.md`, `~/notes/todo.md` or `/etc/hosts` is linked by how it looks, without
-touching the disk, so an editor opens it or reports the file missing; a word without a slash, a date or `and/or` is not a path. The link
-target comes from `fileOpener` (`/customize` > Input & keys > File opener): `file` (default, the system's own handler, no line number),
-`vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed` (`scheme://file/abs/path:line:col`), `idea` (`idea://open?file=…&line=…`) or `none`
-(addresses only). Targets are printable ASCII, at most 2048 characters, with a fixed list of schemes; message text never carries escape
-sequences, only the span's own link is written. While MendCode reads the mouse the terminal never sees a click, so a plain click on a web
-address opens it in the default browser itself (`url.open`: http/https only, local clients only; macOS `open`, Windows `explorer.exe`,
-Linux `xdg-open`); a drag over it still selects. With the [file viewer](file-viewer.md)
-(`pathClick`, on from balanced) a plain click on a path opens the file in MendCode's own right slot instead; `pathClick: editor` keeps this
-behaviour, and ctrl or cmd click always reaches the terminal's link.
+Ctrl or cmd click opens transcript URLs and file paths in terminals that support OSC 8 hyperlinks. Other terminals show the text. `hyperlinks` defaults on; `MENDCODE_HYPERLINKS=0` or `TERM=dumb|linux` never send them.
+
+A URL in message markdown (`[label](url)`, `<url>`, a bare address) links to `http`/`https` only. When layout cuts a URL across rows, both rows point at the whole address.
+
+Paths such as `src/config/load.ts:42:7`, `./README.md`, `~/notes/todo.md` or `/etc/hosts` are linked by appearance, without touching the disk. The editor opens the path or reports it missing. A word without a slash, a date or `and/or` is not a path.
+
+### Choose a file opener
+
+Set `fileOpener` in `/customize` > Input & keys > File opener:
+
+| Value | Target |
+|---|---|
+| `file` (default) | System handler, no line number |
+| `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed` | `scheme://file/abs/path:line:col` |
+| `idea` | `idea://open?file=…&line=…` |
+| `none` | Addresses only |
+
+Targets are printable ASCII, at most 2048 characters, with a fixed list of schemes. Message text never carries escape sequences; only the span's own link is written.
+
+### Plain clicks and dragging
+
+While MendCode reads the mouse, the terminal never sees a click. MendCode opens a plain-clicked web address in the default browser itself; dragging over it still selects.
+
+`url.open` is http/https only and local clients only. It uses macOS `open`, Windows `explorer.exe` or Linux `xdg-open`.
+
+With the [file viewer](file-viewer.md) (`pathClick`, on from balanced), a plain click on a path opens MendCode's own right slot instead. `pathClick: editor` keeps the editor-opening behaviour. Ctrl or cmd click always reaches the terminal's link.
 
 ## Breakpoints
 
-One module, `apps/cli/src/ui/breakpoints.ts`. Pages ask `isWide(width)` (or `isCompact`, `isXl`) instead of carrying a
-`WIDE_WIDTH` of their own. Terminal extensions get the same class as `ctx.breakpoint` (and the terminal's size as `ctx.screen`) in
-every slot, page and modal renderer ([extensions](extensions-tui.md#slots)).
+The terminal uses these shared width classes:
 
 | Class | Columns | Used for |
 |---|---|---|
@@ -90,28 +133,35 @@ every slot, page and modal renderer ([extensions](extensions-tui.md#slots)).
 | wide | 110 to 149 | pages put detail beside the list; chat shows left project sessions (`auto`) |
 | xl | 150 and up | larger grids; chat keeps the left session list |
 
-Pages on the wide breakpoint: sessions, setup, changes, loops, workflows, memory, profiles, MCP servers, tools and help.
-They used to switch at 120 columns (workflows at 120 columns of inner width, that is 122 of terminal width); the spec says
-110, so a terminal of 110 to 119 columns now gets the side-by-side layout. Three places keep a threshold of their own that
-is not a spec breakpoint: the status and memory-graph pages switch at 100, and the pet needs 80
-(`PET_MIN_WIDTH`, kept in the same module).
+Sessions, setup, changes, loops, workflows, memory, profiles, MCP servers, tools and help use the wide breakpoint. They used to switch at 120 columns; workflows used 120 inner columns, or 122 terminal columns.
+
+The spec says 110, so terminals of 110 to 119 columns now get side-by-side layout. Three places keep their own non-spec thresholds: status and memory-graph pages switch at 100, and the pet needs 80 (`PET_MIN_WIDTH`, kept in the same module).
+
+### Shared breakpoint API
+
+`apps/cli/src/ui/breakpoints.ts` is the shared module. Pages ask `isWide(width)` (or `isCompact`, `isXl`) instead of carrying their own `WIDE_WIDTH`.
+
+Terminal extensions get the same class as `ctx.breakpoint` and the terminal's size as `ctx.screen` in every slot, page and modal renderer ([extensions](extensions-tui.md#slots)).
 
 ## Panel dashboards
 
-`view/deck.ts` owns `boxPanel` and the weighted `panelGrid`: accent titles on single-line borders,
-no extra vertical padding, independently windowed bodies and exact cell widths. Below 70 terminal
-columns, grid panels stack as title + rule; medium grids reflow to two columns. Right-sidebar widgets
-use the same dense border-title panels, without blank spacer rows between widgets.
+Below 70 terminal columns, grid panels stack as title + rule. Medium grids reflow to two columns. Right-sidebar widgets use the same dense border-title panels, without blank spacer rows between widgets.
 
-Usage uses the dashboard described in [usage.md](usage.md). Context, storage, agents, status, extensions,
-providers, connect, secrets, timeline, model and settings use panel grids on wide terminals. Compact
-flows and page actions remain the same. Existing master/detail pages and the full-screen diagram
-canvas retain their established layouts.
+Usage uses the dashboard described in [usage.md](usage.md). Context, storage, agents, status, extensions, providers, connect, secrets, timeline, model and settings use panel grids on wide terminals.
+
+Compact flows and page actions remain the same. Existing master/detail pages and the full-screen diagram canvas retain their established layouts.
+
+`view/deck.ts` owns `boxPanel` and the weighted `panelGrid`: accent titles on single-line borders, no extra vertical padding, independently windowed bodies and exact cell widths.
 
 ## Sidebar
 
-A session list (left by default, right selectable in `/customize`), 38 columns plus a one-column gap, from the top row to the bottom of chat. A 160-column terminal
-gives chat 121 columns. The declarative [right sidebar](sidebar.md) is empty and hidden by default. It takes 48 cells from 110 columns and 56 from 150; when open, the left list is hidden below 150 so medium terminals keep one side column. Below 110 it hides (or, with `panelNarrow: sheet`, becomes a bottom sheet above the prompt). `/btw` always uses that sheet.
+The session list sits on the left by default; choose the right in `/customize`. It uses 38 columns plus a one-column gap, from the top row to the bottom of chat. A 160-column terminal gives chat 121 columns.
+
+The declarative [right sidebar](sidebar.md) is empty and hidden by default. It takes 48 cells from 110 columns and 56 from 150. When open, it hides the left list below 150 so medium terminals keep one side column.
+
+Below 110, the right sidebar hides, or becomes a bottom sheet above the prompt with `panelNarrow: sheet`. `/btw` always uses that sheet.
+
+### Show or hide the session list
 
 | Mode | Shows when |
 |---|---|
@@ -119,11 +169,16 @@ gives chat 121 columns. The declarative [right sidebar](sidebar.md) is empty and
 | `always` (legacy) | same as `auto` |
 | `hidden` | never |
 
-The minimal view and a session with nothing in it (the home screen) never show it. The mode is a terminal settings setting
-(`sidebar` in `<dataDir>/tui/profile.json`, like the rest of `/customize`): `/sidebar auto|always|hidden` sets it,
-`/sidebar` or `ctrl+x b` (bindable as `sidebar.toggle`) toggles it: a visible sidebar is hidden, a hidden one comes back as
-`auto` (under 110 columns it says there is no room and changes nothing). Existing `auto` profiles now mean left sessions
-on wide terminals, with no file rewrite.
+The minimal view and an empty session (the home screen) never show the list. Its terminal setting is `sidebar` in `<dataDir>/tui/profile.json`, like the rest of `/customize`.
+
+| Command or key | Does |
+|---|---|
+| `/sidebar auto|always|hidden` | Set the mode |
+| `/sidebar`, `ctrl+x b` (bindable as `sidebar.toggle`) | Hide a visible list; bring a hidden one back as `auto` |
+
+Under 110 columns, toggling says there is no room and changes nothing. Existing `auto` profiles now mean left sessions on wide terminals, with no file rewrite.
+
+### Read session state
 
 Sessions are filtered to the current project, newest first, one row each: a state symbol, the title (cut with `…`), then
 on the right edge its age (`now`, `4m`, `3h`, `2d`), `↳N` for N child sessions and `#412` for a linked PR (green open,
@@ -139,25 +194,34 @@ primary merged, muted closed). The symbols, most urgent first:
 | `·` | muted | idle (`.` with ASCII glyphs) |
 | `◇` | muted | settled |
 
-Only running and approval rows move, on the same tick that animates a busy turn; a list with nothing working draws no
-frames by itself. Unread is kept in memory only: a session counts as seen when the list first draws it and while it is
-open, so a fresh start has nothing unread and nothing is written. The header counts what works and what waits
-(`Sessions ⠹2 ?1`).
+Only running and approval rows move, on the same tick that animates a busy turn. A list with nothing working draws no frames by itself. The header counts what works and what waits (`Sessions ⠹2 ?1`).
 
-Groups are Pinned, Today and Earlier, with dim headings and a blank row between them, then one `◇ Settled · N` row that
-folds the settled sessions and shows the most urgent symbol among them. `▌` in the margin marks the current session. From
-an empty prompt, Left focuses a left list (Right focuses a right list); Up/Down select (the selected row gets the selection
-fill, a `›` mark and one muted detail line: tool in flight, queue, draft, children, PR), Enter switches, Enter (or the arrow
-away from the prompt) on the Settled row folds or unfolds it, the arrow toward the prompt or Esc returns to it. A click on
-a session switches immediately and a click on Settled folds it. Long lists keep the selection visible and count the rows
-left out (`↓ 5 more`). Live `session.activity` updates the list even while chat is open. Prompts, popups, pets and toasts
-stay in the chat column.
+Unread is kept in memory only. A session counts as seen when the list first draws it and while it is open, so a fresh start has nothing unread and nothing is written.
+
+### Navigate the list
+
+Groups are Pinned, Today and Earlier, with dim headings and a blank row between them. One `◇ Settled · N` row folds settled sessions and shows their most urgent symbol. `▌` in the margin marks the current session.
+
+| Key or click | Does |
+|---|---|
+| Left from an empty prompt; Right for a right list | Focus the list |
+| Up/Down | Select; the row gets selection fill, a `›` mark and one muted detail line: tool in flight, queue, draft, children, PR |
+| Enter | Switch session |
+| Enter or arrow away from the prompt on Settled | Fold or unfold settled sessions |
+| Arrow toward the prompt or Esc | Return to the prompt |
+| Click a session | Switch immediately |
+| Click Settled | Fold it |
+
+Long lists keep the selection visible and count omitted rows (`↓ 5 more`). Live `session.activity` updates the list even while chat is open. Prompts, popups, pets and toasts stay in the chat column.
 
 ## Chat chrome
 
-Messages default to a quiet `›` user row on a subtle tint and a `•` assistant marker. Role icons, labels, leads and
-user tint preview in `/customize`; `classic` restores the previous headers. Completion metadata is off by default;
-`compact` or `full` shows it once per turn. One blank row separates turns, including those containing tools.
+Messages default to a quiet `›` user row on a subtle tint and a `•` assistant marker. Preview role icons, labels, leads and user tint in `/customize`; `classic` restores the previous headers.
+
+Completion metadata is off by default; `compact` or `full` shows it once per turn. One blank row separates turns, including those containing tools.
+
+### Footer placement
+
 Balanced and full share one footer outside the prompt, read left to right in groups (see [Footer by tier](#footer-by-tier)):
 who answers and how, what runs, then the placed segments. Quota and today are opt-in in `/customize` for balanced. Script status
 and extension `footer.*` slots share that row. `footerRows` (or `/footer preset rows`) make it any number of rows, up to 12 and a quarter of the terminal
@@ -165,18 +229,31 @@ height ([customize.md](customize.md#footer-rows)). Explicit script `rows` expand
 left/right rows align independently and clip by cell width. Legacy output stays one row. See [customize.md](customize.md).
 Legacy footer context is ignored: Context bar (`top|off`, `bar|percent|both`) is the only context control.
 
-Pending comments on an answer ([editor.md](editor.md#comments-on-an-answer)) add rows that sit with the prompt: the reply bar and the chip row (or the list) directly above the prompt, or the chips under it (`commentChips: below`); a comment being typed tints the prompt's top rule and adds one row under it. The margin marks (`1┃`) are drawn in the transcript's first two columns of the rows of a commented passage. With no comments none of this takes a row or costs a frame. The transcript's rows are never changed, only drawn over: a mouse selection still reads the text as laid out.
+### Comments beside the prompt
 
-Hover over the topbar's context bar to replace it in place with `used / limit`, as in v1. Clicking keeps that inline
-detail; `/context` opens the full page. `/context` also shows the context rent: every tool schema the request carries (chars / 4, grouped
-by owner: built-in, `mcp:<server>`, `extension:<name>`) against the calls still in the history, with unused owners flagged and a
-hint when a big one was never called. A tool a tier turned off is not offered, so it costs nothing and is not listed.
+Pending comments on an answer ([editor.md](editor.md#comments-on-an-answer)) add rows beside the prompt. The reply bar and chip row (or list) sit directly above it; `commentChips: below` puts chips under it.
+
+A comment being typed tints the prompt's top rule and adds one row under it. Margin marks (`1┃`) occupy the transcript's first two columns on rows of a commented passage.
+
+With no comments, none of this takes a row or costs a frame. Transcript rows are drawn over, never changed; mouse selection still reads the text as laid out.
+
+### Context and forecast
+
+Hover over the topbar's context bar to replace it in place with `used / limit`, as in v1. Clicking keeps that inline detail; `/context` opens the full page.
+
+`/context` also shows context rent: every tool schema the request carries (chars / 4, grouped by owner: built-in, `mcp:<server>`, `extension:<name>`) against calls still in history. Unused owners are flagged, with a hint when a big one was never called.
+
+A tool a tier turned off is not offered, costs nothing and is not listed.
 The `forecast` footer segment (`~9 turns to compact`, from the context at the end of the last turns; shown after three turns of
 growth and hidden when the context is flat, was just compacted or is over 99 turns away) follows the tier: on in balanced and
 full, off in minimalist and with no tier; `/footer +forecast` places it anywhere and `/tier forecast off` removes it.
-The terminal enables mouse motion reports unless `MENDCODE_MOUSE=0`. Tab on any slash suggestion only
-completes its text, with a trailing space for commands accepting arguments. Enter runs the command. Command notices
-clear on navigation; `/diagram` with no diagram uses a transient toast.
+### Mouse and command navigation
+
+The terminal enables mouse motion reports unless `MENDCODE_MOUSE=0`. Tab on a slash suggestion only completes its text, with a trailing space for commands accepting arguments. Enter runs the command.
+
+Command notices clear on navigation. `/diagram` with no diagram uses a transient toast.
+
+### Frame evidence
 
 `bun scripts/render-frames.ts <directory> [100x30 180x50 ...]` writes plain-text home, chat, chat-wide and chat-btw-tab
 frames through the fake app harness, using temporary data directories and no provider. UI-1 evidence is in
@@ -208,13 +285,21 @@ shows it (the state in the working row, the context in the top bar, notices over
 - Full's default is the `line` preset (`FOOTER_PRESETS.line`, one row) with its quota look (`quotaView: left`, `quotaColor: accent`,
   unless the profile already holds another value). It applies only in the full view and only while `footerRows` is empty, `/footer`
   placed no list and `footerDefaultRows` is on; `footerRows`, a `/footer` list, `/footer preset classic` (also `/footer rows 0`, and the
-  `classic` stop of the `/customize` preset row) or `/footer reset` back to the default decide otherwise. An item with nothing to say is
+  `classic` stop of the `/customize` preset row) or `/footer reset` back to the default decide otherwise.
+
+  An item with nothing to say is
   not drawn: a provider with no quota reading (no Codex or no Claude login), the code graph before the daemon pushed this folder's
   status (it never asks for the saved tokens, which a placed `codegraph` asks once per model call), and the cache share until the
-  second call (the first is always cold). The row does not repeat the context, which the top bar's Context bar shows. When it does
+  second call (the first is always cold). The row does not repeat the context, which the top bar's Context bar shows.
+
+  When it does
   not fit, the quota windows give up their bars first, then the code graph, the effort, the cache share and the quotas give way in
-  that order. Your own rows are drawn as written, cut to a quarter of the terminal's height from the bottom. Pages (`/usage`,
-  `/profiles`) do not carry the rows. `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
+  that order.
+
+  Your own rows are drawn as written, cut to a quarter of the terminal's height from the bottom. Pages (`/usage`,
+  `/profiles`) do not carry the rows.
+
+  `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
   context, the Codex quota, the Claude quota, the code graph); `/footer preset classic` the balanced row with agent, `fast`, loops
   and the forecast, plus a second row of graph, cache and quota.
 - Screen-reader mode: one separator everywhere, counts as words (`1 loop`, not `↻ 1 loop`) and quota figures without bars. ASCII
@@ -224,36 +309,63 @@ shows it (the state in the working row, the context in the top bar, notices over
 
 ### Cache countdown
 
-`warm` (feature `cache_countdown`, full tier, off until you place it: `/footer +warm` or a `footerRows` row) shows how long the
-prompt cache of the session's last call has left: `cache 12m` (amber under two minutes), `· packs in 11m` when the
-[compaction while idle](compaction.md) is scheduled first, and `cache cold · next sends 161K` once it expired. The lifetime
-is the one the idle compaction uses (`cacheLifetimeMinutes`, else the documented one, the call's own `1h` included); for
-ChatGPT nobody states it, so it reads `~12m`. A provider with no stated lifetime, a context under 20K tokens, a running turn
-and a session another engine packs (Claude Code, Codex, ACP) show nothing. It asks the daemon once per call, after the turn
-(`context.recent`), and redraws every 15 seconds only while it shows. Outside full it draws nothing unless
-`/tier cache_countdown on`. Where the expiry costs: the Waste tab of `/usage` ([usage](usage.md#waste)).
+Place `warm` with `/footer +warm` or a `footerRows` row to see how long the prompt cache of the session's last call has left. Feature `cache_countdown` belongs to full tier and is off until placed.
+
+| Display | Meaning |
+|---|---|
+| `cache 12m` | Time left; amber under two minutes |
+| `· packs in 11m` | [compaction while idle](compaction.md) is scheduled first |
+| `cache cold · next sends 161K` | Cache expired |
+
+The lifetime is the one idle compaction uses: `cacheLifetimeMinutes`, otherwise the documented one, including the call's own `1h`. Nobody states ChatGPT's lifetime, so it reads `~12m`.
+
+Nothing shows for a provider with no stated lifetime, context under 20K tokens, a running turn or a session another engine packs (Claude Code, Codex, ACP).
+
+It asks the daemon once per call, after the turn (`context.recent`), and redraws every 15 seconds only while visible. Outside full, it draws nothing unless `/tier cache_countdown on`.
+
+See the Waste tab of `/usage` for where expiry costs ([usage](usage.md#waste)).
 
 ## The dock (`ctrl+t`)
 
-Ten bordered rows above the working row, with padding inside and a blank row above the prompt. Panels: Todos,
-Questions, Subagents, Jobs, Scratchpad and Info. Questions (the session's pending approvals and questions, `!` and `?`),
-Subagents show only while there is something in them; Jobs additionally needs `dockJobs: true` (Top & side > Dock jobs in `/customize`, off by default in every tier). The dock belongs to balanced/full; minimalist gains no chrome. An empty Scratchpad can still be focused. When the width
-cannot hold them an empty Todos panel gives way first, then Scratchpad, Jobs, Subagents, Todos, Questions. Info stays
-unless the focused Scratchpad needs the whole width. On short terminals a multiline prompt scrolls around its cursor
-to reserve the tray and footer.
+Press `ctrl+t` for ten bordered rows above the working row, with padding inside and a blank row above the prompt. The dock belongs to balanced/full; minimalist gains no chrome.
+
+| Panel | Visibility |
+|---|---|
+| Todos | Can give way when empty |
+| Questions | Only with pending approvals or questions, marked `!` and `?` |
+| Subagents | Only while nonempty |
+| Jobs | Nonempty and `dockJobs: true` (Top & side > Dock jobs in `/customize`); off by default in every tier |
+| Scratchpad | Can be focused even when empty |
+| Info | Stays unless focused Scratchpad needs the whole width |
+
+When width cannot hold the panels, an empty Todos panel gives way first, then Scratchpad, Jobs, Subagents, Todos and Questions. On short terminals, a multiline prompt scrolls around its cursor to reserve the tray and footer.
+
+### Todos and jobs
 
 - **Todos** wraps task text with a hanging indent under its marker, using the extra width left by hidden panels. Current tasks come first, then pending, then completed/cancelled; completed text is muted. The five body rows stay capped, with `+N more` counting items not fully shown (including an oversized first item's remaining text). Full text remains in the transcript and sidebar Todos card.
 - **Jobs** stays available through `/jobs` whether or not its dock panel is enabled. It shows the session's background shell tasks (`background.list`, asked at startup, when the dock opens, on session
   activity and after turns): running ones first with their elapsed time, finished ones with `exit N` or `killed`.
   The footer counts running jobs across sessions.
-- **Scratchpad** is a per-project note, persisted by `scratchpad.get/set` in the daemon's data directory (`scratchpads/<sha256 canonical project path>.txt`, at most 8,000 characters). It is excluded from model history. `/scratch`, `ctrl+x s`, or a click in the Scratchpad panel focuses its own instance of the prompt editor inside the tray. Arrows, Home/End, word motion, selection, undo and multiline paste work there; Enter inserts a newline. Changes autosave after 500 ms; Esc returns focus to the unchanged prompt and flushes pending changes. A long note scrolls around the real cursor with a mini scrollbar. Ctrl+T opens padded bordered widgets with a blank row above the prompt. Editing needs the balanced/full view and at least 18 rows.
+### Edit the scratchpad
+
+The Scratchpad is a per-project note excluded from model history. It is persisted by `scratchpad.get/set` in the daemon's data directory: `scratchpads/<sha256 canonical project path>.txt`, at most 8,000 characters.
+
+1. Use `/scratch`, `ctrl+x s` or click the Scratchpad panel to focus its own prompt-editor instance inside the tray. Editing needs balanced/full view and at least 18 rows.
+2. Edit with arrows, Home/End, word motion, selection, undo and multiline paste. Enter inserts a newline. Changes autosave after 500 ms.
+3. Press Esc to return to the unchanged prompt and flush pending changes.
+
+A long note scrolls around the real cursor with a mini scrollbar. Ctrl+T opens padded bordered widgets with a blank row above the prompt.
 
 **Left out.** Extension-provided dock widgets: extensions stay on their slots (`prompt.above` and the others); the dock
 has no slot of its own.
 
 ## The visible plan
 
-Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`) controls the tool's listing and guidance, not a progress row. No current-task row is drawn above the working status in any tier or density. The Todos dock (`ctrl+t`), transcript todo card and sidebar Todos card retain the list. `/activity` continues to control the working status, not tasks.
+Feature `visible_plan` controls the tool's listing and guidance, not a progress row. It is on in balanced and full, and without a tier; `/tier visible_plan off` turns it off.
+
+No current-task row is drawn above working status in any tier or density. The Todos dock (`ctrl+t`), transcript todo card and sidebar Todos card retain the list. `/activity` controls working status, not tasks.
+
+### Guidance to the model
 
 What the model is told: `todo` is listed in every request of balanced and full (feature `plan_tools` still keeps the goal
 tools behind `tool_search`), its description says the user follows the list in the transcript and Todos dock, when to use it (three or
@@ -261,13 +373,20 @@ more steps, several requests, before the first edit) and not to repeat it in the
 one line saying the same while `todo` is listed. Minimalist has no `todo` tool at all (the tool declares the balanced
 tier), so neither its schema nor a line about it is sent, and `tool_search` cannot find it.
 
-Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled) with one `[x]`, `[~]`, `[ ]`
-or `[-]` line per item. Claude Code's `TodoWrite` (the item in progress reads as its `activeForm`) and its
-`TaskCreate`/`TaskUpdate` tasks (kept per Claude Code process; `deleted` removes one), Codex's `update_plan`
-(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the dock and the
-right panel's Todos card show them too. A sub-agent's own TodoWrite stays in its thread. Codex's `plan` item (plan mode's
-proposal, prose) is not a list and stays an artifact. With `visible_plan` on, Claude Code, Codex and ACP agents are told in
-one line after their own prompt where their list is shown; pi, which has no list tool, is not.
+### Lists from each engine
+
+Every engine's list is drawn the same way. Native `todo` writes a card titled `todo d/n`: done over items not cancelled, with one `[x]`, `[~]`, `[ ]` or `[-]` line per item.
+
+| Engine input | Display behavior |
+|---|---|
+| Claude Code's `TodoWrite` | In-progress item reads as its `activeForm` |
+| `TaskCreate`/`TaskUpdate` | Tasks kept per Claude Code process; `deleted` removes one |
+| Codex's `update_plan` (`turn/plan/updated`) | Turned into the same card |
+| ACP agent's `plan` | Turned into the same card |
+
+The dock and right panel's Todos card show these lists too. A sub-agent's own TodoWrite stays in its thread. Codex's `plan` item is plan mode's prose proposal, not a list, and stays an artifact.
+
+With `visible_plan` on, Claude Code, Codex and ACP agents get one line after their own prompt saying where the list is shown. pi has no list tool and gets no such line.
 
 ## Long transcripts
 
@@ -276,15 +395,21 @@ v1 inventory and class/state/ER/Gantt/pie/mindmap/git/quadrant/requirement/kanba
 `/diagram [n]` retains pan/zoom and can lay out canvases up to 1,600 columns.
 See [Mermaid diagrams](mermaid.md) for syntax, resource limits and UI-9 frame generation.
 
+### Load earlier history
+
 Opening or switching sessions reads only the newest `session.events` window (200 events by default), then subscribes
 from its raw `lastSeq` for replay of newer events and live output. PageUp, wheel-up and the existing scroll-up bindings
 fetch `loadBefore(firstSeq)` when they cross the oldest loaded line. `Home` reaches the top of loaded history and can
 request one earlier page; it does not download the whole session.
 
-Only one earlier read runs at a time: `loading earlier…` appears at the top while it waits. `start of session` appears
+Only one earlier read runs at a time: `loading earlier…` appears at the top while it waits.
+
+`start of session` appears
 only at the scrolled top of an overflowing session after an earlier page was successfully loaded and history exhausted;
-home and sessions fitting in one viewport never show it. Prepending keeps the same item row on screen, including live output or scrolling during the
-read. Raw cursors advance even through empty pages of undone turns; loaded pages are kept and never fetched again.
+home and sessions fitting in one viewport never show it.
+
+Prepending keeps the same item row on screen, including live output or scrolling during the read. Raw cursors advance even through empty pages of undone turns; loaded pages are kept and never fetched again.
+
 Switching resets paging and ignores late replies from the session left behind. Failed reads preserve the transcript
 and cursor; another scroll up retries an earlier read.
 
@@ -293,6 +418,8 @@ to the newest 400 blocks (`WINDOW_BLOCKS`) until scrolling lays out another 200 
 already loaded blocks; `/timeline` jumps can widen layout to a loaded message. A reader scrolled up stays pinned
 while new output arrives.
 
+### Scroll controls
+
 The transcript's own scroll chrome is drawn inside the chat column, never over a sidebar. The jump-to-latest pill sits on
 the row just above the prompt's top rule whenever the view is off the bottom, on a row of its own when the transcript's last line would reach it; the optional scrollbar is a one-cell column
 at the column's right edge, reserved for as long as `scrollbar` is `auto` or `always` so showing it moves no text. With the
@@ -300,9 +427,27 @@ activity status at `above` it is laid over the prompt's top rule, and at `inside
 takes a row, so a turn starting or ending never moves the transcript. All of it is configured in
 [customize.md](customize.md#activity-status) and measured by `bun scripts/render-activity-scroll-frames.ts <directory> [before|after]`.
 
-A transcript shorter than the body is top-anchored: it starts under the top bar after one blank row and the free rows sit
-between its last message and the prompt (a short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes; only the minimal view, which has no rule, gives it a row above the prompt; a command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds, so there is one place for notices and the footer holds state only; success is silent where the result is already on screen (text copied by selecting, a draft saved or restored, a quote or queued prompt put back in the prompt, comments parked or back, a goal set): only what failed or tells something new is said, and the `confirmNotices` customize key (Customize > Confirmations) brings those confirmations back; a toast that needs several lines, such as an error with detail, takes the first empty place at its right, below the top bar and the pinned prompt, and with none falls back to that row, never over text). Once it overflows the view
-follows the bottom as above. Mouse selection, the find highlights, images and the pet use the same rows as drawn.
+### Short transcripts and notices
+
+A transcript shorter than the body is top-anchored. It starts under the top bar after one blank row; free rows sit between its last message and the prompt. Once it overflows, the view follows the bottom as above.
+
+A short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes. Only minimal view, which has no rule, gives it a row above the prompt.
+
+A command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds. Notices have one place; the footer holds state only.
+
+Success is silent when the result is already on screen:
+
+- Text copied by selecting.
+- A draft saved or restored.
+- A quote or queued prompt put back in the prompt.
+- Comments parked or back.
+- A goal set.
+
+Only failures or new information are announced. `confirmNotices` (Customize > Confirmations) brings those confirmations back.
+
+A multiline toast, such as an error with detail, takes the first empty place at its right, below the top bar and pinned prompt. With none, it falls back to that row, never over text.
+
+Mouse selection, find highlights, images and the pet use the same rows as drawn.
 
 ## Inline mode (no alternate screen)
 
@@ -326,31 +471,51 @@ stays above the shell prompt. `/raw` toggles plain, copy-friendly output (raw pr
 
 ## Find in the transcript
 
-`ctrl+f` (also `ctrl+x /` and `/find [text]`, alias `/search`) opens a find bar above the prompt. Type to highlight every
-hit in the transcript (smart case: a capital makes it case-sensitive), the current one in the warning colour, the rest
-muted. The bar shows `3/17`; the newest hit is current first. `enter` or `down` is the next hit and wraps, `shift+enter`
-or `up` the previous one; the viewport centres on the current hit and widens the layout to reach older blocks. `tab`
-limits the search to your prompts, and with an empty query it steps from prompt to prompt. Paging keys and the wheel
-keep scrolling, `backspace` edits, `ctrl+u` clears, `esc` closes the bar and leaves you where you landed. Typing in the
-bar never reaches the prompt. Under 70 columns the key hints are dropped and the count stays. In inline mode the bar
-opens on the alternate screen over the whole transcript, including what is already in the scrollback. The action is
-`transcript.find` in `keybindings.json`.
+1. Press `ctrl+f` (also `ctrl+x /` and `/find [text]`, alias `/search`) to open a find bar above the prompt.
+2. Type to highlight every hit. Smart case makes a query with a capital case-sensitive. The current hit uses the warning colour; others are muted. The bar shows `3/17`, with the newest hit current first.
+3. Navigate with the keys below. The viewport centres on the current hit and widens layout to reach older blocks.
+
+| Key | Does |
+|---|---|
+| `enter`, `down` | Next hit, wrapping |
+| `shift+enter`, `up` | Previous hit |
+| `tab` | Limit search to your prompts; with an empty query, step from prompt to prompt |
+| Paging keys, wheel | Keep scrolling |
+| `backspace` | Edit |
+| `ctrl+u` | Clear |
+| `esc` | Close and stay where you landed |
+
+Typing in the bar never reaches the prompt. Under 70 columns, key hints disappear and the count stays.
+
+In inline mode the bar opens on the alternate screen over the whole transcript, including scrollback. The action is `transcript.find` in `keybindings.json`.
 
 ## Selecting text and `<details>` blocks
+
+### Select and copy
 
 Dragging the mouse over the transcript selects its text (releasing copies it, or `ctrl+c` with `copyOnSelect` off). Drag past
 the top or bottom edge of the transcript and it scrolls toward the pointer (one to three rows every 50 ms, faster the farther
 the pointer is), also while the mouse is held still; the selection stays on its text and the copy includes the rows that
-scrolled off screen. Moving back inside, releasing, any key or the wheel stops it. The selection is kept in transcript rows, so
+scrolled off screen.
+
+Moving back inside, releasing, any key or the wheel stops it. The selection is kept in transcript rows, so
 history that loads in while you drag (paging from the store) can shift it by the rows added.
 
 A double click selects the word under the pointer (letters, digits and `_`, plus `- . / : @ ~` between them, so a path or `src/a.ts:12` stays whole)
 and a triple click the whole wrapped line, in the transcript or the prompt; like a drag, releasing copies it (`copyOnSelect`) or keeps it for
-`ctrl+c`. Two presses count as a double click when they land on the same cell within 450 ms. While you are scrolled up, the
+`ctrl+c`. Two presses count as a double click when they land on the same cell within 450 ms.
+
+### Mouse scrolling and paste
+
+While you are scrolled up, the
 `↓ new output · End` label at the bottom right is a button: pressing it follows the newest output again. The wheel scrolls
-`wheelLines` rows a notch (default 3, 1..20, `/customize` > Input & keys > Wheel lines). Right click is off by default; with
+`wheelLines` rows a notch (default 3, 1..20, `/customize` > Input & keys > Wheel lines).
+
+Right click is off by default; with
 `rightClickPaste` on it pastes the clipboard into the prompt like `ctrl+v` (text, or an image as an attachment). That reads the
 daemon machine's clipboard, so it is local only and refused for a remote client.
+
+### Open a details block
 
 A `<details>` block in an assistant message shows as a `▸ Summary` row. A click on that row opens or folds that block only;
 `ctrl+x f` (`details.toggle`) does the same for the block nearest the middle of the screen (it says so when none is in view).
@@ -359,9 +524,13 @@ on its own while `ctrl+o` has everything open.
 
 ### Tool cards
 
-Tool results are display only: the model gets the whole result, and `/copy`, `/export` and the session log keep it. What a
+Tool results are display only: the model gets the whole result, and `/copy`, `/export` and the session log keep it.
+
+What a
 card shows follows the `view` setting (`/view`, or Tab on an empty prompt: minimal → balanced → full; a menu or text in the prompt keeps Tab for completion, and `view.next` rebinds it in `keybindings.json`); no view prints a whole file or listing. `minimal` is unchanged (one line for a run of
-tools). `balanced` and `full` share one frame, drawn by `view/tool-card.ts` from `tool-frame.ts` (header, rule, grid),
+tools).
+
+`balanced` and `full` share one frame, drawn by `view/tool-card.ts` from `tool-frame.ts` (header, rule, grid),
 `tool-kinds.ts` (a card per kind), `tool-bodies.ts` (the bodies) and `tool-data.ts` (parsers); the rationale is in
 `docs/design/tool-cards.md`.
 
@@ -369,14 +538,22 @@ Frame: a glyph per kind coloured by status (running primary, ok success, awaitin
 target in bold, facts muted after it, the duration right-aligned from 1 s (a running call keeps it inline, so the pet's corner
 stays clear), and a thin `│` rule under the header holding the body. `MENDCODE_GLYPHS=ascii` swaps every mark.
 
+#### Failed calls
+
 A failed call says so with its marker, a word and its rule, and nothing else on the card is painted with it: the marker is `✗`
 (`x` in ASCII) in the error role instead of the kind's glyph, the header carries `exit 2` (a shell), `HTTP 404` (a fetch) or
 `failed` / `interrupted` in the error role, and the rule at the left is the error role. The command or target keeps its normal
-colour. The output under the rule is the muted output role, like a passing call's; a short error (one or two lines, such as
+colour.
+
+The output under the rule is the muted output role, like a passing call's; a short error (one or two lines, such as
 `[PROFILES]: Profile tree exceeds approval budget`) is the normal text colour so it reads at once. A shell's output is stdout and
-stderr merged, so its lines cannot be told apart and none is tinted. A long error shows its first 3 lines (a shell its last 12,
+stderr merged, so its lines cannot be told apart and none is tinted.
+
+A long error shows its first 3 lines (a shell its last 12,
 or 4 in the `calm` and `standard` densities) and `… +N lines`, which opens the card. Without colour the state is still the `✗`
 and the word.
+
+#### Previews by tool
 
 | Tool | `balanced` (default) | `full` |
 |---|---|---|
@@ -391,6 +568,8 @@ and the word.
 | `task` | one row: agent, model, calls, status, duration; running, its last activity | the result on the rule |
 | graph and codegraph cards | the visual and one muted summary row (`7 dirs · 2,360 files · hubs: ids 559 · …`) | plus a compact table of at most 6 rows (not on the `graph_map` card, which is the ASCII map alone at every level) |
 | MCP and unknown tools | `server · tool  target` and the shape of the result (`object · 14 keys`, `text · 2.1 KB`) | plus at most 6 rows |
+
+#### Open and fold cards
 
 An opened card (click, `ctrl+x f`, `ctrl+o`) shows the whole body, a page of 40 rows at a time, and the full lists of a
 graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` is the `full` view's table), except the project map of `graph_map`, whose card never draws the lists ([code graph](code-graph.md)). The engine's own code map starts open in the `full` view and as one row in `balanced` (`codeMapCard` in `/customize`); a click on the card opens or folds that one.
@@ -429,11 +608,11 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
 
 #### Tool density in the full view
 
-The table's `full` column is the `dense` density. A long session of it is a wall: every call prints its preview and the
-assistant's sentences get lost. `toolDensity` (`/customize` > Chat > Tool density; `calm` by default) chooses how
-much of each card the `full` view prints. The balanced and minimal views ignore it, `toolOutput: collapsed` and `expanded`
-and `ctrl+o` win over it, and a card the reader opened by hand stays open in every density. Nothing the model receives, no
-export and no history changes: only the rows drawn.
+The table's `full` column is the `dense` density. A long session of it is a wall: every call prints its preview and the assistant's sentences get lost.
+
+`toolDensity` (`/customize` > Chat > Tool density; `calm` by default) chooses how much of each card the `full` view prints. Balanced and minimal views ignore it.
+
+`toolOutput: collapsed` and `expanded` and `ctrl+o` win over density. A card opened by hand stays open in every density. Nothing the model receives, no export and no history changes: only the rows drawn.
 
 | | `calm` (default) | `standard` | `dense` |
 |---|---|---|---|
@@ -442,8 +621,19 @@ export and no history changes: only the rows drawn.
 | runs of looking calls | three or more in a row fold into one row, counts spelled: `Read 4 files · Grep 3 patterns` (click to open) | as they are | as they are |
 | a target in a one-row call | muted, not bold | | |
 
-The short preview is capped by kind: `read` 3 lines then `… N more lines`; `grep` 3 matching lines; `shell` its last 3 lines (4 for a
-failure); `ls` and `glob` 2 rows; `web_search` 3 titles; a diff 8 rows; an unknown tool 3 rows. A result that is one JSON
+The short preview is capped by kind:
+
+| Kind | Preview |
+|---|---|
+| `read` | 3 lines then `… N more lines` |
+| `grep` | 3 matching lines |
+| `shell` | Last 3 lines, 4 for a failure |
+| `ls`, `glob` | 2 rows |
+| `web_search` | 3 titles |
+| Diff | 8 rows |
+| Unknown tool | 3 rows |
+
+A result that is one JSON
 value is its shape in the header and no rows: `object · 4 keys`, `array · 20 items`, `json · 1,155 lines`. The code map card, the
 thought blocks, to-do lists, questions and plans are not part of it and draw as they always do.
 
@@ -455,23 +645,37 @@ folds, and the assistant's answer arriving moves nothing above it. A click on a 
 
 `/context` shows a ten-column, 100-cell window map and a category legend: system prompt, native tools,
 MCP schemas, custom agents, memory, skills, retained messages, free space and the autocompact buffer.
-Each category has its own glyph and theme role. Figures are estimates from the actual report; the
+Each category has its own glyph and theme role.
+
+Figures are estimates from the actual report; the
 last measured call is labeled separately. The full buffer stays marked when usage enters it, with
 a separate count of tokens inside the buffer. Unknown windows use the compact threshold and explicitly
 omit buffer estimates. The model and session id come from the report.
 
-Wide terminals put the largest messages beside the window and resource sections. Small terminals
-stack the page. `tab`, Shift+Tab and `1`/`2` retain Sections/Largest navigation; `r` refreshes, Esc/`q`
-returns, and PageUp/PageDown reveals resource rows or messages. Suggestions appear only for recorded
-large tool results, successful repeated file reads or actual pressure at the compact threshold.
+Wide terminals put the largest messages beside the window and resource sections. Small terminals stack the page.
+
+| Key | Does |
+|---|---|
+| `tab`, Shift+Tab, `1`/`2` | Sections/Largest navigation |
+| `r` | Refresh |
+| Esc/`q` | Return |
+| PageUp/PageDown | Reveal resource rows or messages |
+
+Suggestions appear only for recorded large tool results, successful repeated file reads or actual pressure at the compact threshold.
+
+### Report fields
+
 `context.query` adds optional `sessionId`, `contextWindow`, disjoint `categories`, `mcpTools` and
 `repeatedReads`; existing `sections` remain intact. MCP and agent-catalog estimates are moved out of
 tool totals, never counted twice. Resource counts describe entries included in the prompt/catalog,
 not every installed file. Unknown counts in older reports stay unavailable.
 
+### Scratchpad wrapping and evidence
+
 The scratchpad's focused and unfocused layouts now wrap at word boundaries, hard-breaking only
 words wider than the editor. Grapheme offsets, whitespace, selections, autosave and stored text are
 preserved across resizing; visual Home/End follows the same rows used to draw the cursor.
+
 `bun scripts/render-ui8-frames.ts .agents/runs/frames/ui-8/` generates isolated app-harness evidence
 at 60×20, 100×30, 180×50 and 220×60, plus a real-screen ANSI capture of the terminal-themed home.
 
@@ -479,6 +683,7 @@ at 60×20, 100×30, 180×50 and 220×60, plus a real-screen ANSI capture of the 
 
 Shared cell measurement and end/tail-biased truncation live in `apps/cli/src/view/wrap.ts`;
 `deck`, `panel-box` and `session-list` retain their helper exports for compatibility.
+
 Time helpers live in `view/time.ts`: agent/loop clocks share padded remainders while loop
 durations still show `<1s` below one second. Other clock styles keep their existing rounding.
 
@@ -488,11 +693,15 @@ The native `question` tool accepts `questions[]` with `question`, a short `heade
 optional `multiple`, and `custom` (defaults to true). Claude Code's AskUserQuestion arrives the
 same way ([Claude Code](claude-code.md)).
 
+### Answer a question
+
 **The question card takes the prompt's place** while a question waits: one card with the header,
 the question, the numbered options with their descriptions wrapped in full (never cut), a last
-"Type your own answer" row, and one line of keys. There is no second input under it, no
+"Type your own answer" row, and one line of keys. A batch adds a row of tabs.
+
+There is no second input under it, no
 "waiting" header, no working row repeating that the turn waits, and the running call that asked
-(`AskUserQuestion`, `question`) draws no row until it is answered. A batch adds a row of tabs.
+(`AskUserQuestion`, `question`) draws no row until it is answered.
 
 - Up/Down select (the highlighted answer has a `›` and is where the terminal cursor sits, so a
   screen reader reads it); digits pick; Enter confirms. Esc or ctrl+c dismiss the question.
@@ -509,16 +718,29 @@ the question, the numbered options with their descriptions wrapped in full (neve
   `decision.answers: string[][]` (labels containing commas stay intact).
 - Whatever the prompt held when the question came stays aside and comes back once it is gone.
 
+### Limits and client helper
+
 The client helper is `answerQuestions(sessionId, requestId, answers)`. A single question (`title`,
 `detail`, `options`) is drawn as a batch of one and still answers with plain text (labels joined
-with ", "). Batch limits: 32 questions, 9 options each, 4,000 chars per custom answer. On a short
+with ", ").
+
+| Batch limit | Value |
+|---|---|
+| Questions | 32 |
+| Options per question | 9 |
+| Custom answer | 4,000 chars |
+
+On a short
 terminal the question text gives way first, then the answers scroll to keep the highlighted one
 (or the caret) in view.
+
+### TODO lists and async questions
 
 The native `todo` tool replaces the latest session list with `items`; `[]` clears it.
 Each item has `text`, `status` (`pending`, `in_progress`, `done`, `completed`, `cancelled`) and
 optional `priority` (`high`, `medium`, `low`). Tool cards, the dock and an opt-in TODO sidebar
 show priorities and cancellation; cancelled and finished items are excluded from the open count.
+
 The progress row above the prompt is [the visible plan](#the-visible-plan); a call still running or one that failed
 leaves the list before it in place.
 Lists and clears survive event replay. Below 70 columns the dock shows one panel.
@@ -542,6 +764,12 @@ Every page with a list behaves the same way (a test, `apps/cli/test/page-standar
 | `Esc` | Clears the box first; then goes back to the page it was opened from (to the chat when it was opened from there). |
 | `Enter` or `Space`, `←` `→` | Open or toggle the selected row; change a value. |
 
-Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`. The hint row names the keys the same way on each page (`/ search`, `esc back`); while the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.
+Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`.
+
+The hint row names keys the same way on each page (`/ search`, `esc back`). While the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.
 
 With Caps Lock on, a page of letter shortcuts reads a capital as its lowercase key. A page that gives shift+letter a meaning of its own keeps the capital for it.
+
+## Layout references
+
+This guide describes how `apps/cli` adapts to terminal size. Spec: `specs/master-plan.md` sections 52 (responsive TUI), 54 and 55 (sidebar, project panel). The v1 references are its session sidebar and widgets dock (`ctrl+t`).

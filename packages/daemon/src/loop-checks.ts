@@ -11,12 +11,13 @@ const OUTPUT_TAIL_CHARS = 64_000
 /**
  * Runs one loop check as a plain program (argv, no shell) in its own process group, bounded in time and
  * output; a timeout (`timeoutSeconds`, default 300) or abort kills the whole group. A timed-out check keeps the
- * output collected so far and ends with `timed out after N s`.
+ * output collected so far and ends with `timed out after N s`. `stdin` is written whole and then closed; without it
+ * stdin is ignored.
  */
-export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeconds = DEFAULT_CHECK_TIMEOUT_SECONDS }) => {
+export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeconds = DEFAULT_CHECK_TIMEOUT_SECONDS, stdin }) => {
   let child: ReturnType<typeof Bun.spawn>
   try {
-    child = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1", TERM: "dumb" }, detached: true })
+    child = Bun.spawn(argv, { cwd, stdin: stdin === undefined ? "ignore" : new TextEncoder().encode(stdin), stdout: "pipe", stderr: "pipe", env: { ...process.env, CI: "1", TERM: "dumb" }, detached: true })
   } catch (error) {
     return { exitCode: -1, output: `cannot run ${argv[0]}: ${error instanceof Error ? error.message : String(error)}` }
   }

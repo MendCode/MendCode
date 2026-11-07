@@ -1,5 +1,9 @@
 # Remote attach
 
+Attach your terminal to a daemon on another machine using an SSH tunnel, authenticated TCP or the opt-in HTTP adapter. Session paths and work run on the daemon; a remote attach never launches or manages a local daemon.
+
+Start with [Setup](#setup) for TCP or [SSH tunnel: simplest safe path](#ssh-tunnel-simplest-safe-path) to forward an existing Unix socket.
+
 ## Session HTTP bridge (B87)
 
 The daemon's `--http-listen 127.0.0.1:9877` opt-in flag enables four donor-shaped routes; no HTTP listener opens by default.
@@ -32,7 +36,16 @@ mendcode remote token list --dir /srv/mendcode
 mendcode remote token revoke laptop --dir /srv/mendcode
 ```
 
-`create` prints a random token once. Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`. `list` prints name, scope (`full` or `read-only`), creation time and last-used time; it never prints tokens or hashes. Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Names use 1–64 letters, digits, `_` or `-`. Revocation rejects subsequent requests and closes active streams within one second.
+`create` prints a random token once. Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`.
+
+| Command | Result |
+|---|---|
+| `list` | Prints name, scope (`full` or `read-only`), creation time and last-used time; never tokens or hashes |
+| Revocation | Rejects subsequent requests and closes active streams within one second |
+
+Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Names use 1–64 letters, digits, `_` or `-`.
+
+### Start the daemon
 
 Start the headless daemon with its existing engine options:
 
@@ -62,9 +75,21 @@ TLS is automatic for any non-literal-loopback host. Certificate chain and hostna
 mendcode --connect server.example:9876 --ca /private/path/ca.pem --token-file /private/path/mendcode-token
 ```
 
-`--ca` adds trust to the normal roots and enables TLS. `--token-file` takes precedence over `MENDCODE_TOKEN`. There is no plain `--token` flag. Transport flags also work with automation commands, for example `mendcode --connect server.example:9876 session list --all`.
+| Client option | Effect |
+|---|---|
+| `--ca` | Adds trust to the normal roots and enables TLS |
+| `--token-file` | Takes precedence over `MENDCODE_TOKEN` |
+| `--token` | No plain flag exists |
 
-The TUI attaches to `--session`, otherwise the newest session. With no sessions a full token creates one in the daemon's reported project directory; a read-only token requires an existing session. Session paths, mentions (`files.search`), diffs and custom Markdown commands resolve on the daemon. Switching sessions updates the remote directory. A remote attach never launches, upgrades, shuts down for version freshness, or restarts a local daemon. Topbar/home show `remote <host>` and `read-only` where applicable.
+Transport flags also work with automation commands, for example `mendcode --connect server.example:9876 session list --all`.
+
+### Choose a session
+
+The TUI attaches to `--session`, otherwise the newest session. With no sessions a full token creates one in the daemon's reported project directory; a read-only token requires an existing session.
+
+Session paths, mentions (`files.search`), diffs and custom Markdown commands resolve on the daemon. Switching sessions updates the remote directory.
+
+A remote attach never launches, upgrades, shuts down for version freshness, or restarts a local daemon. Topbar/home show `remote <host>` and `read-only` where applicable.
 
 ## SSH tunnel: simplest safe path
 
@@ -91,7 +116,17 @@ mendcode remote token create --dir /srv/mendcode --read-only --name observer
 mendcode --connect server.example:9876 --token-file /private/path/observer-token --session SESSION_ID
 ```
 
-Read-only tokens can subscribe, page history and run observational queries. Mutating commands (including submit, shell, draft saves, settings, token-independent daemon shutdown, attachments and workflow controls) return `forbidden`, before retry-cache access. New command types are denied until explicitly classified in the protocol. `secrets.reveal` is denied: a read-only peer sees secret markers and tails, never values. `extensions.list` and `status.watch` are also denied because they load executable extension code or start status scripts; read-only command discovery skips extension code and reads Markdown definitions only. Read-only covers daemon-wide data, including sensitive queries; it is not a per-project privacy boundary.
+Read-only tokens can subscribe, page history and run observational queries.
+
+| Operation | Read-only behavior |
+|---|---|
+| Mutating commands: submit, shell, draft saves, settings, token-independent daemon shutdown, attachments and workflow controls | Return `forbidden` before retry-cache access |
+| New command types | Denied until explicitly classified in the protocol |
+| `secrets.reveal` | Denied; peers see secret markers and tails, never values |
+| `extensions.list` and `status.watch` | Denied because they load executable extension code or start status scripts |
+| Command discovery | Skips extension code and reads Markdown definitions only |
+
+**Warning:** Read-only covers daemon-wide data, including sensitive queries. It is not a per-project privacy boundary.
 
 ## Terminal features while remote
 
@@ -110,7 +145,13 @@ Startup shows a note; blocked actions show a terse explanation. Mentions, themes
 
 ## Security
 
-Bind loopback unless direct TLS access is needed. Restrict exposed ports with the host's network policy; prefer SSH tunnels. Every TCP peer authenticates before commands. Failed auth closes the connection without echoing token contents, with per-address exponential backoff (250 ms to 30 s), bounded memory and a five-second auth deadline. Successful authentication does not erase that backoff. Never put tokens in shell arguments, logs, screenshots or commits. Full tokens grant the daemon's complete command authority, including tools, shell and shutdown. Unix sockets retain their filesystem-based trust; keep the daemon directory private.
+Bind loopback unless direct TLS access is needed. Restrict exposed ports with the host's network policy; prefer SSH tunnels.
+
+Every TCP peer authenticates before commands. Failed auth closes the connection without echoing token contents, with per-address exponential backoff (250 ms to 30 s), bounded memory and a five-second auth deadline. Successful authentication does not erase that backoff.
+
+**Warning:** Never put tokens in shell arguments, logs, screenshots or commits. Full tokens grant the daemon's complete command authority, including tools, shell and shutdown.
+
+Unix sockets retain their filesystem-based trust; keep the daemon directory private.
 
 ## HTTP adapter (B34)
 
@@ -123,11 +164,58 @@ mendcode attach http://127.0.0.1:4096 --token-file /private/token --continue --f
 mendcode web --dir /tmp/mend-http --cwd /work/project --port 4096 --no-open
 ```
 
-`web` serves a dependency-free browser client at `/` and opens it unless `--no-open` is set. Paste a v2 token into its password field; it stays in memory, with no cookies or browser storage. Sessions, prompts, cancel and streamed conversation use the same daemon. The conversation lists tool calls (sub-steps hidden), shows pending tool approvals (allow once / for session / deny) and simple questions with their options or a typed answer, and has a model picker, rename, fork (with transcript) and a changes panel with per-file diffs, all through existing commands; read-only tokens see requests but cannot answer or change anything. Multi-question batches and plan reviews say to answer in the terminal UI. Tabs switch between Chat, Files and Terminal, and a Workspace selector (registered workspaces from `/experimental/workspace`) retargets sessions, files and terminals through the `x-mendcode-workspace` header. **Files** lists the project, opens any path and saves with `file.edit` ([file API](file-rest.md#browser-editor-file-edit)); saving needs `web --edit` (off by default), otherwise the pane is a read-only viewer. **Terminal** drives the [PTY API](pty.md) (`web --pty`, off by default) with a one-use ticket and a bounded line terminal (colors dropped, no full-screen programs). Read-only tokens get neither pane. No real-browser visual check has been run: the client is covered by DOM-fake tests only. `/` contains only the login shell; data, `/doc` and `/openapi.json` require auth.
+### Use the browser client
 
-HTTP accepts `Authorization: Bearer TOKEN`, or HTTP Basic with username `mendcode` and **a v2 token as password**. `attach --password TOKEN` / `-p` and `--username NAME` / `-u` provide the v1 spellings; prefer `--token-file` to avoid shell history. Token file wins over password, then `MENDCODE_TOKEN`; HTTP alone accepts `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME` as fallbacks. Arbitrary v1 passwords do not authorize a v2 daemon. URL credentials, fragments, query strings and paths are rejected. Plain HTTP attach requires loopback; HTTPS verifies certificates and supports `--ca`.
+1. Start `web`. It serves a dependency-free browser client at `/` and opens it unless `--no-open` is set.
+2. Paste a v2 token into its password field. It stays in memory, with no cookies or browser storage.
+3. Choose Chat, Files or Terminal. The Workspace selector uses registered workspaces from `/experimental/workspace` to retarget sessions, files and terminals through the `x-mendcode-workspace` header.
 
-For `attach`, `--dir` is the **server project directory**, passed unchanged even when absent locally. The daemon accepts its root or a registered local workspace. `--data-dir` retains its storage meaning. `--continue` resumes the newest project root; `--session` wins; `--fork` requires one of these and preserves the transcript. `--diagnostics` enables the existing TUI diagnostics page. Remote restrictions above remain in effect.
+Sessions, prompts, cancel and streamed conversation use the same daemon. The conversation offers:
+
+- Tool calls, with sub-steps hidden.
+- Pending tool approvals: allow once / for session / deny.
+- Simple questions with options or a typed answer.
+- A model picker, rename, fork (with transcript) and a changes panel with per-file diffs, all through existing commands.
+
+Read-only tokens see requests but cannot answer or change anything. Multi-question batches and plan reviews say to answer in the terminal UI.
+
+| Pane | Capability | Opt-in |
+|---|---|---|
+| **Files** | Lists the project, opens any path and saves with `file.edit` ([file API](file-rest.md#browser-editor-file-edit)) | Saving needs `web --edit` (off by default); otherwise it is a read-only viewer |
+| **Terminal** | Drives the [PTY API](pty.md) with a one-use ticket and a bounded line terminal: colors dropped, no full-screen programs | `web --pty`, off by default |
+
+Read-only tokens get neither pane. `/` contains only the login shell; data, `/doc` and `/openapi.json` require auth.
+
+**Note:** No real-browser visual check has been run. The client is covered by DOM-fake tests only.
+
+### Authenticate an HTTP attach
+
+HTTP accepts `Authorization: Bearer TOKEN`, or HTTP Basic with username `mendcode` and **a v2 token as password**. Arbitrary v1 passwords do not authorize a v2 daemon.
+
+| Credential source | Rule |
+|---|---|
+| `--token-file` | Preferred to avoid shell history; wins over password, then `MENDCODE_TOKEN` |
+| `attach --password TOKEN` / `-p` | v1 password spelling |
+| `--username NAME` / `-u` | v1 username spelling |
+| `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME` | Fallbacks accepted by HTTP alone |
+
+URL credentials, fragments, query strings and paths are rejected. Plain HTTP attach requires loopback; HTTPS verifies certificates and supports `--ca`.
+
+### Choose the HTTP project and session
+
+For `attach`, `--dir` is the **server project directory**, passed unchanged even when absent locally. The daemon accepts its root or a registered local workspace.
+
+| Option | Does |
+|---|---|
+| `--data-dir` | Retains its storage meaning |
+| `--continue` | Resumes the newest project root |
+| `--session` | Wins over continue |
+| `--fork` | Requires one of these and preserves the transcript |
+| `--diagnostics` | Enables the existing TUI diagnostics page |
+
+Remote restrictions above remain in effect.
+
+### Configure the listener
 
 Listener settings can live under `server` in `<dir>/remote.json`, alongside existing TCP settings:
 
@@ -135,11 +223,31 @@ Listener settings can live under `server` in `<dir>/remote.json`, alongside exis
 { "server": { "enabled": false, "port": 4096, "hostname": "127.0.0.1", "cors": ["http://localhost:3000"], "mdns": false, "mdnsDomain": "mendcode.local", "username": "mendcode" } }
 ```
 
-Explicit flags override config. `--cors ORIGIN` is repeatable and replaces the configured CORS list when supplied. Origins must match exactly; wildcards, paths and URL credentials fail. Preflights disclose no data; all data calls require tokens. There is no cookie auth. mDNS publication is withdrawn: its CLI flags are usage errors, and `mdns: true` is rejected before launch or configuration writes. Legacy `mdns: false` and `mdnsDomain` remain readable for wire compatibility; they publish nothing.
+Explicit flags override config. `--cors ORIGIN` is repeatable and replaces the configured CORS list when supplied.
+
+- Origins must match exactly; wildcards, paths and URL credentials fail.
+- Preflights disclose no data; all data calls require tokens.
+- There is no cookie auth.
+
+mDNS publication is withdrawn. Its CLI flags are usage errors, and `mdns: true` is rejected before launch or configuration writes. Legacy `mdns: false` and `mdnsDomain` remain readable for wire compatibility; they publish nothing.
+
+### Protocol and workspace routing
 
 The initial OpenAPI 3.1 contract describes `GET /global/health`, `POST /command` (the strict v2 command envelope, result JSON), `GET /wire` (WebSocket carrying unchanged v2 frames), `POST /event` (hello JSON or SSE v2 frames) and `/experimental/workspace` registration/list/status/adapter/removal. Session/config REST compatibility groups remain in batches B81–B86/B88; `/command` already exposes existing operations without another engine. Request bodies and WebSocket frames obey the protocol size limit; stream backlogs are bounded, subscriptions close on disconnect and revoked tokens close active streams.
 
-Local workspaces register **existing directories**, via `workspace.create { name, directory, adapter: "local" }`; `workspace.query` lists workspaces/adapters/status; `workspace.remove` unregisters without deleting project files. HTTP routing uses `x-opencode-directory`/`directory`, or `x-mendcode-workspace`/`workspace`. Symlinks resolve before routing; directory/session/parent mismatches are refused before replay-cache access. Full tokens remain daemon-wide authority, not tenant credentials. Workspace commands are deliberately excluded from `READ_ONLY_COMMANDS`. Cloud provisioning, session warp and remote synchronization require a future adapter/service.
+Local workspaces register **existing directories**:
+
+| Command | Does |
+|---|---|
+| `workspace.create { name, directory, adapter: "local" }` | Registers a directory |
+| `workspace.query` | Lists workspaces/adapters/status |
+| `workspace.remove` | Unregisters without deleting project files |
+
+HTTP routing uses `x-opencode-directory`/`directory`, or `x-mendcode-workspace`/`workspace`. Symlinks resolve before routing; directory/session/parent mismatches are refused before replay-cache access.
+
+Full tokens remain daemon-wide authority, not tenant credentials. Workspace commands are deliberately excluded from `READ_ONLY_COMMANDS`. Cloud provisioning, session warp and remote synchronization require a future adapter/service.
+
+### Related REST adapters
 
 B81 adds the [session REST adapter](session-rest.md), including native v2 pagination and cancellation. Its compatibility limits and full-token policy are documented there; it adds no terminal screens.
 

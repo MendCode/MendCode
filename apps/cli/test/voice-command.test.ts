@@ -177,7 +177,7 @@ describe("/voice", () => {
     const ready = app()
     await ready.type("/voice on\r")
     expect(screen(ready)).toContain("voice on")
-    expect(screen(ready)).toContain("uploaded to the transcription provider")
+    expect((await ready.details()).join(" ").replace(/[┃│]/g, " ").replace(/\s+/g, " ")).toContain("uploaded to the transcription provider")
     const h = app({ ready: false })
     await h.type("/voice on\r")
     expect(h.sentOf("settings.set").at(-1)).toMatchObject({ patch: { voice: { enabled: true } } })

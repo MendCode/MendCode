@@ -35,7 +35,7 @@ describe("/remote-control", () => {
     const { h } = app({ token: false })
     await h.type("/remote-control\r")
     expect(h.sentOf("channels.status")).toHaveLength(1)
-    expect(h.text().join("\n")).toContain("MENDCODE_TELEGRAM_TOKEN")
+    expect((await h.details()).join("\n")).toContain("MENDCODE_TELEGRAM_TOKEN")
   })
 
   test("on and off send the change and show the result", async () => {

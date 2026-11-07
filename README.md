@@ -256,8 +256,10 @@ Version 0.x: expect changes between releases, and back up your data before upgra
 - **Verified on macOS** (Apple silicon): the measurements below and the script-workflow sandbox were run there. The Linux and
   Windows binaries are built and smoke-tested by the release pipeline; the Linux sandbox profile for script workflows has not
   run on real Linux machines yet, and Windows has no script host and no daemon smoke test ([workflows](docs/workflows.md#security-model), [releases](docs/release.md)).
-- **Tested against fake transports, not real accounts:** Claude Code, Codex, ACP and pi as engines, the GitHub automation,
-  the Telegram bridge and MCP OAuth ([GitHub](docs/github.md), [channels](docs/channels.md), [MCP OAuth](docs/mcp-oauth.md)).
+- **Used with real accounts:** Claude Code (daily, with a Claude login), Codex (with a ChatGPT login) and pi (with an OpenAI
+  subscription) as engines, and the GitHub pull request reviewer. Their tests also run against fake transports.
+- **Tested against fake transports only, not real accounts:** ACP as an engine, the Telegram bridge and MCP OAuth
+  ([ACP](docs/acp-engine.md), [channels](docs/channels.md), [MCP OAuth](docs/mcp-oauth.md)).
 - **Your data:** `--dir`, else `MENDCODE_DIR`, else `~/.mendcode`. To back it up, quit every terminal, run
   `mendcode daemon stop` and copy the whole directory (the database with its `-wal` and `-shm` files, `blobs/`, and `keys/`, which
   the encrypted secrets need) ([storage](docs/storage.md), [secrets](docs/secrets.md)).
@@ -441,7 +443,7 @@ Disk command: `MEND_DISK_REPORT=1 bun test packages/store/test/disk-budget.test.
 | ACP | Explicitly configured external ACP agent | [ACP](docs/acp-engine.md) |
 | pi | Installed, logged-in pi; RPC; opt-in, full-tier permission | [pi](docs/pi-engine.md) |
 
-External engines retain their own authentication and tool loops. Fake transports establish offline adapter coverage, not live account interoperability.
+External engines retain their own authentication and tool loops. Claude Code, Codex and pi have run with real accounts; ACP is covered only by fake transports so far.
 ## Embedding
 
 `mendcode app-server --dir DATA --cwd PROJECT` exposes local JSONL JSON-RPC (`mendcode-app-server@1`): threads, turns, events and approval requests. A typed client is exported by `@mendcode/client/app-server`. Headless `run --format json`, the daemon socket and opt-in HTTP adapter are alternatives. See [embedding](docs/embedding.md) and its [client example](examples/app-server-client.ts).

@@ -1,6 +1,10 @@
 # Git page (terminal)
 
-`/git [changes | commit | worktrees | pr]` opens one page with four tabs. Balanced and above (`/tier git_hub`); minimalist keeps `/changes` and `/warp` as they were. Changes, Commit and Worktrees are local: nothing leaves the machine. The PR tab and its push and pull request actions reach the network through `git` and `gh`, so they are a separate switch, off by default ([The switch](#the-switch)).
+The Git page lets you review changes, commit selected files, pick a worktree and work with pull requests. Open it with `/git [changes | commit | worktrees | pr]`.
+
+The page is available in balanced and above (`/tier git_hub`). Minimalist keeps `/changes` and `/warp` as they were.
+
+Changes, Commit and Worktrees are local: nothing leaves the machine. The PR tab and its push and pull request actions reach the network through `git` and `gh`; they have a separate switch, off by default ([The switch](#the-switch)).
 
 | Tab | What it is |
 |---|---|
@@ -11,36 +15,78 @@
 
 In a folder that is not a Git repository every tab is one state instead: what it is, and one action, [Initialize repository](#folder-that-is-not-a-repository). In a repository with no remote the PR tab offers [Publish to GitHub (private)](#publish-to-github-private) in place of push.
 
-The first row of every tab shows the tabs and the repository: branch, commits ahead and behind its upstream, and how many files are dirty (from `git.status`). `<` and `>` switch tabs (not while a comment, a line number, a workspace name, the commit message, a pull request field or the name of a protected branch is being typed); a click on a tab does the same. Below 70 columns the tabs shorten to `Chg`, `Com`, `Wt`, `PR`. `git.defaultTab` (`changes`, `commit`, `worktrees` or `pr`) picks the tab `/git` opens.
+### Navigate the tabs
+
+The first row shows the tabs and repository: branch, commits ahead and behind its upstream, and how many files are dirty, from `git.status`.
+
+| Control | Does |
+|---|---|
+| `<` and `>` | switch tabs |
+| Click a tab | switch to it |
+| `git.defaultTab` | choose the tab `/git` opens: `changes`, `commit`, `worktrees` or `pr` |
+
+The tab keys do not switch while you type a comment, line number, workspace name, commit message, pull request field or protected branch name.
+
+Below 70 columns the tabs shorten to `Chg`, `Com`, `Wt`, `PR`.
 
 ## Commit
 
-No file starts ticked. `space` ticks, `a` ticks all or none, `tab` goes to the message (the prompt's multi-line editor: `enter` is a new line, paste works), `enter` on the files opens the confirmation card, `w` puts `/commit` with the ticked files in the prompt so the agent writes the message (it costs a turn and goes through the normal approvals; nothing is sent from here).
+1. Tick the files you want to commit. No file starts ticked.
+2. Press `tab` to write the message in the prompt's multi-line editor. `enter` adds a new line; paste works.
+3. Press `enter` on the files to open the confirmation card.
+4. Check the exact command, every path, branch, hooks that will run and what is staged elsewhere. Press `enter` to commit, or `esc` to go back.
 
-The card shows the exact command, every path, the branch, the hooks that will run and what is staged elsewhere. `enter` commits, `esc` goes back.
+| Key | Does |
+|---|---|
+| `space` | tick a file |
+| `a` | tick all or none |
+| `w` | put `/commit` with the ticked files in the prompt so the agent writes the message |
+
+Using `w` costs a turn and goes through normal approvals. Nothing is sent from here.
 
 ### `git.commit`
 
-A daemon command for local clients only. Remote clients and peers (read-only or not) are refused; it is not in `READ_ONLY_COMMANDS`. It never goes through a shell: every call is an argv array, with `GIT_TERMINAL_PROMPT=0`, `GIT_LITERAL_PATHSPECS=1`, no editor, no stdin, output bounded to 16 KB and a timeout.
+This daemon command is for local clients only. Remote clients and peers, read-only or not, are refused; it is not in `READ_ONLY_COMMANDS`.
+
+Every call is an argv array, never a shell. It uses `GIT_TERMINAL_PROMPT=0`, `GIT_LITERAL_PATHSPECS=1`, no editor, no stdin, output bounded to 16 KB and a timeout.
 
 It runs, in this order:
 
 1. `git add -- <untracked selected paths>`, only for paths git does not know yet.
 2. `git commit -m <message> -- <selected paths>`.
 
-The repository's hooks run. Never `--no-verify`, `--amend`, `--force` or `-a`; never a path that was not selected; never a push. Paths are contained in the project with the same symlink-safe check the file API uses (`..`, absolute paths, `.git`, folders and links out of the project are refused). A path that starts with `-` or `:` is a file name, not an option or a pathspec.
+The repository's hooks run. The command never uses `--no-verify`, `--amend`, `--force` or `-a`, never includes a path that was not selected, and never pushes.
+
+Paths are contained in the project with the file API's symlink-safe check. It refuses `..`, absolute paths, `.git`, folders and links out of the project.
+
+A path that starts with `-` or `:` is a file name, not an option or a pathspec.
 
 If the commit fails (a hook, for one), the untracked files added for it are removed from the index again, and the last 20 lines of git's output come back redacted for secrets.
 
-**Staged elsewhere.** `git commit -- <paths>` commits those paths only. Changes already staged for other files stay staged and are not in the commit; the card says so ("2 other staged files stay staged and out of this commit"). The index of files you did not tick is never touched.
+**Staged elsewhere:** `git commit -- <paths>` commits those paths only. Changes staged for other files stay staged and out of the commit. The card says "2 other staged files stay staged and out of this commit".
 
-One line each, and no commit, for: an empty message, nothing selected, a detached HEAD, a merge, rebase, cherry-pick or revert in progress, and no `user.name` or `user.email`.
+The index of files you did not tick is never touched.
+
+The command returns one line and makes no commit for:
+
+- an empty message or nothing selected;
+- a detached HEAD;
+- a merge, rebase, cherry-pick or revert in progress;
+- no `user.name` or `user.email`.
 
 ## Folder that is not a repository
 
-`/git` (any tab) in a folder where `git.status` finds no repository shows one state under the tabs row, whose right side reads "not a git repository": the folder's path, a line saying that there is nothing to review, commit or branch yet, and one action, `Initialize repository` (`i` or `enter`, or a click on it). The daemon is asked first (`preview`); if it would refuse, the reason replaces the action. `r` looks again.
+When `git.status` finds no repository, every `/git` tab shows the same state under the tabs row. Its right side reads "not a git repository".
 
-`i` opens a card headed "Confirm · local only, nothing leaves this machine": the exact command, the directory, the first branch and whose choice it is, and "not done: no commit, no .gitignore, no remote, no network". `enter` initializes, `esc` goes back. After it the page lands on the Commit tab with the files listed: nothing is committed, a `.gitignore` that exists is honoured and left as it is, and none is created. A failed `git init` keeps the card with what git printed.
+The page shows the folder's path, says there is nothing to review, commit or branch yet, and offers `Initialize repository`.
+
+1. Press `i` or `enter`, or click the action. The daemon is asked first (`preview`); if it would refuse, the reason replaces the action. `r` looks again.
+2. Read the card headed "Confirm · local only, nothing leaves this machine". It shows the exact command, directory, first branch and whose choice it is, plus "not done: no commit, no .gitignore, no remote, no network".
+3. Press `enter` to initialize, or `esc` to go back.
+
+The page then lands on Commit with the files listed. Nothing is committed. An existing `.gitignore` is honoured and left as it is; none is created.
+
+A failed `git init` keeps the card with what git printed.
 
 ### `git.init`
 
@@ -61,7 +107,20 @@ Argv, no shell, the environment of `git.commit`, output bounded, timeout, one ac
 
 ## The switch
 
-Push, publish and pull request creation are the only parts of the page that use the network and the only ones that publish anything, so they are behind `experimental.git_actions` (`/experimental git_actions on`). It follows the same policy as the [PR watch](pr-watch.md): the tier allows it (balanced and full; the feature is `git_actions`), `features.git_actions: false` blocks it and minimalist never offers it. The switch is off by default in balanced, where your `/experimental git_actions on` turns it on, and on by default in full, where `/experimental git_actions off` turns it off; what you set always wins. Full can do this because nothing runs by itself there: every push, publish and pull request shows its exact command on a card and waits for Enter, with no "always allow", and the model has no tool for any of it. No tier turns the network on for the model.
+Push, publish and pull request creation are the only parts that use the network or publish anything. They are behind `experimental.git_actions` (`/experimental git_actions on`), with the same policy as [PR watch](pr-watch.md).
+
+| Tier or setting | Effect |
+|---|---|
+| balanced | off by default; `/experimental git_actions on` turns it on |
+| full | on by default; `/experimental git_actions off` turns it off |
+| minimalist | never offers it |
+| `features.git_actions: false` | blocks it |
+
+Balanced and full allow the `git_actions` feature; what you set always wins.
+
+Nothing runs by itself in full. Every push, publish and pull request shows its exact command on a card and waits for Enter, with no "always allow". The model has no tool for any of it.
+
+No tier turns the network on for the model.
 
 | | Switch off (default in balanced) | Switch on (default in full) |
 |---|---|---|
@@ -74,15 +133,43 @@ There are no model tools for any of this and no prompt text: the page is for you
 
 ## PR tab
 
-Reads the branch's pull request (`gh pr view --json …`, parsed by the same reader as the PR watch) and shows the number and title, `head → base`, state and draft, the link, the checks (passed, failed with the failing names, pending with their names), the review decision and whether it merges cleanly. `r` reads it again, `o` (or a click on the link) copies the link and prints it: the terminal has no browser to open. `gh` runs on the machine of the daemon, so a remote session shows one line saying to use the tab from a local session.
+The tab reads the branch's pull request through `gh pr view --json …`, parsed by the same reader as the PR watch. It shows:
 
-One clear line each for: the switch off, `gh` not installed, `gh` not logged in (`gh auth login` in your shell), and no pull request for the branch (the tab then offers `u` and `P`). With no remote the tab is the empty state that offers [publish](#publish-to-github-private).
+- number and title, `head → base`, state and draft, and the link;
+- checks: passed, failed with the failing names, pending with their names;
+- review decision and whether it merges cleanly.
+
+| Key | Does |
+|---|---|
+| `r` | read again |
+| `o`, or click the link | copy the link and print it; the terminal has no browser to open |
+
+`gh` runs on the daemon's machine. A remote session shows one line saying to use the tab from a local session.
+
+| Condition | What the tab shows |
+|---|---|
+| Switch off | one clear line |
+| `gh` not installed | one clear line |
+| `gh` not logged in | one clear line; run `gh auth login` in your shell |
+| No pull request for the branch | one clear line, with `u` and `P` offered |
+| No remote | empty state offering [publish](#publish-to-github-private) |
 
 Not built, on purpose: merge, close, comment and delete of a remote branch. Those stay with `gh` in your shell.
 
 ## Push
 
-`u` opens a card headed "leaves this machine". It shows the exact command, the remote name and its address (credentials in a URL are masked as `***`), the number of commits that will be sent and the newest subjects, the repository hooks that will run (`pre-push`), and what is not done: "no force, no tags, no other branch, no pull request". `enter` pushes, `esc` cancels. There is no "always allow" and no grant that lasts a session: every push is confirmed with the command in front of you.
+1. Press `u` to open a card headed "leaves this machine".
+2. Check the command and what will be sent.
+3. Press `enter` to push, or `esc` to cancel.
+
+The card shows:
+
+- the exact command, remote name and address; credentials in a URL are masked as `***`;
+- the number of commits to send and the newest subjects;
+- repository hooks that will run (`pre-push`);
+- what is not done: "no force, no tags, no other branch, no pull request".
+
+There is no "always allow" or grant lasting a session. Every push is confirmed with the command in front of you.
 
 ### `git.push`
 
@@ -92,7 +179,17 @@ A daemon command for local clients only (remote clients and peers are refused; n
 git push --no-recurse-submodules --no-follow-tags [-u] <remote> <branch>
 ```
 
-`-u` only when the branch has no upstream. The branch is the one checked out; the remote is the branch's configured remote, else `origin`, else the push is refused. Never `--force`, `--force-with-lease`, `--tags`, `--all`, `--mirror`, `--delete`, never a refspec of its own and never another branch. Branch and remote names that start with `-`, contain `..`, `:` or control characters, or that `git check-ref-format` rejects are refused before anything runs. Nothing to push is a refusal, not a no-op push.
+`-u` is used only when the branch has no upstream. The branch is the one checked out. The remote is the branch's configured remote, else `origin`; without either, the push is refused.
+
+The command never uses `--force`, `--force-with-lease`, `--tags`, `--all`, `--mirror` or `--delete`, never a refspec of its own and never another branch.
+
+Branch and remote names are refused before anything runs if they:
+
+- start with `-`;
+- contain `..`, `:` or control characters;
+- are rejected by `git check-ref-format`.
+
+Nothing to push is a refusal, not a no-op push.
 
 A rejected push (non-fast-forward) is shown as git printed it, redacted, last lines only, with "the page never forces, so update the branch and push again". The card stays so the command and the answer are together.
 
@@ -102,11 +199,32 @@ A rejected push (non-fast-forward) is shown as git printed it, redacted, last li
 
 Where a push would refuse because the repository has no remote ("this repository has no remote"), the PR tab shows "No remote" and offers `Publish to GitHub (private)` (`g`, `u` or a click) instead. With the switch off the tab is the one "Off" line, as for everything else, and nothing is asked.
 
-`g` opens a form: `Name` (default: the folder's name, cleaned to what GitHub takes), `Owner` (default: your gh account, read with `gh api user`; a plain text field, so an organization is typed) and `Description` (optional, one line). `tab` walks the fields, `enter` goes to the next one and, on the description, to the card; `esc` cancels. Under them one line, "private · change visibility on GitHub": **visibility is not a field**. There is no public or internal option on the page, no flag, setting or parameter for one, and `git.publish` has none in its schema.
+### Fill in the repository form
 
-The card is headed "leaves this machine" (the `warning` role) and shows the exact command, `owner/name`, "private · change visibility on GitHub", what the repository stands on (the branch and its commits, "no commit yet: this creates an empty repository, the first commit comes before the push", or a detached HEAD, where only a remote is added), "not done: no push, no public repository, no other remote" and that it uses your own gh login. `enter` publishes, `esc` goes back to the form with what you typed.
+1. Press `g` to open the form.
+2. Fill in the fields below. `tab` walks them; `enter` goes to the next one and, on the description, to the card. `esc` cancels.
+3. Read the confirmation card. Press `enter` to publish, or `esc` to return to the form with what you typed.
 
-After it the page says "published owner/name, private · origin added", the session gets a passive line ("published owner/name as a private repository and added origin (nothing pushed)"), the PR tab reads again and `u` offers the push, whose card is confirmed on its own: publishing never pushes.
+| Field | Default and limits |
+|---|---|
+| `Name` | the folder's name, cleaned to what GitHub takes |
+| `Owner` | your gh account, read with `gh api user`; plain text, so type an organization |
+| `Description` | optional, one line |
+
+The line under the fields says "private · change visibility on GitHub". **Visibility is not a field.** There is no public or internal option, flag, setting or parameter; `git.publish` has none in its schema.
+
+### Confirm publication
+
+The card is headed "leaves this machine", using the `warning` role. It shows:
+
+- the exact command, `owner/name` and "private · change visibility on GitHub";
+- the branch and its commits, or "no commit yet: this creates an empty repository, the first commit comes before the push", or a detached HEAD where only a remote is added;
+- "not done: no push, no public repository, no other remote";
+- that it uses your own gh login.
+
+After publication the page says "published owner/name, private · origin added". The session gets the passive line "published owner/name as a private repository and added origin (nothing pushed)".
+
+The PR tab reads again and `u` offers the push. Its card is confirmed separately: publishing never pushes.
 
 ### `git.publish`
 
@@ -116,21 +234,81 @@ A daemon command for local clients only, behind `experimental.git_actions` like 
 gh repo create <owner>/<name> --private --source <root> --remote origin [--description=<text>]
 ```
 
-and, when no owner is given, `gh api user --jq .login` first. There is no `--push`, `--public` or `--internal`, under any input: the builder takes only a validated owner and name, and the description is a single `--description=` word, so no text typed in the form can become a flag or reach a shell. The name is `^[A-Za-z0-9._-]{1,100}$`, not starting with `.` or `-` and not ending in `.git`; the owner is letters, digits, `_` and `-` (up to 60, not starting with `-`); the description is one line of at most 350 characters.
+When no owner is given, it runs `gh api user --jq .login` first.
 
-Your `deny` rules of `permission.bash` are honoured against `gh repo create <owner>/<name> --private --source …` (the full command), `gh repo create <owner>/<name>` and `gh repo create`, and `gh api user` for the account read. Output is redacted, the process group is killed on the timeout, one commit, push, publish or pull request at a time per repository, and your credentials are the ones gh already has.
+There is no `--push`, `--public` or `--internal`, under any input. The builder takes only a validated owner and name; the description is a single `--description=` word. Form text cannot become a flag or reach a shell.
 
-Refused, one line each, before or without creating anything: a remote named `origin` already exists (a remote is never replaced or renamed; the address is masked), not a repository, a name, owner or description that is not usable, a deny rule (named), gh not installed, gh not logged in, and gh's own first line for the rest (name taken, organization not permitted...). A repository with no commit and one on a detached HEAD are allowed: publishing only adds a remote, and the card says which it is.
+| Input | Validation |
+|---|---|
+| Name | `^[A-Za-z0-9._-]{1,100}$`; not starting with `.` or `-`, not ending in `.git` |
+| Owner | letters, digits, `_` and `-`; up to 60, not starting with `-` |
+| Description | one line, at most 350 characters |
 
-**When only part of it happened.** After a failed or timed-out gh the page looks at `origin` once and reports exactly what is true: the first line says what happened ("publish incomplete: owner/name was created, gh failed (exit 1)", "gh timed out after 90s: owner/name may or may not exist on GitHub", "gh reported success but origin was not added", "gh failed after adding origin"), then `now:` (where `origin` points, or that there is none), `on GitHub:` (the link gh printed, or that it is unknown), `run:` what to type (`git remote add origin <link>`) and "nothing was deleted and nothing is retried", then what gh printed. The hosted repository is never deleted and nothing is run a second time unless you press `enter` on the card again.
+Your `deny` rules of `permission.bash` are honoured against:
+
+- `gh repo create <owner>/<name> --private --source …` (the full command);
+- `gh repo create <owner>/<name>` and `gh repo create`;
+- `gh api user` for the account read.
+
+Output is redacted; the process group is killed on timeout. Only one commit, push, publish or pull request runs at a time per repository. Credentials are the ones gh already has.
+
+### Publication refusals
+
+Each refusal is one line, before or without creating anything:
+
+- a remote named `origin` already exists: it is never replaced or renamed, and its address is masked;
+- not a repository;
+- an unusable name, owner or description;
+- a deny rule, named in the refusal;
+- gh not installed or not logged in;
+- gh's own first line for the rest, such as name taken or organization not permitted.
+
+A repository with no commit and one on a detached HEAD are allowed. Publishing only adds a remote; the card says which state it is.
+
+### When only part of publication happened
+
+After a failed or timed-out gh, the page looks at `origin` once and reports exactly what is true. The first line says what happened:
+
+- "publish incomplete: owner/name was created, gh failed (exit 1)";
+- "gh timed out after 90s: owner/name may or may not exist on GitHub";
+- "gh reported success but origin was not added";
+- "gh failed after adding origin".
+
+Then it shows:
+
+| Line | Meaning |
+|---|---|
+| `now:` | where `origin` points, or that there is none |
+| `on GitHub:` | the link gh printed, or that it is unknown |
+| `run:` | what to type: `git remote add origin <link>` |
+
+It says "nothing was deleted and nothing is retried", then shows what gh printed. The hosted repository is never deleted. Nothing runs a second time unless you press `enter` on the card again.
 
 ## Create pull request
 
-`P` (when the branch has no pull request) opens a form: title, body, base branch and draft. The title is prefilled from the commits since the merge-base with the base (one commit: its subject; otherwise the branch name) and the body with the commit subjects. The base is the remote's default branch and can be edited. `tab` walks the fields, `space` toggles draft, `enter` on the base or the draft opens the card, `esc` cancels. Below 70 columns one field shows at a time.
+The branch must be pushed and level with its upstream. Otherwise the page says "push first" and why, and pushes nothing. Pushing is a separate, confirmed step (`u`), never implicit.
 
-The branch has to be pushed and level with its upstream. If it is not, the page says "push first" and why, and nothing is pushed: pushing is a separate, confirmed step (`u`), never implicit.
+1. Press `P` when the branch has no pull request. A form opens with title, body, base branch and draft.
+2. Fill in the fields. `tab` walks them, `space` toggles draft, and `enter` on base or draft opens the card. `esc` cancels.
+3. Read the card headed "leaves this machine". Press `enter` to create, or `esc` to return to the form with what you typed.
 
-The card is headed "leaves this machine" and shows the exact command, the body (counted in lines: it goes on standard input, never in the command), the remote and its address, the commits that are in the pull request but not in the base, and "not done: no merge, no force, no push". `enter` creates it, `esc` goes back to the form with what you typed. The link of the new pull request is shown and, when the session metadata feature is on, saved on the session the way `/pr link` does.
+| Field | Prefilled value |
+|---|---|
+| Title | from commits since the merge-base with the base: one commit uses its subject; otherwise the branch name |
+| Body | commit subjects |
+| Base branch | the remote's default branch; editable |
+
+Below 70 columns one field shows at a time.
+
+The card shows:
+
+- the exact command;
+- the body, counted in lines: it goes on standard input, never in the command;
+- the remote and its address;
+- commits in the pull request but not in the base;
+- "not done: no merge, no force, no push".
+
+The new pull request's link is shown. When the session metadata feature is on, it is saved on the session the way `/pr link` does.
 
 ### `git.pr.create`
 
@@ -144,18 +322,46 @@ The title is one `--title=` argument and the body goes through standard input: n
 
 ## Safety, for push, publish and pull request
 
-- Local clients only. Remote and peer connections are refused, and none of the commands (nor `git.init`) is in `READ_ONLY_COMMANDS`.
-- Argv arrays, no shell. `GIT_TERMINAL_PROMPT=0`, no askpass, ssh in batch mode (unless you set `GIT_SSH_COMMAND` or `core.sshCommand` yourself), `GIT_*` variables that relocate the repository removed from the environment. The page uses your own login (git credential helper, ssh agent, `gh auth`); it never reads, logs or shows a credential, and if git or gh would have to ask for one the action fails.
-- Output is bounded and passes through secret redaction; a token in a remote URL is masked on the card and in errors.
-- Timeouts on every process (the process group is killed); one commit, push or pull request at a time per repository.
-- The repository is contained as in Commit: the directory has to be inside the project.
-- Your permission rules: a `deny` rule of `permission.bash` (settings, project rules or the session's own rules) that matches the command line (`git push origin main`, `gh pr create`, or the full command) refuses the action, and the refusal names the rule. `allow` and `ask` rules are not used: the page always asks you, on the card. The `tools` toggles do not apply (it is not a model tool).
-- After a push or a pull request the session gets a passive line in its transcript ("pushed feat/x to origin"). It never starts a model turn.
+### Local access and credentials
+
+Only local clients can use these actions. Remote and peer connections are refused. None of the commands, nor `git.init`, is in `READ_ONLY_COMMANDS`.
+
+Calls use argv arrays, not a shell:
+
+- `GIT_TERMINAL_PROMPT=0`, no askpass;
+- ssh in batch mode, unless you set `GIT_SSH_COMMAND` or `core.sshCommand` yourself;
+- `GIT_*` variables that relocate the repository removed from the environment.
+
+The page uses your own login: git credential helper, ssh agent, `gh auth`. It never reads, logs or shows a credential. If git or gh would have to ask for one, the action fails.
+
+### Process and path limits
+
+- Output is bounded and passes through secret redaction. A token in a remote URL is masked on the card and in errors.
+- Every process has a timeout that kills its process group. One commit, push or pull request runs at a time per repository.
+- The repository directory must be inside the project, as in Commit.
+
+### Permission rules
+
+A matching `deny` rule of `permission.bash` refuses the action and is named in the refusal. Rules can come from settings, project rules or the session's own rules.
+
+Matches include `git push origin main`, `gh pr create`, or the full command. `allow` and `ask` rules are not used: the page always asks you on the card.
+
+The `tools` toggles do not apply because this is not a model tool.
+
+After a push or pull request, the session gets a passive transcript line, such as "pushed feat/x to origin". It never starts a model turn.
 
 ## New session in its own worktree
 
-`git.newSessionWorktree: true` (off by default; needs the Git page, so balanced and full): `/new` and `/bg` create the session in a fresh workspace instead of in the project folder. It is the same code path as `/warp` → New workspace (`workspace-create` for a worktree, then `workspace-warp`), so the folder and the `mend/` branch are named the same way. See [Worktrees](worktrees.md#a-new-session-in-its-own-worktree).
+Set `git.newSessionWorktree: true` to make `/new` and `/bg` create sessions in fresh workspaces instead of the project folder. It is off by default and needs the Git page: balanced and full.
+
+This uses the same code path as `/warp` → New workspace: `workspace-create` for a worktree, then `workspace-warp`. The folder and `mend/` branch are named the same way. See [Worktrees](worktrees.md#a-new-session-in-its-own-worktree).
 
 ## Not here
 
-Merge or close a pull request, delete a remote branch or a repository, a public or internal repository (change visibility on GitHub), a first commit made for you, force push, tags, branch switch, stash, amend and staging by hunk. The page is the review, commit, push and open-a-pull-request path; the rest stays with the agent and your shell.
+The page covers review, commit, push and opening a pull request. The rest stays with the agent and your shell:
+
+- merge or close a pull request;
+- delete a remote branch or repository;
+- create a public or internal repository: change visibility on GitHub;
+- make a first commit for you;
+- force push, tags, branch switch, stash, amend and staging by hunk.

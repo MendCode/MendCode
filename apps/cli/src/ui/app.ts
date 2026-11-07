@@ -556,17 +556,17 @@ export function createApp(input: AppInput) {
   appState.sendChipArea = undefined!
   appState.limitArea = undefined!
 
-  function say(message: string, variant: ToastVariant = "info", extra: { title?: string; hint?: string; oneLine?: boolean; ms?: number; quiet?: boolean } = {}) {
+  function say(message: string, variant: ToastVariant = "info", extra: { title?: string; hint?: string; detail?: string; oneLine?: boolean; ms?: number; quiet?: boolean } = {}) {
     // Success is silent where the result is already on screen (`quiet`): only what failed or tells something new is said. `confirmNotices` brings those back.
     // The notice it would have replaced goes all the same: it spoke of a state that is over.
     if (extra.quiet && !appState.tuiProfile.confirmNotices) return void toasts.dismiss()
     {
       // Never steal focus from a form or an async command. The complete latest report stays one key away,
       // even after its preview expires; only one string is retained and the page module stays lazy.
-      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message, ...(extra.hint ? { hint: extra.hint } : {}) }
+      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message: extra.detail ?? message, ...(extra.hint ? { hint: extra.hint } : {}) }
     }
     appState.toastPage = appState.page
-    toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
+    toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.detail ? { detail: extra.detail } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
   }
 
   // One place for a passing notice: what a command reports through `state.notice` shows in the notice slot over the prompt, like

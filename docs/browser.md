@@ -1,21 +1,26 @@
-# Browser tool
+The model can use a headless Chromium to check your local dev server, a deployed site or documentation. For background tabs in the browser you already use, see [Your own browser (extension)](#your-own-browser-extension).
 
-Multi-tab actions: `tabs` lists this chat's cached tab IDs, title and URL without starting Chromium; `open_tab {url}`
-opens a tab (execute approval), `select_tab {tabId}` selects it and `close_tab {tabId}` closes it. IDs cannot address
-another chat's tabs. Each tab has isolated cookies/storage; the cap is 8 per chat. Take a new snapshot for refs after
-switching. `close` and session teardown close all owned tabs. Tests use a fake CDP driver with no network calls.
-The new tab controls are refused for remote/peer model turns before accessing a page or starting Chromium.
+## Browser tool
 
-The model can drive a headless Chromium to check web pages and apps: your local dev server, a deployed
-site, documentation. It is **off by default**. Start the daemon with `MENDCODE_BROWSER=1` and an explicit
-`--dir`; the `browser` tool is then registered (it is also a core tool under [tool discovery](tool-discovery.md)).
-Disable it again per project with `tools: { browser: false }` or `permission: { browser: "deny" }`.
+The `browser` tool is **off by default**. To enable it:
 
-No dependency or service is added. The daemon launches the Chrome, Chromium, Edge or Brave already on the
-machine (macOS app folders, then `google-chrome`, `chromium`, `microsoft-edge`, `brave-browser` on PATH) with an
-argument array, a throwaway profile directory and a debugging port bound to `127.0.0.1`. Set
-`MENDCODE_BROWSER_PATH` to pick the executable. Without a browser the tool says so. It speaks the DevTools
-protocol over Bun's built-in WebSocket.
+1. Start the daemon with `MENDCODE_BROWSER=1` and an explicit `--dir`. The `browser` tool is registered; it is also a core tool under [tool discovery](tool-discovery.md).
+2. Set `MENDCODE_BROWSER_PATH` if you want to pick the executable. Without a browser, the tool says so.
+
+To disable it again per project, use `tools: { browser: false }` or `permission: { browser: "deny" }`.
+
+### Work with tabs
+
+| Action | Does |
+|---|---|
+| `tabs` | Lists this chat's cached tab IDs, title and URL without starting Chromium |
+| `open_tab {url}` | Opens a tab, with execute approval |
+| `select_tab {tabId}` | Selects a tab |
+| `close_tab {tabId}` | Closes a tab |
+
+Each tab has isolated cookies/storage; the cap is 8 per chat. IDs cannot address another chat's tabs. Take a new snapshot for refs after switching.
+
+`close` and session teardown close all owned tabs. The new tab controls are refused for remote/peer model turns before accessing a page or starting Chromium.
 
 ## Actions
 
@@ -35,41 +40,58 @@ protocol over Bun's built-in WebSocket.
 | `console` | | console output, page errors and failed resources since the last check (bounded to 200 entries) |
 | `close` | | closes this chat's browser |
 
-Refs come from the latest snapshot and stop working when the page navigates or the element goes away; the
-model snapshots again. Passwords and card or one-time-code fields never show their value in a snapshot. Typed
-text is not echoed in results or card titles. JavaScript dialogs are dismissed and logged to the console buffer.
-Downloads are denied. A link that opens a new tab is opened in the same tab.
+Refs come from the latest snapshot and stop working when the page navigates or the element goes away. The model snapshots again.
+
+- Passwords and card or one-time-code fields never show their value in a snapshot.
+- Typed text is not echoed in results or card titles.
+- JavaScript dialogs are dismissed and logged to the console buffer.
+- Downloads are denied.
+- A link that opens a new tab is opened in the same tab.
 
 ## Isolation and limits
 
-One browser process serves the daemon; each chat session gets its own context (own cookies, storage and cache)
-and one page. A chat cannot see another's pages. At most 4 chats hold a browser (the next is refused until one
-closes), calls of one chat never overlap, an idle browser closes after 10 minutes, a page lives at most an hour,
-and deleting the session, `close`, or stopping the daemon closes the context. The process exits with its last
-page; a crashed browser is relaunched on the next call. Only `http:` and `https:` pages load: `file:`,
-`javascript:`, `data:`, `chrome:` and URLs with embedded credentials are refused, so the tool cannot read local
-files. Page content is returned labelled as untrusted web content, never as instructions.
+One browser process serves the daemon. Each chat session gets its own context (own cookies, storage and cache) and one page. A chat cannot see another's pages.
+
+| Limit or event | Behavior |
+|---|---|
+| Concurrent chats | At most 4 hold a browser; the next is refused until one closes |
+| Calls from one chat | Never overlap |
+| Idle browser | Closes after 10 minutes |
+| Page lifetime | At most an hour |
+| Deleting the session, `close`, or stopping the daemon | Closes the context |
+| Last page closes | The process exits |
+| Browser crashes | Relaunched on the next call |
+
+Only `http:` and `https:` pages load. `file:`, `javascript:`, `data:`, `chrome:` and URLs with embedded credentials are refused, so the tool cannot read local files.
+
+Page content is returned labelled as untrusted web content, never as instructions.
 
 ## Permissions
 
-The tool has its own approval class, `browser`. Looking at the open page (`snapshot`, `screenshot`, `console`,
-`scroll`, `wait`, `close`) is `read`; `navigate`, `click`, `type`, `press` and `back` are `execute`, so plan mode
-refuses them and ask mode asks first (edits and smart modes treat it as any `execute` tool). The approval shows
-the URL, or the element and the text to type. Permission rules match a navigation by its URL and other steps by
-their action name (`click`, `type`...), so a pattern rule saved from a click approval never covers opening pages.
+The tool has its own approval class, `browser`.
+
+| Actions | Approval |
+|---|---|
+| `snapshot`, `screenshot`, `console`, `scroll`, `wait`, `close` | `read`: looking at the open page |
+| `navigate`, `click`, `type`, `press`, `back` | `execute`: plan mode refuses; ask mode asks first; edits and smart modes treat it as any `execute` tool |
+
+The approval shows the URL, or the element and the text to type.
+
+Permission rules match a navigation by its URL and other steps by their action name (`click`, `type`...). A pattern rule saved from a click approval never covers opening pages.
+
 Approving "for this session" is, as for `shell`, a grant for the whole tool:
 
 ```json
 { "permission": { "browser": { "https://*": "deny", "http://localhost:*": "allow" } } }
 ```
 
-(Rules are matched last-wins; a lone `"*": "deny"` disables the whole tool.) Navigation is the approval
-boundary: once a page is open, links it contains are followed by `click` under the click approval. Use
-`https://*` deny rules, or ask mode, when that matters.
+Rules are matched last-wins; a lone `"*": "deny"` disables the whole tool.
 
-The browser is reachable only from a model turn. There is no HTTP route, wire command or ticket for it, so remote
-and peer clients have no way to drive it, and nothing was added to `READ_ONLY_COMMANDS`. Screenshots and
-snapshots can contain sensitive page content and are stored in the session like any tool image.
+**Note:** Navigation is the approval boundary. Once a page is open, links it contains are followed by `click` under the click approval. Use `https://*` deny rules, or ask mode, when that matters.
+
+The browser is reachable only from a model turn. There is no HTTP route, wire command or ticket for it, so remote and peer clients have no way to drive it. Nothing was added to `READ_ONLY_COMMANDS`.
+
+**Warning:** Screenshots and snapshots can contain sensitive page content and are stored in the session like any tool image.
 
 ## Decisions and limits
 
@@ -82,11 +104,15 @@ snapshots can contain sensitive page content and are stored in the session like 
 
 ## Your own browser (extension)
 
-The `browser` tool above drives a headless Chromium of its own. `user_browser` is the other half: it works in the
-browser you already use (Chrome, Arc, Brave, Edge, Chromium) through a MendCode extension, in background tabs of a tab
-group titled "MendCode", so you keep browsing and focus is never taken. It needs no Accessibility permission. It is
-**off by default**: start the daemon with `MENDCODE_BROWSER_EXTENSION=1` (feature `browser`, full tier). Until you also
-install the extension, nothing listens and nothing is written.
+The `browser` tool above drives a headless Chromium of its own. `user_browser` works in the browser you already use (Chrome, Arc, Brave, Edge, Chromium) through a MendCode extension.
+
+It uses background tabs of a tab group titled "MendCode", so you keep browsing and focus is never taken. It needs no Accessibility permission.
+
+### Enable the extension
+
+It is **off by default**. Start the daemon with `MENDCODE_BROWSER_EXTENSION=1` (feature `browser`, full tier). Until you also install the extension, nothing listens and nothing is written.
+
+### Extension actions
 
 | Action | Approval | Result |
 |---|---|---|
@@ -97,20 +123,53 @@ install the extension, nothing listens and nothing is written.
 | `tabs`, `read {tabId}`, `close {tabId}` | none | the group's tabs, a tab's page text (labelled untrusted), close it |
 | `click {tabId, selector}`, `type {tabId, selector, text, submit?}` | execute | by CSS selector; password, card and one-time-code fields are refused |
 
-`install` writes, and returns the list of, these files (macOS and Linux; Windows needs a registry entry and is not
-supported yet): the extension folder, `host.mjs` and `host.sh` and `installed.json` under `<data dir>/browser/`, and one
-`NativeMessagingHosts/com.mendcode.browser.json` per browser whose profile folder exists. Then load the extension once:
-`chrome://extensions`, Developer mode, Load unpacked, pick `<data dir>/browser/extension`, and restart the browser.
+### Install and load once
 
-How it connects: the browser starts `host.sh` (a stdio native messaging host) when the extension asks; the host only
-joins stdio to the daemon's socket `<data dir>/browser/bridge.sock` (mode 0600, listening only while the bridge is
-enabled and installed). Messages are 4-byte little-endian length plus JSON in both directions. The extension's first
-message carries a per-install token the daemon checks; a wrong token is dropped.
+`install` writes these files and returns their list on macOS and Linux. Windows needs a registry entry and is not supported yet.
 
-Security: a site works only when **both** sides agree: MendCode's list (`allow_site`, approved by you) and the browser's
-own optional host permission (the extension's toolbar button, on that site, which needs your click). The extension acts
-only on tabs it opened itself, inside its group; your own tabs are never read or driven. It holds no `cookies`
-permission and fills no password, card or one-time-code field. Page text is returned labelled as untrusted web content.
-Tests use fake sockets and temp directories; nothing touches a real browser.
+| Location | Written files |
+|---|---|
+| `<data dir>/browser/` | Extension folder, `host.mjs`, `host.sh`, `installed.json` |
+| Each browser whose profile folder exists | One `NativeMessagingHosts/com.mendcode.browser.json` |
 
-Not yet: Firefox and Safari, Windows, a CLI install command, and keeping remote/peer turns away from the tool.
+Then load the extension once:
+
+1. Open `chrome://extensions` and enable Developer mode.
+2. Choose Load unpacked and pick `<data dir>/browser/extension`.
+3. Restart the browser.
+
+### Allow a site
+
+A site works only when **both** sides agree:
+
+- MendCode's list: `allow_site`, approved by you.
+- The browser's own optional host permission: click the extension's toolbar button on that site. This needs your click.
+
+The extension acts only on tabs it opened itself, inside its group; your own tabs are never read or driven.
+
+It holds no `cookies` permission and fills no password, card or one-time-code field. Page text is returned labelled as untrusted web content.
+
+Not yet supported:
+
+- Firefox and Safari.
+- Windows.
+- A CLI install command.
+- Keeping remote/peer turns away from the tool.
+
+## How it works
+
+### Headless browser
+
+No dependency or service is added. The daemon launches the Chrome, Chromium, Edge or Brave already on the machine.
+
+It looks in macOS app folders, then for `google-chrome`, `chromium`, `microsoft-edge`, `brave-browser` on PATH. It launches with an argument array, a throwaway profile directory and a debugging port bound to `127.0.0.1`.
+
+It speaks the DevTools protocol over Bun's built-in WebSocket. Multi-tab tests use a fake CDP driver with no network calls.
+
+### Extension bridge
+
+The browser starts `host.sh`, a stdio native messaging host, when the extension asks. The host only joins stdio to the daemon's socket `<data dir>/browser/bridge.sock`.
+
+The socket has mode 0600 and listens only while the bridge is enabled and installed. Messages are 4-byte little-endian length plus JSON in both directions.
+
+The extension's first message carries a per-install token the daemon checks; a wrong token is dropped. Tests use fake sockets and temp directories; nothing touches a real browser.

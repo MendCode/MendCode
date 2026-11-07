@@ -49,7 +49,7 @@ export type Responder = (prompt: string, info: { sessionId: SessionId; turn: num
  * answered by `responder` (or held, for tests that decide when a task ends). Pass the same `saved`/`rows` to a second harness to
  * simulate a daemon restart.
  */
-export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; rows?: Map<string, string>; clock?: ReturnType<typeof scriptClock>; responder?: Responder; host?: ScriptHostPort; checkExit?: (argv: string[], cwd?: string) => number; /** Route per-run-worktree tasks to `/worktrees/<task>` like the daemon's router. */ worktrees?: boolean; /** No script host and no journal: what a daemon without isolation looks like. */ bare?: boolean; /** The git side of worktree results (a fake in most tests). */ merge?: ScriptMergePort } = {}) {
+export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; rows?: Map<string, string>; clock?: ReturnType<typeof scriptClock>; responder?: Responder; host?: ScriptHostPort; checkExit?: (argv: string[], cwd?: string, stdin?: string) => number | Promise<number>; /** Route per-run-worktree tasks to `/worktrees/<task>` like the daemon's router. */ worktrees?: boolean; /** No script host and no journal: what a daemon without isolation looks like. */ bare?: boolean; /** The git side of worktree results (a fake in most tests). */ merge?: ScriptMergePort } = {}) {
   const clock = options.clock ?? scriptClock()
   const ids = createIdFactory({ now: clock.now })
   const saved = options.saved ?? new Map<WorkflowId, WorkflowRun>()
@@ -61,6 +61,7 @@ export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; r
   const prompts: string[] = []
   const ran: string[][] = []
   const checkDirs: string[] = []
+  const checkStdins: Array<string | undefined> = []
   const turns = new Map<SessionId, TurnId>()
   const turnCount = new Map<SessionId, number>()
   let sequence = 0
@@ -85,10 +86,11 @@ export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; r
       return { queueId }
     },
     cancelTurn: (input) => void cancelled.push(input),
-    async runCheck({ argv, cwd }) {
+    async runCheck({ argv, cwd, stdin }) {
       ran.push(argv)
       if (cwd) checkDirs.push(cwd)
-      const exitCode = options.checkExit?.(argv, cwd) ?? 0
+      checkStdins.push(stdin)
+      const exitCode = (await options.checkExit?.(argv, cwd, stdin)) ?? 0
       return { exitCode, output: exitCode ? "failing" : "ok" }
     },
     fingerprint: async () => "same",
@@ -135,7 +137,7 @@ export function scriptHarness(options: { saved?: Map<WorkflowId, WorkflowRun>; r
   const get = (run: WorkflowRun) => service.get(run.workflowId)!
   const header = (meta: string) => `export const meta = ${meta}\n`
   return {
-    clock, ids, saved, rows: journal.rows, journal, service, host, sessions, submitted, cancelled, prompts, ran, checkDirs, event, start, get, header, finishWith,
+    clock, ids, saved, rows: journal.rows, journal, service, host, sessions, submitted, cancelled, prompts, ran, checkDirs, checkStdins, event, start, get, header, finishWith,
     turnOf: (sessionId: SessionId) => turns.get(sessionId),
     setResponder: (next: Responder | undefined) => void (responder = next),
     /** Held tasks: the task ids whose session got a prompt that was not answered. */

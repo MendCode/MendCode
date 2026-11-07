@@ -1,6 +1,10 @@
-# Terminal extensions and keybindings
+Write TypeScript modules to draw in the terminal, add `/commands`, pages, modals and named actions, bind keys, and reshape tool cards and assistant text. Start by saving a module in one of the extension folders below.
 
-The terminal half of the extension contract (`packages/extension-api`): TypeScript modules that draw in the terminal, add `/commands`, pages, modals and named actions, bind keys and reshape tool cards and assistant text. The daemon half (hooks, tools) is separate; a module can export both and each process calls only its own (`tui(api)` here, never `daemon`).
+## Terminal extensions and keybindings
+
+This is the terminal half of the extension contract (`packages/extension-api`). The daemon half, for hooks and tools, is separate.
+
+A module can export both halves. Each process calls only its own: `tui(api)` here, never `daemon`.
 
 ## Where modules live
 
@@ -13,7 +17,18 @@ Per layer, `extensions/*.ts|js` and `extensions/<name>/index.ts|js`:
 | project profiles | `<project>/.mendcode/packages/<name>/extensions` |
 | project | `<project>/.mendcode/extensions` |
 
-`<data dir>` is the CLI's `--dir` (else `MENDCODE_DIR`, else `~/.mendcode`). Modules load in that order, which is the daemon's layer order (user profiles, your own folder, project profiles, the project's folder; a later module wins a name, key or slot); within a layer, by file name. Versions before the precedence report loaded your own folder first. `/profiles` then `p` and `/doctor` list every name more than one module registers and which one is in force ([profiles](packages.md#one-precedence-report)). Profiles disabled in the daemon's settings (`disabledProfiles`, `user:name` / `project:name`) are skipped. Files starting with `.` and `.d.ts` files are ignored.
+`<data dir>` is the CLI's `--dir`, else `MENDCODE_DIR`, else `~/.mendcode`.
+
+### Load order and conflicts
+
+Modules load in the table's order, matching the daemon's layer order: user profiles, your own folder, project profiles, the project's folder. A later module wins a name, key or slot; within a layer, modules load by file name.
+
+Versions before the precedence report loaded your own folder first. `/profiles` then `p` and `/doctor` list every name more than one module registers and which one is in force ([profiles](packages.md#one-precedence-report)).
+
+- Profiles disabled in the daemon's settings (`disabledProfiles`, `user:name` / `project:name`) are skipped.
+- Files starting with `.` and `.d.ts` files are ignored.
+
+### Create a module
 
 A module is loaded with a dynamic `import()` only when at least one file exists: a terminal without extensions never parses the runtime (`apps/cli/test/extensions-loader.test.ts` checks this in a fresh process), and draws no extra work per frame.
 
@@ -43,7 +58,25 @@ Disabling a profile that is already loaded reloads the terminal half. `/customiz
 
 ## Live reload and agent customization
 
-Edit or add a `.ts`/`.js` file under `<data dir>/extensions`: the **daemon** watches this directory, invalidates its extension cache, and broadcasts `extensions.changed`. Connected terminals build a candidate runtime beside the running one and import the modules again, including local helpers. The candidate's settings requests wait until it is swapped in; if a module that loaded before now fails (syntax error, missing import, `tui()` throws) the candidate is disposed (its own disposers run once), the running extensions stay on screen and the failure is shown in `/extensions` and reported to the daemon. When the candidate is at least as good, it takes over and the previous runtime is disposed once; an `api.onDispose` that returns a promise is awaited (up to 2 s), and only then does the new copy run its `api.onStart` callbacks. Start processes, sockets and timers in `api.onStart`, not in `tui()`: `tui()` runs while the old copy is still live, so a helper started there runs twice during a reload (two captures of the same device, two servers on one port). A broken candidate never starts. Closing the terminal awaits the disposers the same way. There is no CLI file watcher. `/extensions reload` explicitly performs the same reload (including trusted project/package modules); it does not grant project trust. Deletion of an extension file also removes its registrations. Register timer/listener cleanup with `api.onDispose(cleanup)`; it runs on reload, failed setup and terminal exit.
+1. Edit or add a `.ts`/`.js` file under `<data dir>/extensions`.
+2. The daemon watches this directory, invalidates its extension cache and broadcasts `extensions.changed`.
+3. Connected terminals build a candidate runtime beside the running one and import the modules again, including local helpers.
+
+There is no CLI file watcher. `/extensions reload` explicitly performs the same reload, including trusted project/package modules; it does not grant project trust.
+
+### Candidate validation and lifecycle
+
+The candidate's settings requests wait until it is swapped in. If a previously loaded module now fails (syntax error, missing import, `tui()` throws), the candidate is disposed and its own disposers run once.
+
+The running extensions stay on screen. The failure appears in `/extensions` and is reported to the daemon.
+
+When the candidate is at least as good, it takes over and the previous runtime is disposed once. An `api.onDispose` promise is awaited, up to 2 s, before the new copy runs its `api.onStart` callbacks.
+
+**Warning:** Start processes, sockets and timers in `api.onStart`, not in `tui()`. The old copy is still live during `tui()`, so a helper started there runs twice during reload: two captures of one device or two servers on one port.
+
+A broken candidate never starts. Closing the terminal awaits the disposers the same way.
+
+Deleting an extension file removes its registrations. Register timer/listener cleanup with `api.onDispose(cleanup)`; it runs on reload, failed setup and terminal exit.
 
 ```ts
 // Seconds since this copy went live, redrawn every second. The timer starts in onStart, so a reload never runs two.
@@ -66,17 +99,59 @@ The writing tool `customize_ui` uses the normal tool permission gate: plan mode 
 - `{action: "edit", file: "look.ts", old: "exact unique text", new: "replacement"}` patches one literal occurrence.
 - `{action: "reload"}` retries validation without changing a file.
 
-Results contain `revision`, `errors`, `terminalValidation` (`complete` when all connected local terminals acknowledge, otherwise `pending`) and `file` for file writes. A load error makes the tool result an error; the model can repair it with `edit`. Without a connected terminal, importing the daemon half is not proof of terminal rendering. Render-time failures remain visible in `/customize` and `/help`; validation acknowledges setup, not every future renderer invocation.
+### Check a customization result
 
-Only flat alphanumeric/underscore/hyphen `.ts`/`.js` filenames are accepted, at most 64 KiB of UTF-8. No paths, traversal, dotfiles, project destinations, symlinked extension directories/targets, dangling links or hardlinked targets. Edits use `O_NOFOLLOW` and writes use an exclusive mode-0600 temporary file followed by rename. Settings storage also rejects links. These checks confine the **tool's file operations**, not executed extension code: an approved module is arbitrary code with the user's privileges, not an OS sandbox. Parent-directory races against a hostile local process are not a sandbox guarantee.
+Results contain `revision`, `errors`, `terminalValidation` (`complete` when all connected local terminals acknowledge, otherwise `pending`) and `file` for file writes.
 
-`/customize` → Extensions lists UI modules, on/off state and errors; left/right select a module, enter/space toggle, down selects Export look, enter exports. Export look writes the current complete profile as a new `look-<uuid>.ts` user module and reloads it; it does not export other modules' source, timers or arbitrary renderers. Both actions persist without restarting.
+A load error makes the tool result an error; the model can repair it with `edit`. Without a connected terminal, importing the daemon half is not proof of terminal rendering.
+
+Render-time failures remain visible in `/customize` and `/help`; validation acknowledges setup, not every future renderer invocation.
+
+### File safety
+
+Only flat alphanumeric/underscore/hyphen `.ts`/`.js` filenames are accepted, at most 64 KiB of UTF-8. No paths, traversal, dotfiles, project destinations, symlinked extension directories/targets, dangling links or hardlinked targets.
+
+Edits use `O_NOFOLLOW` and writes use an exclusive mode-0600 temporary file followed by rename. Settings storage also rejects links.
+
+**Warning:** These checks confine the **tool's file operations**, not executed extension code: an approved module is arbitrary code with the user's privileges, not an OS sandbox. Parent-directory races against a hostile local process are not a sandbox guarantee.
+
+### Toggle modules or export your look
+
+`/customize` → Extensions lists UI modules, on/off state and errors.
+
+| Key | Does |
+|---|---|
+| Left/right | Select a module |
+| Enter/space | Toggle |
+| Down | Select Export look |
+| Enter on Export look | Export |
+
+Export look writes the current complete profile as a new `look-<uuid>.ts` user module and reloads it. It does not export other modules' source, timers or arbitrary renderers.
+
+Both actions persist without restarting.
 
 ## Errors
 
-Each problem is kept per extension, shown in **one** toast at startup (`N extension problems · /help`, or the message itself when there is one) and listed in `/help` (problems lead the page). Problems: a module that fails to import, a default export that is not `{ name, tui? }`, a missing or duplicate `name`, a `tui()` that throws, rejects or takes longer than `HOOK_TIMEOUT_MS`, an unknown slot, an invalid key, a command that shadows a built-in, invalid `keybindings.json` entries. A `tui()` that fails has its earlier registrations removed.
+Each problem is kept per extension and listed first in `/help`. Startup shows one toast: `N extension problems · /help`, or the message itself when there is one.
 
-At run time every call into extension code is guarded: a slot renderer, tool renderer, markdown transform or page that throws (or returns the wrong shape) is **disabled for the session** and reported once (toast + `/help`); a command or key that throws is reported and stays registered. Nothing an extension does can fail a frame.
+Reported problems include:
+
+- A module that fails to import.
+- A default export that is not `{ name, tui? }`, or a missing or duplicate `name`.
+- A `tui()` that throws, rejects or takes longer than `HOOK_TIMEOUT_MS`.
+- An unknown slot, an invalid key or a command that shadows a built-in.
+- Invalid `keybindings.json` entries.
+
+A `tui()` that fails has its earlier registrations removed.
+
+At run time every call into extension code is guarded.
+
+| Failure | Result |
+|---|---|
+| Slot renderer, tool renderer, markdown transform or page throws or returns the wrong shape | Disabled for the session; reported once through a toast and `/help` |
+| Command or key throws | Reported; stays registered |
+
+Nothing an extension does can fail a frame.
 
 ## Slots
 
@@ -98,23 +173,69 @@ Balanced and full use one footer under the prompt (agent · model · effort/prov
 slots replace or extend that same row. `minimal` has none of its own; it shows the footer when `footerRows` is set or an extension
 draws in a `footer.*` slot. Shell mode keeps its own row.
 
-`SlotContext` is a frozen snapshot per call: `width` (cells available to that slot), `height` (rows available to it), `breakpoint`
-(the terminal's width class from `ui/breakpoints.ts`: `compact` under 70 columns, `normal` 70 to 109, `wide` 110 to 149, `xl` 150 and up;
-it is the whole terminal's, not the slot's), `screen` (`{ width, height }` of the terminal), `sessionId`, `title`, `directory`, `branch`, `model`, `effort`, `state` (`idle`, `working`, `waiting` for approval or a held queue, `offline`), `context` (0–1 of the compaction threshold) and `now`.
+### Read the slot context
+
+`SlotContext` is a frozen snapshot per call:
+
+| Field | Meaning |
+|---|---|
+| `width`, `height` | Cells and rows available to that slot |
+| `breakpoint` | The whole terminal's width class from `ui/breakpoints.ts`, not the slot's |
+| `screen` | `{ width, height }` of the terminal |
+| `sessionId`, `title`, `directory`, `branch`, `model`, `effort` | Session information |
+| `state` | `idle`, `working`, `waiting` for approval or a held queue, `offline` |
+| `context` | 0–1 of the compaction threshold |
+| `now` | Current time |
+
+| Breakpoint | Terminal columns |
+|---|---|
+| `compact` | Under 70 |
+| `normal` | 70 to 109 |
+| `wide` | 110 to 149 |
+| `xl` | 150 and up |
 
 Output is cut to the slot's width (replace-style slots are padded to it), at most 200 rows are read, and text is reduced to printable cells: escape sequences and control characters are dropped, newlines and tabs become spaces.
 
 ### Colors and styles
 
-`fg`/`bg` are theme roles: `primary text body muted border heading code link success warning error accent secondary info borderActive panel element promptBg diffAddedBg diffRemovedBg background synComment synKeyword synString synNumber synFunction synType`. An unknown `fg` falls back to `text`; an unknown `bg` is ignored. `#rgb` / `#rrggbb` also work. `bold`, `dim`, `italic` apply; `underline` is accepted and ignored (the terminal layer has no underline).
+`fg`/`bg` are theme roles: `primary text body muted border heading code link success warning error accent secondary info borderActive panel element promptBg diffAddedBg diffRemovedBg background synComment synKeyword synString synNumber synFunction synType`.
+
+An unknown `fg` falls back to `text`; an unknown `bg` is ignored. `#rgb` / `#rrggbb` also work.
+
+`bold`, `dim`, `italic` apply; `underline` is accepted and ignored because the terminal layer has no underline.
 
 ## Tool cards, markdown
 
 `api.renderTool(tool, ({ tool, detail, args, final, output, status, width, expanded }) => Line[] | undefined)` is consulted for every tool card before the default body, built-in tools included (`shell`, `edit`, `custom__x`, `mcp__s__t`…). The body is drawn inside the card's indent; `width` is what is left. `status` is `running`, `ok` or `error` (cancelled and interrupted count as `error`).
 
-**Arguments.** `detail` is the text after the tool name in the title (a command, a path). Once the call finished, `args` holds every argument the tool got, with `detail` among them, and `final` is `true`; while it runs, or when the daemon cut long arguments (it keeps 4000 characters, secrets redacted), `args` is `{ detail }` and `final` is `false`. Everything is read-only: `args` and every object and list in it are frozen (assigning throws in module code), strings over 2000 characters end in `…`, lists keep 100 items and nesting stops at 6 levels.
+### Read arguments
 
-**Which renderer draws.** `tool` is a name or a pattern ending in `*`: `mcp__github__*`, `mcp__*`, `*` (a `*` anywhere else is refused at load). For each call the exact name is asked first, then the longest matching prefix, then `*`; among equals the later registration wins (a later profile, or a later call in the same file). A renderer that returns `undefined` passes the call to the next one, and after the last comes the default card.
+`detail` is the text after the tool name in the title: a command or a path.
+
+| Call state | Arguments |
+|---|---|
+| Finished | `args` holds every argument, including `detail`; `final` is `true` |
+| Running, or long arguments cut by the daemon | `args` is `{ detail }`; `final` is `false`. The daemon keeps 4000 characters, secrets redacted |
+
+Everything is read-only: `args` and every object and list in it are frozen; assigning throws in module code.
+
+| Argument limit | Value |
+|---|---|
+| Strings | Over 2000 characters end in `…` |
+| Lists | Keep 100 items |
+| Nesting | Stops at 6 levels |
+
+### Choose the renderer
+
+`tool` is a name or a pattern ending in `*`: `mcp__github__*`, `mcp__*`, `*`. A `*` anywhere else is refused at load.
+
+For each call, renderers are asked in this order:
+
+1. Exact name.
+2. Longest matching prefix.
+3. `*`.
+
+Among equals the later registration wins: a later profile, or a later call in the same file. Returning `undefined` passes the call to the next renderer; after the last comes the default card.
 
 ```ts
 // Every GitHub MCP call as one line with its repository; other MCP tools keep the default card.
@@ -127,7 +248,11 @@ Renderers apply in `balanced` and `full` (`minimal` draws one-line rows); cards 
 
 A complete profile with two renderers is `examples/profiles/tool-renderers/`: `shell` as `$ command` with its folder, background flag and the last lines of output, and every `mcp__github__*` call as action, `owner/repo #number` and title, each passing the call on when its arguments are missing.
 
-`api.markdown((text) => string)` remains the assistant-only shorthand. `api.markdown(role, (text, ctx) => string)` selects `user`, `assistant`, `tool` or `meta` (reasoning/status/notices). Transforms chain in load order and only alter display text; they never mutate transcript data or model context. User transformed markdown renders as markdown, rather than the default plain tinted message.
+### Transform markdown
+
+`api.markdown((text) => string)` remains the assistant-only shorthand. `api.markdown(role, (text, ctx) => string)` selects `user`, `assistant`, `tool` or `meta` (reasoning/status/notices).
+
+Transforms chain in load order and only alter display text; they never mutate transcript data or model context. User transformed markdown renders as markdown, rather than the default plain tinted message.
 
 ```ts
 // TODO in an answer stands out; a message that starts with a path shows it as code. Only the screen changes.
@@ -137,14 +262,35 @@ api.markdown("user", (text) => text.replace(/^(\S+\/\S+)/, "`$1`"))
 
 ## Role renderers, prompt, widgets and settings
 
-`api.renderMessage(role, ({message, width, theme}) => Line[] | undefined)` overrides the entire message body before the default markdown/tool/meta renderer. The last answering registration wins; `undefined` preserves the default, `[]` hides the body. `message` contains `role`, `text`, optional `itemId`, `turnId`, `title`, `at`, `status`, and `meta` (agent/model/tokens/time when available). The message, nested metadata and theme are frozen snapshots. `theme` has `name` and `colors`. Maximum 200 rows, sanitized and clipped to cell width. Throwing or invalid renderers/transforms are disabled and reported once, like slots; other modules keep drawing.
+### Render a message body
+
+`api.renderMessage(role, ({message, width, theme}) => Line[] | undefined)` overrides the entire message body before the default markdown/tool/meta renderer.
+
+The last answering registration wins; `undefined` preserves the default, `[]` hides the body.
+
+`message` contains `role`, `text`, optional `itemId`, `turnId`, `title`, `at`, `status`, and `meta` (agent/model/tokens/time when available).
+
+The message, nested metadata and theme are frozen snapshots. `theme` has `name` and `colors`.
+
+Output is at most 200 rows, sanitized and clipped to cell width. Throwing or invalid renderers/transforms are disabled and reported once, like slots; other modules keep drawing.
 
 ```ts
 // The user's messages as quoted lines; every other role keeps the default body.
 api.renderMessage("user", ({ message }) => message.text.split("\n").filter(Boolean).map((line) => [{ text: `> ${line}`, fg: "muted" }]))
 ```
 
-`api.prompt.chrome({lead?, border?, preset?})` merges overrides in load order. Border: `auto|single|rounded|double|ascii`; preset: `box|top-bottom|minimal|ascii-box`. `api.prompt.replace(ctx => ({lines, cursor: {row, col}}) | undefined)` draws up to 8 input rows inside that chrome; cursor coordinates are zero-based cells within those rows. `ctx` extends `SlotContext` with `text`, visual `lines`, `cursor` and frozen `theme`. Input editing/submission stays in MendCode. Invalid coordinates disable the renderer; above/below slots and the footer remain outside the input frame.
+### Draw the prompt
+
+`api.prompt.chrome({lead?, border?, preset?})` merges overrides in load order.
+
+- Border: `auto|single|rounded|double|ascii`.
+- Preset: `box|top-bottom|minimal|ascii-box`.
+
+`api.prompt.replace(ctx => ({lines, cursor: {row, col}}) | undefined)` draws up to 8 input rows inside that chrome. Cursor coordinates are zero-based cells within those rows.
+
+`ctx` extends `SlotContext` with `text`, visual `lines`, `cursor` and frozen `theme`. Input editing/submission stays in MendCode.
+
+Invalid coordinates disable the renderer; above/below slots and the footer remain outside the input frame.
 
 ```ts
 // A "λ" lead on the first input row; every row moves two cells right and the cursor with them.
@@ -155,7 +301,18 @@ api.prompt.replace(({ lines, cursor }) => ({
 }))
 ```
 
-`api.widget("tray" | "sidebar", id, {title, render: ctx => Line[] | undefined})` registers a named panel. Ctrl+T shows tray widgets. Sidebar panels stay hidden and unrendered until explicitly added with `/sidebar widget <id>` or an `extension:<id>` sidebar spec entry; registration never opens a surface or takes focus. Rendering receives available `width`/`height`, is sanitized and bounded to 8 rows (the tray shows two panels, two content rows each); right-sidebar overflow scrolls. Compact terminals hide side panels; short terminals omit tray panels to preserve the input and footer. IDs use letters, digits, `_` or `-`. A failing widget is disabled and reported once. The existing `api.page` and `sidebar:<id>` slots remain supported.
+### Add a widget
+
+`api.widget("tray" | "sidebar", id, {title, render: ctx => Line[] | undefined})` registers a named panel.
+
+1. Press Ctrl+T to show tray widgets.
+2. For a sidebar panel, explicitly add `/sidebar widget <id>` or an `extension:<id>` sidebar spec entry. Until then it stays hidden and unrendered; registration never opens a surface or takes focus.
+
+Rendering receives available `width`/`height`, is sanitized and bounded to 8 rows. The tray shows two panels, two content rows each; right-sidebar overflow scrolls.
+
+Compact terminals hide side panels; short terminals omit tray panels to preserve the input and footer.
+
+IDs use letters, digits, `_` or `-`. A failing widget is disabled and reported once. The existing `api.page` and `sidebar:<id>` slots remain supported.
 
 ```ts
 // Branch and model in the tray (ctrl+t), and the same panel for the right sidebar once `/sidebar widget where` adds it.
@@ -164,7 +321,25 @@ api.widget("tray", "where", where)
 api.widget("sidebar", "where", where)
 ```
 
-`api.settings.get(key)` reads a `/customize` profile value; `get()` returns the full profile. `api.settings.set(key, value)` or `set({...})` validates a patch like `/customize`, applies it immediately and refreshes cached messages. It is a layer over your profile for as long as the extension is loaded: nothing is written to your stored terminal settings, a value you choose yourself in `/customize` wins over it, and unloading the extension puts your stored value back. Keys/defaults are in `view/tui-profile.ts` and the additive wire validator in `packages/protocol/src/tui-data.ts`; unknown keys/invalid values throw. Setup changes are staged and committed only if `tui()` succeeds; failed/timed-out setup removes its registrations and staged settings. Styles, slots and profile changes from `api.settings` are all runtime-only. `disabledUiExtensions` stores terminal module names. API version remains 1; all new methods are additive.
+### Apply runtime settings
+
+| API | Does |
+|---|---|
+| `api.settings.get(key)` | Reads a `/customize` profile value |
+| `get()` | Returns the full profile |
+| `api.settings.set(key, value)` or `set({...})` | Validates a patch like `/customize`, applies it immediately and refreshes cached messages |
+
+The extension adds a layer over your profile while loaded:
+
+- Nothing is written to stored terminal settings.
+- A value you choose yourself in `/customize` wins.
+- Unloading restores your stored value.
+
+Keys/defaults are in `view/tui-profile.ts` and the additive wire validator in `packages/protocol/src/tui-data.ts`; unknown keys/invalid values throw.
+
+Setup changes are staged and committed only if `tui()` succeeds. Failed/timed-out setup removes its registrations and staged settings.
+
+Styles, slots and profile changes from `api.settings` are all runtime-only. `disabledUiExtensions` stores terminal module names. API version remains 1; all new methods are additive.
 
 ```ts
 // Side-by-side diffs while this module is loaded, unless you chose a diff view in /customize yourself.
@@ -180,14 +355,31 @@ daemon service adapter; selecting its widget alone never starts a query. See [Us
 
 ## Usage and provider quota
 
-`api.usage()` and `SlotContext.usage` give `UsageSnapshot` (types in `@mendcode/extension-api`): `context?` (`usedPercent`, `tokens`, `limit`, measured
-against the compaction threshold), `tokens` (`input`, `output`, `reasoning`, `cacheRead`, `cacheWrite`), `costMicros?` and `quota`, a list of
-`QuotaReading` (`provider`, `window` such as `7d` or `5h`, `usedPercent`, `leftPercent`, `resetsAt?`, `observedAt`, `ageMs`, `stale`). Read-only, free,
-nothing is sent to the daemon. Quota comes from what each provider itself reports (the ChatGPT backend's response headers on the native engine,
-the Codex and Claude Code engines' rate-limit events) and is remembered per provider: a session on one provider leaves another's last reading
-in place, with its age. A window that was never reported is not listed (unknown, never 0 % or 100 %). `stale` is true after 15 minutes or once the
-window has reset (a reset window is shown as `n/a`, a stale one in a live window dimmed with a compact age such as `~2d`). Extensions never read another program's files for this. A `statusline.json` script gets the same list in `MENDCODE_USAGE_JSON`
-(`{ now, quota }`). `mendcode docs usage` has a two-row quota footer that is tested against this contract.
+`api.usage()` and `SlotContext.usage` give `UsageSnapshot`, with types in `@mendcode/extension-api`. Reading it is free and read-only; nothing is sent to the daemon.
+
+| Field | Contains |
+|---|---|
+| `context?` | `usedPercent`, `tokens`, `limit`, measured against the compaction threshold |
+| `tokens` | `input`, `output`, `reasoning`, `cacheRead`, `cacheWrite` |
+| `costMicros?` | Optional cost |
+| `quota` | A list of `QuotaReading` |
+
+Each reading contains `provider`, `window` such as `7d` or `5h`, `usedPercent`, `leftPercent`, `resetsAt?`, `observedAt`, `ageMs`, `stale`.
+
+### Quota sources and freshness
+
+Quota comes from what each provider reports: the ChatGPT backend's response headers on the native engine, and the Codex and Claude Code engines' rate-limit events.
+
+It is remembered per provider. A session on one provider leaves another's last reading in place, with its age. Extensions never read another program's files for this.
+
+| Reading | Display |
+|---|---|
+| Window never reported | Not listed: unknown, never 0 % or 100 % |
+| After 15 minutes or once the window resets | `stale` is true |
+| Reset window | `n/a` |
+| Stale reading in a live window | Dimmed with a compact age such as `~2d` |
+
+A `statusline.json` script gets the same list in `MENDCODE_USAGE_JSON` (`{ now, quota }`). `mendcode docs usage` has a two-row quota footer tested against this contract.
 
 ```ts
 // The fullest quota window on the left of the footer ("7d 82%"): amber from 80 %, dim when the reading is stale.
@@ -207,10 +399,15 @@ api.slot("footer.left", () => {
 | `api.onStats(listener)` | Calls `listener(stats)` after a model call, a compaction or a change of model, effort or context window moved a figure: at most once per change, after the current frame or event (a microtask), never on a timer. Returns the function that stops it; reload and disable stop it too. A listener that throws is skipped and reported like any renderer |
 | `SlotContext.stats` | The same snapshot, inside every slot renderer |
 
-Read-only: nothing here changes the session or asks the daemon for anything. The fields (`calls`, `input`, `cacheRead`, `cacheWrite`,
-`output`, `reasoning`, `cachePercent`, `lastPrompt`, `lastCacheRead`, `lastCachePercent`, `contextTokens`, `contextLimit`, `contextPercent`,
-`contextApprox`, `costMicros`, `tokensPerSecond`, `firstTokenMs`, `forecastTurns`, `model`, `effort`) are described in the table under
-[Session stats](customize.md#session-stats); optional ones are absent until there is something behind them.
+Read-only: nothing here changes the session or asks the daemon for anything. Optional fields are absent until there is something behind them.
+
+The table under [Session stats](customize.md#session-stats) describes these fields:
+
+- `calls`, `input`, `cacheRead`, `cacheWrite`, `output`, `reasoning`.
+- `cachePercent`, `lastPrompt`, `lastCacheRead`, `lastCachePercent`.
+- `contextTokens`, `contextLimit`, `contextPercent`, `contextApprox`.
+- `costMicros`, `tokensPerSecond`, `firstTokenMs`, `forecastTurns`, `model`, `effort`.
+
 `examples/extensions/cache-ctx.ts` draws `cache 99% · ctx 21%` in the footer's right side and redraws when the figures move:
 
 ```ts
@@ -242,7 +439,13 @@ card, footer). Frames at 80 and 120 columns, dark and light: `bun scripts/render
 
 ### `keybindings.json`
 
-`<data dir>/keybindings.json`: `{ "<key>": "<action>" | null }`. Read at startup, again whenever [`/keymap`](editor.md#keymap-editor) changes it, and on every `extensions.changed`: the daemon's watcher sends one when the file is written by hand or by the agent, so every open terminal applies it without a restart. Invalid entries are reported once and skipped, the rest apply. With no file the defaults are unchanged. `null` unbinds that key. A key set here leaves every default table, so `"ctrl+o": "dock"` replaces ctrl+o's default meaning.
+Save bindings in `<data dir>/keybindings.json` as `{ "<key>": "<action>" | null }`.
+
+1. Choose a key and action from the references below.
+2. Set the action, or use `null` to unbind that key. For example, `"ctrl+o": "dock"` replaces ctrl+o's default meaning: a key set here leaves every default table.
+3. Save the file. The daemon's watcher sends `extensions.changed`, whether you or the agent wrote it, so every open terminal applies it without a restart.
+
+The file is also read at startup and whenever [`/keymap`](editor.md#keymap-editor) changes it. Invalid entries are reported once and skipped; the rest apply. With no file the defaults are unchanged.
 
 Keys (case-insensitive): `ctrl+<letter>`, `ctrl+space`, `ctrl+\`, `ctrl+]`, `ctrl+^`, `ctrl+_`, `alt+<char>` (`opt+<char>` and `option+<char>` are the same key, for a Mac keyboard; hints name it by the platform, the file's name is `alt`), `f1`…`f12`, `up down left right home end pgup pgdn insert delete`, `shift+tab`, `leader+<char>` (the chord after `ctrl+x`), or a raw sequence such as `"\u0007"`. Reserved (refused): `ctrl+c` (quit/clear), `ctrl+x` (leader), `enter`, `esc`, `tab`, `backspace`, `ctrl+j`, `ctrl+m`, `ctrl+i`, `ctrl+h`.
 
@@ -295,11 +498,23 @@ Actions:
 | `modal:<id>` | an extension modal (`api.modal`) |
 | `action:<id>` | an extension's named action (`api.action`) |
 
-Keys act in the chat; the keymap is bypassed while a slash/mention popup or an approval/question owns the keys. The prompt's own defaults (`palette` to `scroll.down`) keep their conditions on their default keys (an empty prompt, a queued message, no pending approval…); on a key you bound they act whenever the keymap is live. Not rebindable: enter, esc, tab, `ctrl+c`, `ctrl+x`, editing keys, `a`/`s`/`d` and `1`–`3` on approvals, `!`, arrows in the prompt.
+Keys act in the chat. The keymap is bypassed while a slash/mention popup or an approval/question owns the keys.
+
+The prompt's own defaults (`palette` to `scroll.down`) keep their conditions on default keys: an empty prompt, a queued message, no pending approval…. On a key you bound they act whenever the keymap is live.
+
+Not rebindable: enter, esc, tab, `ctrl+c`, `ctrl+x`, editing keys, `a`/`s`/`d` and `1`–`3` on approvals, `!`, arrows in the prompt.
 
 ### `api.key(key, run)`
 
-Same key names, or a raw sequence. Extension keys override `keybindings.json` and defaults; later extensions win. Nothing is replaced silently: `/keymap` marks both rows ("ctrl+o replaced <action>", "ctrl+o is taken by extension x"), `/extensions` lists the key under that extension, and two extensions on one key are a problem naming the loser. The same goes for a terminal command or page id registered by two extensions. `d` on `/extensions` turns the selected extension off by name (terminal half through `disabledUiExtensions`, daemon half through `extensions.disable`). `run(actions)` gets `TuiActions`. An invalid key is reported and ignored.
+Use the same key names, or a raw sequence. `run(actions)` gets `TuiActions`. An invalid key is reported and ignored.
+
+Extension keys override `keybindings.json` and defaults; later extensions win. Nothing is replaced silently:
+
+- `/keymap` marks both rows: "ctrl+o replaced <action>" and "ctrl+o is taken by extension x".
+- `/extensions` lists the key under that extension.
+- Two extensions on one key produce a problem naming the loser. The same applies to a terminal command or page id registered by two extensions.
+
+Press `d` on `/extensions` to turn the selected extension off by name: terminal half through `disabledUiExtensions`, daemon half through `extensions.disable`.
 
 `/help` lists the effective bindings (file and extensions included).
 
@@ -307,7 +522,21 @@ Same key names, or a raw sequence. Extension keys override `keybindings.json` an
 
 `api.command(name, description, (args, actions) => void)`: `/name args` runs in the terminal with no daemon round trip. It appears in the slash suggestions (marked `:ext`) and the palette; picking it inserts `/name ` so arguments can follow. A name that is a built-in command or alias is refused. Extension commands run before `.mendcode/commands` of the same name.
 
-`api.page(id, { title, render, onKey? })` is a full-screen page drawn with the page standard (`view/page.ts`: title, rule, your body, `esc back`). `render(ctx)` returns the body (`ctx.width` = page width − 2, `ctx.height` = rows available, `ctx.breakpoint` the terminal's width class), called again on every frame, so a resize lays it out anew. Open it with `actions.openPage(id)` (from a command or key) or the `page:<id>` action. `onKey(key, { close, redraw })` gets every key first, named like the keybindings (`x`, `up`, `ctrl+o`, `alt+x`, `pgup`, `enter`…; typed-ahead text arrives one character at a time) and returns `true` when it handled it; an unhandled `esc` closes the page. Mouse events are not forwarded. A page that throws while drawing closes and is disabled.
+### Open a full-screen page
+
+`api.page(id, { title, render, onKey? })` uses the page standard (`view/page.ts`: title, rule, your body, `esc back`). Open it with `actions.openPage(id)` from a command or key, or the `page:<id>` action.
+
+`render(ctx)` returns the body and runs every frame, so a resize lays it out anew:
+
+| Context field | Meaning |
+|---|---|
+| `ctx.width` | Page width − 2 |
+| `ctx.height` | Rows available |
+| `ctx.breakpoint` | Terminal's width class |
+
+`onKey(key, { close, redraw })` gets every key first and returns `true` when handled. Names match keybindings: `x`, `up`, `ctrl+o`, `alt+x`, `pgup`, `enter`…; typed-ahead text arrives one character at a time.
+
+An unhandled `esc` closes the page. Mouse events are not forwarded. A page that throws while drawing closes and is disabled.
 
 ```ts
 // `/note text` keeps a note; `/note` alone opens them on a page, where x clears them and esc goes back.
@@ -331,11 +560,63 @@ api.page("notes", {
 })
 ```
 
-`api.modal(id, { title, render, onKey?, width? })` is a card drawn over the chat, or over the page that is open, with the palette's chrome (`view/modal-card.ts`, shared with `view/palette.ts`): a centered card on the `panel` fill, three columns of padding, the title row with `esc` on the right, and padding rows on a screen of 24 rows or more. The transcript stays drawn around it. `render(ctx)` returns the body and is called with a fresh context every frame: `ctx.width` is the card's inner width, `ctx.height` the rows it may take, `ctx.breakpoint` and `ctx.screen` describe the terminal, so a modal adapts to a resize without a listener. `width` is the card's width in columns (above 1) or a share of the terminal (0 to 1), or a function `({ width, height, breakpoint }) => number` of the terminal asked every frame (one that throws or answers anything but a positive number disables the modal); without it the card is as wide as the palette (72 % of the terminal, 96 to 148 columns). It is never wider than the terminal less two columns; a terminal too small for a card of 16 columns closes the modal. Open it with `actions.openModal(id)` or the `modal:<id>` action; `actions.closeModal()` closes it. `onKey(key, actions)` gets the terminal's `TuiActions` (insert, submit, toast, open a page…) plus `close()` and `redraw()`, and returns `true` when it handled the key. While it is open it takes every key, named as for pages (typed-ahead and pasted text one character at a time); nothing reaches the prompt behind it. An unhandled `esc` closes it and `ctrl+c` always does (it never quits from a modal). Mouse events are dropped. Opening a page closes the modal. A modal that throws while drawing or in `onKey` closes and is disabled for the session, like a page.
+### Open a modal
 
-`api.action(id, run, { title?, description? })` names an action: `action:<id>` in `keybindings.json` and `/keymap`, and a row under **Actions** in the palette (ctrl+p) with `title` (else the id) and `description`. `run(actions)` gets `TuiActions`, as a key does; a throw is reported and the action stays registered. An id is letters, digits, `_`, `.`, `:` or `-`; a later module's action with the same id wins and the conflict is listed in `/extensions`. An id no loaded extension has is a toast (`unknown action: <id>`).
+`api.modal(id, { title, render, onKey?, width? })` draws a card over the chat or open page. Open it with `actions.openModal(id)` or `modal:<id>`; `actions.closeModal()` closes it.
 
-`TuiActions`: `submit(text)` sends text as the user (a `/command` runs as typed; the prompt's draft is kept), `insert(text)` inserts into the prompt, `openPage(id)`, `openModal(id)`, `closeModal()`, `openFile(path, lines?)` (opens a file of the workspace in the [file viewer](file-viewer.md), at `{ from, to? }`; a path outside the workspace, a missing file or a folder is refused with a toast and nothing is read), `toast(text, tone?)`, and `comments` (below).
+The card uses the palette's chrome (`view/modal-card.ts`, shared with `view/palette.ts`):
+
+- Centered on the `panel` fill, with three columns of padding.
+- A title row with `esc` on the right.
+- Padding rows on a screen of 24 rows or more.
+
+The transcript stays drawn around it. `render(ctx)` returns the body with a fresh context every frame, so resizing needs no listener.
+
+| Context field | Meaning |
+|---|---|
+| `ctx.width` | Card's inner width |
+| `ctx.height` | Rows it may take |
+| `ctx.breakpoint`, `ctx.screen` | Terminal description |
+
+Set `width` as columns (above 1), a terminal share (0 to 1), or `({ width, height, breakpoint }) => number`, asked every frame. A function that throws or returns anything but a positive number disables the modal.
+
+Without `width`, the card matches the palette: 72 % of the terminal, 96 to 148 columns. It never exceeds terminal width less two columns; a terminal too small for a 16-column card closes it.
+
+`onKey(key, actions)` receives the terminal's `TuiActions` (insert, submit, toast, open a page…) plus `close()` and `redraw()`. Return `true` when handled.
+
+While open, the modal takes every key, named as for pages; typed-ahead and pasted text arrive one character at a time. Nothing reaches the prompt behind it.
+
+| Event | Result |
+|---|---|
+| Unhandled `esc` | Close |
+| `ctrl+c` | Always close; never quit from a modal |
+| Mouse events | Dropped |
+| Opening a page | Close the modal |
+| Drawing or `onKey` throws | Close and disable for the session, like a page |
+
+### Register a named action
+
+`api.action(id, run, { title?, description? })` names an action. It appears as `action:<id>` in `keybindings.json` and `/keymap`, and under **Actions** in the palette (ctrl+p).
+
+The palette shows `title`, or the id when absent, and `description`. `run(actions)` gets `TuiActions`, as a key does; a throw is reported and the action stays registered.
+
+An id uses letters, digits, `_`, `.`, `:` or `-`. A later module's action with the same id wins, with the conflict listed in `/extensions`.
+
+An id no loaded extension has produces a toast: `unknown action: <id>`.
+
+### Use terminal actions
+
+| `TuiActions` method | Does |
+|---|---|
+| `submit(text)` | Sends text as the user; a `/command` runs as typed, keeping the prompt's draft |
+| `insert(text)` | Inserts into the prompt |
+| `openPage(id)` | Opens a page |
+| `openModal(id)`, `closeModal()` | Opens or closes a modal |
+| `openFile(path, lines?)` | Opens a workspace file in the [file viewer](file-viewer.md), at `{ from, to? }` |
+| `toast(text, tone?)` | Shows a toast |
+| `comments` | Comment actions below |
+
+For `openFile`, a path outside the workspace, a missing file or a folder is refused with a toast and nothing is read.
 
 ### A responsive modal
 
@@ -378,20 +659,43 @@ export default {
 
 ### Every tier
 
-Terminal extensions load at every tier: the terminal never asks the tier before discovering or importing them (`extensions` is a
-kernel feature, [tiers](tiers.md)), and only `--pure`, `--safe-mode`, a remote attach, `disabledProfiles` and `/customize` → Extensions
-leave them out. Their commands, pages, modals, actions and keys work the same in minimalist, balanced and full; their commands and
-actions are listed in the slash menu and the palette under minimalist too (they are the user's own). The minimal view that minimalist
-selects has no top bar or footer of its own, but it draws an extension's `header.replace` and `footer.*` slots. What a view still
-decides is how the transcript looks: tool cards are one-line rows in the minimal view, so `renderTool` bodies show in balanced and full.
+Terminal extensions load at every tier. The terminal never asks the tier before discovery or import: `extensions` is a kernel feature ([tiers](tiers.md)).
+
+Only these leave extensions out:
+
+- `--pure` or `--safe-mode`.
+- A remote attach.
+- `disabledProfiles` or `/customize` → Extensions.
+
+Commands, pages, modals, actions and keys work the same in minimalist, balanced and full. Commands and actions appear in the minimalist slash menu and palette too: they are your own.
+
+The minimal view has no top bar or footer of its own, but draws an extension's `header.replace` and `footer.*` slots.
+
+The view still decides how the transcript looks. Minimal tool cards are one-line rows, so `renderTool` bodies show in balanced and full.
 
 ### Comments on an answer
 
 The user's comments on passages of an answer ([editor.md](editor.md#comments-on-an-answer)) are visible to extensions in two ways.
 
-`actions.comments.list()` returns the pending comments, each `{ n, quote, text, itemId? }` (`n` is the chip number), and `actions.comments.add({ quote, text })` adds one, for example "comment on this diff hunk". It returns `false` when comments are off, the quote or the words are empty, or the user's limit (`commentMax`, at most nine) is reached. A comment added by code is marked `of="context"` on the wire, never `earlier answer`, and has no passage in the transcript to mark.
+`actions.comments.list()` returns pending comments, each `{ n, quote, text, itemId? }`; `n` is the chip number.
 
-`api.comments.beforeSend((message, { comments, note }) => string | undefined)` runs just before a message with comments is sent. `message` is the complete envelope as built (the user's `commentTemplate` and `commentEntry` included); return the text to send instead, or `undefined` to keep it. Text before or after the envelope is allowed and shows as such in the transcript. Transforms run in load order, receive frozen data, and one that throws, or returns anything but a string or `undefined`, is disabled with a problem in `/doctor`. The result must stay under 60,000 characters or the send is refused and the prompt keeps everything.
+`actions.comments.add({ quote, text })` adds one, for example "comment on this diff hunk". It returns `false` when:
+
+- Comments are off.
+- The quote or words are empty.
+- Your limit (`commentMax`, at most nine) is reached.
+
+A comment added by code is marked `of="context"` on the wire, never `earlier answer`, and has no passage in the transcript to mark.
+
+`api.comments.beforeSend((message, { comments, note }) => string | undefined)` runs just before a message with comments is sent.
+
+`message` is the complete envelope as built, including your `commentTemplate` and `commentEntry`. Return replacement text, or `undefined` to keep it.
+
+Text before or after the envelope is allowed and shows as such in the transcript. Transforms run in load order and receive frozen data.
+
+A transform that throws, or returns anything but a string or `undefined`, is disabled with a problem in `/doctor`.
+
+The result must stay under 60,000 characters or the send is refused and the prompt keeps everything.
 
 ```ts
 // <data dir>/extensions/comment-hunk.ts (examples/extensions/comment-hunk.ts)
@@ -412,7 +716,21 @@ export default {
 
 ## Diagram view
 
-`/diagram [n]` (or the `diagram.open` action, `ctrl+x i`) opens the session's Mermaid diagrams full screen, the last one by default. The chat draws a diagram at the chat's width and shows source when it does not fit; this view draws it at its natural size and scrolls. Keys: arrows or `hjkl` pan, `H J K L` and shift+arrows pan a page, `home`/`end` jump to the corners, `+`/`-` zoom (overview, 100%, 200%, 300%: a horizontal stretch that keeps labels whole), `0` or `r` reset the zoom and pan, `n`/`p` move between diagrams, `esc` or `q` close. v1's Mermaid card has fit, zoom and pan but no rotate or flip, so neither exists here. The renderer loads the first time the view opens.
+Open `/diagram [n]`, the `diagram.open` action or `ctrl+x i` to see the session's Mermaid diagrams full screen. The last diagram opens by default.
+
+The chat draws at chat width and shows source when a diagram does not fit. This view draws at natural size and scrolls.
+
+| Key | Does |
+|---|---|
+| Arrows or `hjkl` | Pan |
+| `H J K L` and shift+arrows | Pan a page |
+| `home`/`end` | Jump to corners |
+| `+`/`-` | Zoom: overview, 100%, 200%, 300%; horizontal stretch keeps labels whole |
+| `0` or `r` | Reset zoom and pan |
+| `n`/`p` | Move between diagrams |
+| `esc` or `q` | Close |
+
+v1's Mermaid card has fit, zoom and pan but no rotate or flip, so neither exists here. The renderer loads the first time the view opens.
 
 ## Tests
 
@@ -433,7 +751,18 @@ Add `{ "type": "extension:project-note", "title": "Project", "options": {} }` to
 
 ## Per-role message chrome
 
-`api.messageStyle("user" | "assistant" | "tool" | "meta", { icon?, lead?, label?, tint?, layout? })` overrides local role chrome. `layout` is `quiet` (inline lead) or `classic` (separate header) for user/assistant; tool/meta add a prefix above their default body. Icons/leads are sanitized to four printable characters; `label` is a boolean or custom string; tint is boolean. Later registrations merge. Existing cached messages refresh after reload. Local profile files are unaffected unless `settings.set` is used. Completion metadata stays governed by `Message meta: off|compact|full`.
+`api.messageStyle("user" | "assistant" | "tool" | "meta", { icon?, lead?, label?, tint?, layout? })` overrides local role chrome.
+
+| Option | Values or behavior |
+|---|---|
+| `layout` | `quiet` (inline lead) or `classic` (separate header) for user/assistant; tool/meta add a prefix above their default body |
+| Icons/leads | Sanitized to four printable characters |
+| `label` | Boolean or custom string |
+| Tint | Boolean |
+
+Later registrations merge. Existing cached messages refresh after reload. Local profile files are unaffected unless `settings.set` is used.
+
+Completion metadata stays governed by `Message meta: off|compact|full`.
 
 ```ts
 export default {
@@ -512,17 +841,29 @@ export default {
 }
 ```
 
-`command.register(factory)` accepts slash names/aliases, keybinds and `onSelect`; `route.register` returns a
-disposer and `route.navigate` opens the registered page. `slots.register` maps home/session prompt, home bottom,
-home footer and sidebar slots to native surfaces, also returning a disposer. `home_logo` maps to the whole native
-welcome replacement. Registered pages use the shared bordered panel grid (one column under 70) and header hints.
-Lifecycle disposal aborts its signal and clears registrations. The bridge supplies footer/widget runtime aliases;
-UI registration happens during activation, and edits are applied through the existing live reload.
+### Register bridge surfaces
 
-`metadata.current/get/getCurrent/list/patch` addresses plugin-owned session JSON through the daemon.
-`get({ sessionID })` resolves `{ data }`; `patch({ sessionID, patch: { status: "review" } })` persists a bounded
-32 KB merge (null deletes a key). The default is the visible session. Namespaces are separated by module id;
-cross-project session access is refused. This metadata is separate from the donor Agent View data model.
+| API | Does |
+|---|---|
+| `command.register(factory)` | Accepts slash names/aliases, keybinds and `onSelect` |
+| `route.register` | Returns a disposer |
+| `route.navigate` | Opens the registered page |
+| `slots.register` | Maps home/session prompt, home bottom, home footer and sidebar slots to native surfaces; returns a disposer |
+| `home_logo` | Maps to the whole native welcome replacement |
+
+Registered pages use the shared bordered panel grid (one column under 70) and header hints. Lifecycle disposal aborts its signal and clears registrations.
+
+The bridge supplies footer/widget runtime aliases. UI registration happens during activation, and edits use the existing live reload.
+
+### Store plugin metadata
+
+`metadata.current/get/getCurrent/list/patch` addresses plugin-owned session JSON through the daemon. The default is the visible session.
+
+- `get({ sessionID })` resolves `{ data }`.
+- `patch({ sessionID, patch: { status: "review" } })` persists a bounded 32 KB merge; null deletes a key.
+
+Namespaces are separated by module id; cross-project session access is refused. This metadata is separate from the donor Agent View data model.
+
 `/extensions` shows the plugin id, ABI, auth/provider registrations and errors in its selected panel.
 
 Donor component trees, HTTP SDK methods, overlays, workspace adapters and Effect APIs need migration to the
@@ -530,9 +871,16 @@ native row/daemon interfaces. The adapter does not import the donor application 
 
 ## View slots
 
-`api.view(slot, renderer)` is one contract for every redrawable part of the terminal: messages, tool cards, approval and question boxes,
-prompt frame, top bar, session list, notices, footer, home, panel widgets, the slash menu, the compaction card, turn status and tool rows, every full-screen page (`page`), the palette and cards (`overlay`) and the rows around the prompt (`bar`). View code is not sandboxed: installing one trusts its author. Each slot receives
-plain data, returns span lines (or `undefined`), and falls back to the built-in after three faults. See [views.md](views.md).
+`api.view(slot, renderer)` is one contract for every redrawable part of the terminal:
+
+- Messages, tool cards, approval and question boxes.
+- Prompt frame, top bar, session list, notices, footer and home.
+- Panel widgets, slash menu, compaction card, turn status and tool rows.
+- Every full-screen page (`page`), palette and cards (`overlay`), and rows around the prompt (`bar`).
+
+Each slot receives plain data, returns span lines (or `undefined`), and falls back to the built-in after three faults. See [views.md](views.md).
+
+**Warning:** View code is not sandboxed: installing one trusts its author.
 
 ```ts
 // Read cards as one line with the line count; every other tool keeps the built-in card.

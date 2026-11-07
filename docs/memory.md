@@ -1,8 +1,10 @@
 # Memory
 
-The [automation memory commands](automation.md#memory-control-plane) expose status, retrieval preview, editing, deletion, proposals, Codex import, resolution, index rebuilding and scoped configuration. Codex `--apply` creates Pending user proposals, visible here with `codex-import` tags; approval is a separate action. Ordinary and imported revisions capture their target's full revision at creation, so later edits, moves or metadata changes invalidate approval.
+Use Memory to review what the agent remembers, approve proposals and control what reaches future prompts. Open `/memory` (`/mem`) to manage saved facts, Dream, extraction and sharing.
 
-`/memory` (`/mem`) has nine tabs. `tab`, `shift+tab` and `1`–`9` switch; `esc` goes back to the chat.
+1. Open `/memory` (`/mem`). The page has nine tabs.
+2. Switch with `tab`, `shift+tab` or `1`–`9`.
+3. Press `esc` to go back to the chat.
 
 | tab | shows |
 |---|---|
@@ -20,7 +22,9 @@ On narrow terminals (under 64 cells) the tab row shows only the numbers.
 
 ## Pending, Saved and Archived
 
-Each row shows the memory's scope (`user`, `project` or `session`), `pinned` when it is, its category and who proposed it. The wide layout (120 cells and up) adds a detail panel. `/` filters by text, category, scope, or the word `pinned`; the list includes the session-scope memories of the project (`memory.list` with `session: "all"`).
+Each row shows the memory's scope (`user`, `project` or `session`), `pinned` when it is, its category and who proposed it. The wide layout (120 cells and up) adds a detail panel.
+
+Use `/` to filter by text, category, scope, or the word `pinned`. The list includes the session-scope memories of the project (`memory.list` with `session: "all"`).
 
 | key | tab | does |
 |---|---|---|
@@ -43,7 +47,11 @@ Dream reads recent sessions and proposes memories. Its proposals follow their ca
 
 - The first row shows the daily time (set in `/setup`), the token budget (`dreamMaxTokens`, "default" when unset) and how many proposals wait.
 - Runs are listed newest first with their result and duration; a run made after a missed window is marked `recovered`.
-- Under the list, the selected run's notes (or error) and its **safety report**: the trigger, what it read (sessions, reused digests, memories shown, characters sent), what it proposed and what became of each proposal, what it refused and why, secrets redacted in the evidence and in proposals, the model calls with input and output tokens (`estimated` when the provider reported none), the budget used and whether it stopped the run, what Evolution did, and any failure. `dream.list` carries the report of the newest five runs only; moving to an older run asks for its report once (`dream.list` with `runId`), and a run recorded before reports existed says so.
+### Read the safety report
+
+Under the list, you see the selected run's notes (or error) and its **safety report**: the trigger, what it read (sessions, reused digests, memories shown, characters sent), what it proposed and what became of each proposal, what it refused and why, secrets redacted in the evidence and in proposals, the model calls with input and output tokens (`estimated` when the provider reported none), the budget used and whether it stopped the run, what Evolution did, and any failure.
+
+`dream.list` carries the report of the newest five runs only; moving to an older run asks for its report once (`dream.list` with `runId`), and a run recorded before reports existed says so.
 
 | key | does |
 |---|---|
@@ -57,7 +65,15 @@ How a run works, its safety report, the token budget and missed-window recovery 
 
 ## Policies tab
 
-One row per category with its policy (`auto` saved at once, `review` kept in Pending, `never` dropped), a note when it differs from the default, and the category's meaning. A line below says what the selected policy does to a proposal. What you save yourself is always saved, and a proposal in which a secret was redacted always waits for review, whatever the policy says.
+Each row shows a category, its policy, its meaning and a note when the policy differs from the default. A line below says what the selected policy does to a proposal.
+
+| Policy | Result |
+|---|---|
+| `auto` | Saved at once |
+| `review` | Kept in Pending |
+| `never` | Dropped |
+
+What you save yourself is always saved. A proposal in which a secret was redacted always waits for review, whatever the policy says.
 
 | key | does |
 |---|---|
@@ -85,15 +101,41 @@ The list refreshes when a Dream run ends.
 
 ↑↓ selects a setting or job. Enter toggles a switch, cycles maintenance (`disabled`, `preview`, `auto-consolidate`), or edits a numeric cap; Enter saves and Esc cancels numeric editing. `r` retries a selected failed/skipped job, otherwise refreshes. Hints stay in the header; shared bordered panels fill larger terminals and compact terminals show the focused column.
 
-Settings are independent: `memoryEnabled` gates generated proposals and retrieval; `memoryUse` gates prompt injection; `memoryGenerate` enables post-turn extraction; `memoryRequireApproval` forces extraction proposals into Pending. Prompt use and generation default off; approval defaults on. Enable use explicitly to inject saved facts; the v2 enabled switch retains its existing default on. Category `never` still drops proposals, `review` still requires review, and secrets always require review. Manual additions remain explicit user actions.
+### Switches
 
-`memoryMaxPromptTokens` defaults to 10 000 (estimated at four characters per token, including wrapper); `memoryMaxEntries` defaults to 50 and `memoryProjectMaxEntries` to 3. These cap generated proposals and prompt retrieval; manual facts are retained. Pinned facts obey the configured overall prompt cap. `memoryGlobalCompactionMaxEntries` (default 50) is the user-scope entry cap for the memory preview taken after a compaction, where `memoryMaxEntries` applies to an ordinary request. `memoryProjects` holds per-project overrides keyed by the project's absolute directory (the same `memory*` keys); the memory control commands write it when called with the project scope, and it wins over the global value for that project.
+Settings are independent: `memoryEnabled` gates generated proposals and retrieval; `memoryUse` gates prompt injection; `memoryGenerate` enables post-turn extraction; `memoryRequireApproval` forces extraction proposals into Pending.
+
+Prompt use and generation default off; approval defaults on. Enable use explicitly to inject saved facts; the v2 enabled switch retains its existing default on.
+
+Category `never` still drops proposals, `review` still requires review, and secrets always require review. Manual additions remain explicit user actions.
+
+### Caps and project overrides
+
+`memoryMaxPromptTokens` defaults to 10 000 (estimated at four characters per token, including wrapper); `memoryMaxEntries` defaults to 50 and `memoryProjectMaxEntries` to 3. These cap generated proposals and prompt retrieval; manual facts are retained. Pinned facts obey the configured overall prompt cap.
+
+`memoryGlobalCompactionMaxEntries` (default 50) is the user-scope entry cap for the memory preview taken after a compaction, where `memoryMaxEntries` applies to an ordinary request.
+
+`memoryProjects` holds per-project overrides keyed by the project's absolute directory (the same `memory*` keys); the memory control commands write it when called with the project scope, and it wins over the global value for that project.
 
 `/remember [--user] <text>` saves one fact at once (this project, or every project with `--user`) without a proposal; it answers `remembered (this project)` or the error.
 
-Completed ordinary user turns enqueue one redacted digest (at most 64 000 characters), excluding tool/reasoning output and child task turns. One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs retained; a job that finished leaves no row, and only the newest 20 failed or skipped ones stay to be retried. A call times out after 45 seconds, retries twice with backoff, and never applies a late result after timeout or shutdown. Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason. The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+### Post-turn jobs
 
-Maintenance defaults disabled. Preview reports exact generated duplicates within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected. Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
+Completed ordinary user turns enqueue one redacted digest (at most 64 000 characters), excluding tool/reasoning output and child task turns.
+
+One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs retained; a job that finished leaves no row, and only the newest 20 failed or skipped ones stay to be retried.
+
+A call times out after 45 seconds, retries twice with backoff, and never applies a late result after timeout or shutdown.
+
+Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason.
+
+The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+
+### Duplicate maintenance
+
+Maintenance defaults disabled. Preview reports exact generated duplicates within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected.
+
+Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
 
 ## What the agent sees
 
@@ -175,6 +217,10 @@ Two safeguards hold whatever the policy: a proposal in which a secret was redact
 
 ## Protocol
 
+The [automation memory commands](automation.md#memory-control-plane) expose status, retrieval preview, editing, deletion, proposals, Codex import, resolution, index rebuilding and scoped configuration.
+
+Codex `--apply` creates Pending user proposals, visible here with `codex-import` tags; approval is a separate action. Ordinary and imported revisions capture their target's full revision at creation, so later edits, moves or metadata changes invalidate approval.
+
 | command | does |
 |---|---|
 | `memory.list`, `memory.search` | as before, plus `session` |
@@ -244,11 +290,21 @@ The view shows up to 200 memories, the most linked first.
 
 ### Memory assistant
 
-Press `t` in Memory to open its assistant. The selected project, tab, category and memory focus its answer; the current project's and area's memory remain available. Enter asks; PgUp/PgDn scroll, Ctrl+R opens Pending, Ctrl+X cancels, Ctrl+L clears history, and Esc returns to Memory. Ctrl+N sets the chat aside in the archive and starts a new one; Ctrl+O lists archived chats (↑↓ select, Enter restores it and archives the live chat if it has messages, x forgets it, Esc closes). The prompt's main draft is preserved. Compact terminals use one column; larger ones show conversation and Selection/Pending in shared bordered panels. Hints stay in the header.
+Press `t` in Memory to open its assistant. The selected project, tab, category and memory focus its answer; the current project's and area's memory remain available.
 
-History lives at `<dataDir>/memory-assistant/<area-project-hash>.json`, separate from `/btw`, the main event log and engine history. It survives restart; interrupted calls are marked. Questions, context and answers are redacted and bounded. Clear/cancel discard late completions and their actions. Archived chats live in a `.archive` folder beside that file (private files, newest 20 kept per area and project, same redaction as the live thread); clear still discards without archiving. Commands: `memory.assistant.get/send/clear/cancel/archive` (`archive` takes `action: archive|list|restore|delete` and an `archiveId`); client helpers: `memoryModel`, `memoryAssistant`, `memoryAssistantArchive`. These commands are not available to read-only peers.
+Enter asks; PgUp/PgDn scroll, Ctrl+R opens Pending, Ctrl+X cancels, Ctrl+L clears history, and Esc returns to Memory. Ctrl+N sets the chat aside in the archive and starts a new one; Ctrl+O lists archived chats (↑↓ select, Enter restores it and archives the live chat if it has messages, x forgets it, Esc closes).
 
-The tool-free completion uses the `memoryAssistant` model role, falling back to `memoryExtractor`, `small`, then main. No provider means a visible refusal. Responses can draft pending facts, edits, deletes, scope/category moves, graph facts and links; approval applies supported actions, rejection removes the draft. Control drafts are applied only on your approval, after validation, and stay pending with the reason when they cannot be:
+The prompt's main draft is preserved. Compact terminals use one column; larger ones show conversation and Selection/Pending in shared bordered panels. Hints stay in the header.
+
+History lives at `<dataDir>/memory-assistant/<area-project-hash>.json`, separate from `/btw`, the main event log and engine history. It survives restart; interrupted calls are marked. Questions, context and answers are redacted and bounded. Clear/cancel discard late completions and their actions.
+
+Archived chats live in a `.archive` folder beside that file (private files, newest 20 kept per area and project, same redaction as the live thread); clear still discards without archiving.
+
+Commands: `memory.assistant.get/send/clear/cancel/archive` (`archive` takes `action: archive|list|restore|delete` and an `archiveId`); client helpers: `memoryModel`, `memoryAssistant`, `memoryAssistantArchive`. These commands are not available to read-only peers.
+
+The tool-free completion uses the `memoryAssistant` model role, falling back to `memoryExtractor`, `small`, then main. No provider means a visible refusal.
+
+Responses can draft pending facts, edits, deletes, scope/category moves, graph facts and links; approval applies supported actions, rejection removes the draft. Control drafts are applied only on your approval, after validation, and stay pending with the reason when they cannot be:
 
 | Action | Fields | Approval does |
 |---|---|---|
@@ -264,15 +320,37 @@ Dream windows (start and end) are not modelled: v2 runs once a day at one time. 
 
 ## Workspaces and Markdown sharing
 
-`w` opens the project browser from any memory tab (outside text editing). ↑↓ selects Current project, User memories, All projects or a recorded project; Enter loads it and Esc cancels. Projects come from v2's persisted sessions and memories, with origin, parent group, area, status counts and manual/agent counts. No filesystem discovery or v1 data reads occur. All projects merges memory lists and graph nodes within the active area; user memories appear once. Project selection also scopes Dream and Evolution without changing the chat session. Reports show omitted entries when the 200-entry limit is reached.
+### Choose a project
 
-Sharing (`9`) uses `s` for project/user scope, `e` to enable, `d` to disable, `o` to export and `i` to import; ↑↓/PgUp/PgDn scroll results. Enabling requires typing `ENABLE PROJECT` or `ENABLE USER` in the page. Errors, skipped ids and conflict reasons stay in the result panel. Imported changes appear as update diffs in Pending; `a` approves and `x` rejects.
+`w` opens the project browser from any memory tab (outside text editing). ↑↓ selects Current project, User memories, All projects or a recorded project; Enter loads it and Esc cancels.
 
-The daemon writes bounded private snapshots and an index under `<dataDir>/memory-sharing/<scope>-<identity>/`. Sharing is off by default for each project/area. Only saved non-session entries without detected secrets or redaction markers are exported; security-category and high-sensitivity entries are excluded. Files are capped at 32 KiB, the inventory at 200. Disable and file deletion keep internal memories and exported files intact. External edits to a snapshot or index are never silently overwritten.
+Projects come from v2's persisted sessions and memories, with origin, parent group, area, status counts and manual/agent counts. No filesystem discovery or v1 data reads occur.
 
-The metadata header identifies the v2 origin and exact internal revision. Import validates it and creates a durable, deduplicated manual-review proposal; category auto policies never bypass approval. Approval compares the original revision again and rejects stale edits, preserving ids, pins and graph links. Symlinks, non-regular/oversized files, malformed metadata, changed origins and secrets are refused visibly. Accepted edits can be re-exported to refresh their revision.
+All projects merges memory lists and graph nodes within the active area; user memories appear once. Project selection also scopes Dream and Evolution without changing the chat session. Reports show omitted entries when the 200-entry limit is reached.
+
+### Enable and review sharing
+
+Sharing (`9`) uses `s` for project/user scope, `e` to enable, `d` to disable, `o` to export and `i` to import; ↑↓/PgUp/PgDn scroll results.
+
+Enabling requires typing `ENABLE PROJECT` or `ENABLE USER` in the page. Errors, skipped ids and conflict reasons stay in the result panel. Imported changes appear as update diffs in Pending; `a` approves and `x` rejects.
+
+### Snapshot safeguards
+
+The daemon writes bounded private snapshots and an index under `<dataDir>/memory-sharing/<scope>-<identity>/`. Sharing is off by default for each project/area.
+
+Only saved non-session entries without detected secrets or redaction markers are exported; security-category and high-sensitivity entries are excluded.
+
+Files are capped at 32 KiB, the inventory at 200. Disable and file deletion keep internal memories and exported files intact. External edits to a snapshot or index are never silently overwritten.
+
+The metadata header identifies the v2 origin and exact internal revision. Import validates it and creates a durable, deduplicated manual-review proposal; category auto policies never bypass approval.
+
+Approval compares the original revision again and rejects stale edits, preserving ids, pins and graph links.
+
+Symlinks, non-regular/oversized files, malformed metadata, changed origins and secrets are refused visibly. Accepted edits can be re-exported to refresh their revision.
 
 Commands: `memory.workspaces`, `memory.browse` (`project | user | all`), `memory.sharing.status/configure/export/import`. Only workspaces, browse and sharing status are read-only. Typed client helpers: `memoryWorkspaces`, `browseMemory`, `sharingStatus`.
+
+### Import v1 memories
 
 These snapshots use the explicit `mendcode-v2` format (header version 2) and v2 revisions; v2 never writes into a v1 sharing
 folder. To bring v1's memories over, point `mendcode memory import-v1 --from <v1 sharing folder>` at a folder v1's sharing
@@ -284,9 +362,19 @@ is already in memory (any status, case and spacing ignored) is skipped with that
 (`--max-proposals`). v1's folder is only read, never named implicitly.
 ## Memory consent and notices
 
-Memory consent and management are available in every tier. In default approval mode, an explicit current request such as “me llamo Nora recuerda eso” or “my name is Nora, remember that” authorizes one matching fact. Ambiguous paraphrases still ask. Consent never extends to later turns, another fact, a sub-agent, expanded context or a synthetic notice; deny rules and plan mode still apply.
+Memory consent and management are available in every tier.
 
-Model-initiated writes use a **Save to memory?** card with plain fact text and muted scope/category chips: Save, Save and don't ask for memory again, Edit text, Reject. `Require approval` applies to memory even in full-access mode. The second option turns off `memoryRequireApproval` for future memory writes only. Editing saves the edited text directly. Read operations do not ask for write approval. Approved native `remember` and `memory propose` writes save directly rather than creating a second Pending review; after-turn extraction retains its independent review policy.
+In default approval mode, an explicit current request such as “me llamo Nora recuerda eso” or “my name is Nora, remember that” authorizes one matching fact. Ambiguous paraphrases still ask.
+
+Consent never extends to later turns, another fact, a sub-agent, expanded context or a synthetic notice; deny rules and plan mode still apply.
+
+Model-initiated writes use a **Save to memory?** card with plain fact text and muted scope/category chips: Save, Save and don't ask for memory again, Edit text, Reject.
+
+`Require approval` applies to memory even in full-access mode. The second option turns off `memoryRequireApproval` for future memory writes only.
+
+Editing saves the edited text directly. Read operations do not ask for write approval.
+
+Approved native `remember` and `memory propose` writes save directly rather than creating a second Pending review; after-turn extraction retains its independent review policy.
 
 ### What a memory write says
 
@@ -300,10 +388,22 @@ A short toast is one line laid over the prompt's top rule (the transcript gives 
 
 ### What the model is told to save
 
-The `remember`, `memory` and `memory_graph` descriptions say to save only durable facts and standing preferences the user stated (remember, always, from now on, I prefer), corrections that apply to later work and project facts the repo does not show; never secrets, this request's content or format, or task status; and when unsure, not to. The after-turn extractor prompt (`packages/daemon/prompts/memory-extract.md`) carries the same criteria and says a one-off request is not a preference. These are prompt-only. There is no separate "memory section" in the system prompt: the descriptions are the guidance.
+The `remember`, `memory` and `memory_graph` descriptions say to save only durable facts and standing preferences the user stated (remember, always, from now on, I prefer), corrections that apply to later work and project facts the repo does not show; never secrets, this request's content or format, or task status; and when unsure, not to.
 
-Enforced in code: with `memoryRequireApproval` off (the "don't ask again" answer), a model save whose text restates the current user message (at least half of its distinctive words, and three of them, already in the message, and no standing marker such as remember, always, from now on, siempre, recuerda in it) is not saved silently. It shows the usual **Save to memory?** card with `Restates this request`. The same check sends an extractor fact to Pending. An explicit "remember X" in the message keeps its immediate, dialog-free save. A paraphrase with less overlap, or in another language, is not caught.
+The after-turn extractor prompt (`packages/daemon/prompts/memory-extract.md`) carries the same criteria and says a one-off request is not a preference.
+
+These are prompt-only. There is no separate "memory section" in the system prompt: the descriptions are the guidance.
+
+Enforced in code: with `memoryRequireApproval` off (the "don't ask again" answer), a model save whose text restates the current user message (at least half of its distinctive words, and three of them, already in the message, and no standing marker such as remember, always, from now on, siempre, recuerda in it) is not saved silently. It shows the usual **Save to memory?** card with `Restates this request`.
+
+The same check sends an extractor fact to Pending. An explicit "remember X" in the message keeps its immediate, dialog-free save.
+
+A paraphrase with less overlap, or in another language, is not caught.
 
 Duplicate writes do not announce success. After-turn extraction deduplicates case, Unicode normalization and whitespace against visible retained facts, even when the model used a memory tool; unrelated extracted facts remain eligible.
 
-Extraction separates memory enablement, after-turn generation, extractor configuration, queued/running count, last executed job and last error. **Maintenance: disabled** refers only to duplicate maintenance. Saved supports `e` to edit (Enter saves, Esc cancels) and `d` then `d`/`y` to delete; another key cancels deletion. Memory commands, approval edits and persistent consent changes are local-only and cannot resolve an unrelated request. Remote turns exclude native memory tools; memory commands are absent from the read-only peer allowlist.
+Extraction separates memory enablement, after-turn generation, extractor configuration, queued/running count, last executed job and last error.
+
+**Maintenance: disabled** refers only to duplicate maintenance. Saved supports `e` to edit (Enter saves, Esc cancels) and `d` then `d`/`y` to delete; another key cancels deletion.
+
+Memory commands, approval edits and persistent consent changes are local-only and cannot resolve an unrelated request. Remote turns exclude native memory tools; memory commands are absent from the read-only peer allowlist.

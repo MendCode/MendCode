@@ -23,13 +23,23 @@ export type DaemonServiceCommand = {
   lines: number
   limit: number
   help: boolean
+  /** `restart --force`: how long to wait for running commands and background work before the stop kills them (seconds). */
+  grace?: number
+}
+
+/** How long `restart --force` waits for a running command, background task or agent before the stop kills it. */
+export const RESTART_GRACE_S = 120
+
+/** The sessions a restart waits on, one per line, with what runs in each. */
+export function heldLines(held: ReadonlyArray<{ sessionId: string; title: string; items: string[] }>) {
+  return held.map((entry) => `  ${entry.sessionId} ${JSON.stringify(entry.title)}: ${entry.items.join("; ")}`).join("\n")
 }
 
 /** Lifecycle commands run before automatic launch; observations never start a stopped daemon. */
 export function parseDaemonService(argv: string[]): DaemonServiceCommand | undefined {
   const words: string[] = []
   const flags: Record<string, string | boolean> = {}
-  const values = new Set(["dir", "data-dir", "cwd", "engine", "service-dir", "lines", "limit", "format", "interval-ms"])
+  const values = new Set(["dir", "data-dir", "cwd", "engine", "service-dir", "lines", "limit", "format", "interval-ms", "grace"])
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!
     if (!token.startsWith("--")) { words.push(token); continue }
@@ -64,12 +74,15 @@ export function parseDaemonService(argv: string[]): DaemonServiceCommand | undef
   }
   if (action === "tick" && (!scheduler || service)) throw new Error("--once needs a loops or Dream daemon alias")
   if (flags.execute && action !== "tick") throw new Error("--execute needs --once")
+  const grace = flags.grace === undefined ? undefined : Number(flags.grace)
+  if (grace !== undefined && (action !== "restart" || !Number.isInteger(grace) || grace < 0 || grace > 3600)) throw new Error("--grace needs restart and 0–3600 seconds")
   return {
     action: action === "remove" ? "uninstall" : action as DaemonServiceCommand["action"], service,
     ...(scheduler ? { scheduler } : {}), ...(flags.dir || flags["data-dir"] ? { dir: String(flags["data-dir"] ?? flags.dir) } : {}),
     ...(flags.cwd ? { cwd: String(flags.cwd) } : {}), ...(flags.engine ? { engine: String(flags.engine) } : {}), ...(flags["service-dir"] ? { serviceDir: String(flags["service-dir"]) } : {}),
     json: Boolean(flags.json || flags.format === "json"), force: Boolean(flags.force), execute: Boolean(flags.execute),
     lines: number("lines", 100, 1000), limit: number("limit", 10, 100), help: Boolean(flags.help),
+    ...(grace !== undefined ? { grace } : {}),
   }
 }
 
@@ -146,6 +159,49 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         if (!report.running || !(report.activeTurns || report.backgroundJobs || report.loops.running)) return
         if (!command.force) throw new Error(`Daemon is busy: ${report.activeTurns ? workText(report) : `${report.backgroundJobs} jobs · ${report.loops.running} loops running`}; retry with --force to interrupt work. Turns it interrupts resume when the daemon starts again`)
         if (report.activeTurns) interrupted = Object.assign([...(report.work ?? [])], { count: report.activeTurns })
+        if (command.action === "restart") await drain()
+      }
+      let drained = false
+      /** The daemon stops by itself after its wait: this command only waits for it to go and starts the next one. */
+      let stopping = false
+      /**
+       * A forced restart first waits, up to `--grace`, for the commands, background tasks and agents that run: the daemon holds every
+       * session, interrupts nothing, and then stops by itself; that stop kills only what still runs. This command must stay until
+       * then: if it goes away first, the daemon lets the wait go and nothing restarts. A daemon that predates the wait refuses the
+       * field and restarts as before.
+       */
+      const drain = async () => {
+        if (drained || !peer) return
+        drained = true
+        const graceS = command.grace ?? RESTART_GRACE_S
+        if (graceS <= 0) return
+        // The daemon may stop by itself at the end of the wait: the terminals that lose it wait for this command's start (below).
+        const mark = () => { if (!command.service) deps.restarting?.(true) }
+        mark()
+        const reply = await peer.send({ type: "daemon.shutdown", force: true, drainMs: graceS * 1000 }).catch((error: unknown) => ({ ok: false as const, error }))
+        if (!reply.ok) return
+        const say = (text: string) => { if (!command.json) deps.out.write(text) }
+        let shown = heldLines((reply.result as { waiting?: Parameters<typeof heldLines>[0] } | undefined)?.waiting ?? [])
+        if (shown) say(`Waiting up to ${graceS} s for work that a restart would kill (--grace); keep this command running:\n${shown}\n`)
+        let told = false
+        let marked = deps.now()
+        for (;;) {
+          // The restart mark lasts seconds; the wait can last minutes.
+          if (deps.now() - marked >= 5000) { marked = deps.now(); mark() }
+          // The daemon closes this connection as it stops.
+          const status = await readStatus().catch(() => undefined)
+          if (!status?.running) { stopping = true; return }
+          // Let go without a stop (it failed): the forced stop below restarts as before.
+          if (!status.drain) return
+          const now = heldLines(status.drain.waiting)
+          if (status.drain.done && !told) {
+            told = true
+            if (now) say(`Still running after ${graceS} s; the restart stops it now:\n${now}\nEach session is told what was stopped when the daemon starts again.\n`)
+            else if (shown) say("The work ended; restarting.\n")
+          } else if (!status.drain.done && now !== shown && now) say(`Still waiting on:\n${now}\n`)
+          shown = now
+          await deps.sleep(250)
+        }
       }
       // A daemon that holds the data directory but does not answer: a new one could only fail on the lock, and stop cannot reach it.
       const unanswered = (report: DaemonStatusReport | NotAnswering) => {
@@ -176,8 +232,10 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!service.installed || service.drift?.length) throw new Error("Install a matching user service definition first")
           if (command.action === "restart" || !service.loaded) await busy()
           if (peer && !service.loaded) {
-            const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
-            if (!reply.ok) throw new Error(reply.error.message)
+            if (!stopping) {
+              const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
+              if (!reply.ok) throw new Error(reply.error.message)
+            }
             peer.close(); peer = undefined
             await stopped()
           }
@@ -215,12 +273,12 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
       } else if (command.action === "restart") {
         // Same refusal as stop: work in progress is never interrupted without --force.
         await busy()
-        const service = await deps.host.status()
         // This command starts the next daemon, with the environment it was given; the terminals that lose theirs wait for it.
         deps.restarting?.(true)
         try {
+          const service = await deps.host.status()
           if (service.loaded && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("stop")
-          else if (peer) {
+          else if (peer && !stopping) {
             const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
             if (!reply.ok) throw new Error(reply.error.message)
           }

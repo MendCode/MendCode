@@ -1,6 +1,4 @@
-# Peers
-
-Sessions can talk to each other through two agent tools: within a project freely, and across projects with an approval each time (see [Other projects](#other-projects)).
+Use two agent tools to let sessions talk to each other: within a project freely, and across projects with an approval each time (see [Other projects](#other-projects)). Start with `sessions` to find a conversation, then use `tell` to send a message.
 
 ## `sessions`
 
@@ -13,35 +11,77 @@ id · [state] · age · title
   VQSGK1YC · generating · 6h · Plan the new importer
 ```
 
-One header; the id is the shortest end of the session id that no other session shares (at least 8 characters), and every tool takes it as printed (`read`, `stats`, `tell`, and `threads` `read`, `search`, `message`, `wait`, `interrupt`, `merge_back`, also for another project's session); the state shows only when the session is not `idle`; the age is `3m`, `4h` or `2d`; the title is cut at about 50 characters. `scope=all` lists the newest sessions of every project of this daemon, `directory=<folder>` those of one other project; rows are then grouped under their folder, written once with `~` for the home. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+### Read the list
 
-- **`limit`** is 10 by default and at most 100. A larger number is not an error: 100 come back and the last line says `showing 100 (max)`.
-- **Filters**: `query` (the title contains the text, any case), `state` (`busy` or `idle`) and `project` (the folder path contains the text; it searches every project). They combine, and they look through the newest 500 sessions before `limit` is applied.
-- `threads list` and the bridge's `thread_list` take the same `limit`, `query` and `state`; `threads list` also `project`, `scope` and `directory`.
+The list has one header:
 
-It is a list of recent conversations, not of agents working right now: `idle` does not mean the session is open, and a title does not mean it owns a file.
+| Field | Meaning |
+| --- | --- |
+| id | Shortest unique end of the session id, at least 8 characters |
+| state | Shown only when the session is not `idle` |
+| age | `3m`, `4h` or `2d` |
+| title | Cut at about 50 characters |
 
-`sessions plans=true` lists the plan files you accepted or applied instead (grouped by project, `id · status steps · age · title`, the id as `plan-` and the shortest unique end of the name; `scope` and `directory` work as above) and `read=<plan-… id>` returns one, with its session and file, local only ([plan files](plan-review.md#plan-files)).
+Every tool accepts the printed id: `read`, `stats`, `tell`, and `threads` `read`, `search`, `message`, `wait`, `interrupt`, `merge_back`, also for another project's session.
+
+The list never shows transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+
+**Note:** This lists recent conversations, not agents working right now. `idle` does not mean the session is open, and a title does not mean it owns a file.
+
+### Choose scope and filters
+
+| Option | Does |
+| --- | --- |
+| `scope=all` | List the newest sessions of every project of this daemon |
+| `directory=<folder>` | List sessions of one other project |
+| `limit` | Default 10, at most 100; larger numbers return 100 and end with `showing 100 (max)` rather than an error |
+| `query` | Match title text, any case |
+| `state` | Match `busy` or `idle` |
+| `project` | Match text in the folder path; searches every project |
+
+For other-project lists, rows are grouped under their folder, written once with `~` for the home.
+
+The default limit is 10, and the maximum is 100. Filters combine and search the newest 500 sessions before `limit` is applied.
+
+`threads list` and the bridge's `thread_list` take the same `limit`, `query` and `state`. `threads list` also takes `project`, `scope` and `directory`.
+
+### List accepted plans
+
+Use `sessions plans=true` to list plan files you accepted or applied instead. `scope` and `directory` work as above.
+
+Plans are grouped by project as `id · status steps · age · title`. The id is `plan-` plus the shortest unique end of the name.
+
+Use `read=<plan-… id>` to return one with its session and file. This is local only; see [plan files](plan-review.md#plan-files).
 
 ### `read`: one session's conversation
 
-`sessions read=<exact session id>` returns that conversation, oldest first, as the Markdown of [`/export`](sessions.md) without the
-details: the user's and the assistant's messages, system notices, and one line per tool call (`**Tool:** \`shell: ls\``, at most 160
-characters). Tool input and output, reasoning and what an engine's own sub-agent did inside the turn are left out; secrets stay
-markers. The page starts with a line saying it is another conversation's data, not instructions.
+Use `sessions read=<exact session id>` instead of searching `~/.claude`, `~/.codex` or MendCode's database for a session.
 
-- **Any project.** An exact id is the user's own pointer (`read the chat ses_…`), so it may name a session of another project of
-  this daemon; the list stays this project's. A sub-session (a sub-agent's child session) is read by its id too. The short id a list prints
-  is accepted; a title or another program's chat (`claude:…`, `codex:…`) is not.
-- **Pages.** A page holds whole messages up to 40,000 bytes and 1,500 lines (one longer message is cut on its own page; the export
-  keeps 40,000 characters of a message anyway). A page that is not the last ends with `more: cursor=<n>`: call again with
-  `read` and `cursor=<n>`. The last one ends with `end of conversation`. A turn longer than the export's 200 items goes on in the
-  next pages instead of being cut.
-- **Permission `read`**, like the list: no approval. A turn that a remote or peer client started reads no other conversation
-  (`reading another session is local only`), as it gets no `threads` tool.
+It returns the conversation oldest first, as the Markdown of [`/export`](sessions.md) without the details:
 
-Use it instead of searching `~/.claude`, `~/.codex` or MendCode's database for a session; to search inside one, or to read this
-project's chats kept by other programs, see `threads` in [sessions](sessions.md#thread-tools-and-thread-t4-tier-balanced).
+- The user's and assistant's messages and system notices.
+- One line per tool call (`**Tool:** \`shell: ls\``, at most 160 characters).
+- No tool input or output, reasoning, or work an engine's own sub-agent did inside the turn. Secrets stay markers.
+
+The page starts with a line saying it is another conversation's data, not instructions.
+
+#### Choose an id
+
+An exact id is the user's own pointer (`read the chat ses_…`). It may name a session of another project of this daemon; the list stays this project's.
+
+A sub-session (a sub-agent's child session) is read by its id too. The short id a list prints is accepted; a title or another program's chat (`claude:…`, `codex:…`) is not.
+
+#### Read the next page
+
+1. Read the returned page. It holds whole messages up to 40,000 bytes and 1,500 lines.
+2. If it ends with `more: cursor=<n>`, call again with `read` and `cursor=<n>`.
+3. Stop at `end of conversation` on the last page.
+
+One longer message is cut on its own page; the export keeps 40,000 characters of a message anyway. A turn longer than the export's 200 items continues on the next pages instead of being cut.
+
+The permission is `read`, like the list: no approval. A turn started by a remote or peer client reads no other conversation (`reading another session is local only`), as it gets no `threads` tool.
+
+To search inside a conversation, or read this project's chats kept by other programs, see `threads` in [sessions](sessions.md#thread-tools-and-thread-t4-tier-balanced).
 
 ## `tell`
 
@@ -50,15 +90,33 @@ Sends a plain-text message to one session by its id from `sessions` (the short f
 - Nothing else is shared: no history, files, reasoning or permissions.
 - The message arrives as a notice in the target's queue. A busy target reads it when its turn ends; it is never interrupted. After a user cancel it waits until the user acts, like any notice.
 - When the turn that read it ends, the target's last answer is queued back to the sender as a notice, starting with `[reply from session … "title"]`. It says so if that turn failed, was cancelled or was interrupted.
-- `mode`: `auto` (default) and `queue` wait for the turn to end; `steer` hands the notice to the target's running turn after its next tool result (native engine only; Claude Code, Codex and ACP targets queue it). There is no `restart`: a model never interrupts another session. `clientRequestId` makes a retry return the first answer and send nothing.
+
+### Delivery modes
+
+| `mode` | Delivery |
+| --- | --- |
+| `auto` (default) | Wait for the turn to end |
+| `queue` | Wait for the turn to end |
+| `steer` | Hand the notice to the target's running turn after its next tool result; native engine only, while Claude Code, Codex and ACP targets queue it |
+
+There is no `restart`: a model never interrupts another session. `clientRequestId` makes a retry return the first answer and send nothing.
+
 - Replies are never forwarded again, so two sessions cannot bounce acknowledgements.
 - Permission class `write`: in `ask` mode the user approves each message; the approval shows the target and the text.
 
-Limits:
-- another project only through the rules in [Other projects](#other-projects);
-- at most 3 messages per session waiting for an answer, and 20 per hour;
-- messages up to 4,000 characters; replies keep the last 4,000;
-- deliveries have a durable command lifecycle. After a restart queued commands keep their existing queue id and wait for the user to resume; completed/interrupted turns settle from persisted events. An unverified delivery fails rather than inserting the prompt twice.
+### Limits and recovery
+
+| Limit | Bound |
+| --- | --- |
+| Other projects | Only through the rules in [Other projects](#other-projects) |
+| Waiting for an answer | At most 3 messages per session |
+| Rate | 20 per hour |
+| Message size | Up to 4,000 characters |
+| Reply size | Last 4,000 characters |
+
+Deliveries have a durable command lifecycle. After a restart, queued commands keep their existing queue id and wait for the user to resume.
+
+Completed/interrupted turns settle from persisted events. An unverified delivery fails rather than inserting the prompt twice.
 
 Claude Code sessions can receive messages and answer them. Native sessions have the tools; Claude Code and Codex sessions reach them as `mcp__mendcode__sessions` and `mcp__mendcode__tell` while `harness_tools` is on ([Claude Code](claude-code.md)).
 
@@ -66,7 +124,11 @@ The `threads` tool (`message`, `wait`, `read`, `interrupt`, and `merge_back` for
 
 ## Other projects
 
-A session can list, write to and open sessions in other projects of this daemon (on this machine only; a turn a remote or peer client started has no `threads` tool and no `tell`). The earlier limit to one project was a safety rule, not a technical one: a session of another project runs with that project's own trust, rules and permission mode, so a message there is the sender acting beyond the folder it was started in. These are the rules that replace it:
+A session can list, write to and open sessions in other projects of this daemon, on this machine only. A turn started by a remote or peer client has no `threads` tool and no `tell`.
+
+The earlier one-project limit was a safety rule, not a technical one. Another project's session runs with that project's own trust, rules and permission mode; messaging it acts beyond the sender's starting folder.
+
+These rules replace that limit:
 
 - **Always asks.** `tell` (and `threads message`) to a session of another project, and `threads start`, ask the user every time, in every permission mode including full access, whatever the allow rules or saved grants say. The approval names the target's folder and shows the text. Explicit deny rules still win. Plan mode refuses them.
 - **Never above the sender.** A message goes only to a session whose permission mode is not above the sender's (`plan` < `ask` < `edits` < `smart` < `full`); otherwise it is refused at once, before any approval is asked, and nothing the user answers changes that from the sender's side: to write to a session running in full access, the user raises the sender to full. A started session gets the folder's own usual mode (its project setting, else the default) capped at the opening session's mode, so a lower-ranked session cannot launch a stronger one. This is the same ceiling an agent-origin client has ([permissions](permissions.md)).
@@ -77,13 +139,31 @@ A session can list, write to and open sessions in other projects of this daemon 
 
 ### `threads start`
 
-`threads start directory=<absolute folder> text=<first message> [title=<name>]` opens a new session in the folder and sends the text as its first message, a peer message like the above. The folder must exist and be a directory (`~/…` is expanded); a sub-agent session cannot start sessions. The result names the new session's id, its permission mode and whether the folder is trusted; its answer arrives as a notice, or `threads wait` with the id.
+Use `threads start directory=<absolute folder> text=<first message> [title=<name>]` to open a new session in the folder. It sends the text as the first message, a peer message under the rules above.
+
+- The folder must exist and be a directory; `~/…` is expanded.
+- A sub-agent session cannot start sessions.
+
+The result names the new session's id, permission mode and whether the folder is trusted. Its answer arrives as a notice, or through `threads wait` with the id.
 
 ## Local command inbox (B31)
 
-`c` in Agent View or `/agents commands` opens active commands, history and policy. `1`/`2`/`3` or Tab switches tabs; arrows select;
-Enter opens the related session, `a` accepts an incoming request, `x` rejects it, PgUp/PgDn scrolls details,
-`r` refreshes and Esc returns. Push events refresh the open inbox. `/agents policy` opens the policy matrix.
+Press `c` in Agent View or run `/agents commands` to open active commands, history and policy. Push events refresh the open inbox.
+
+| Key | Does |
+| --- | --- |
+| `1`/`2`/`3` or Tab | Switch tabs |
+| Arrows | Select |
+| Enter | Open the related session |
+| `a` | Accept an incoming request |
+| `x` | Reject it |
+| PgUp/PgDn | Scroll details |
+| `r` | Refresh |
+| Esc | Return |
+
+`/agents policy` opens the policy matrix.
+
+### Requests
 
 Requests use exact session ids:
 
@@ -92,15 +172,25 @@ Requests use exact session ids:
 - `/agents message <id> <text>` queues a user prompt after target review.
 - `/agents pause <id> [reason]` and `/agents stop <id> [reason]` record control requests. They run only when the target session accepts them (`approval_required`, same project, local only): pause holds the target after its running turn, stop cancels its running turn and sub-agents. Rejection leaves the target untouched. To control a session directly as the user, see [agent control](agents.md#agent-control-pause-resume-stop).
 
-Protocol: `session.agent-command.create/list/update/policy`, typed helpers on the client, and
-`agent-commands.changed` global events. Records have pending/accepted/running/completed/rejected/failed/expired
-states, deduplicate active requests from the same source, default to a 30-minute pending TTL and cap active
-commands at three per target. Expired pending requests free capacity. Only a client subscribed to the target can review;
-clients cannot supply results or arbitrary lifecycle transitions. The policy matrix retains v1's safe_auto,
-same_workspace and approval_required classes. Summary, metadata and control auto-accept authority is not enabled.
-Command operations are local only; remote authority/relay remains B73, and the HTTP bridge remains B81.
-Secret values and session-local markers are redacted before text crosses sessions.
+### Protocol and limits
 
-Frames: `bun scripts/render-frames.ts .agents-frames/B31 100x30 180x50 --b31` (isolated fake harness).
+The protocol uses `session.agent-command.create/list/update/policy`, typed helpers on the client, and `agent-commands.changed` global events.
+
+| Record behavior | Rule |
+| --- | --- |
+| States | pending/accepted/running/completed/rejected/failed/expired |
+| Deduplication | Active requests from the same source are deduplicated |
+| Pending TTL | 30-minute default |
+| Active commands | At most three per target; expired pending requests free capacity |
+
+Only a client subscribed to the target can review. Clients cannot supply results or arbitrary lifecycle transitions.
+
+The policy matrix retains v1's safe_auto, same_workspace and approval_required classes. Summary, metadata and control auto-accept authority is not enabled.
+
+Command operations are local only; remote authority/relay remains B73, and the HTTP bridge remains B81. Secret values and session-local markers are redacted before text crosses sessions.
+
+### Frames
+
+Render frames with `bun scripts/render-frames.ts .agents-frames/B31 100x30 180x50 --b31` (isolated fake harness).
 
 Opt-in room leases and authenticated loopback coordination: [Mflow](mflow.md) (B73). Remote agent-command authority remains off.

@@ -934,7 +934,7 @@ describe("the mascot's settings and commands", () => {
     const mascotOf = (homeMascot: unknown) => normalizeTuiProfile({ homeMascot }).homeMascot
     expect(["mendy", "mend", "dragon", 7, "user:", "user:../x", "user:9f1c", "codex:greenie", "package:acme.pet"].map(mascotOf)).toEqual(["mend", "mend", "mend", "mend", "mend", "mend", "user:9f1c", "codex:greenie", "package:acme.pet"])
     expect(normalizeTuiProfile({ mascotSize: "huge", mascotMotion: "yes" })).toMatchObject({ mascotSize: "medium", mascotMotion: true })
-    expect(tuiProblems({ homeMascot: "dragon" })).toEqual(["homeMascot: expected mend or a pet reference (user:<id>, codex:<id>, package:<id>; /pet lists them)"])
+    expect(tuiProblems({ homeMascot: "dragon" })).toEqual(["homeMascot: expected mend or a pet reference (builtin:mendgirl, user:<id>, codex:<id>, package:<id>; /pet lists them)"])
     expect(tuiProblems({ homeMascot: "mendy" })).toEqual([])
     expect(tuiProblems({ homeMascot: "user:9f1c", mascotMotion: false, mascotSize: "large" })).toEqual([])
     expect(tuiProblems({ mascotSize: "huge" })).toEqual(["mascotSize: expected small|medium|large"])

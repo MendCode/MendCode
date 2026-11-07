@@ -130,11 +130,14 @@ export function decodeSprite(bytes: Uint8Array<ArrayBuffer>): Map<PetRow, PetIma
   return read(bytes).rows
 }
 
-/** Cache file of a pet: changes when its sheet (path, size, mtime) or its layout does. */
+/** The start of a pet's cache file names. `+` is in no pet id, so a user's pet of any id never drops a built-in pet's cache as stale. */
+const cacheName = (pet: PetInfo) => (pet.ref.startsWith("builtin:") ? `builtin+${pet.id}` : pet.id)
+
+/** Cache file of a pet: changes when its sheet (path, size, mtime) or its layout does. A built-in sheet's path names its content. */
 export async function spritePath(input: { pet: PetInfo; cacheDir: string }, format = FORMAT) {
   const info = await stat(input.pet.sheetPath)
   const key = Bun.hash(`${input.pet.sheetPath}:${fileSignature(info)}:${format}${input.pet.layout ? `:${JSON.stringify(input.pet.layout)}` : ""}`).toString(36)
-  return path.join(input.cacheDir, `${input.pet.id}-${key}.sprite`)
+  return path.join(input.cacheDir, `${cacheName(input.pet)}-${key}.sprite`)
 }
 
 /**
@@ -148,7 +151,7 @@ export async function loadSprite(input: { pet: PetInfo; cacheDir: string }): Pro
     // A cache in the previous format already holds the frames: rewriting it skips the sheet decoder.
     const legacy = await readLegacy(await spritePath(input, LEGACY_FORMAT))
     await writeSprite({ sheetPath: input.pet.sheetPath, out: file, layout: input.pet.layout, ...(legacy ? { baked: legacy } : {}) })
-    await dropStale({ cacheDir: input.cacheDir, id: input.pet.id, keep: file })
+    await dropStale({ cacheDir: input.cacheDir, id: cacheName(input.pet), keep: file })
   }
   const { rows, timing, box } = read(new Uint8Array(await Bun.file(file).arrayBuffer()))
   return { id: input.pet.id, rows, ...(timing ? { timing } : {}), ...(input.pet.layout ? { art: input.pet.layout.art } : {}), ...(box ? { box } : {}) }

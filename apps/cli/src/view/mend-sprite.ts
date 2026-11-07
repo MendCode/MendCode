@@ -1,8 +1,10 @@
-import type { Line, Span } from "../ui/theme"
+import { mix, type Theme } from "../themes"
+import { activeTheme, type Line, type Span } from "../ui/theme"
 
 /**
  * The built-in Mend (MendAscii) as filled half blocks (two pixels a cell), the way Claude Code draws its crab: the little robot
- * MendGirl holds, a round mint head with an antenna, happy eyes, pink cheeks, ear discs and a teal body with a mint cross, in
+ * MendGirl holds, a round head with an antenna, happy eyes, pink cheeks, ear discs and a body with a cross, in the active
+ * theme's palette (`mendPalette`: mint and teal by default, black and white under Ink), in
  * 13 x 14 pixels, 7 rows of 13 cells. Its eyes follow the session's phase (`mascotPhase`) and move while it works; a 16-color palette or ASCII glyphs
  * keep the v1 text mascot (`mascot.ts`).
  */
@@ -82,18 +84,46 @@ const COLORS: Record<Key, Rgb> = {
 /** An error turns the body red; the head and the eyes stay. */
 const ERROR_COLORS: Partial<Record<Key, Rgb>> = { B: [239, 68, 68], D: [153, 27, 27], C: [254, 202, 202] }
 
+/**
+ * Ink's robot in the website's black and white: a white head with a mid-grey outline, a graphite body with a light cross,
+ * dark eyes, and the pink cheeks as the one warm touch. On an error its body takes the theme's own error red.
+ */
+const INK_COLORS: Record<Key, Rgb> = {
+  O: [115, 115, 115], M: [229, 229, 229], H: [250, 250, 250], S: [184, 184, 184], D: [82, 82, 82], A: [212, 212, 212],
+  B: [64, 64, 64], C: [229, 229, 229], P: [240, 168, 172], E: [23, 23, 23], V: [229, 229, 229],
+}
+
+const channel = (hexColor: string, at: number) => Number.parseInt(hexColor.slice(at, at + 2), 16)
+const rgb = (hexColor: string): Rgb => [channel(hexColor, 1), channel(hexColor, 3), channel(hexColor, 5)]
+const themeErrorColors = (theme: Theme): Partial<Record<Key, Rgb>> => ({ B: rgb(theme.colors.error), D: rgb(mix(theme.colors.error, "#000000", 0.45)), C: rgb(mix(theme.colors.error, "#ffffff", 0.65)) })
+
+/** Themes that draw Mend in a palette of their own; every other theme keeps the mint and teal robot. */
+const THEME_PALETTES: Readonly<Record<string, Record<Key, Rgb>>> = { ink: INK_COLORS }
+
+type MendPalette = { key: string; colors: Record<Key, Rgb>; error: Record<Key, Rgb> }
+const DEFAULT_PALETTE: MendPalette = { key: "mend", colors: COLORS, error: { ...COLORS, ...ERROR_COLORS } }
+let themed: { theme: Theme; palette: MendPalette } | undefined
+
+/** Mend's colors under the active theme, with the key every frame cache adds so a theme switch draws it again. */
+export function mendPalette(theme = activeTheme()): MendPalette {
+  const colors = THEME_PALETTES[theme.name]
+  if (!colors) return DEFAULT_PALETTE
+  if (themed?.theme !== theme) themed = { theme, palette: { key: `${theme.name}${theme.colors.error}`, colors, error: { ...colors, ...themeErrorColors(theme) } } }
+  return themed.palette
+}
+
 export const MEND_SPRITE_SIZE = { cols: BODY[0].length, rows: BODY.length / 2 } as const
 
 const hex = (rgb: Rgb) => `#${rgb.map((value) => value.toString(16).padStart(2, "0")).join("")}`
 
 /** Each pixel's color for `phase` at `beat` (undefined where the background shows), row by row. */
-function pixels(sprite: Sprite, phase: string, beat: number): Array<Array<string | undefined>> {
+function pixels(sprite: Sprite, phase: string, beat: number, colors: MendPalette): Array<Array<string | undefined>> {
   const cycle = PHASE_EYES[phase] ?? ["open"]
   const shape = cycle[beat % cycle.length]!
   const eyes = EYES[shape]
   const gaze = GAZE[shape] ?? 0
   const signal = SIGNALLING.has(phase) && beat % 2 === 1
-  const palette = phase === "error" ? { ...COLORS, ...ERROR_COLORS } : COLORS
+  const palette = phase === "error" ? colors.error : colors.colors
   return sprite.body.map((row, y) => {
     const eyeRow = y === sprite.row || y === sprite.row + 1 ? eyes[y - sprite.row] : undefined
     const cheeks = row.includes("P") ? movedCheeks(row, gaze) : row
@@ -114,8 +144,8 @@ function movedCheeks(row: string, gaze: number): string {
 }
 
 /** Mend for `phase` as one pixel per pixel of RGBA: the frame the image layer draws, sized by the rule every pet follows (`pets/mend-pet.ts`). */
-export function mendImage(phase = "idle", beat = 0): { width: number; height: number; rgba: Uint8Array } {
-  const grid = pixels(FULL, phase, beat)
+export function mendImage(phase = "idle", beat = 0, palette = mendPalette()): { width: number; height: number; rgba: Uint8Array } {
+  const grid = pixels(FULL, phase, beat, palette)
   const width = BODY[0].length
   const rgba = new Uint8Array(width * BODY.length * 4)
   grid.forEach((row, y) => row.forEach((color, x) => {
@@ -140,10 +170,11 @@ export function mendChatLines(phase = "idle", beat = 0): Line[] {
 }
 
 function halfBlocks(sprite: Sprite, phase: string, scale: number, beat: number): Line[] {
-  const key = `${phase}/${scale}/${beat % BEATS}`
+  const palette = mendPalette()
+  const key = `${palette.key}/${phase}/${scale}/${beat % BEATS}`
   const kept = drawn.get(key)
   if (kept) return kept
-  const grid = pixels(sprite, phase, beat).flatMap((row) => Array.from({ length: scale }, () => row.flatMap((color) => Array.from({ length: scale }, () => color))))
+  const grid = pixels(sprite, phase, beat, palette).flatMap((row) => Array.from({ length: scale }, () => row.flatMap((color) => Array.from({ length: scale }, () => color))))
   const lines: Line[] = []
   for (let y = 0; y < grid.length; y += 2) {
     const line: Span[] = []

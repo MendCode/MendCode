@@ -41,9 +41,12 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "pr-review/already-reviewed", "pr-review/commit-status", "pr-review/pr-states",
     "pr-review/context", "pr-review/readers", "pr-review/readers-graft",
     "extensions/plugin-adapter", "extensions/plugin-tool", "extensions/session-api", "extensions/dialogs", "usage-breakdown",
+    "restart-drain",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
   // /profiles and what it names of an override (labels, groups, summaries) load with the page.
   for (const file of ["packages-page", "profile-overrides", "customize-rows"]) expect(inputs.has(`apps/cli/src/view/${file}.ts`), file).toBe(false)
+  // The pet system and the built-in MendGirl (module and sheet) load with the pet list or a chosen pet, never at start.
+  for (const file of ["apps/cli/src/pets/builtin.ts", "apps/cli/src/pets/manifest.ts", "apps/cli/src/pets/sprite.ts", "apps/cli/assets/pets/mendgirl.webp"]) expect(inputs.has(file), file).toBe(false)
 }, 20_000)

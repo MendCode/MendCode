@@ -30,7 +30,9 @@ export function createPets(ctx: AppContext, actions: { changeProfile(patch: Part
     const { image } = mendPicture("idle", cells.cols, cells.rows, { width: 8, height: 16 })
     const official = { ref: "mend", name: "MendAscii", description: "The official Mend mascot, MendGirl's little robot drawn in colored blocks; its eyes follow what the session does", source: "Built-in", states: Object.keys(defaultActivityMascotStates), preview, ...(activeTheme().ansi === undefined ? { image, cells } : {}) }
     const choices = input.pets ? await petChoices(input.pets) : []
-    state.petList = [official, ...choices.map(({ pet: info, image, preview, cells, states }) => ({ ref: info.ref, name: info.displayName, description: info.description, source: info.layout ? "imported" : info.ref.split(":")[0]!, states, ...(info.generatedStates ? { generated: info.generatedStates } : {}), ...(info.layout ? { imported: true } : {}), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(cells ? { cells } : {}) }))]
+    // A built-in pet has a layout like an imported one, but it is not the user's to rename or delete.
+    const builtIn = (ref: string) => ref.startsWith("builtin:")
+    state.petList = [official, ...choices.map(({ pet: info, image, preview, cells, states }) => ({ ref: info.ref, name: info.displayName, description: info.description, source: builtIn(info.ref) ? "Built-in" : info.layout ? "imported" : info.ref.split(":")[0]!, states, ...(info.generatedStates ? { generated: info.generatedStates } : {}), ...(info.layout && !builtIn(info.ref) ? { imported: true } : {}), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(cells ? { cells } : {}) }))]
     state.petPicker = createPetPickerState(state.petList, state.petPickerMascot ? mascotNow() : state.tuiProfile.pet || state.settingsNow.pet)
     requestFrame()
   }

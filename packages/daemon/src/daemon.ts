@@ -415,7 +415,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -594,7 +594,7 @@ export async function startDaemon(options: DaemonOptions) {
   const mflow = createMflow({ dir: options.dir, now: () => clock.now(), listener: () => mflowListener?.url.origin })
   const actors = new Map<SessionId, SessionActor>()
   /** Background tasks Claude Code runs for a session, as it last reported them; shown with the daemon's own shells (`background.list`). */
-  const engineTasks = new Map<SessionId, Array<{ id: string; description: string; kind: string; startedAt: number }>>()
+  const engineTasks = new Map<SessionId, Array<{ id: string; description: string; kind: string; command?: string; startedAt: number }>>()
   /** Background agents an engine runs inside its own process (Claude Code's): stopping the daemon stops that process, so they are running work. */
   /** How to stop one of a session's engine tasks (Claude Code's `stop_task`), while it has any. */
   const engineTaskStops = new Map<SessionId, (taskId: string) => Promise<void>>()
@@ -2359,8 +2359,45 @@ export async function startDaemon(options: DaemonOptions) {
     title: (sessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? ""),
     queueId: () => ids("queue"),
     log: logLine,
+    // One meta read at start; the module that formats the list loads only when the previous stop killed something.
+    lost: async () => {
+      if (!store.meta.get("restart.lost")) return new Map()
+      const { takeLost, lostText } = await import("./restart-drain")
+      return new Map([...takeLost(store.meta)].map(([sessionId, items]) => [sessionId, lostText(items)]))
+    },
+    // With resumeAfterRestart off nothing starts a turn on its own after a restart; the list stays in the daemon log.
+    tellLost: async (sessionId, text) => store.settings.get().resumeAfterRestart !== false ? actorFor(sessionId)?.notify(text) : undefined,
   })
   sessionObservers.push(restartResume.observe)
+
+  /** What runs in a session that a stop would kill: a tool call in flight, a compaction, Claude Code's background tasks, the session's background shells. */
+  function runningWork(sessionId: SessionId, openTools: (events: SessionEvent[]) => string[]): string[] {
+    const now = actors.get(sessionId)?.snapshot()
+    const items: string[] = []
+    if (now?.foreground === "compacting") items.push("compaction")
+    if (now?.turnId && !now.stopping && now.openItems > 0) items.push(...openTools(lastTurnEvents(sessionId) ?? []))
+    for (const task of engineTasks.get(sessionId) ?? []) items.push(`background ${/agent/i.test(task.kind) ? "agent" : "task"}: ${task.command || task.description || task.kind}`)
+    for (const task of background.listAll(sessionId)) if (task.status === "running") items.push(`background shell: ${task.command}`)
+    return items.map((item) => secrets.mask(sessionId, item))
+  }
+  const sessionTitle = (sessionId: SessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? "")
+  /** The wait of a forced restart (`daemon.shutdown` with `drainMs`); loaded by the first one. */
+  let restartDrain: import("./restart-drain").RestartDrain | undefined
+  async function loadRestartDrain() {
+    if (restartDrain) return restartDrain
+    const { createRestartDrain, openToolCalls } = await import("./restart-drain")
+    return restartDrain ??= createRestartDrain({
+      sessions: () => actors.keys(),
+      running: (sessionId) => runningWork(sessionId, openToolCalls),
+      title: sessionTitle,
+      paused: (sessionId) => actors.get(sessionId)?.snapshot().paused === true,
+      hold: (sessionId, on) => actors.get(sessionId)?.pause(on) ?? Promise.resolve(),
+      // After the reply that started the wait is out; the stop interrupts the turns still open, for the next start to resume.
+      stop: () => void setTimeout(() => void stop().then(() => options.onShutdown?.()), 10),
+      now: () => clock.now(),
+      log: logLine,
+    })
+  }
 
   /** A turn that was running when the previous daemon died is closed as interrupted, never re-run (FC-37, I15). */
   function recoverInterruptedTurns() {
@@ -6074,7 +6111,14 @@ export async function startDaemon(options: DaemonOptions) {
         }
       }
       case "daemon.shutdown": {
-        const busy = () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0 || loops.list().some((loop) => loop.state === "verifying")
+        // A forced restart's wait: the sessions are held, what still runs is waited for, then the daemon stops (restart-drain.ts).
+        // A socket client that leaves before that lets it go; the client that asked starts the next daemon.
+        if (command.drainMs !== undefined) {
+          if (stopped) return reply(connection, command.id, { ok: true, result: { waiting: [] } })
+          const waiting = await (await loadRestartDrain()).begin(command.drainMs, { except: connection.agent?.sessionId, gone: connection.ended?.signal })
+          return reply(connection, command.id, { ok: true, result: { waiting } })
+        }
+        const busy =() => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0 || loops.list().some((loop) => loop.state === "verifying")
         if (busy() && !command.force && command.whenIdle) {
           restartWhenIdle ??= setInterval(() => {
             if (stopped || busy()) return
@@ -6106,6 +6150,7 @@ export async function startDaemon(options: DaemonOptions) {
           /** What a process hosting this daemon must not drop when its terminal closes (apps/cli/src/solo.ts). `standing` features restart from durable state in a separate daemon; `running` work would lose its in-flight step. */
           keepAlive: keepAliveReport(),
           ...(restartWhenIdle ? { restartPending: true } : {}),
+          ...(restartDrain?.status() ? { drain: restartDrain.status()! } : {}),
         } })
       }
       case "daemon.logs": {
@@ -6753,6 +6798,17 @@ export async function startDaemon(options: DaemonOptions) {
     idleGc.stop()
     if (stopped) return
     stopped = true
+    // Before anything is stopped: what still runs (a command, a background task) is about to be killed; the next start tells each session.
+    const except = restartDrain?.except()
+    restartDrain?.dispose()
+    if ([...actors.values()].some(actorWorking) || engineJobs() > 0 || scheduler.snapshot().length > 0 || background.listAll().some((task) => task.status === "running")) {
+      try {
+        const { collectHeld, recordLost, openToolCalls, heldText } = await import("./restart-drain")
+        const held = collectHeld({ sessions: actors.keys(), running: (sessionId) => runningWork(sessionId, openToolCalls), title: sessionTitle, except })
+        recordLost(store.meta, held)
+        if (held.length) logLine("warn", `[DAEMON]: stopping kills work still running:\n${heldText(held)}`)
+      } catch (error) { logLine("warn", `[DAEMON]: could not record the work a stop kills: ${error instanceof Error ? error.message : String(error)}`) }
+    }
     audio.dispose()
     voice.dispose()
     await releases.stop()

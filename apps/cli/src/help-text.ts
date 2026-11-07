@@ -57,6 +57,8 @@ export const DAEMON_HELP = text([
   `usage: ${P} daemon <command> [--dir D] [--json]`,
   "",
   "  start|run|stop|restart  --force: interrupt active work",
+  "                          restart --force first waits for running commands,",
+  "                          background tasks and agents: --grace S (0-3600, 120)",
   "  status",
   "  logs                    --lines N (1-1000)",
   "  service <action>        plan, install, start, stop, restart, status, logs,",

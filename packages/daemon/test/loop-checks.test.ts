@@ -41,3 +41,20 @@ describe("loop check timeout", () => {
     expect(result.output).not.toContain("timed out")
   })
 })
+
+describe("loop check stdin", () => {
+  const withStdin = (argv: string[], stdin?: string) => runLoopCheck({ argv, cwd: process.cwd(), signal: new AbortController().signal, timeoutSeconds: 20, ...(stdin === undefined ? {} : { stdin }) })
+  const echoStdin = [process.execPath, "-e", "const text = await Bun.stdin.text(); process.stdout.write(`len=${Buffer.byteLength(text)} text=${text}`)"]
+
+  test("the given text reaches the command's stdin exactly, and stdin is closed after it", async () => {
+    const result = await withStdin(echoStdin, "héllo\nworld")
+    expect(result.exitCode).toBe(0)
+    expect(result.output).toBe("len=12 text=héllo\nworld")
+  })
+
+  test("without stdin the command reads an empty, closed stdin as before", async () => {
+    const result = await withStdin(echoStdin)
+    expect(result.exitCode).toBe(0)
+    expect(result.output).toBe("len=0 text=")
+  })
+})

@@ -35,7 +35,7 @@ export function createDaemon(ctx: AppContext, deps: { reloadTerminal: () => Prom
       // The daemon came back and the builds still differ: it is this terminal that is behind, and waiting changes nothing.
       if (was === "manual") {
         state.daemonRestart = undefined
-        say("daemon restarted · this terminal is an older build, reopen it to update")
+        say("daemon restarted · reopen this terminal to update it", "info", { detail: "The daemon restarted on a newer build than this terminal. Reopen the terminal to run the same build." })
       }
     }
     requestFrame()
@@ -45,7 +45,11 @@ export function createDaemon(ctx: AppContext, deps: { reloadTerminal: () => Prom
     const reply = await input.send({ type: "daemon.status" })
     if (!reply.ok) return fail(reply.error.message)
     const report = (reply.result ?? {}) as { buildId?: string; activeTurns?: number; backgroundJobs?: number; clients?: number }
-    state.notice = [`daemon ${report.buildId ?? "unknown build"}${older ? " (older than this terminal)" : ""}`, `${report.activeTurns ?? 0} turns`, `${report.backgroundJobs ?? 0} jobs`, ...(report.clients !== undefined ? [`${report.clients} client${report.clients === 1 ? "" : "s"}`] : [])].join(" · ")
+    // In words; the build id goes behind F4 with the counts.
+    const count = (n: number | undefined, noun: string) => `${n ?? 0} ${noun}${n === 1 ? "" : "s"}`
+    const counts = [count(report.activeTurns, "turn"), count(report.backgroundJobs, "job"), ...(report.clients !== undefined ? [count(report.clients, "terminal")] : [])]
+    const detail = [`Daemon build ${report.buildId ?? "unknown"}${older ? " (older than this terminal)" : ""}`, `${count(report.activeTurns, "turn")} running, ${count(report.backgroundJobs, "background job")}${report.clients !== undefined ? `, ${count(report.clients, "terminal")} connected` : ""}`].join("\n")
+    say(`${older ? "Daemon older than this terminal" : "Daemon running"} · ${counts.join(" · ")}`, "info", { detail, oneLine: true, ms: 8_000 })
     requestFrame()
   }
 

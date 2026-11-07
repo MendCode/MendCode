@@ -1,10 +1,70 @@
 # Code graph
 
-Unless the [autopilot](#autopilot) is on (full tier; nightly, dev and local builds by default), the graph is built only on an explicit request, in a folder the [gate](#where-it-indexes) allows: when the model calls a graph tool, when the user presses `m` in the focused Galaxy panel to see the project's code ([code mode](sidebar.md#code-mode)), or once by itself when the Galaxy shows a session that has touched no code yet. Without `m` the Galaxy draws the session's own code graph from what its tools declared, and builds nothing: the files it read or changed and the symbols graph lookups returned, linked symbol to file and caller to callee, each node and link lighting up as it is used and fading over six seconds. Without the autopilot nothing else builds it: not opening a session or a page. Both refuse the home folder and the directories above it (not a project; nothing is indexed). `graph_context` is off until `/tier graph_context on` (balanced/full); on, it runs permission-gated `graph_map` orientation once per retained session context and project directory. The engine-injected orientation draws in the transcript as the code map card or as one muted row, `Code map · 7 dirs · 2,394 files · click or ctrl+o to open`. `codeMapCard` (Session chrome in `/customize`) chooses the default: `auto` opens the card in the full view and keeps the row in balanced, `open` and `folded` force either (the minimal view always keeps the row). A click on the card or row (or `ctrl+o`, for all cards) opens or folds that one card, and the reader's choice wins over the setting. The call is marked `injected` on its `item.started` meta, so a `graph_map` the model calls itself always keeps its card. The card is the ASCII project diagram alone at every level: its summary row (`7 dirs · 2,594 files · hubs: …`) and the directory and hub lists are not drawn, in any view or after `ctrl+o` (the folded row already counts dirs and files). They remain in the result the model reads and in the stored result and export (below); the terminal has no other view of them. Injection and token cost are unchanged. Successful native `edit`/`write` calls get a separate `graph_impact` card with cached pre-edit callers and importing files through two hops, without rescanning. The card identifies its snapshot and missing/unindexed files explicitly. Dynamic calls and new symbols may be missing: a small radius is not safety proof. Compaction may refresh orientation. Minimalist and peer turns skip automatic reads. Disable with `/tier graph_context off` or graph tool switches. Map/impact feed positive file-bytes/4 minus result-chars/4 estimates into `/usage` savings, not measured provider billing.
+Use the code graph to navigate a project by symbols and calls, or view its code in the Galaxy panel. Press `m` in the focused Galaxy panel for the project's [code mode](sidebar.md#code-mode).
+
+## Build or view the graph
+
+Unless [autopilot](#autopilot) is on (full tier; nightly, dev and local builds by default), the graph builds only in a folder the [gate](#where-it-indexes) allows, on these requests:
+
+- The model calls a graph tool.
+- You press `m` in the focused Galaxy panel.
+- Once by itself when the Galaxy shows a session that has touched no code yet.
+
+Without autopilot, nothing else builds it: not opening a session or a page. Both refuse the home folder and directories above it; they are not a project, so nothing is indexed.
+
+Without `m`, Galaxy draws the session's own code graph from what its tools declared and builds nothing. It shows files read or changed and symbols returned by graph lookups, linked symbol to file and caller to callee.
+
+Each node and link lights up as it is used and fades over six seconds.
+
+## Add orientation to a turn
+
+Enable `/tier graph_context on` in balanced/full. `graph_context` is off until then; on, it runs permission-gated `graph_map` orientation once per retained session context and project directory.
+
+The engine-injected orientation appears as a code map card or one muted row: `Code map · 7 dirs · 2,394 files · click or ctrl+o to open`.
+
+### Choose the card's default
+
+Set `codeMapCard` under Session chrome in `/customize`:
+
+| Value | Default display |
+|---|---|
+| `auto` | Open card in full view; row in balanced. |
+| `open` | Force the open card. |
+| `folded` | Force the folded row. |
+
+The minimal view always keeps the row. Click a card or row to open or fold that card, or use `ctrl+o` for all cards. Your choice wins over the setting.
+
+The call is marked `injected` on its `item.started` meta, so a `graph_map` the model calls itself always keeps its card.
+
+### What the card contains
+
+The card is the ASCII project diagram alone at every level. The summary row (`7 dirs · 2,594 files · hubs: …`) and directory and hub lists are not drawn in any view or after `ctrl+o`; the folded row already counts dirs and files.
+
+Those details remain in the model's result, stored result and export (below). The terminal has no other view of them. Injection and token cost are unchanged.
+
+### Impact after an edit
+
+Successful native `edit`/`write` calls get a separate `graph_impact` card: cached pre-edit callers and importing files through two hops, without rescanning. The card explicitly identifies its snapshot and missing/unindexed files.
+
+Dynamic calls and new symbols may be missing: a small radius is not safety proof.
+
+- Compaction may refresh orientation.
+- Minimalist and peer turns skip automatic reads.
+- Disable with `/tier graph_context off` or graph tool switches.
+
+Map/impact feed positive file-bytes/4 minus result-chars/4 estimates into `/usage` savings, not measured provider billing.
 
 ## Autopilot
 
-Feature `graph_autopilot` (full tier; `/tier graph_autopilot on|off`). With it on, the sentence above changes: MendCode builds and refreshes the graph of a project by itself, so the model neither has to remember to ask nor gives up because none exists. **It is on by default only in nightly, dev and local builds** (the channel of the binary: `channelOfVersion` in `packages/upgrade/src/releases.ts`); in beta and stable it stays off until `/tier graph_autopilot on`, and minimalist and balanced never have it unless switched on. Off, everything above is exactly as before.
+Enable feature `graph_autopilot` with `/tier graph_autopilot on|off` (full tier). MendCode then builds and refreshes the project's graph itself, so the model neither has to remember to ask nor gives up because none exists.
+
+| Build or tier | Default |
+|---|---|
+| Nightly, dev and local builds | On by default. |
+| Beta and stable | Off until `/tier graph_autopilot on`. |
+| Minimalist and balanced | Never have it unless switched on. |
+
+The binary's channel is determined by `channelOfVersion` in `packages/upgrade/src/releases.ts`. With autopilot off, everything above works exactly as before.
 
 | What | How |
 | --- | --- |
@@ -19,7 +79,17 @@ Feature `graph_autopilot` (full tier; `/tier graph_autopilot on|off`). With it o
 
 ## Where it indexes
 
-A folder is indexed only when its gate allows it (`createIndexGate` in `packages/codegraph/src/index-gate.ts`; the daemon checks it where indexing starts: a graph tool call and `codegraph.overview`). The mode is `codegraph_index` (`auto`, the default; `on`; `off`), set for every project with `/graph default on|off|auto` or the `Code graph index` row of `/customize` (Capabilities), and for one project with `/graph on|off|auto` (stored as `projectConfig[<dir>].codegraph_index`; `auto` removes the override). Bare `/graph` says what applies here. Nothing asks: no modal, no notification.
+A folder is indexed only when its gate allows it. Set the `codegraph_index` mode: `auto` (default), `on` or `off`.
+
+| Scope | Control |
+|---|---|
+| Every project | `/graph default on|off|auto`, or `Code graph index` in `/customize` (Capabilities). |
+| One project | `/graph on|off|auto`, stored as `projectConfig[<dir>].codegraph_index`; `auto` removes the override. |
+| Current status | Bare `/graph` says what applies here. |
+
+Nothing asks: no modal, no notification.
+
+The gate is `createIndexGate` in `packages/codegraph/src/index-gate.ts`. The daemon checks it where indexing starts: a graph tool call and `codegraph.overview`.
 
 | Mode | Indexes |
 | --- | --- |
@@ -27,7 +97,23 @@ A folder is indexed only when its gate allows it (`createIndexGate` in `packages
 | `on` | Any folder but the home folder and the directories above it. |
 | `off` | Nothing. |
 
-A skipped folder gives a reason: `off`, `home folder`, `no git repo`, `several repos` (a folder that is not a repository but holds two or more), `large folder`. The daemon publishes it as `codegraph.status {state: "skipped", reason}` when a session opens there and when the setting changes, and the footer's GRAPH row says it in one muted phrase, `graph off · large folder` (`graph off` for the user's own off). In a skipped folder the native engine does not list `graph_*` and `code_search` at all, so the model goes straight to `grep`/`glob`/`read`; a call that still arrives (another engine, a stale list) is refused with that reason and the advice to use them. The folder indexed is the session folder itself, not the repository root, so every `file:line` stays relative to where the session reads.
+### Skipped folders
+
+A skipped folder gives a reason:
+
+- `off`
+- `home folder`
+- `no git repo`
+- `several repos`: not a repository itself, but holds two or more.
+- `large folder`
+
+The daemon publishes `codegraph.status {state: "skipped", reason}` when a session opens there and when the setting changes. The footer's GRAPH row shows one muted phrase: `graph off · large folder`, or `graph off` for your own off.
+
+In a skipped folder, the native engine omits `graph_*` and `code_search`, so the model goes straight to `grep`/`glob`/`read`. A call still arriving from another engine or a stale list is refused with the reason and advice to use those tools.
+
+The indexed folder is the session folder itself, not the repository root. Every `file:line` stays relative to where the session reads.
+
+### Language-server navigation
 
 For semantic definitions, references, hover, symbols and call hierarchy from language servers, use the daemon's [`lsp` tool](lsp.md). The graph tools below remain the syntactic fallback.
 
@@ -59,7 +145,31 @@ const tools = createCodeGraphTools({ cacheDir, jgBin?, now?, jgTimeoutMs?, onSca
 | `off` | Not a project (the home folder or above it), `MENDCODE_CODEGRAPH=0`, or the `codegraph` feature off. Nothing was indexed. `reason` says which. |
 | `failed` | The build was tried and failed or was cancelled; `reason` is one line. |
 
-A file is `{path, imports, importedBy, calls, degree, symbols, topImports, topImportedBy}`: `imports` and `importedBy` count resolved project files, `calls` the call edges that cross the file's boundary in either direction, and `degree` is the number of distinct files the file is joined to by any of those (an import and a call to the same file count once), which ranks the files. A file with no connection is left out. Caps (`CODEGRAPH_OVERVIEW` in `packages/protocol/src/codegraph-overview-data.ts`): 30 files (`limit` 1–30, default 24), 256 edges, 5 paths in each of `topImports` and `topImportedBy`, 240 characters per path, 200 per reason. Paths are relative to `directory`; one longer than the cap is left out, never cut. The command is not in the read-only set, so a read-only remote peer cannot start an index.
+### File records
+
+A file is `{path, imports, importedBy, calls, degree, symbols, topImports, topImportedBy}`:
+
+| Field | Meaning |
+|---|---|
+| `imports`, `importedBy` | Count resolved project files. |
+| `calls` | Call edges crossing the file's boundary in either direction. |
+| `degree` | Distinct files joined by any of those edges; an import and call to the same file count once. This ranks the files. |
+
+A file with no connection is left out.
+
+### Overview limits
+
+Caps are defined by `CODEGRAPH_OVERVIEW` in `packages/protocol/src/codegraph-overview-data.ts`:
+
+| Resource | Cap |
+|---|---|
+| Files | 30; `limit` 1–30, default 24. |
+| Edges | 256. |
+| `topImports`, `topImportedBy` | 5 paths each. |
+| Path | 240 characters. |
+| Reason | 200 characters. |
+
+Paths are relative to `directory`. A path longer than the cap is left out, never cut. The command is not in the read-only set, so a read-only remote peer cannot start an index.
 
 All six tools have permission `read` and follow the configured permission rules. Every result is bounded: at most 50 results, text cut to `OUTPUT_LIMITS`.
 

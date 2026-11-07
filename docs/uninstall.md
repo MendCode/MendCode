@@ -1,14 +1,45 @@
 # Uninstall
 
-```
-mendcode uninstall [--keep-config|-c] [--keep-data|-d] [--dry-run] [--force|-f] [--dir D] [--json]
-```
+Use uninstall to review exact existing paths and byte counts before moving known v2 files to Trash. You can keep configuration, data or both; this local command never connects to, launches, stops or signals a daemon.
 
-This local command never connects to, launches, stops or signals a daemon. It reviews exact existing paths and byte counts before confirmation. The interactive review uses the shared panel grid; arrows/PageUp/PageDown scroll, `y` confirms, and Enter/Esc/`n` cancel. Piped input requires `--force` after reviewing `--dry-run` (exit 4 otherwise). `--force` skips only confirmation.
+## Review and confirm removal
 
-The data directory follows `--dir`, `MENDCODE_DIR`, then `~/.mendcode`. A copied SQLite is checked for the v2 schema; review never opens the original SQLite or creates WAL sidecars. A live writer-lock owner blocks execution, including forced execution. An invalid lock or a socket without a verifiable lock also blocks it. The daemon's writer lock is held while executing, so a daemon starting during confirmation causes refusal.
+1. Review the targets with `--dry-run`:
 
-Only known v2 files are moved. Unknown files, symlinks and unverified databases/binaries stay in place and are listed in the report. v1/Codex locations and their ancestors are refused, including physical paths behind symlink aliases. Project files and shell startup files are not modified.
+   ```sh
+   mendcode uninstall --dry-run
+   ```
+
+2. Run uninstall with the options you want:
+
+   ```sh
+   mendcode uninstall [--keep-config|-c] [--keep-data|-d] [--dry-run] [--force|-f] [--dir D] [--json]
+   ```
+
+3. Check the exact paths and byte counts in the interactive review, then confirm or cancel.
+
+The interactive review uses the shared panel grid:
+
+| Key | Does |
+|---|---|
+| Arrows / PageUp / PageDown | Scroll |
+| `y` | Confirm |
+| Enter / Esc / `n` | Cancel |
+
+For piped input, review `--dry-run` first, then use `--force`. Without it, the command exits 4. `--force` skips only confirmation.
+
+The data directory follows this order: `--dir`, `MENDCODE_DIR`, then `~/.mendcode`.
+
+### When removal is refused
+
+- A live writer-lock owner blocks execution, including forced execution.
+- An invalid lock or a socket without a verifiable lock also blocks execution.
+- The daemon's writer lock is held while executing. A daemon starting during confirmation causes refusal.
+- v1/Codex locations and their ancestors are refused, including physical paths behind symlink aliases.
+
+Only known v2 files are moved. Unknown files, symlinks and unverified databases/binaries stay in place and are listed in the report. Project files and shell startup files are not modified.
+
+## Choose what to keep
 
 | Option | Preserved |
 |---|---|
@@ -16,18 +47,67 @@ Only known v2 files are moved. Unknown files, symlinks and unverified databases/
 | `--keep-data` | SQLite sessions/events, usage/memory, encrypted session secrets and their key, blobs, snapshots, goals, reviews, side chats and project scratchpads |
 | Both | Original database and both file groups |
 
-Because settings and history share one SQLite, keeping only one prepares a retained database with the other group's records removed. The original is moved to Trash before the retained database is written. Cache/builtins and managed binaries are removed regardless of the keep flags. A changed target aborts before moving files; a failed move restores earlier moves. A cross-filesystem Trash rename fails safely rather than deleting the source.
+Settings and history share one SQLite. Keeping only one prepares a retained database with the other group's records removed. The original is moved to Trash before the retained database is written.
 
-Removed targets live in a private recovery folder under `~/.Trash` on macOS, `${XDG_DATA_HOME:-~/.local/share}/Trash/files` on Linux, or `%LOCALAPPDATA%/MendCodeV2/Trash` on Windows (a recovery folder, not the Windows Recycle Bin). `restore.json` maps original paths to the numbered filenames in that folder. Original database/WAL/SHM files must be restored together while no daemon is running. Trash retains credentials present in the original configuration; the report never prints those contents.
+**Note:** Cache/builtins and managed binaries are removed regardless of the keep flags.
 
-Installation ownership:
+## Recover removed files
 
-- `<data dir>/bin/mendcode-next[.exe]`, `.prev` and `.new` belong to the upgrade contract (the managed binary keeps its name `mendcode-next` inside the data directory) when the database is verified.
-- POSIX/PowerShell installers now write `.mendcode-install` beside `mendcode[.exe]`, containing its exact basename and SHA256 (and, since `--tier`, the starting tier as a fourth `tier=` line that uninstall accepts but does not need; see [releases](release.md#starting-tier)). Only a matching receipt permits removing that binary. `MENDCODE_INSTALL_DIR` selects a custom installer destination; a standalone executable also inspects its own installed path. Source runs never target the Bun executable.
-- The development wrapper must match `scripts/install-dev.sh`'s exact marker/shape. `MENDCODE_NEXT_BIN_DIR` selects its directory.
+Removed targets live in a private recovery folder:
 
-Older unmarked installations, manually created links, package-manager ownership and Windows user PATH cleanup remain blocked pending destination/ownership policy. They are never inferred from the name `mendcode`, which v1 also uses. No package-manager command runs. Safe owned targets can still be removed; skipped targets return exit 1 with a partial result.
+| Platform | Location |
+|---|---|
+| macOS | `~/.Trash` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/Trash/files` |
+| Windows | `%LOCALAPPDATA%/MendCodeV2/Trash`: a recovery folder, not the Windows Recycle Bin |
 
-Exit codes: 0 complete/dry-run, 1 failure or partial, 2 cancelled, 4 needs confirmation, 64 usage. `--json`/`--format json` emits the existing `mendcode-next.cli.v1` envelope with `plan`, then `result` or `error`; no credential values are included.
+`restore.json` maps original paths to the numbered filenames in that folder. Original database/WAL/SHM files must be restored together while no daemon is running.
 
-Evidence: `bun scripts/render-frames.ts .agents-frames/B76 --b76 100x30 180x50`. This uses the production **local** review factory and temporary v2 stores, not a daemon-backed session screen.
+**Warning:** Trash retains credentials present in the original configuration. The report never prints those contents.
+
+### If a move cannot complete
+
+- A changed target aborts before moving files.
+- A failed move restores earlier moves.
+- A cross-filesystem Trash rename fails safely rather than deleting the source.
+
+## Check installation ownership
+
+Only verified ownership permits removal:
+
+| Installation | Ownership check |
+|---|---|
+| Managed binary | When the database is verified, `<data dir>/bin/mendcode-next[.exe]`, `.prev` and `.new` belong to the upgrade contract. The managed binary keeps its name `mendcode-next` inside the data directory. |
+| POSIX/PowerShell installer | Installers now write `.mendcode-install` beside `mendcode[.exe]`, containing its exact basename and SHA256. Only a matching receipt permits removing that binary. |
+| Development wrapper | Must match `scripts/install-dev.sh`'s exact marker/shape. `MENDCODE_NEXT_BIN_DIR` selects its directory. |
+
+Since `--tier`, the install receipt also contains the starting tier as a fourth `tier=` line. Uninstall accepts it but does not need it; see [releases](release.md#starting-tier).
+
+`MENDCODE_INSTALL_DIR` selects a custom installer destination. A standalone executable also inspects its own installed path. Source runs never target the Bun executable.
+
+These remain blocked pending destination/ownership policy:
+
+- Older unmarked installations.
+- Manually created links.
+- Package-manager ownership.
+- Windows user PATH cleanup.
+
+Ownership is never inferred from the name `mendcode`, which v1 also uses. No package-manager command runs. Safe owned targets can still be removed; skipped targets return exit 1 with a partial result.
+
+## Read the result
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Complete/dry-run |
+| 1 | Failure or partial |
+| 2 | Cancelled |
+| 4 | Needs confirmation |
+| 64 | Usage |
+
+`--json`/`--format json` emits the existing `mendcode-next.cli.v1` envelope with `plan`, then `result` or `error`. No credential values are included.
+
+## How review works
+
+A copied SQLite is checked for the v2 schema. Review never opens the original SQLite or creates WAL sidecars.
+
+Evidence: `bun scripts/render-frames.ts .agents-frames/B76 --b76 100x30 180x50`. This uses the production local review factory and temporary v2 stores, not a daemon-backed session screen.

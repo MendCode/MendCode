@@ -173,8 +173,8 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
     return { lines: side.rows, hits: side.hits.map((hit) => hit.sessionId === SETTLED_ROW ? { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "toggle" } : { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "open", arg: hit.sessionId }) }
   },
   notice: (m, g) => {
-    if (m.kind === "toast" && m.inline) return [renderToastRow({ variant: m.variant, ...(m.title ? { title: m.title } : {}), message: m.message, ...(m.hint ? { hint: m.hint } : {}) }, m.width, 2)]
-    if (m.kind === "toast") return renderToast({ variant: m.variant, ...(m.title ? { title: m.title } : {}), message: m.message, ...(m.hint ? { hint: m.hint } : {}) }, m.width)
+    if (m.kind === "toast" && m.inline) return [renderToastRow({ variant: m.variant, ...(m.title ? { title: m.title } : {}), message: m.message, ...(m.hint ? { hint: m.hint } : {}) }, m.width, 2, g)]
+    if (m.kind === "toast") return renderToast({ variant: m.variant, ...(m.title ? { title: m.title } : {}), message: m.message, ...(m.hint ? { hint: m.hint } : {}) }, m.width, g)
     if (m.kind === "limit") {
       const bar = renderLimitBar({ width: m.width, view: m.view as UsageLimitView, now: m.now, glyphs: g })
       return { lines: bar.rows, hits: bar.chips.map((chip) => ({ row: chip.row, from: chip.from, to: chip.to, action: chip.action })) }
