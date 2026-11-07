@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1174,8 +1174,35 @@ describe("MCP servers changed during a turn", () => {
     expect(closes).toEqual([])
     adds.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
     await Bun.sleep(5)
-    expect(closes).toEqual([["MCP servers changed", 0]])
+    expect(closes).toEqual([["a change waited for the background tasks (MCP servers, effort or fast)", 0]])
     expect(spawned).toHaveLength(1)
+    engine.stop?.()
+  })
+
+  test("a new model or effort while a background agent runs keeps the process: the model switches live, the effort waits until the agent ends", async () => {
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (turns === 1) api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Long agent" }] })
+        streamText(api, 0, `turn ${turns}`)
+        api.push(result())
+      },
+    })
+    let choice: ClaudeModelChoice = { model: "sonnet", effort: "medium" }
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([fake], { modelFor: () => choice, onClose: (_sessionId, reason) => void closes.push(reason) })
+    const first = turnInput()
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    choice = { model: "opus", effort: "high" }
+    expect(await engine.runTurn(turnInput({ sessionId: first.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(1)
+    expect(closes).toEqual([])
+    expect(fake.written.filter((message) => message.type === "control_request").map((message) => message.request)).toContainEqual({ subtype: "set_model", model: "opus" })
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await Bun.sleep(5)
+    expect(closes).toEqual(["a change waited for the background tasks (MCP servers, effort or fast)"])
     engine.stop?.()
   })
 
@@ -1241,6 +1268,20 @@ describe("claude protocol helpers", () => {
     const args = claudeArgs({ permission: "ask", model: "sonnet", advisor: "opus" })
     expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 4)).toEqual(["--model", "sonnet", "--advisor", "opus"])
     expect(claudeArgs({ permission: "ask", model: "sonnet" })).not.toContain("--advisor")
+  })
+
+  test("claudeContext: full adds nothing; lean keeps only MendCode's MCP servers and drops auto memory; isolated also drops CLAUDE.md, hooks and output style; no level turns off /compact", () => {
+    expect(claudeContextArgs("full")).toEqual({ args: [] })
+    expect(claudeContextArgs("lean")).toEqual({ args: ["--strict-mcp-config"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    for (const level of ["lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--disable-slash-commands")
+    expect(claudeContextArgs("isolated")).toEqual({
+      args: ["--strict-mcp-config", "--settings", JSON.stringify({ disableAllHooks: true, outputStyle: "default" })],
+      env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" },
+    })
+    // Settings files keep loading in every level: permission rules and login never change.
+    for (const level of ["full", "lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--setting-sources")
+    // The flag-layer settings merge with fast mode's instead of one replacing the other.
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeContextArgs("isolated").args])).toContain(JSON.stringify({ fastMode: true, disableAllHooks: true, outputStyle: "default" }))
   })
 
   test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {

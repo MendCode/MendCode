@@ -91,6 +91,22 @@ export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; 
 }
 
 /**
+ * What the `claudeContext` level changes in a Claude Code process (each in Claude Code 2.1.319's `claude --help` or binary). `lean`:
+ * `--strict-mcp-config` keeps only the servers MendCode hands it with `--mcp-config` (its own tools), `CLAUDE_CODE_DISABLE_AUTO_MEMORY` its
+ * auto memory (MendCode's memory block still comes). Never `--disable-slash-commands`: it also turns off the `/compact` MendCode sends to
+ * compact a Claude session (2.1.319 answers "/compact isn't available in this environment"). `isolated`, as
+ * OpenCode runs it (anomalyco/opencode `claude-agent/claude/query-options.ts`): also `CLAUDE_CODE_DISABLE_CLAUDE_MDS`, and in the flag layer
+ * `disableAllHooks` and the `default` output style. Settings files still load in every level, so permission rules and login stay.
+ */
+export type ClaudeContext = "full" | "lean" | "isolated"
+export function claudeContextArgs(level: ClaudeContext): { args: string[]; env?: Record<string, string> } {
+  if (level === "full") return { args: [] }
+  const lean = { args: ["--strict-mcp-config"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } }
+  if (level === "lean") return lean
+  return { args: [...lean.args, "--settings", JSON.stringify({ disableAllHooks: true, outputStyle: "default" })], env: { ...lean.env, CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } }
+}
+
+/**
  * Every `--settings <json object>` of `args` as one, the later keys winning: a process may get settings from several places (fast
  * mode, a run limit's language), and neither may depend on how Claude Code reads a repeated option. A value that is not a JSON
  * object (a settings file's path) is left where it is.

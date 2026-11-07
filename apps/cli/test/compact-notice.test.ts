@@ -169,7 +169,7 @@ describe("/settings: the compact notice row", () => {
 
   test("is in Behavior with the compaction and cache rows", () => {
     const behavior = SETTINGS_GROUPS.find((group) => group.title === "Behavior")!.rows.map((row) => row.id)
-    expect(behavior.slice(behavior.indexOf("compactAtTokens"), behavior.indexOf("compactNoticePercent") + 1)).toEqual(["compactAtTokens", "idleCompactAtTokens", "promptCacheTtl", "claudeCacheTtl", "compactNoticePercent"])
+    expect(behavior.slice(behavior.indexOf("compactAtTokens"), behavior.indexOf("compactNoticePercent") + 1)).toEqual(["compactAtTokens", "idleCompactAtTokens", "promptCacheTtl", "claudeCacheTtl", "claudeContext", "compactNoticePercent"])
     expect(rows.find((row) => row.id === "compactNoticePercent")).toEqual({ id: "compactNoticePercent", label: "compact notice", kind: "cycle" })
   })
 

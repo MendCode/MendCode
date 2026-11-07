@@ -37,9 +37,9 @@ describe("detection to recommended model", () => {
     expect(out.options.filter((option) => option.source === "claude")).toEqual([])
     expect(out.usable).toBe(false)
     const max = harness({ id: "claude", installed: true, signedIn: true, plan: "max" })
-    expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan" })
+    expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan · context: /settings claude context" })
     expect(max.options[0]).toMatchObject({ source: "claude", line: expect.stringContaining("runs in Claude Code, hosted by MendCode") })
-    expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported")
+    expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported · context: /settings claude context")
     expect(harness({ id: "claude", installed: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not confirmed")
     // Without the daemon's report (an older daemon) a listed Claude Code is never called signed in.
     expect(detect({ claude: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not checked")

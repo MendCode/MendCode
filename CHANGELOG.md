@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Claude Code sessions load less of your own Claude Code setup by default: `/settings` → `claude context` picks lean (no own MCP servers or auto memory), full or isolated (none of your setup); permissions never change.
 - `/today` lists what needs you, the sessions to pick up and Dream's memory proposals in one read-only page.
 - On `/today`, each tab says what it holds (Attention: blocked until you answer; Pick up: left half-done) and each row says what Enter does.
 - `/today` `m` pins rows into a Today group at the top until midnight.
@@ -26,6 +27,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Changing a Claude Code session's model no longer ends its background agents: the model switches live, and a new effort waits until they finish.
 - Page tabs draw their shortcut number dim and apart, so it no longer reads as the tab's count; `/today` shows each count once.
 - The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.
 - On a small diff the reviewer says the review pass reads the code itself, instead of calling the readers' share spent.
