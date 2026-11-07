@@ -1,6 +1,6 @@
 ---
 summary: PR reviewer, repo watch, hosted Action, @mendcode
-docs: pr-review, pr-review-setup, feature-setup
+docs: pr-review, pr-review-setup, pr-review-security, feature-setup
 aliases: pr-reviewer, code-review, review-yaml
 ---
 For: "review this PR", "set up PR review", "why did MendCode comment on my PR", "configure the reviewer", "teach the reviewer".
