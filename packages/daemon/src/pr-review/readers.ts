@@ -216,6 +216,8 @@ export function readerPrompt(groups: readonly ReaderGroup[]): string {
   ].join("\n")
 }
 
+/** The most groups one answer may carry; `batchGroups` never puts more in one call. */
+export const MAX_ANSWER_GROUPS = 50
 const ReaderAnswer = z.object({
   groups: z.array(z.object({
     id: z.string().max(20),
@@ -225,7 +227,7 @@ const ReaderAnswer = z.object({
     rarities: z.array(z.object({ kind: z.string().max(40), detail: z.string().max(600).default(""), path: z.string().max(400).optional() })).max(30).default([]),
     /** A changed code file's read; each entry is checked on its own (`codeSummary`), so one bad file never voids the others. */
     files: z.array(z.unknown()).max(50).optional(),
-  })).max(50),
+  })).max(MAX_ANSWER_GROUPS),
 })
 const CodeFileAnswer = z.object({
   path: z.string().max(400),
@@ -246,7 +248,8 @@ function codeSummary(group: ReaderGroup, answer: z.infer<typeof ReaderAnswer>["g
   if (!entry?.success) return raw("the reader gave no usable answer for this file")
   const changed = tidy(entry.data.changed, 400)
   if (!changed) return raw("the reader did not say what changed")
-  const { kept, dropped } = validRisks(file, entry.data.risks)
+  const { kept, dropped, overflow } = validRisks(file, entry.data.risks)
+  if (overflow) return raw("the reader flagged more risk spots than a summary carries, so the file goes whole")
   if (entry.data.risks.length && !kept.length) return raw("every risk spot the reader cited was outside the diff")
   if (!kept.length && !entry.data.nothing_risky) return raw("the reader named no risk spot and did not say there is none")
   const code: CodeRead = { path: file.path, changed, risks: kept.map((risk) => ({ start: risk.start, end: risk.end, kind: tidy(risk.kind, 40) || "other", why: tidy(risk.why, 300) })), nothingRisky: !kept.length }
@@ -274,14 +277,14 @@ export function parseReaderAnswer(text: string, groups: readonly ReaderGroup[], 
   return out
 }
 
-/** Groups batched into reader calls of at most `READER_CALL_TOKENS` of excerpt each, in order. */
+/** Groups batched into reader calls of at most `READER_CALL_TOKENS` of excerpt and `MAX_ANSWER_GROUPS` groups each, in order. */
 export function batchGroups(groups: readonly ReaderGroup[]): Array<{ groups: ReaderGroup[]; prompt: string; tokens: number }> {
   const batches: Array<{ groups: ReaderGroup[]; prompt: string; tokens: number }> = []
   let current: ReaderGroup[] = []
   const push = () => { if (!current.length) return; const prompt = readerPrompt(current); batches.push({ groups: current, prompt, tokens: estimateTokens(prompt.length) }); current = [] }
   for (const group of groups) {
     const alone = estimateTokens(readerPrompt([group]).length)
-    if (current.length && estimateTokens(readerPrompt([...current, group]).length) > READER_CALL_TOKENS) push()
+    if (current.length >= MAX_ANSWER_GROUPS || current.length && estimateTokens(readerPrompt([...current, group]).length) > READER_CALL_TOKENS) push()
     current.push(group)
     if (alone >= READER_CALL_TOKENS) push()
   }

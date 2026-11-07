@@ -7,8 +7,8 @@ import { gitRun, parseUnifiedDiff } from "../src/pr-review/context"
 import { createAccounting, accountingFile } from "../src/pr-review/accounting"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { createJobLedger } from "../src/pr-review/jobs"
-import { annotateDiff, riskHunks, validRisks } from "../src/pr-review/read-code"
-import { READER_SHARE, READER_SHARE_ALL } from "../src/pr-review/readers"
+import { MAX_RISKS, annotateDiff, riskHunks, validRisks } from "../src/pr-review/read-code"
+import { MAX_ANSWER_GROUPS, READER_SHARE, READER_SHARE_ALL, batchGroups, groupFiles, parseReaderAnswer } from "../src/pr-review/readers"
 import { runPrReview } from "../src/pr-review/run"
 import { emptyState } from "../src/pr-review/state"
 
@@ -222,6 +222,26 @@ describe("read-code helpers", () => {
     const { kept, dropped } = validRisks(file, risks)
     expect(kept.map((risk) => [risk.start, risk.end])).toEqual([[2, 3], [1, 22]])
     expect(dropped).toBe(2)
+  })
+
+  test("more valid risk spots than a summary carries are reported as overflow, never dropped as invalid", () => {
+    const many = Array.from({ length: MAX_RISKS + 1 }, () => ({ start: 2, end: 2, kind: "x", why: "" }))
+    expect(validRisks(file, many)).toMatchObject({ overflow: true, dropped: 0 })
+    expect(validRisks(file, many.slice(0, MAX_RISKS))).toMatchObject({ overflow: false, dropped: 0 })
+  })
+
+  test("a reader answer with more valid risk spots than fit sends the file whole", () => {
+    const [group] = groupFiles({ data: [], code: [file] })
+    const risks = Array.from({ length: MAX_RISKS + 1 }, () => ({ start: 21, end: 21, kind: "x", why: "flagged" }))
+    const answer = JSON.stringify({ groups: [{ id: group!.id, files: [{ path: "a.ts", changed: "changes b and adds y", risks }] }] })
+    expect(parseReaderAnswer(answer, [group!], "gpt-6-luna")?.[0]?.by).toBe("raw")
+  })
+
+  test("many small code files are split into calls of at most the answer's group limit", () => {
+    const files = parseUnifiedDiff(Array.from({ length: MAX_ANSWER_GROUPS + 1 }, (_, i) => `diff --git a/f${i}.ts b/f${i}.ts\n--- a/f${i}.ts\n+++ b/f${i}.ts\n@@ -1 +1 @@\n-a\n+b\n`).join(""))
+    const batches = batchGroups(groupFiles({ data: [], code: files }))
+    expect(batches.length).toBeGreaterThan(1)
+    for (const batch of batches) expect(batch.groups.length).toBeLessThanOrEqual(MAX_ANSWER_GROUPS)
   })
 
   test("only the hunks a risk spot touches are kept, with the header", () => {

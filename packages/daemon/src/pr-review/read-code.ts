@@ -31,10 +31,13 @@ export function annotateDiff(text: string): string {
 
 export type RawRisk = { start: number; end: number; kind: string; why: string }
 
-/** The risk spots whose both ends are new-side lines of the diff and whose span is bounded, at most `MAX_RISKS`; `dropped` counts the rest. */
-export function validRisks(file: Pick<FileDiff, "right">, risks: readonly RawRisk[]): { kept: RawRisk[]; dropped: number } {
+/**
+ * The risk spots whose both ends are new-side lines of the diff and whose span is bounded; `dropped` counts the invalid ones.
+ * More valid spots than `MAX_RISKS` set `overflow`: the caller sends the file whole rather than hide a flagged hunk.
+ */
+export function validRisks(file: Pick<FileDiff, "right">, risks: readonly RawRisk[]): { kept: RawRisk[]; dropped: number; overflow: boolean } {
   const kept = risks.filter((risk) => Number.isInteger(risk.start) && Number.isInteger(risk.end) && risk.start <= risk.end && risk.end - risk.start < MAX_RISK_SPAN && file.right.has(risk.start) && file.right.has(risk.end))
-  return { kept: kept.slice(0, MAX_RISKS), dropped: risks.length - Math.min(kept.length, MAX_RISKS) }
+  return { kept: kept.slice(0, MAX_RISKS), dropped: risks.length - kept.length, overflow: kept.length > MAX_RISKS }
 }
 
 /** The file's header and only the hunks that contain a line of a risk spot, with how many hunks it has. */
