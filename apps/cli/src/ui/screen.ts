@@ -1,5 +1,5 @@
 import { hostCellPixels, terminalPixels } from "./terminal-pixels"
-import { backgroundPaint, createTerminalMode, MODE_SUBSCRIBE, MODE_UNSUBSCRIBE, PAINT_RESET, paintSequence } from "./terminal-mode"
+import { backgroundPaint, createTerminalMode, MODE_SUBSCRIBE, MODE_UNSUBSCRIBE, paintSequence } from "./terminal-mode"
 import { createTerminalFocus, FOCUS_SUBSCRIBE, FOCUS_UNSUBSCRIBE } from "./terminal-focus"
 import { createKeyboardProtocol, translateKey } from "./keyboard-protocol"
 import { createInlineRegion } from "./inline-region"
@@ -88,22 +88,29 @@ export function createScreen(
   // colours (OSC 10/11/12), so the rows' SGR stays what it was and erased or unwritten cells take it too. Only on the
   // alternate screen: inline output stays in the scrollback, where the terminal's colours come back. Re-decided when the
   // theme or the terminal's answer changes; the terminal's own colours go back on leaving.
-  let painted = PAINT_RESET
+  // Painting saves the colours the terminal answered with; unpainting sets those exact ones back (terminal-mode.ts `restore`).
+  let painted: string | undefined
   let paintInputs: { theme: Theme; mode: string | undefined; answered: boolean } | undefined
   function paintChange(): string {
     const theme = activeTheme()
     if (paintInputs && paintInputs.theme === theme && paintInputs.mode === terminalMode.mode && paintInputs.answered === terminalMode.answered) return ""
     paintInputs = { theme, mode: terminalMode.mode, answered: terminalMode.answered }
-    const next = paintSequence(backgroundPaint({ theme, mode: terminalMode.mode, answered: terminalMode.answered }))
+    const paint = backgroundPaint({ theme, mode: terminalMode.mode, answered: terminalMode.answered })
+    if (!paint) return unpaint()
+    const next = paintSequence(paint)
     if (next === painted) return ""
+    if (painted === undefined) terminalMode.hold()
     painted = next
     return next
   }
+  function unpaint(): string {
+    if (painted === undefined) return ""
+    painted = undefined
+    return terminalMode.restore()
+  }
   function paintRestore(): string {
     paintInputs = undefined
-    if (painted === PAINT_RESET) return ""
-    painted = PAINT_RESET
-    return PAINT_RESET
+    return unpaint()
   }
 
   // Window focus (DEC 1004), asked for while the screen is entered so notifications can wait for the user to look away.

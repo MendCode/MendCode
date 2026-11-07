@@ -1446,7 +1446,7 @@ MendCode normally draws on the terminal's own background. When the theme's light
 
 The terminal's background is asked once when the full-screen chat starts (the OSC 11 colour and the DEC 996/2031 light/dark mode); later mode-change reports, theme changes (the picker's preview too) and resizes keep it in sync.
 
-The colour is set as the terminal's default text, background and cursor colours (OSC 10/11/12), so the cells' own colours, selection, diff rows, panels and images draw as before; the terminal's colours are put back on exit, on `ctrl+z` and while an external editor runs.
+The colour is set as the terminal's default text, background and cursor colours (OSC 10/11/12), so the cells' own colours, selection, diff rows, panels and images draw as before; the terminal's colours are put back on exit, on `ctrl+z` and while an external editor runs. Those are the exact colours the terminal answered with at start (OSC 10/11/12 queries), so ones a shell or another program set survive; a colour it never answered, or one changed by a light/dark mode report, goes back to the terminal's configured default (OSC 110/111/112).
 
 It stays off:
 

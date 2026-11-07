@@ -38,7 +38,8 @@ export function attachmentLabel(pending: readonly PendingAttachment[], index: nu
 /** Cells a file name may take inside a token; a longer one keeps its start and its end (the extension). */
 const TOKEN_NAME_CELLS = 28
 
-function tokenName(name: string): string {
+/** The name as a token shows it: control characters and brackets turned to spaces, a name past `TOKEN_NAME_CELLS` cut in the middle. */
+export function tokenName(name: string): string {
   const clean = [...name.replace(/[\x00-\x1f\x7f\[\]]/g, " ").replace(/\s+/g, " ").trim()]
   const text = clean.length > TOKEN_NAME_CELLS ? `${clean.slice(0, TOKEN_NAME_CELLS - 11).join("")}…${clean.slice(-10).join("")}` : clean.join("")
   return text || "file"
@@ -156,7 +157,10 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
   }
   placed.sort((a, b) => a.start - b.start)
 
-  const block = (item: PendingAttachment & { kind: "text" }) => `[attached file: ${item.name}]\n\`\`\`\n${item.content}\n\`\`\``
+  const block = (item: PendingAttachment & { kind: "text" }) => {
+    const fence = fileFence(item.content)
+    return `[attached file: ${item.name}]\n${fence}\n${item.content}\n${fence}`
+  }
   const refs = new Map<PendingAttachment, BlobRef>()
   let body = ""
   let cursor = 0
@@ -198,6 +202,13 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
     else blocks.push(block(item))
   }
   return { text: [body, ...blocks].filter(Boolean).join("\n\n"), attachments: pending.flatMap((item) => (refs.has(item) ? [refs.get(item)!] : [])) }
+}
+
+/** A file block's fence: three backticks, or one more than the longest backtick run in the file, so no fence inside it closes the block (CommonMark). */
+function fileFence(content: string): string {
+  let longest = 0
+  for (const run of content.matchAll(/`+/g)) longest = Math.max(longest, run[0].length)
+  return "`".repeat(Math.max(3, longest + 1))
 }
 
 /** A single line that looks like one local path: a quoted path (may contain spaces), or an unquoted `file://`, `~/` or absolute path with escaped spaces. */

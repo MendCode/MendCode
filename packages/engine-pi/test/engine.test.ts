@@ -192,6 +192,15 @@ describe("live output tokens", () => {
     // The message's own usage is still the one record.
     expect(events.filter((event) => event.type === "usage")).toHaveLength(1)
   })
+
+  test("an update's exact count comes after its words, so the words it already counts are not estimated on top of it", () => {
+    const events: EngineEvent[] = []
+    const mapper = createPiMapper({ newItemId: () => ids("item"), emit: (event) => void events.push(event) })
+    mapper.accept({ type: "message_update", usage: { input: 100, output: 0, cacheRead: 0, cacheWrite: 0 }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "a" } })
+    mapper.accept({ type: "message_update", usage: { input: 100, output: 12, cacheRead: 0, cacheWrite: 0 }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "b" } })
+    const order = events.flatMap((event) => (event.type === "item.delta" ? [`delta:${event.text}`] : event.type === "usage.live" ? [`live:${event.output}`] : []))
+    expect(order).toEqual(["delta:a", "delta:b", "live:12"])
+  })
 })
 
 describe("a normal turn", () => {

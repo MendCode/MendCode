@@ -153,7 +153,8 @@ describe("the theme's background", () => {
     expect(writes.join("")).not.toContain(PAINT_RESET)
     writes.length = 0
     screen.leave()
-    expect(writes.join("")).toContain(PAINT_RESET)
+    // The background it answered with is set back exactly; text and cursor, never answered, go back to the configured defaults.
+    expect(writes.join("")).toContain("\x1b]110\x07\x1b]11;rgb:0000/0000/0000\x07\x1b]112\x07")
     // Back on the screen (an editor, ctrl+z): the terminal is asked again (it may have changed) and painted again.
     screen.enter()
     expect(writes.join("")).toContain(MODE_SUBSCRIBE)
@@ -181,6 +182,35 @@ describe("the theme's background", () => {
     writes.length = 0
     screen.leave()
     expect(writes.join("")).toContain(PAINT_RESET)
+  }))
+
+  test("the colours a shell or another program set at runtime are the ones put back, not the configured defaults", () => withTheme("paper", () => {
+    const { writes, out } = tty()
+    const screen = createScreen(out, {})
+    screen.enter()
+    screen.requestTerminalMode()
+    expect(writes.join("")).toContain(MODE_SUBSCRIBE)
+    // Replies in the order asked: text, cursor, then the background (one chunk, cut inside the cursor's reply).
+    const replies = "\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]12;rgb:ff00/8000/0000\x1b\\\x1b]11;rgb:1212/1414/1818\x07"
+    expect(screen.consumeTerminalInput(replies.slice(0, 40))).toBe("")
+    expect(screen.consumeTerminalInput(replies.slice(40))).toBe("")
+    screen.draw(rows)
+    expect(writes.join("")).toContain(SET_BACKGROUND)
+    // A late answer while painted is the theme's colour: it does not replace what is put back.
+    screen.consumeTerminalInput("\x1b]10;rgb:1f1f/2a2a/2424\x07")
+    writes.length = 0
+    screen.leave()
+    const restored = "\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]11;rgb:1212/1414/1818\x07\x1b]12;rgb:ff00/8000/0000\x07"
+    expect(writes.join("")).toContain(restored)
+    expect(writes.join("")).not.toContain(PAINT_RESET)
+    // Switching to a theme that fits the terminal unpaints with the same saved colours.
+    screen.enter()
+    screen.consumeTerminalInput("\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]11;rgb:1212/1414/1818\x07")
+    screen.draw(rows)
+    writes.length = 0
+    setTheme("ink")
+    screen.draw(rows)
+    expect(writes.join("")).toContain(restored)
   }))
 
   test("nothing changes for a theme that fits its terminal, a terminal that never answered, or the inline chat", () => withTheme("paper", () => {
