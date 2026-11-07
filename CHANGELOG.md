@@ -9,6 +9,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.7 - 2026-11-07
+
+`/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code
+sessions load less of your own setup and keep their background agents on a model change, held-space dictation no
+longer stops after a minute, and the token count moves while a model thinks.
+
+### Upgrade notes
+
+- Same code as v0.0.7-beta.1.
+
+## v0.0.7-beta.1 - 2026-11-07
+
+`/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code
+sessions load less of your own setup and keep their background agents on a model change, held-space dictation no
+longer stops after a minute, and the token count moves while a model thinks.
+
 ### New
 
 - Claude Code sessions load less of your own Claude Code setup by default: `/settings` → `claude context` picks lean (no own MCP servers or auto memory), full or isolated (none of your setup); permissions never change.
