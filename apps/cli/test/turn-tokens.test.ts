@@ -51,7 +51,7 @@ test("the working row tells new input from the context the provider read from it
   expect(state.cached).toBe(0)
 })
 
-test("an engine that reports no usage has no token count: nothing is estimated for it", () => {
+test("the terminal counts nothing from streamed words itself: its figures are the usage records and the daemon's live push", () => {
   const state = createTurnState()
   state.apply(event({ type: "turn.started", turnId: "trn_3", queueId: "que_3" }))
   state.apply(event({ type: "item.started", itemId: "itm_a", kind: "agent_message" }))
@@ -82,4 +82,22 @@ test("an engine's running output count shows while the turn runs, is replaced by
   expect(state.outputLive).toBe(450)
   // Late, after the turn: dropped.
   expect(state.noteLive({ turnId: "trn_live", output: 500 })).toBe(false)
+})
+
+test("an estimated live figure reads with ~ until the call's exact count or its usage record replaces it", async () => {
+  const { tokensText } = await import("../src/view/working-row")
+  const state = createTurnState()
+  state.apply(event({ type: "turn.started", turnId: "trn_est", queueId: "que_est" }))
+  expect(state.noteLive({ turnId: "trn_est", output: 325, estimated: true })).toBe(true)
+  expect([state.outputLive, state.liveEstimated]).toEqual([325, true])
+  const row = () => tokensText({ input: state.input, output: state.outputLive, ...(state.liveEstimated ? { estimated: true } : {}) }, { style: "inline" })
+  expect(row()).toBe("↓ ~325 tokens")
+  expect(tokensText({ input: 0, output: 4_300, estimated: true })).toBe("↓~4,300 tokens")
+  // The same figure turning exact is a change: the ~ goes.
+  expect(state.noteLive({ turnId: "trn_est", output: 325 })).toBe(true)
+  expect(row()).toBe("↓ 325 tokens")
+  state.noteLive({ turnId: "trn_est", output: 600, estimated: true })
+  state.apply(usage(10, 470))
+  expect([state.outputLive, state.liveEstimated]).toEqual([470, false])
+  expect(row()).toBe("↓ 470 tokens")
 })

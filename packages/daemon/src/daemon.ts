@@ -2362,7 +2362,7 @@ export async function startDaemon(options: DaemonOptions) {
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },
-      onLiveOutput: (turnId, output) => liveTokens.push(sessionId, turnId, output),
+      onLiveOutput: (turnId, output, estimated) => liveTokens.push(sessionId, turnId, output, estimated),
       onPause: () => publishActivity(sessionId, actors.get(sessionId)?.snapshot().foreground ?? "idle", true),
     })
     actors.set(sessionId, actor)

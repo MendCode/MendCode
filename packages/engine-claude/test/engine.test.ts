@@ -487,6 +487,38 @@ describe("claude engine turns", () => {
     engine.stop()
   })
 
+  test("thinking that streams no words sends Claude Code's thinking_tokens estimate for the call in flight; the call's end sends its exact count", async () => {
+    // The frames as Claude Code 2.1.319 sent them for a Haiku call at high effort: a running estimate per thinking block, its increment beside it.
+    const frame = (estimated: number, delta: number) => ({ type: "system", subtype: "thinking_tokens", estimated_tokens: estimated, estimated_tokens_delta: delta, session_id: "cc-session-1" })
+    const { engine } = engineWith([fakeClaude({ onUser: (api) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_a", model: "claude-haiku-4-5", usage: { input_tokens: 2, output_tokens: 2 } } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } }, parent_tool_use_id: null })
+      api.push(frame(50, 50))
+      api.push({ type: "stream_event", event: { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "", estimated_tokens: 50 } }, parent_tool_use_id: null })
+      api.push(frame(325, 275))
+      api.push({ type: "stream_event", event: { type: "content_block_stop", index: 0 }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 470 } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_b", model: "claude-haiku-4-5", usage: { input_tokens: 2, output_tokens: 1 } } }, parent_tool_use_id: null })
+      api.push(frame(30, 30))
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } }, parent_tool_use_id: null })
+      api.push(result())
+      api.push(frame(99, 99))
+    } })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    const live = events.filter((event) => event.type === "usage.thinking" || event.type === "usage.live")
+    // The second call's count is the same sum: it is still sent once, so the estimate of that call ends with it. Nothing after the result.
+    expect(live).toEqual([
+      { type: "usage.thinking", tokens: 50 },
+      { type: "usage.thinking", tokens: 325 },
+      { type: "usage.live", output: 470 },
+      { type: "usage.thinking", tokens: 30 },
+      { type: "usage.live", output: 470 },
+    ])
+    engine.stop()
+  })
+
   test("a turn with no main-thread call on the stream reports no context rather than the cumulative totals", async () => {
     const { engine } = engineWith([fakeClaude({ onUser: (api) => { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })])
     const { input, events } = turnInput()
@@ -937,14 +969,18 @@ describe("claude thinking blocks", () => {
     stream({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "CAQS2AYKEAgSGAI4AUII" } }),
   ]
 
+  /** The item events alone: the thinking frame's live estimate (`usage.thinking`) is the activity line's, not the transcript's. */
+  const itemsOf = (events: EngineEvent[]) => events.filter((event) => event.type !== "usage.thinking")
+
   test("a text-less thinking block is a reasoning item from its start, without deltas, and ends with no text", () => {
     const { events, mapper } = mapped(TEXTLESS)
-    expect(events).toEqual([{ type: "item.started", itemId: expect.any(String), kind: "reasoning" }])
+    expect(itemsOf(events)).toEqual([{ type: "item.started", itemId: expect.any(String), kind: "reasoning" }])
+    expect(events.filter((event) => event.type === "usage.thinking")).toEqual([{ type: "usage.thinking", tokens: 50 }])
     mapper.accept(stream({ type: "content_block_stop", index: 0 }))
-    expect(events[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "ok", text: "" })
+    expect(itemsOf(events)[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "ok", text: "" })
     mapper.accept(stream({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } }))
     mapper.accept(stream({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "**391" } }))
-    expect(events.slice(2).map((event) => event.type === "item.started" ? event.kind : event.type)).toEqual(["agent_message", "item.delta"])
+    expect(itemsOf(events).slice(2).map((event) => event.type === "item.started" ? event.kind : event.type)).toEqual(["agent_message", "item.delta"])
   })
 
   test("wordless thinking that goes on says the model is alive with an empty delta every 20 of its own", () => {
@@ -1093,7 +1129,7 @@ describe("claude thinking blocks", () => {
   test("a turn cut off while thinking closes the open item as interrupted", () => {
     const { events, mapper } = mapped(TEXTLESS)
     mapper.finish("interrupted")
-    expect(events[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "interrupted", text: "" })
+    expect(itemsOf(events)[1]).toEqual({ type: "item.completed", itemId: (events[0] as any).itemId, status: "interrupted", text: "" })
   })
 })
 

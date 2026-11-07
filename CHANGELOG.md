@@ -31,6 +31,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The activity line shows the tokens received while a long model call or a long think is still running, marked `~` until the exact figure arrives.
 - A light theme in a dark terminal (or a dark one in a light terminal) paints its own background, so its text stays readable; the terminal's colours come back on exit.
 - Dictating with a held space no longer stops and starts again after a minute: it listens until you let go.
 - A file pasted in the middle of a sentence no longer splits it: the model gets the whole sentence, then the file, and the transcript shows the file folded to its name.

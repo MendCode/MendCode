@@ -6,19 +6,21 @@ export type TurnTokensEvent = Extract<GlobalEvent, { type: "turn.tokens" }>
 /** At most one push per session in this window. */
 export const LIVE_TOKENS_MIN_INTERVAL_MS = 250
 
+type Figure = { turnId: TurnId; output: number; estimated: boolean }
+
 /**
  * Rate-limits the live output-token count of running turns: never stored, one push per session per 250 ms, the newest figure delivered when
  * the window ends. A 0 (a usage record took the figures, or the turn ended) goes out at once and drops anything still waiting, so a late
- * figure never lands over the record.
+ * figure never lands over the record. `estimated` (part of the figure is counted from streamed words) travels with its figure.
  */
 export function createLiveTokens(input: { clock: Clock; emit(event: TurnTokensEvent): void; minIntervalMs?: number }) {
   const interval = input.minIntervalMs ?? LIVE_TOKENS_MIN_INTERVAL_MS
-  const sessions = new Map<SessionId, { lastAt: number; sent: number; pending?: { turnId: TurnId; output: number }; timer?: { cancel(): void } }>()
+  const sessions = new Map<SessionId, { lastAt: number; sent: number; sentEstimated: boolean; pending?: Figure; timer?: { cancel(): void } }>()
 
-  function send(sessionId: SessionId, turnId: TurnId, output: number) {
+  function send(sessionId: SessionId, { turnId, output, estimated }: Figure) {
     const known = sessions.get(sessionId)
-    if (known) { known.lastAt = input.clock.now(); known.sent = output }
-    input.emit({ type: "turn.tokens", gseq: 0, at: input.clock.now(), sessionId, turnId, output })
+    if (known) { known.lastAt = input.clock.now(); known.sent = output; known.sentEstimated = estimated }
+    input.emit({ type: "turn.tokens", gseq: 0, at: input.clock.now(), sessionId, turnId, output, ...(estimated ? { estimated: true as const } : {}) })
   }
 
   function drop(sessionId: SessionId) {
@@ -28,32 +30,33 @@ export function createLiveTokens(input: { clock: Clock; emit(event: TurnTokensEv
   }
 
   return {
-    push(sessionId: SessionId, turnId: TurnId, output: number) {
+    push(sessionId: SessionId, turnId: TurnId, output: number, estimated = false) {
+      const figure = { turnId, output, estimated: estimated && output > 0 }
       const now = input.clock.now()
       const known = sessions.get(sessionId)
       if (!known) {
         // Nothing was shown for this session: a 0 has nothing to clear.
         if (output === 0) return
-        sessions.set(sessionId, { lastAt: now, sent: output })
-        return send(sessionId, turnId, output)
+        sessions.set(sessionId, { lastAt: now, sent: output, sentEstimated: figure.estimated })
+        return send(sessionId, figure)
       }
       if (output === 0) {
         drop(sessionId)
         if (known.sent === 0) return
-        return send(sessionId, turnId, 0)
+        return send(sessionId, figure)
       }
-      if (output === known.sent && !known.pending) return
+      if (output === known.sent && figure.estimated === known.sentEstimated && !known.pending) return
       if (now - known.lastAt >= interval) {
         drop(sessionId)
-        return send(sessionId, turnId, output)
+        return send(sessionId, figure)
       }
-      known.pending = { turnId, output }
+      known.pending = figure
       if (known.timer) return
       known.timer = input.clock.setTimer(interval - (now - known.lastAt), () => {
         const pending = known.pending
         delete known.timer
         delete known.pending
-        if (pending) send(sessionId, pending.turnId, pending.output)
+        if (pending) send(sessionId, pending)
       })
     },
     /** Drops a deleted session's timer and history. */

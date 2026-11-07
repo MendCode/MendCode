@@ -150,6 +150,15 @@ describe("the working row's parts", () => {
     for (const width of [8, 20, 40]) expect(textWidth(text(renderWorkingRow({ ...inline, width, margin: 0 })))).toBeLessThanOrEqual(width)
   })
 
+  test("a long thinking call shows its estimated received tokens with ~, and the exact figure without it", () => {
+    const thinking = { ...base, style: "inline" as const, groupSeparator: "·", phase: "Thinking...", elapsedMs: 63_000, model: undefined as never }
+    expect(text(renderWorkingRow({ ...thinking, tokens: { input: 0, output: 18_400, estimated: true } }))).toBe("  * Thinking… (1m 3s · ↓ ~18.4k tokens)")
+    expect(text(renderWorkingRow({ ...thinking, tokens: { input: 0, output: 1_912 } }))).toBe("  * Thinking… (1m 3s · ↓ 1,912 tokens)")
+    expect(text(renderWorkingRow({ ...base, tokens: { input: 45_200, output: 310, estimated: true } }))).toBe("  * Generating...  1m 21s  luna  ↑45.2K ↓~310 tokens")
+    // Thinking that streams nothing at all has no figure to show: the verb and the elapsed time, never a made-up count.
+    expect(text(renderWorkingRow({ ...thinking, tokens: undefined as never }))).toBe("  * Thinking… (1m 3s)")
+  })
+
   test("the list orders them, leaves out what it does not name, and adds the opt-in ones", () => {
     expect(text(renderWorkingRow({ ...base, parts: activityPartsOf("elapsed,spinner,verb") }))).toBe("  1m 21s  * Generating...")
     expect(text(renderWorkingRow({ ...base, parts: activityPartsOf("spinner,elapsed") }))).toBe("  * 1m 21s")

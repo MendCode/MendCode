@@ -1182,17 +1182,17 @@ To show the cache as well, set `activityTokens` to `in,cache,out`.
 
 #### When token figures update
 
-The token figures are exact, never estimated, so there is no `~`: each is the sum of what the provider reported for the turn's model calls, and the count steps up as they report.
+The sent and cached figures are exact: the sum of what the provider reported for the turn's model calls. The received figure is exact too once a call reports; while a call is still streaming, it also counts what arrived since the provider's last count, estimated, and then reads with a `~` (`↓ ~4.3k tokens`). When the call reports, its exact count replaces the estimate, so a call is never counted twice.
 
-Who reports when: the native engine and Codex report per model call, so the figure grows through a turn. pi also reports the message in flight, so the received figure moves while it streams (for a provider that reports only at the end of a message it moves then).
+The estimate counts the main agent's streamed answer and reasoning at about four characters a token. For thinking that streams no words, Claude Code sends its own running estimate of the thinking tokens, and MendCode shows that (whichever of the two is larger for the thinking). A sub-agent's words and tool output are not counted.
 
-Claude Code reports the output of each call when that call ends, and MendCode shows it live from then on, so a turn of several calls climbs call by call; the sent and cached figures come with the turn's total when it ends.
+Who reports when: the native engine and Codex report per model call, so the exact figure steps up call by call and the estimate fills in between. pi also reports the message in flight, so the received figure is exact while it streams when the provider counts as it goes.
 
-A single long call shows no figure until it ends.
+Claude Code reports the output of each call when that call ends; until then a long call, a long think included, shows the estimate. The sent and cached figures come with the turn's total when it ends.
 
-An ACP agent reports none, so it has none.
+An ACP agent reports no usage, so it shows only the estimate of what it streams.
 
-A figure the engine does not report is left out, not guessed.
+When a model thinks without streaming anything at all (no words and no estimate), there is nothing to count: the row shows the verb and the elapsed time, `Thinking… (1m 3s)`, and no figure is guessed.
 
 The running figure is only drawn: it is never stored, and the turn's usage record is the same as before.
 

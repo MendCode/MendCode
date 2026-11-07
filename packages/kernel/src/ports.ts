@@ -73,9 +73,15 @@ export type EngineEvent =
   | { type: "usage"; provider: string; model: string; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; costMicros?: number; profile?: import("@mendcode/protocol").RequestProfile; thinkingDropped?: true; cacheTtl?: "1h"; context?: number; contextWindow?: number; contextApprox?: true; partial?: true; compactAt?: number }
   /**
    * Output tokens the provider has reported so far for the turn that no `usage` has recorded yet (a call still streaming, or every call of an
-   * engine that records one usage at the end). Shown live and never stored; the `usage` that records them replaces it. Never an estimate.
+   * engine that records one usage at the end). Shown live and never stored; the `usage` that records them replaces it. Never an estimate:
+   * it covers every word streamed before it, so the kernel's estimate of streamed words starts again from it.
    */
   | { type: "usage.live"; output: number }
+  /**
+   * The engine's estimate of the reasoning tokens of the model call in flight when its thinking streams no words (Claude Code's
+   * `thinking_tokens` frames): the call's running total, shown with `~` until a `usage.live` or `usage` gives the exact figure.
+   */
+  | { type: "usage.thinking"; tokens: number }
   /** A failed model call will be retried after `delayMs`; `attempt` counts retries from 1; `offline`: the connection itself failed. */
   | { type: "retrying"; attempt: number; delayMs: number; message: string; offline?: boolean }
 

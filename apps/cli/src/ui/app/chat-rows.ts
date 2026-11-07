@@ -830,7 +830,7 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
       ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
       ...(retry ? { retry } : {}),
-      ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive } } : {}),
+      ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive, ...(state.turnState.liveEstimated ? { estimated: true } : {}) } } : {}),
       now: now(),
       interruptHint: state.tuiProfile.showInterruptHint && hint,
       ...(stalledMs !== undefined ? { stalledMs } : {}),
