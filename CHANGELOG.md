@@ -20,6 +20,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- First-run setup no longer opens on the Model row while it is still checking; the Model row appears only once something can run.
 - Dream no longer runs on temporary folders, missing folders or worktrees, and skips projects with nothing new.
 - Dream recovers every interrupted project, not only the most recent runs.
 - A memory you rejected or archived is not proposed again, and repeats are matched ignoring case and punctuation.
