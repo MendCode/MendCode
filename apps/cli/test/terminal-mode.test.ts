@@ -5,6 +5,16 @@ import { activeTheme, setTheme } from "../src/ui/theme"
 import { THEMES } from "../src/themes"
 
 describe("terminal mode detection", () => {
+  test("the start-up mode report keeps the text and cursor colours answered before it; a later flip drops them", () => {
+    const mode = createTerminalMode({})
+    mode.consume("\x1b]10;rgb:dddd/dddd/dddd\x07\x1b]12;rgb:aaaa/aaaa/aaaa\x07\x1b[?997;1n\x1b]11;rgb:0000/0000/0000\x07")
+    mode.hold()
+    expect(mode.restore()).toBe("\x1b]10;rgb:dddd/dddd/dddd\x07\x1b]11;rgb:0000/0000/0000\x07\x1b]12;rgb:aaaa/aaaa/aaaa\x07")
+    mode.hold()
+    mode.consume("\x1b[?997;2n")
+    expect(mode.restore()).toBe("\x1b]110\x07\x1b]111\x07\x1b]112\x07")
+  })
+
   test("COLORFGBG tells dark from light and ignores anything else", () => {
     expect(modeFromEnv({ COLORFGBG: "15;0" })).toBe("dark")
     expect(modeFromEnv({ COLORFGBG: "0;15" })).toBe("light")

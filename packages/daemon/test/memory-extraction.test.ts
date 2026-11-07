@@ -425,6 +425,19 @@ test("retries count against the daily cap: a failing review under a cap of 1 mak
   expect(h.store.memoryReviews.callsSince(Date.now() - 86_400_000)).toBe(1)
 })
 
+test("a waiting retry's calls count against the daily cap for a day only, then the queue runs again", async () => {
+  let clock = Date.now()
+  let calls = 0
+  const h = fixture(async () => { calls++; if (calls === 1) throw new Error("provider down"); return [] }, { now: () => clock }, { memoryReviewDailyCap: 1 })
+  h.turn("First rule here"); h.turn("Second rule here")
+  await until(() => calls === 1 && h.store.extraction.list().some((job) => job.state === "queued" && job.attempts === 1))
+  clock += 2 * 86_400_000
+  h.turn("Third rule here"); h.turn("Fourth rule here")
+  await until(() => calls === 2 && h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
+  // The old retry ran (its failed call is over a day old); the cap of 1 then holds back only the new review.
+  expect(h.store.extraction.list().filter((job) => job.reason === "Daily review cap reached").map((job) => job.attempts)).toEqual([0])
+})
+
 test("review progress survives a restart: unreviewed turns are not forgotten and reviewed ones are not sent again", async () => {
   const texts: string[] = []
   const extract = async (job: ExtractionJob) => { texts.push(job.text); return [] }

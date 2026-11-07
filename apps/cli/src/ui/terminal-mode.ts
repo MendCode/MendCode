@@ -37,6 +37,7 @@ function modeFromColor(channels: string[]): TerminalMode {
 export function createTerminalMode(env: Record<string, string | undefined> = process.env) {
   let current = modeFromEnv(env)
   let answered = false
+  let reported = false
   let pending = ""
   const listeners = new Set<(mode: TerminalMode) => void>()
   // The colours the terminal last answered with, and those saved when a theme's background was painted over them.
@@ -74,9 +75,15 @@ export function createTerminalMode(env: Record<string, string | undefined> = pro
       pending = ""
       let rest = joined.replace(REPORT, (_, report: string | undefined, slot: ColorSlot, color: string, r: string, g: string, b: string) => {
         if (report) {
-          colors = {}
-          if (held) held = {}
-          set(report === "1" ? "dark" : "light")
+          const mode: TerminalMode = report === "1" ? "dark" : "light"
+          // A report that answers the start-up query keeps the colours just answered; one that flips a mode the terminal already
+          // told (by a report or its background) means it changed its own colours.
+          if ((reported || answered) && mode !== current) {
+            colors = {}
+            if (held) held = {}
+          }
+          reported = true
+          set(mode)
         } else {
           // An answer while painted is the theme's own colour, never the terminal's.
           if (!held) colors[slot] = color

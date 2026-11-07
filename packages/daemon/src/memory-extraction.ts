@@ -225,8 +225,8 @@ export function createMemoryExtraction(options: {
         if (!first) break
         if (first.nextAttemptAt > now()) { schedule(first.nextAttemptAt - now()); break }
         const info = meta.get(first.jobId) ?? { turns: 0, trigger: "retry" as ReviewTrigger }
-        // Every attempt is checked, retries too: calls already made by jobs waiting to retry are not in the record yet, so they count here.
-        const unrecorded = waiting.reduce((sum, job) => sum + job.attempts, 0)
+        // Every attempt is checked, retries too: calls a waiting job made in the last day are not in the record yet, so they count here.
+        const unrecorded = waiting.reduce((sum, job) => sum + (job.updatedAt >= now() - DAY_MS ? job.attempts : 0), 0)
         if (store.memoryReviews.callsSince(now() - DAY_MS) + unrecorded >= reviewPolicy(options.settings(first.directory)).dailyCap) {
           put(first, { state: "skipped", reason: "Daily review cap reached" })
           if (first.attempts > 0) log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, calls: first.attempts, outcome: "skipped", reason: "daily cap" })
