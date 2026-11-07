@@ -4,7 +4,7 @@ import { activeTheme, type Line, type Span } from "../ui/theme"
 /**
  * The built-in Mend (MendAscii) as filled half blocks (two pixels a cell), the way Claude Code draws its crab: the little robot
  * MendGirl holds, a round head with an antenna, happy eyes, pink cheeks, ear discs and a body with a cross, in the active
- * theme's palette (`mendPalette`: mint and teal by default, black and white under Ink), in
+ * theme's primary color (`mendPalette`: black and white under the default Ink, mint and teal under Mend), in
  * 13 x 14 pixels, 7 rows of 13 cells. Its eyes follow the session's phase (`mascotPhase`) and move while it works; a 16-color palette or ASCII glyphs
  * keep the v1 text mascot (`mascot.ts`).
  */
@@ -85,30 +85,64 @@ const COLORS: Record<Key, Rgb> = {
 const ERROR_COLORS: Partial<Record<Key, Rgb>> = { B: [239, 68, 68], D: [153, 27, 27], C: [254, 202, 202] }
 
 /**
- * Ink's robot in the website's black and white: a white head with a mid-grey outline, a graphite body with a light cross,
- * dark eyes, and the pink cheeks as the one warm touch. On an error its body takes the theme's own error red.
+ * Every theme but Mend draws the robot from its own primary color: each part keeps a fixed lightness (0-255) and takes the
+ * primary's hue, its saturation held to `TONE_SATURATION` so a vivid theme stays soft. A grey primary (Ink's white, Mono's)
+ * gives the website's black and white exactly: a white head, a mid-grey outline, a graphite body with a light cross and dark
+ * eyes. The pink cheeks stay as the one warm touch; on an error the body takes the theme's own error red.
  */
-const INK_COLORS: Record<Key, Rgb> = {
-  O: [115, 115, 115], M: [229, 229, 229], H: [250, 250, 250], S: [184, 184, 184], D: [82, 82, 82], A: [212, 212, 212],
-  B: [64, 64, 64], C: [229, 229, 229], P: [240, 168, 172], E: [23, 23, 23], V: [229, 229, 229],
-}
+const TONE_LIGHTNESS: Record<Exclude<Key, "P">, number> = { H: 250, M: 229, V: 229, C: 229, A: 212, S: 184, O: 115, D: 82, B: 64, E: 23 }
+const TONE_SATURATION = 0.75
+const CHEEKS: Rgb = COLORS.P
 
 const channel = (hexColor: string, at: number) => Number.parseInt(hexColor.slice(at, at + 2), 16)
 const rgb = (hexColor: string): Rgb => [channel(hexColor, 1), channel(hexColor, 3), channel(hexColor, 5)]
 const themeErrorColors = (theme: Theme): Partial<Record<Key, Rgb>> => ({ B: rgb(theme.colors.error), D: rgb(mix(theme.colors.error, "#000000", 0.45)), C: rgb(mix(theme.colors.error, "#ffffff", 0.65)) })
 
-/** Themes that draw Mend in a palette of their own; every other theme keeps the mint and teal robot. */
-const THEME_PALETTES: Readonly<Record<string, Record<Key, Rgb>>> = { ink: INK_COLORS }
+/** A color's hue (0-1) and saturation (0-1), as HSL measures them. */
+function hueSaturation([r, g, b]: Rgb): { hue: number; saturation: number } {
+  const [red, green, blue] = [r / 255, g / 255, b / 255]
+  const max = Math.max(red, green, blue)
+  const min = Math.min(red, green, blue)
+  const chroma = max - min
+  if (!chroma) return { hue: 0, saturation: 0 }
+  const lightness = (max + min) / 2
+  const saturation = chroma / (1 - Math.abs(2 * lightness - 1))
+  const sector = max === red ? ((green - blue) / chroma + 6) % 6 : max === green ? (blue - red) / chroma + 2 : (red - green) / chroma + 4
+  return { hue: sector / 6, saturation }
+}
+
+/** The HSL color `hue`, `saturation` at `lightness` (0-255) as RGB. */
+function tone(hue: number, saturation: number, lightness: number): Rgb {
+  const level = lightness / 255
+  const chroma = (1 - Math.abs(2 * level - 1)) * saturation
+  const spread = (offset: number) => {
+    const at = (offset + hue * 12) % 12
+    return Math.round((level - (chroma / 2) * Math.max(-1, Math.min(at - 3, 9 - at, 1))) * 255)
+  }
+  return [spread(0), spread(8), spread(4)]
+}
+
+/** The robot in `theme`'s primary color. */
+function themeColors(theme: Theme): Record<Key, Rgb> {
+  const { hue, saturation } = hueSaturation(rgb(theme.colors.primary))
+  const tones = Object.fromEntries(Object.entries(TONE_LIGHTNESS).map(([key, lightness]) => [key, tone(hue, Math.min(saturation, TONE_SATURATION), lightness)]))
+  return { ...tones, P: CHEEKS } as Record<Key, Rgb>
+}
+
+/** The theme that keeps the robot as it was first drawn, mint and teal: the green Mend theme. */
+const ORIGINAL_THEME = "mend"
 
 type MendPalette = { key: string; colors: Record<Key, Rgb>; error: Record<Key, Rgb> }
-const DEFAULT_PALETTE: MendPalette = { key: "mend", colors: COLORS, error: { ...COLORS, ...ERROR_COLORS } }
+const ORIGINAL_PALETTE: MendPalette = { key: "mend", colors: COLORS, error: { ...COLORS, ...ERROR_COLORS } }
 let themed: { theme: Theme; palette: MendPalette } | undefined
 
 /** Mend's colors under the active theme, with the key every frame cache adds so a theme switch draws it again. */
 export function mendPalette(theme = activeTheme()): MendPalette {
-  const colors = THEME_PALETTES[theme.name]
-  if (!colors) return DEFAULT_PALETTE
-  if (themed?.theme !== theme) themed = { theme, palette: { key: `${theme.name}${theme.colors.error}`, colors, error: { ...colors, ...themeErrorColors(theme) } } }
+  if (theme.name === ORIGINAL_THEME) return ORIGINAL_PALETTE
+  if (themed?.theme !== theme) {
+    const colors = themeColors(theme)
+    themed = { theme, palette: { key: `${theme.name}${theme.colors.primary}${theme.colors.error}`, colors, error: { ...colors, ...themeErrorColors(theme) } } }
+  }
   return themed.palette
 }
 

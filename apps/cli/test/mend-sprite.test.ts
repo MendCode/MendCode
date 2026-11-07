@@ -67,13 +67,29 @@ describe("the built-in Mend", () => {
 })
 
 describe("Mend's colors follow the theme", () => {
-  test("the Mend theme and every theme without a palette of its own keep the mint and teal robot, frame for frame", () => {
-    for (const name of ["mend", "mint", "paper", "amber", "matrix"]) {
+  test("the Mend theme keeps the mint and teal robot, frame for frame", () => {
+    setTheme("mend")
+    expect(mendPalette().key).toBe("mend")
+    // Every frame as drawn before themes had a say.
+    expect(allFrames()).toBe("793e3b38aea5d4133324cf1cbb9575a1aeae4b2d0215c205099934a8d2ab5c0f")
+  })
+
+  test("every other theme draws it in its own primary color, never the mint robot", () => {
+    const hue = ([r, g, b]: number[]) => (r! > g! && r! > b! ? "red" : g! > b! ? "green" : "blue")
+    for (const [name, expected] of [["amber", "red"], ["fjord", "blue"], ["matrix", "green"]] as const) {
       setTheme(name)
-      expect(mendPalette().key).toBe("mend")
-      // Every frame as drawn before themes had a say.
-      expect(allFrames()).toBe("793e3b38aea5d4133324cf1cbb9575a1aeae4b2d0215c205099934a8d2ab5c0f")
+      expect(mendPalette().key).toStartWith(name)
+      const body = drawnColors("idle").filter((color) => !(color[0] === CHEEK[0] && color[1] === CHEEK[1]))
+      expect(new Set(body.map(hue))).toEqual(new Set([expected]))
+      expect(body).not.toContainEqual([56, 143, 114])
     }
+    setTheme("mono")
+    expect(drawnColors("idle").every(([r, g, b]) => (r === g && g === b) || r === CHEEK[0])).toBe(true)
+  })
+
+  test("a theme's frames stay the same size and shape as the original robot", () => {
+    const mask = (palette: ReturnType<typeof mendPalette>) => Array.from(mendImage("thinking", 3, palette).rgba.filter((_, at) => at % 4 === 3))
+    for (const entry of THEMES) expect(mask(mendPalette(entry))).toEqual(mask(MEND))
   })
 
   test("Ink draws it in black and white: grey everywhere but the pink cheeks", () => {

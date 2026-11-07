@@ -237,7 +237,7 @@ Pets occupy only transcript space, above requests, queues, limit bars and bottom
 
 ### Choose a home logo
 
-The wordmark left as shipped (Logo kind `wordmark`, text `MENDCODE`, font `mendcode`) is MendCode's logo: the website's infinity mark in 24 x 6 cells of half blocks, plain ASCII under `glyphs ascii`, with the product name centered under it; a terminal too small for it shows the plain name.
+The wordmark left as shipped (Logo kind `wordmark`, text `MENDCODE`, font `mendcode`) is MendCode's logo: the website's infinity mark in 38 x 8 cells of half blocks (wider than tall, like the symbol), plain ASCII under `glyphs ascii`, over the name in big letters drawn like the website's wordmark. Where the big name does not fit (under 70 columns, or too few rows) the name is plain text under the mark; a terminal too small for the mark shows the plain name.
 
 Any other text or font draws those letters, and beside a mascot (`both`) the title stays letters.
 
@@ -307,7 +307,7 @@ In chat a bitmap pet waves once when the mouse arrives over it.
 
 `/pet` always includes **MendAscii**, the built-in mascot drawn in colored half blocks (the little robot MendGirl holds: a round head with an antenna, happy eyes, pink cheeks, ear discs and a body with a cross), even without installed bitmap pets.
 
-Its colors follow the theme: under Ink, the default, it is black and white (a white head, a graphite body with a light cross, pink cheeks); the Mend theme and every other theme draw it with a mint head and a teal body with a mint cross.
+Its colors follow the theme: under Ink, the default, it is black and white (a white head, a graphite body with a light cross, pink cheeks); every other theme draws it in shades of its own primary color, and the Mend theme keeps the original mint head and teal body with a mint cross.
 
 Where the terminal draws pictures (the image protocol the pets use) it is a picture of its own pixels, at the size every pet gets: beside the prompt by Pet size, on the start screen by Mascot size, in `/pet` the same cells as the others.
 
@@ -323,7 +323,7 @@ Phase text maps accept strings or v1 arrays (the first text is used); art is bou
 
 Blank restores defaults.
 
-`/pet` also lists **MendGirl** (`builtin:mendgirl`), MendGirl with neko ears holding her little robot, drawn by MendCode's author and shipped inside MendCode, right after MendAscii.
+`/pet` also lists **MendGirl** (`builtin:mendgirl`), MendGirl with neko ears holding her little robot, drawn by MendCode's author and shipped inside MendCode, right after MendAscii. She is drawn in Ink's black and white: silver hair, a black hoodie with white patches and a white robot.
 
 She is never the default: choose her in `/pet`, with `/pet builtin:mendgirl`, or as the start screen's mascot with `/mascot mendgirl`.
 

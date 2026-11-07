@@ -48,6 +48,21 @@ describe("MendGirl, the built-in pet", () => {
     expect(readdirSync(cacheDir).filter((name) => name.endsWith(".sprite"))).toEqual([expect.stringMatching(/^builtin\+mendgirl-[0-9a-z]+\.sprite$/)])
   })
 
+  test("its sheet is in Ink's neutrals: no frame keeps the old brand's mint or green", async () => {
+    const sprite = await loadSprite({ pet: BUILT_IN_PETS[0]!, cacheDir: tempDir("mcev-mendgirl-green-") })
+    let green = 0
+    for (const frame of new Set([...sprite.rows.values()].flat())) {
+      const { rgba } = frame
+      for (let at = 0; at < rgba.length; at += 4) {
+        const [r, g, b] = [rgba[at]!, rgba[at + 1]!, rgba[at + 2]!]
+        // Clearly green: green leads both other channels by a visible margin.
+        if (rgba[at + 3]! >= 128 && g - Math.max(r, b) > 16) green++
+      }
+    }
+    // The old sheet had about 240,000 such pixels; the lossy WebP leaves a few stray ones at colored edges.
+    expect(green).toBeLessThan(20)
+  })
+
   test("beside the prompt it degrades like any detailed imported pet: a picture with an image protocol, the ASCII Mend in half blocks", async () => {
     const slot = createPetSlot({ dirs: [BUILT_IN], cacheDir: tempDir("mcev-mendgirl-slot-"), now: () => 0, reducedMotion: () => true, onChange() {}, say(message) { throw new Error(message) } })
     await slot.choose(MENDGIRL)

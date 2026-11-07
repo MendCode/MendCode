@@ -146,7 +146,10 @@ describe("/customize in the app", () => {
       const sessions = rows.findIndex((row) => row.includes("No sessions yet"))
       expect(prompt).toBeGreaterThan(0)
       expect(sessions).toBeGreaterThan(prompt)
-      if (homeInput === "top") expect(prompt).toBeLessThan(rows.length / 2)
+      // The prompt (its top rule, then the input row) sits right under the identity, past the gap, in the top half when the logo keeps to the top.
+      const logoEnd = rows.findLastIndex((row, index) => index < prompt && /[█▀▄]/.test(row))
+      expect(prompt - logoEnd).toBeLessThanOrEqual(4)
+      if (homeInput === "top") expect(prompt).toBeLessThanOrEqual(rows.length / 2)
       await h.type("hello")
       expect(h.text()).toContain("hello")
     })

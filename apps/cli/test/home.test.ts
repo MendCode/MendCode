@@ -60,7 +60,7 @@ describe("home logo density (v1 homeDensity)", () => {
     const rows = renderHome({ ...base, width: 120, height: 34, screenHeight: 40 })
     expect(withLogo(rows)).toBe(true)
     const row = rows.find((line) => text(line).includes(wordmark[0]!))!
-    expect(row.find((span) => span.text === wordmark[0])).toMatchObject({ fg: "text" })
+    expect(row.find((span) => span.text.includes(wordmark[0]!))).toMatchObject({ fg: "text" })
     const left = text(row).indexOf(wordmark[0]!)
     expect(left).toBe(Math.floor((120 - textWidth(wordmark[0]!)) / 2))
   })
