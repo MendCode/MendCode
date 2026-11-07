@@ -4,6 +4,8 @@ MendCode reviews pull requests with your own model: one pass finds candidate def
 
 No SaaS, no GitHub App, no webhook server and no stored token.
 
+The reviewer only reads: a pull request's text cannot make it write files, run commands or reach the network. [What a malicious pull request can do](pr-review-security.md) has the details and how to make it stricter.
+
 Open `/pr repos` to see your repository watches. The scrollable page shows directory, state, role, open PRs and publish setting in columns, with ended watches below active ones and the full daemon report below the table.
 
 | Key | Does |
