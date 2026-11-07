@@ -8,7 +8,7 @@ const values: SetupValues = { theme: "matrix", view: "balanced", defaultPermissi
 const checks: SetupChecks = {
   connected: true,
   buildId: "0123456789abcdef",
-  info: { engine: "native", model: "gpt-6-luna", effort: "low", dataDir: "/Users/dev/.mendcode-v2", pid: 1, login: { ok: true } },
+  info: { engine: "native", model: "gpt-6-luna", effort: "low", dataDir: "/Users/dev/.mendcode", pid: 1, login: { ok: true } },
   quotas: [{ provider: "chatgpt", windows: [{ label: "5h", usedPercent: 12.4 }, { label: "7d", usedPercent: 30 }] }],
   mcpServers: 2,
   memory: { saved: 5, pending: 1 },
@@ -165,7 +165,7 @@ describe("renderSetupPage", () => {
     expect(all).toContain("12%")
     expect(all).toContain("2 servers configured")
     expect(all).toContain("5 saved · 1 to review")
-    expect(all).toContain("/Users/dev/.mendcode-v2")
+    expect(all).toContain("/Users/dev/.mendcode")
     expect(all).toContain("theme")
     expect(all).toContain("‹ matrix ›")
     expect(all).toContain("view")

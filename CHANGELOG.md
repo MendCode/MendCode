@@ -9,6 +9,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.5 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
+### Upgrade notes
+
+- Same code as v0.0.5-beta.1.
+
+## v0.0.5-beta.1 - 2026-11-06
+
+A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
+language, restarts that never interrupt or leave sessions held, prompt history that comes back, and an Apache 2.0 license.
+
 ### New
 
 - MendGirl, with neko ears and her little robot, ships as a built-in pet beside MendAscii: choose her in `/pet` or as the start screen's mascot with `/mascot mendgirl`.
@@ -30,11 +44,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- ↑ in the prompt and `/prompt-history` show what you typed before again in projects with a long history (long pasted messages left the list empty); ↑ pressed while the daemon restarts no longer leaves it empty either.
+- A workflow script's `check()` that passes now gets the command's output in `detail`, as a failing one already did, instead of just "pass". It gets the whole output, so a script can read a JSON file or a long report through a check; very large output is cut and marked `truncated` instead of being shortened silently.
 - The first-run setup shows each tool and login it found (Codex, Claude Code, ChatGPT, API keys, pi) as a row you can act on: use Codex as its own harness, sign MendCode in with your ChatGPT account and come back with your choices kept, use Claude Code, or add a key. Using Codex this way works in every tier and leaves your tier as it is (`/tier codex_engine on|off`). With nothing that can answer yet, it no longer offers to start chatting with a model that does not exist; it offers to skip for now instead.
 - A compaction threshold written as a fraction (such as 0.8 for 80%) now compacts at that share of the context window instead of right away on an almost empty session; the threshold is a percent of the window, and a new value above 100 or not above 0 is refused with a message saying so.
 - The agent gives a session's full id (`ses_…`), which `mendcode attach` takes, instead of a short code, and `/sessions` finds a session by its full id or the short end of it.
 - In `/sessions`, typing `/` no longer adds a slash to the search (which made "/glass" find nothing), and the selection no longer jumps to another session while other sessions are working, so scrolling down a long list stays where you are.
 - `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on, then the daemon really restarts; anything it still has to stop is listed by command line to that session when the daemon starts again. A restart command that goes away during the wait leaves the sessions unpaused and interrupts nothing.
+- A forced restart no longer waits on a session that only waits for your approval or answer: it lists it as waiting for you, and its turn resumes after the restart. After the restart, messages queued during the wait are sent in order instead of staying held until you resumed each session; a session you paused yourself stays held.
 - Started in your home folder, `/sessions`, the home's Agent View and its Completed list no longer show every project under it: like any folder, they show the sessions started there. `/sessions` now opens on this folder's sessions with each child session nested under its parent; Ctrl+L still shows all projects.
 
 ## v0.0.4-beta.5 - 2026-11-06

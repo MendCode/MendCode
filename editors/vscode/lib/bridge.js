@@ -9,9 +9,12 @@ const path = require("node:path")
 const FORMAT_VERSION = 1
 const MAX_TOTAL_CHARS = 1024 * 1024
 
-/** Same default as the daemon and the CLI. */
-function defaultDataDir() {
-  return path.join(os.homedir(), ".mendcode-v2")
+const isDir = (file) => { try { return fs.lstatSync(file).isDirectory() } catch { return false } }
+
+/** Same default as the daemon and the CLI (defaultDataDirNow): ~/.mendcode, or ~/.mendcode-v2 while its move could not happen yet. */
+function defaultDataDir(home = os.homedir()) {
+  const oldDir = path.join(home, ".mendcode-v2"), newDir = path.join(home, ".mendcode")
+  return isDir(oldDir) && !(isDir(newDir) && fs.existsSync(path.join(newDir, "mendd.db"))) ? oldDir : newDir
 }
 
 function realOr(target) {

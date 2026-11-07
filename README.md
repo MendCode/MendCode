@@ -159,9 +159,12 @@ your settings ([uninstall](docs/uninstall.md)).
 
 ## First run
 
-`mendcode` opens one setup screen that detects instead of asking ([setup](docs/setup.md)). It lists what it found (a ChatGPT
-login, Claude Code, Codex, API keys, pi) and, for anything missing, the one command or key that fixes it. A recommended model is
-preselected; Enter finishes. Each model option says who runs it and whose login pays:
+`mendcode` opens one setup screen that detects instead of asking ([setup](docs/setup.md)). It shows one row per tool or login it
+looked for (a ChatGPT login, API keys, Codex, Claude Code, pi) with its state: `ready`, `needs sign-in`, `sign-in not confirmed`,
+`failed` or not found. Each row offers only the actions that work from there, such as **Use Codex · its own harness**, which turns
+on just the `codex_engine` feature and leaves your tier as it is, or **Use MendCode with your ChatGPT account**, which runs
+`/connect chatgpt` and comes back to the setup. A recommended model is preselected and Enter starts chatting; with no model
+ready there is no model row, and the last row skips for now instead. Each model option says who runs it and whose login pays:
 
 - **ChatGPT** runs in MendCode's own engine. `/connect chatgpt` is OpenAI's Sign in with ChatGPT: open the link, allow MendCode
   to use your plan, and the terminal says `ChatGPT connected`.
@@ -170,6 +173,18 @@ preselected; Enter finishes. Each model option says who runs it and whose login 
 
 `/setup` opens the screen again, `/model` changes the model, `/tier` the tier, and `/permissions` the permission mode. All
 commands: [commands](docs/commands.md).
+
+<p align="center">
+  <img src="docs/assets/readme/setup.svg" alt="The setup screen on a first run: Codex and an API key ready, Claude Code installed with its sign-in not confirmed, the model, tier, permission and look rows, and a preview of the chat that sends nothing." width="100%">
+</p>
+
+Replies follow the language of your latest message. `/language Español` (or any language name) fixes it from the next message,
+and `/language auto` goes back; every engine gets the choice as one short line with each message
+([reply language](docs/prompt-modes.md#reply-language-language)).
+
+<p align="center">
+  <img src="docs/assets/readme/language.svg" alt="A finished session after typing /language Español: one row on the prompt says reply language: Español · applies from the next message." width="100%">
+</p>
 
 ## What it does
 
@@ -256,6 +271,15 @@ commands, agents, MCP servers and workflows it adds. It is an overlay: nothing i
 puts everything back. `/profiles` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
 `mendcode profile new mylook` writes a complete profile to start from, and anyone installs yours with
 `mendcode profile install github:you/mylook` ([profiles](docs/profiles.md)).
+
+`/marketplace` lists the catalogs you turned on, with a search row, a filter by kind (theme, extension, skill, command...) and,
+for the selected profile, what installing it takes over and where it comes from. Enter previews before anything installs, and
+`d` removes one. `/profiles` and `/marketplace` share three tabs: What it takes over, Installed and Marketplace (`1`, `2`, `3`)
+([browse the marketplace](docs/profiles.md#browse-the-marketplace)).
+
+<p align="center">
+  <img src="docs/assets/readme/marketplace.svg" alt="The marketplace page: the three shared tabs, the search row and kind filters over the official example profiles, and the selected profile's contents, tags, source and trust." width="100%">
+</p>
 
 An area is a set of folders. `mendcode area add company ~/Code/acme` gives everything under it its own user memories, model
 roles and default permission; open a terminal there and you are working as `company`, shown as `◆ company` under the prompt.

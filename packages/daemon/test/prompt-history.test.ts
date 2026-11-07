@@ -41,6 +41,18 @@ const entries = async (client: Awaited<ReturnType<typeof boot>>["client"], direc
 }
 
 describe("prompt history over the wire", () => {
+  test("a history larger than one reply still comes back: the newest entries that fit, never an oversized error", async () => {
+    const { client, project, sessionId } = await boot()
+    for (let i = 0; i < 40; i++) expect(await client.send({ type: "prompt.record", sessionId, text: `pasted notes ${i} ${"x".repeat(10_000)}`, kind: "draft" })).toMatchObject({ ok: true })
+    expect(await client.send({ type: "prompt.record", sessionId, text: "/panel next", kind: "command" })).toMatchObject({ ok: true })
+    const listed = await entries(client, project)
+    expect(listed.entries[0]!.text).toBe("/panel next")
+    expect(listed.entries[1]!.text).toStartWith("pasted notes 39 ")
+    expect(listed.entries.length).toBeGreaterThan(5)
+    expect(listed.entries.length).toBeLessThan(41)
+    expect(listed.prompts).toEqual(listed.entries.map((entry) => entry.text))
+  })
+
   test("typed commands and discarded drafts join the sent messages in one list per project, kinds included", async () => {
     const { client, project, sessionId } = await boot()
     expect(await client.send({ type: "prompt.record", sessionId, text: "/panel next", kind: "command" })).toMatchObject({ ok: true, result: { kept: "command" } })

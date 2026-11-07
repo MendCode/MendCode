@@ -11,6 +11,7 @@ import { readVscodeSelection, vscodeLauncher, VSCODE_STALE_MS } from "../src/ide
 
 type Range = { text: string; start: { line: number; character: number }; end: { line: number; character: number } }
 type BridgeLib = {
+  defaultDataDir(home?: string): string
   bridgeFile(dataDir: string, workspace: string): string
   buildRecord(input: { app?: string; workspace: string; filePath?: string; ranges?: Range[]; now: number }): Record<string, unknown>
   writeRecord(file: string, record: Record<string, unknown>): void
@@ -213,4 +214,20 @@ test("extension: publishes only with shareContext, mentions go into the prompt u
   expect(await readVscodeSelection(h.dir, h.directory)).toMatchObject({ status: "connected", selection: { source: "vscode", filePath: h.file, ranges: [{ text: "picked text", selection: { start: { line: 3, character: 5 } } }] } })
   for (const item of context.subscriptions.splice(0)) item.dispose()
   expect(readdirSync(published)).toEqual([])
+})
+
+test("the extension's default data directory is the daemon's: ~/.mendcode, ~/.mendcode-v2 only while its move is still pending", async () => {
+  const { defaultDataDirNow } = await import("@mendcode/program/data-dir")
+  const home = realpathSync(mkdtempSync(path.join(tmpdir(), "mend-vscode-home-")))
+  cleanups.push(() => rmSync(home, { recursive: true, force: true }))
+  const same = () => { expect(lib.defaultDataDir(home)).toBe(defaultDataDirNow(home)); return lib.defaultDataDir(home) }
+  expect(same()).toBe(path.join(home, ".mendcode"))
+  mkdirSync(path.join(home, ".mendcode-v2"))
+  expect(same()).toBe(path.join(home, ".mendcode-v2"))
+  mkdirSync(path.join(home, ".mendcode"))
+  writeFileSync(path.join(home, ".mendcode", "mendd.db"), "")
+  expect(same()).toBe(path.join(home, ".mendcode"))
+  rmSync(path.join(home, ".mendcode-v2"), { recursive: true })
+  symlinkSync(path.join(home, ".mendcode"), path.join(home, ".mendcode-v2"))
+  expect(same()).toBe(path.join(home, ".mendcode"))
 })

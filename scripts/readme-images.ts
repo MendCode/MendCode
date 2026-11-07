@@ -8,10 +8,10 @@
 // Each scene is a frame of the real TUI (the same view functions the terminal draws, over fixed data) on a full-screen
 // terminal of COLUMNS x ROWS cells, set in a window with the product's own theme colors. Nothing is hand-drawn: change a
 // view, run this script, commit the images with it. The logos are artwork, not frames, and are left alone.
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import type { ChangedFile, ChangesReport, Goal, MemoryEntry, MemoryGraphReport, MemoryLink, PackageInfo, SessionId } from "@mendcode/protocol"
+import type { ChangedFile, ChangesReport, Goal, MemoryEntry, MemoryGraphReport, MemoryLink, PackageCatalogEntry, PackageInfo, SessionId } from "@mendcode/protocol"
 // Demo data only: a throwaway data dir per scene, fixed daemon replies, placeholder credential names; never the user's ~/.mendcode.
 import { resolveActivation, type Activation } from "../packages/protocol/src/activation-data"
 import type { CommandReply } from "@mendcode/client"
@@ -23,6 +23,8 @@ import { createPackagesPageState, renderPackagesPage } from "../apps/cli/src/vie
 import { cells } from "../apps/cli/src/view/wrap"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../apps/cli/src/view/tui-profile"
 import { appHarness, ids, NOW } from "../apps/cli/test/session-ui-harness"
+import { onboardingHarness } from "../apps/cli/test/onboarding-harness"
+import { catalogHarness } from "../apps/cli/test/package-catalog-harness"
 
 /** A normal full-screen terminal window on a desktop monitor. */
 export const COLUMNS = 200
@@ -422,6 +424,59 @@ async function appPage({ typed }: { typed: string[] }): Promise<Line[]> {
 
 const BRACKETED = (text: string) => `\x1b[200~${text}\x1b[201~`
 
+/** Runs `frame` with HOME set to the demo user's, so a path the page shortens reads `~/Code/...`; HOME is put back after. */
+async function asDemoUser<T>(frame: () => Promise<T>): Promise<T> {
+  const home = process.env.HOME
+  process.env.HOME = HOME
+  try {
+    return await frame()
+  } finally {
+    if (home === undefined) delete process.env.HOME
+    else process.env.HOME = home
+  }
+}
+
+/**
+ * The setup page on a first run, through `/setup`: a demo machine with Codex signed in, Claude Code installed without a confirmed
+ * sign-in and an API key in the environment (a name only), and what `/import` would take over from Claude Code.
+ */
+function setupFrame(): Promise<Line[]> {
+  return asDemoUser(async () => {
+    const h = onboardingHarness({ codex: true, claude: true, keys: ["openrouter"], importable: { mcp: 2, commands: 3 } }, { width: COLUMNS, height: ROWS, dataDir: mkdtempSync(path.join(tmpdir(), "mendcode-readme-")), directory: PROJECT })
+    h.app.applySettings({ onboarded: false })
+    await Bun.sleep(5)
+    await h.type("/setup\r")
+    await Bun.sleep(20)
+    h.app.render()
+    return h.frames.at(-1)!
+  })
+}
+
+const OFFICIAL = new URL("../examples/official-profiles/", import.meta.url).pathname
+const countIn = (dir: string) => { try { return readdirSync(dir).length } catch { return 0 } }
+
+/** The marketplace's catalog: the official profiles in examples/official-profiles, read from their index and folders, and the retro example. */
+function catalogEntries(): PackageCatalogEntry[] {
+  const index = JSON.parse(readFileSync(path.join(OFFICIAL, "marketplace-index.json"), "utf8")) as { packs: Array<{ id: string; version: string; title: string; tags: string[] }> }
+  const official = index.packs.map((pack): PackageCatalogEntry => {
+    const manifest = JSON.parse(readFileSync(path.join(OFFICIAL, pack.id, "mendcode-profile.json"), "utf8")) as { description: string }
+    return { name: pack.id, title: pack.title, version: pack.version, description: manifest.description, sourceId: "official", location: `examples/official-profiles/${pack.id}`, tags: pack.tags, state: "available", contents: { skills: countIn(path.join(OFFICIAL, pack.id, "skills")), commands: countIn(path.join(OFFICIAL, pack.id, "commands")), agents: 0, tools: 0, themes: 0, mcp: false, extensions: 0 } } as PackageCatalogEntry
+  })
+  const retro = JSON.parse(readFileSync(path.join(RETRO, "mendcode-profile.json"), "utf8")) as { name: string; version: string; description: string }
+  return [...official, { name: retro.name, title: "Retro", version: retro.version, description: retro.description, sourceId: "official", location: "examples/profiles/retro", tags: ["look"], state: "available", contents: { skills: 1, commands: 1, agents: 0, tools: 0, themes: 1, mcp: false, extensions: 2 } } as PackageCatalogEntry]
+}
+
+/** /marketplace: the shared tabs, the search row, the kind filter and the selected profile's source and trust. */
+function marketplaceFrame(): Promise<Line[]> {
+  return asDemoUser(async () => {
+    const h = catalogHarness(COLUMNS, ROWS, false, { entries: catalogEntries() })
+    await h.type("/marketplace\r")
+    await Bun.sleep(10)
+    h.app.render()
+    return h.frames.at(-1)!
+  })
+}
+
 export type Scene = { file: string; title: string; frame: () => Promise<Line[]> | Line[] }
 
 export const SCENES: Scene[] = [
@@ -436,6 +491,10 @@ export const SCENES: Scene[] = [
   { file: "sessions.svg", title: "mendcode — /sessions", frame: () => appPage({ typed: ["/sessions\r", "\x0c"] }) },
   // In minimalist, a command of a higher tier typed by hand answers in one row on the prompt: the tier that has it and how to get there.
   { file: "notice.svg", title: "mendcode — a one-line notice", frame: () => shopSession({ finished: true, typed: ["/review\r"], settings: { tier: "minimalist" } }) },
+  { file: "setup.svg", title: "mendcode — first run", frame: setupFrame },
+  { file: "marketplace.svg", title: "mendcode — /marketplace", frame: marketplaceFrame },
+  // /language answers in one row: the language replies are in from the next message ("auto" follows your latest message).
+  { file: "language.svg", title: "mendcode — /language", frame: () => shopSession({ finished: true, typed: ["/language Español\r"] }) },
 ]
 
 export const IMAGES_DIR = new URL("../docs/assets/readme/", import.meta.url).pathname

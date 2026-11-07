@@ -29,7 +29,9 @@ Then the body. It runs in an isolated process: no process, Bun, require, import,
       A conflict pauses the run (files listed); the user resolves them in the integration worktree and resumes.
   await parallel([() => agent(...), ...], {settled?})   run thunks together; results keep order. settled: true returns {ok,value|error} per entry
   await pipeline(items, stage1, stage2, ...)           each item flows through the stages on its own; a stage returning undefined drops the item
-  await check(command, opts?)   run a command on the host (same as a contract check). Returns {ok, detail}; never throws for a failing command
+  await check(command, opts?)   run a command on the host (same as a contract check). Returns {ok, detail, truncated}; never throws for a failing command
+      detail: "exit N" then the command's whole output (pass or fail); past 1024 KB it is cut and truncated is true. Only a short tail
+      is stored, so a replay runs a check with longer output again: keep checks safe to repeat
       opts: label, phase, timeoutSeconds, in (an earlier detail worktree agent's result), stdin (text written to the command's
       stdin, then closed; at most 1024 KB, never stored; without it stdin is ignored)
   await ask(question, options?)   ask the user (the question dialog) and wait; with options the answer is one of them

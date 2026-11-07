@@ -32,7 +32,7 @@ phase("Summarize")
 // mode: "work" lets an agent edit files (one at a time, or add worktree: true to isolate it). The default is read-only.
 const summary = await agent("Combine these notes into one short summary:\\n\\n" + notes.join("\\n\\n"), { label: "Summarize" })
 
-// check(command) runs a command on this machine and returns { ok, detail } without failing the run.
+// check(command) runs a command on this machine and returns { ok, detail, truncated } without failing the run.
 // ask(question, ["a", "b"]) waits for your answer. memo(key, fn) runs fn once per run. log(...) writes to the run's log.
 log("angles", angles.angles.length)
 return summary

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto"
-import { parseCheck } from "@mendcode/loops"
+import { FULL_OUTPUT_BYTES, parseCheck } from "@mendcode/loops"
 import { WORKFLOW_SCRIPT_MAX_AGENTS, WorkflowAgentTaskSpec, WorkflowCheckTaskSpec, WorkflowHumanTaskSpec, WorkflowEngineId, WorkflowScriptBudget, effectiveScriptBudget, type WorkflowId, type WorkflowRun, type WorkflowTaskSpec } from "@mendcode/protocol"
 import { scriptSpecRegistry } from "./composition"
 import { captureOutput, schemaProblems } from "./outputs"
 import { workflowPlanHash } from "./definitions"
-import { addScriptTask, appendScriptLog, failScript, finishScript, pauseScriptRun, resetScriptHost, scriptHostIdle, scriptHostStarted, setScriptPhase } from "./run"
+import { addScriptTask, appendScriptLog, failScript, finishScript, pauseScriptRun, reopenScriptTask, resetScriptHost, scriptHostIdle, scriptHostStarted, setScriptPhase } from "./run"
 import { parseScript } from "./script-plan"
 import { emptyTaskUsage, totalTaskUsage } from "./routing"
 
@@ -71,8 +71,12 @@ type Context = {
 type Waiter = { kind: "agent" | "check" | "ask"; key: string; taskId: string; detail: boolean }
 type HostRuntime = { handle: ScriptHostHandle; waiters: Map<number, Waiter>; occurrences: Map<string, number>; timers: Set<Timer>; intentional: boolean; started: number }
 
-/** The journal entry of a finished call; `value` is what the script receives (parsed JSON with a schema, else the text). */
-type CallEntry = { kind: "agent" | "check" | "ask" | "merge"; ok: boolean; value?: unknown; text?: string; detail?: string; taskId: string; workspace?: string; diff?: WorktreeSummary; label?: string; at: number }
+/**
+ * The journal entry of a finished call; `value` is what the script receives (parsed JSON with a schema, else the text).
+ * A check's `detail` is the short tail; `long` marks one whose whole output was longer (held in memory only, see `outputs`),
+ * `truncated` one whose output passed CHECK_OUTPUT_LIMIT.
+ */
+type CallEntry = { kind: "agent" | "check" | "ask" | "merge"; ok: boolean; value?: unknown; text?: string; detail?: string; long?: true; truncated?: true; taskId: string; workspace?: string; diff?: WorktreeSummary; label?: string; at: number }
 /** `stdinBytes`: the call writes that many bytes to the command's stdin; the text itself stays in memory only (the replay supplies it again). */
 type SpecEntry = { spec: WorkflowTaskSpec; key: string; cwd?: string; stdinBytes?: number }
 
@@ -83,6 +87,22 @@ const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "mod
 const CHECK_KEYS = new Set(["label", "phase", "timeoutSeconds", "in", "stdin"])
 /** The most text `check(command, { stdin })` writes to the command (UTF-8 bytes). */
 export const CHECK_STDIN_LIMIT = 1_048_576
+/** The most output (UTF-8 bytes) a script's `check()` gets back in `detail`; past it the output is cut and `truncated` is true. */
+export const CHECK_OUTPUT_LIMIT = FULL_OUTPUT_BYTES
+const CHECK_DETAIL_CLIP = 2_000
+
+/** `exit N` and the output from its start, cut at a character boundary within `limit` bytes. */
+export function wholeCheckDetail(exitCode: number, output: string, limit = CHECK_OUTPUT_LIMIT): { detail: string; truncated: boolean } {
+  let text = output.replace(/\s+$/, "")
+  const bytes = Buffer.from(text, "utf8")
+  const truncated = bytes.length > limit
+  if (truncated) {
+    let end = limit
+    while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--
+    text = bytes.subarray(0, end).toString("utf8")
+  }
+  return { detail: `exit ${exitCode}${text ? `\n${text}` : ""}`, truncated }
+}
 const kilobytes = (bytes: number) => Math.max(1, Math.ceil(bytes / 1024))
 
 const stable = (value: unknown): string => {
@@ -164,6 +184,11 @@ export function createScriptEngine(ctx: Context) {
   const specs = new Map<string, SpecEntry>()
   /** The stdin text of check calls by `workflowId/taskId`; never journaled. */
   const stdins = new Map<string, string>()
+  /**
+   * The whole `detail` of finished check calls whose output was longer than the journaled tail, by `workflowId/taskId`; never
+   * journaled. Kept only while the host that will read it runs, and dropped once delivered: a replay that finds it gone runs the check again.
+   */
+  const outputs = new Map<string, string>()
   const journal = ctx.journal
 
   const read = <T>(workflowId: string, key: string): T | undefined => {
@@ -201,8 +226,11 @@ export function createScriptEngine(ctx: Context) {
     return `${hash}.${n}`
   }
 
-  function shape(entry: CallEntry, waiter: Waiter): unknown {
-    if (waiter.kind === "check") return { ok: entry.ok, detail: entry.detail ?? "" }
+  /** A long check whose whole output is no longer in memory: the replay must run it again instead of answering with the tail. */
+  const staleCheck = (workflowId: string, entry: CallEntry) => entry.kind === "check" && entry.long === true && !outputs.has(`${workflowId}/${entry.taskId}`)
+
+  function shape(workflowId: string, entry: CallEntry, waiter: Waiter): unknown {
+    if (waiter.kind === "check") return { ok: entry.ok, detail: (entry.long ? outputs.get(`${workflowId}/${entry.taskId}`) : undefined) ?? entry.detail ?? "", truncated: entry.truncated === true }
     if (waiter.kind === "agent" && waiter.detail) return { value: entry.value, text: entry.text ?? "", taskId: entry.taskId, ...(entry.workspace ? { workspace: entry.workspace } : {}), ...(entry.diff ? { branch: entry.diff.branch, diff: { commit: entry.diff.commit, files: entry.diff.files, insertions: entry.diff.insertions, deletions: entry.diff.deletions, changed: entry.diff.changed } } : {}), ...(entry.label ? { label: entry.label } : {}) }
     return entry.value
   }
@@ -214,9 +242,10 @@ export function createScriptEngine(ctx: Context) {
     if (!runtime || !run) return
     for (const [id, waiter] of [...runtime.waiters]) {
       const entry = read<CallEntry>(workflowId, `call:${waiter.key}`)
-      if (entry) {
+      if (entry && !staleCheck(workflowId, entry)) {
         runtime.waiters.delete(id)
-        reply(runtime, id, { ok: true, value: shape(entry, waiter) }, entry.at)
+        reply(runtime, id, { ok: true, value: shape(workflowId, entry, waiter) }, entry.at)
+        if (entry.long) outputs.delete(`${workflowId}/${entry.taskId}`)
         continue
       }
       const task = run.tasks.find((candidate) => candidate.id === waiter.taskId)
@@ -362,7 +391,9 @@ export function createScriptEngine(ctx: Context) {
     runtime.waiters.set(id, { kind: "check", key, taskId, detail: false })
     const run = ctx.get(workflowId)!
     const exists = run.tasks.some((task) => task.id === taskId)
-    const finished = !!read(workflowId, `call:${key}`)
+    const journaled = read<CallEntry>(workflowId, `call:${key}`)
+    const stale = !!journaled && staleCheck(workflowId, journaled)
+    const finished = !!journaled && !stale
     if (stdin !== undefined && !finished) stdins.set(`${workflowId}/${taskId}`, stdin)
     if (!exists && !finished) {
       const reason = capReason(run, true)
@@ -372,7 +403,8 @@ export function createScriptEngine(ctx: Context) {
         return pauseForCap(workflowId, reason)
       }
       createTask(workflowId, spec.data, key, { label, ...(typeof opts.phase === "string" ? { phase: clip(opts.phase, 80) } : {}), ...(cwd ? { cwd } : {}), ...(stdinBytes !== undefined ? { stdinBytes } : {}) })
-    } else if (exists && !finished && stdin !== undefined) ctx.update(workflowId, (current) => current) // a check that waited for its stdin (after a restart) may start now
+    } else if (exists && stale) ctx.update(workflowId, (current) => reopenScriptTask(current, taskId, ctx.clock.now()))
+    else if (exists && !finished && stdin !== undefined) ctx.update(workflowId, (current) => current) // a check that waited for its stdin (after a restart) may start now
     deliver(workflowId)
   }
 
@@ -479,6 +511,7 @@ export function createScriptEngine(ctx: Context) {
     const runtime = hosts.get(workflowId)
     if (!runtime) return
     hosts.delete(workflowId)
+    forgetOutputs(workflowId)
     runtime.intentional = true
     for (const timer of runtime.timers) timer.cancel()
     runtime.timers.clear()
@@ -513,6 +546,7 @@ export function createScriptEngine(ctx: Context) {
         onExit: (info) => {
           if (runtime.intentional || hosts.get(workflowId) !== runtime || ctx.disposed()) return
           hosts.delete(workflowId)
+          forgetOutputs(workflowId)
           for (const timer of runtime.timers) timer.cancel()
           failRun(workflowId, `the script host stopped: ${info.reason}`)
         },
@@ -559,11 +593,21 @@ export function createScriptEngine(ctx: Context) {
     return { ok: true }
   }
 
-  function recordCheck(run: WorkflowRun, taskId: string, ok: boolean, detail: string) {
+  /**
+   * A finished check call: the journal keeps the short `detail` (the tail); `whole` is the command's output from its start, which
+   * the script gets up to CHECK_OUTPUT_LIMIT, held in memory for the running host only.
+   */
+  function recordCheck(run: WorkflowRun, taskId: string, ok: boolean, detail: string, whole?: { exitCode: number; text: string }) {
     const entry = SPEC_KEY(run.workflowId, taskId)
-    stdins.delete(`${run.workflowId}/${taskId}`)
+    const memo = `${run.workflowId}/${taskId}`
+    stdins.delete(memo)
+    outputs.delete(memo)
     if (!entry) return
-    write(run.workflowId, `call:${entry.key}`, { kind: "check", ok, detail: clip(detail, 2_000), taskId, at: ctx.clock.now() } satisfies CallEntry)
+    const short = clip(detail, CHECK_DETAIL_CLIP)
+    const full = whole ? wholeCheckDetail(whole.exitCode, whole.text) : undefined
+    const long = full !== undefined && full.detail !== short
+    if (long && hosts.has(run.workflowId)) outputs.set(memo, full.detail)
+    write(run.workflowId, `call:${entry.key}`, { kind: "check", ok, detail: short, ...(long ? { long: true } : {}), ...(full?.truncated ? { truncated: true } : {}), taskId, at: ctx.clock.now() } satisfies CallEntry)
   }
 
   /** The user's answer to an `ask`: an approval carries the note (checked against the options), a rejection rejects the call. */
@@ -595,6 +639,10 @@ export function createScriptEngine(ctx: Context) {
 
   function forgetStdins(workflowId: WorkflowId) {
     for (const key of [...stdins.keys()]) if (key.startsWith(`${workflowId}/`)) stdins.delete(key)
+  }
+
+  function forgetOutputs(workflowId: WorkflowId) {
+    for (const key of [...outputs.keys()]) if (key.startsWith(`${workflowId}/`)) outputs.delete(key)
   }
 
   /** A check call with stdin whose text is not in memory yet (after a restart, until the replay reaches the call again). */
@@ -665,6 +713,7 @@ export function createScriptEngine(ctx: Context) {
       scriptSpecRegistry.clear(workflowId)
       for (const key of [...specs.keys()]) if (key.startsWith(`${workflowId}/`)) specs.delete(key)
       forgetStdins(workflowId)
+      forgetOutputs(workflowId)
       journal?.removeRun(workflowId)
     },
     hasHost: (workflowId: WorkflowId) => hosts.has(workflowId),
@@ -672,6 +721,7 @@ export function createScriptEngine(ctx: Context) {
       for (const workflowId of [...hosts.keys()]) stopHost(workflowId, "the daemon is stopping")
       specs.clear()
       stdins.clear()
+      outputs.clear()
     },
   }
 }
