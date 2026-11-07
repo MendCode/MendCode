@@ -89,7 +89,7 @@ const answerExcerpt = (text: string) => {
 type Judged = { verdict: Verdict; evidence: string[]; score?: number }
 function parseVerdicts(text: string): { ok: true; verdicts: Map<string, Judged> } | { ok: false; problem: string } {
   let value: unknown
-  try { value = extractJson(text) } catch (error) { return { ok: false, problem: error instanceof Error ? error.message : String(error) } }
+  try { value = extractJson(text, (object) => Array.isArray(object.verdicts)) } catch (error) { return { ok: false, problem: error instanceof Error ? error.message : String(error) } }
   const list = (value as { verdicts?: unknown })?.verdicts
   if (!Array.isArray(list)) return { ok: false, problem: "the object needs a `verdicts` array" }
   const verdicts = new Map<string, Judged>()

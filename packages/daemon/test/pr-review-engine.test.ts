@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIndexer } from "@mendcode/codegraph"
 import { PrFinding } from "@mendcode/protocol"
-import { buildReviewContext, gitRun, parseUnifiedDiff, type ReviewContext } from "../src/pr-review/context"
+import { buildReviewContext, gitRun, ONE_CALL_SLACK, parseUnifiedDiff, type ReviewContext } from "../src/pr-review/context"
 import { DEFAULT_ENGINE_CONFIG, reviewPrompt, reviewPullRequest, runReview, type ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId, parseFindings, parseWalkthrough } from "../src/pr-review/findings"
 import { publishable, rankFindings, runChecks, verifyFindings } from "../src/pr-review/verify"
@@ -77,8 +77,8 @@ describe("review context", () => {
     const dir = await repository()
     const graph = await graphOf(dir)
     const roomy = await buildReviewContext({ directory: dir, base: "main", head: "feature", budgetTokens: 200_000, graph })
-    // Just under the full context: callers are cut, every diff is kept.
-    const tight = await buildReviewContext({ directory: dir, base: "main", head: "feature", budgetTokens: (roomy.tokens - 5) * 2, graph })
+    // Just under the full context (with the slack one call allows): callers are cut, every diff is kept.
+    const tight = await buildReviewContext({ directory: dir, base: "main", head: "feature", budgetTokens: Math.floor((roomy.tokens - 5) * 2 / ONE_CALL_SLACK), graph })
     expect(tight.truncated).toBe(true)
     expect(tight.changedSymbols.find((entry) => entry.symbol === "total")!.callers.length).toBeLessThan(3)
     expect(tight.diff).toContain("changed 399")

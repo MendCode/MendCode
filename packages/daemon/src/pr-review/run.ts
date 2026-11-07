@@ -13,7 +13,7 @@ import { fallbackUsed, newFallbackState, withFallbacks, type FallbackSource, typ
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
-import { measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
+import { isMeasuredRise, measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
 import { commitStatus } from "./commit-status"
 import { publishReview, publishThroughProvider, type GhCall, type PublishReport, type ReviewInfo } from "./publish"
 import type { PublishCheck } from "./publishers"
@@ -311,6 +311,8 @@ export async function attemptReview({ sessionFactory, account, calling, context,
 // ── runPrReview ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const isAncestor = async (git: GitRun, directory: string, ancestor: string, of: string) => (await git(["merge-base", "--is-ancestor", ancestor, of], directory)).code === 0
+/** Two commits with the same files: `git diff --quiet` says no difference (a missing commit is a difference). */
+const sameTrees = async (git: GitRun, directory: string, from: string, to: string) => (await git(["diff", "--no-ext-diff", "--quiet", from, to, "--"], directory)).code === 0
 
 /**
  * Why this run's review could not be posted by this reviewer, or undefined: the repository's `publishers` does not let it post, or
@@ -367,6 +369,8 @@ async function dropInherited({ git, directory, head, stack, findings }: { git: G
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
+/** A resume whose checkpoint holds the whole review pass: it only verifies the kept candidates, no review pass runs. */
+const verifiesOnly = (resume: ReviewCheckpoint | undefined) => !!resume?.result && !parsePartPhase(resume.phase)
 /** The run's step for the live activity; a listener that throws never stops the review. */
 function tell(input: Pick<RunPrReviewInput, "progress">, step: ReviewProgress) {
   try { input.progress?.(step) } catch { /* the activity is not the review */ }
@@ -403,8 +407,12 @@ async function baseAttributes(git: GitRun, directory: string, ref: string): Prom
  * The readers of one run (readers.ts), bound to the config, the reviewer's reader source and the run's accounting: `read` is what
  * the context calls; `spent` what the readers counted, which comes off the review's cap; `note` the line for the summary and the
  * session notice; `summaries` what the checkpoint keeps for a resume of this head, which reads none of them again.
+ * A resume that only verifies (its checkpoint holds the whole review pass) calls no reader model at all: no review pass runs to
+ * read what they would say, so a file without a kept summary stays as it is (seen live: each retry of a failed verifier re-read
+ * the same files).
  */
 function runReaders({ input, config, resume }: { input: RunPrReviewInput; config: ReviewConfig; resume: ReviewCheckpoint | undefined }) {
+  const verifyOnly = verifiesOnly(resume)
   const parallel = config.readers.parallel ?? READERS_BY_TIER[input.readers?.tier ?? "balanced"]
   const share = config.readers.code === "all" ? READER_SHARE_ALL : READER_SHARE
   const notes: string[] = []
@@ -414,6 +422,7 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
   let source: ReaderSource | undefined
   const pick = (): ReaderSource => {
     if (source) return source
+    if (verifyOnly) return source = { ok: false, reason: "this resume only verifies the kept candidates, so no reader reads again" }
     const wanted = config.readers.model
     if (wanted && !isCheapReaderModel(wanted)) notes.push(`readers.model ${wanted} was refused: it is not a cheap reader model (${cheapReaderList()}); the automatic pick was used.`)
     const asked = wanted && isCheapReaderModel(wanted) ? wanted : undefined
@@ -450,8 +459,8 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     return out
   }
   const note = () => [
-    ...notes,
-    readersNote(total, parallel),
+    // A resume that only verifies read nothing: the line its review pass wrote is already in the summary.
+    ...(verifyOnly ? [] : [...notes, readersNote(total, parallel)]),
     reused ? `Readers: the summaries of ${reused.toLocaleString("en-US")} file${reused === 1 ? "" : "s"} were kept from this head's earlier run, not read again.` : undefined,
   ].filter((line): line is string => !!line)
   /** Whether a model read changed code this run: only then is the main pass held to the share the readers leave it. */
@@ -494,15 +503,22 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     if (status && config.status) await status.start()
   } else if (status && config.enabled && config.status && (!input.publisher || !await publishBlock({ input, config }).catch(() => true))) await status.start()
   try {
-    const nothingLeft = !!range.alreadyReviewed && (await git(["diff", "--no-ext-diff", "--quiet", range.base, range.head, "--"], input.directory)).code === 0
-    const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${nothingLeft ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined
+    const coveredAll = !!range.alreadyReviewed && await sameTrees(git, input.directory, range.base, range.head)
+    const coverageNote = range.alreadyReviewed ? `Already reviewed in ${range.alreadyReviewed.map((number) => `#${number}`).join(", ")}; ${coveredAll ? "nothing else changed, so no model was called." : `this review covers only ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}.`}` : undefined
+    // A head with the reviewed head's tree (a reworded, re-signed or empty commit, a push that changed nothing) has nothing to review.
+    const last = input.state.lastHead
+    const sameAsLast = !coveredAll && !resume && !input.full && !!last && last !== input.head && await sameTrees(git, input.directory, last, input.head)
+    // Why no model is called, when nothing is left to review: this text is the review's summary.
+    let nothingLeft: string | undefined = coveredAll ? coverageNote : sameAsLast ? `Head ${input.head.slice(0, 12)} has the same files as the reviewed head ${last!.slice(0, 12)}: nothing changed, so no model was called.` : undefined
     const graph = nothingLeft ? undefined : await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
     const readers = config.readers.enabled && input.readers?.tier !== "minimalist" ? runReaders({ input, config, resume }) : undefined
     const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
     // An oversized diff must also fit the pass's existing cap after readers and verification. Leave room for summaries/briefs.
     const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - (readers?.share ?? READER_SHARE)) * REVIEW_PASS_SHARE * 0.9 * 4)
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes, readCode: config.readers.code === "all" && !!input.readers })
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: nothingLeft ? undefined : readers?.read, attributes, mainBytes, readCode: config.readers.code === "all" && !!input.readers })
+    // Only files the config ignores changed (or none at all): there is nothing for a model to read.
+    if (!nothingLeft && !resume && !context.files.length) nothingLeft = `No file this review reads changed in ${range.base.slice(0, 12)}..${range.head.slice(0, 12)}, so no model was called.`
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
@@ -540,7 +556,7 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     const fallbackState = newFallbackState()
     const fallbacks = { sources: fallbackSources, state: fallbackState }
     const attempt: ReviewAttempt = nothingLeft ? { ok: true, outcome: {
-      result: { base: range.base, head: range.head, findings: [], dropped: 0, summary: coverageNote!, tokens: { input: 0, output: 0, cached: 0 }, budgetHit: false },
+      result: { base: range.base, head: range.head, findings: [], dropped: 0, summary: nothingLeft, tokens: { input: 0, output: 0, cached: 0 }, budgetHit: false },
       verified: true, folded: 0, candidates: [], validation: { ok: true, reason: "Already reviewed; no remaining changes." },
     } } : await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume, fallbacks })
     // A stalled turn: a retryable failure with no stop, so the job keeps the checkpoint and is tried again with backoff.
@@ -565,10 +581,14 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     if (risen && risenAdded) outcome ={ ...outcome, result: { ...outcome.result, findings: [risen, ...outcome.result.findings] }, candidates: [risen, ...outcome.candidates] }
     const published = Object.values(input.state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : [])
     const previous = [...published, ...(input.recheck ?? []).filter((finding) => !published.some((known) => known.id === finding.id))]
+    // A measured cost rise is decided by this head's measurement, never by a model: a head measured without a rise fixes it.
+    const asked = previous.filter((finding) => !isMeasuredRise(finding))
     // An explicit full review re-checks the open findings too: otherwise asking again after a fix could never close their threads.
     const rechecked = complete && !nothingLeft && (incremental || !!input.full)
     const recheckFactory = (factory: ReviewSessionFactory) => meteredSessions({ factory, account: input.account, calling: input.calling, resuming: false, failures: [], language: config.template.language })
-    const fixed = rechecked && previous.length ? await fixedFindings({ sessionFactory: withFallbacks({ primary: recheckFactory(input.sessionFactory), sources: fallbackSources.map((source) => ({ model: source.model, factory: recheckFactory(source.factory) })), state: fallbackState }), previous, context, language: config.template.language }) : []
+    const byModel = rechecked && asked.length ? await fixedFindings({ sessionFactory: withFallbacks({ primary: recheckFactory(input.sessionFactory), sources: fallbackSources.map((source) => ({ model: source.model, factory: recheckFactory(source.factory) })), state: fallbackState }), previous: asked, context, language: config.template.language }) : []
+    const byMeasure = rechecked && perf?.status === "measured" && !perf.rose ? previous.filter(isMeasuredRise).map((finding) => finding.id) : []
+    const fixed = [...byModel, ...byMeasure]
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []

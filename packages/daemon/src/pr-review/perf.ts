@@ -189,6 +189,13 @@ export function perfPrompt(outcome: PerfOutcome): string {
 export const perfBody = (outcome: PerfOutcome) => outcome.status === "measured" ? `**Performance (perf-attrib, base ${outcome.base.slice(0, 12)} against head ${outcome.head.slice(0, 12)})**\n\n${outcome.markdown}` : undefined
 export const perfNote = (outcome: PerfOutcome) => outcome.status === "not-measured" ? `Performance was not measured: ${outcome.reason}.` : undefined
 
+const MEASURED_RISE = "Measured rise above the noise:"
+/**
+ * A finding this phase made, not a model: whether the rise still holds is what the next head's measurement says, so a model is never
+ * asked to re-check it. A head measured without a rise fixes it.
+ */
+export const isMeasuredRise = (finding: Pick<PrFinding, "category" | "summary">) => finding.category === "performance" && finding.summary.startsWith(MEASURED_RISE)
+
 /**
  * The finding for a measured rise (critical: a rise the owner did not approve is a blocker, the same as a failing test). It sits on
  * the first changed line of the first file that can change cost, so it shows inline; undefined when the diff shows no such line.
@@ -199,7 +206,7 @@ export function perfFinding({ outcome, context }: { outcome: PerfOutcome; contex
   if (!file) return undefined
   const line = file.touched[0] ?? Math.min(...file.right)
   const metrics = outcome.verdict.replace(/^sube:\s*/, "").split(/\.\s*Causes:/)[0]!.trim()
-  const summary = `Measured rise above the noise: ${metrics}`.slice(0, 160)
+  const summary = `${MEASURED_RISE} ${metrics}`.slice(0, 160)
   const detail = `perf-attrib measured this pull request (base ${outcome.base.slice(0, 12)}, head ${outcome.head.slice(0, 12)}) and ${outcome.verdict.slice(0, 700)}. A measured rise without the owner's approval is a blocker: remove the cost, or get the owner to approve this number. The full table is in the review details.`.slice(0, 1200)
   return { id: findingId({ path: file.path, line, category: "performance", summary }), path: file.path, line, side: "RIGHT", severity: "critical", category: "performance", summary, detail, evidence: [`${file.path}:${line}`], verdict: "confirmed" }
 }

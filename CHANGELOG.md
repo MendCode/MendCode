@@ -11,12 +11,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The PR reviewer spends less of your model quota: a push with nothing new to review (an empty or reworded commit, only ignored files) calls no model, and a diff just over one review call is no longer split into a second call.
+- A retried PR review verification no longer asks the readers again, and a measured cost rise is settled by the next measurement instead of a model.
+- When GitHub cannot be reached, the PR review watch now says it is waiting and has not stopped; it keeps retrying and resumes by itself.
 - `/today` shows each pull request once, from its newest head, and leaves out merged or closed ones and reviews with no blocking finding left; reviews nobody touched for a week fold under one line.
 - `/today` can dismiss a row with `x`, or every old review with `X` after one confirmation; `d` lists what you dismissed and brings it back.
 
 ### Fixed
 
 - Choosing a panel preset in a session no longer hides your own version of it: `/panel galaxy` shows your custom galaxy, `/panel galaxy default` the built-in one, and the `/panel` menu says which is which. Sessions that already showed the built-in copy get yours back.
+- A PR review verifier answer with text after its JSON, or the JSON written twice, is no longer refused and retried.
 
 ## v0.0.7 - 2026-11-07
 
