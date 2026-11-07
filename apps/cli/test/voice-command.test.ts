@@ -266,6 +266,8 @@ describe("hold space to talk", () => {
     expect(voiceCalls(h)).toEqual(["status"])
     await space(40)
     expect(voiceCalls(h)).toEqual(["status", "start"])
+    // A held space asks for a recording that lasts until it is let go.
+    expect(h.sentOf("voice.control").find((command) => (command as { action: string }).action === "start")).toMatchObject({ held: true })
     expect(prompt(h)).toBe("fix")
     await h.app.onGlobal({ type: "voice.live", gseq: 1, at: 1, level: 0.9, text: "run the" })
     h.app.render()

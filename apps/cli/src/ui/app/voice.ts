@@ -50,7 +50,7 @@ export function createVoice(ctx: AppContext) {
     state.voice = pending
     requestFrame()
     try {
-      const reply = await input.send({ type: "voice.control", action: "start" })
+      const reply = await input.send({ type: "voice.control", action: "start", ...(held ? { held: true } : {}) })
       // Esc while it started: the recording it opened is dropped.
       if (state.voice !== pending) {
         stopWhenStarted = false
@@ -66,7 +66,8 @@ export function createVoice(ctx: AppContext) {
       const { maxSeconds } = reply.result as unknown as VoiceReport
       state.voice = { phase: "recording", startedAt: now(), maxSeconds, levels: [], ...(held ? { held: true } : {}) }
       tick = setInterval(requestFrame, 1000)
-      limit = setTimeout(() => void finish(), maxSeconds * 1000)
+      // A held on-device recording has no limit (0): it ends when space is let go, never mid-sentence.
+      if (maxSeconds > 0) limit = setTimeout(() => void finish(), maxSeconds * 1000)
       requestFrame()
     } catch (error) {
       stopWhenStarted = false

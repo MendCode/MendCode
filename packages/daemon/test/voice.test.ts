@@ -155,6 +155,16 @@ describe("dictation service", () => {
     expect(await h.voice.stop(h.owner)).toMatchObject({ ok: false, message: "[VOICE]: not recording" })
   })
 
+  test("a held space records an uploaded clip up to the upload size, not max_seconds", async () => {
+    const h = service({ voice: { enabled: true, max_seconds: 5 } })
+    const started = await h.voice.start(h.owner, true)
+    expect(started.ok && started.value.maxSeconds).toBe(780)
+    h.clock.advance(5_000)
+    expect(h.recorder.calls.stops).toBe(0)
+    h.clock.advance(775_000)
+    expect(h.recorder.calls.stops).toBe(1)
+  })
+
   test("an empty clip is reported as no audio and nothing is uploaded", async () => {
     const h = service({ voice: { enabled: true }, recorder: fakeRecorder({ bytes: 100 }) })
     await h.voice.start(h.owner)
@@ -198,10 +208,33 @@ describe("on-device dictation", () => {
     const http = fakeFetch()
     const mic = options.device ?? device()
     const heard: Array<{ owner: object; update: LocalLive }> = []
-    const voice = createVoice({ dir, clock: createVirtualClock(), recorder: recorder.recorder, fetch: http.fetcher, settings: () => ({ voice: options.voice }) as Settings, credentials: () => ({ baseUrl: "https://api.openai.test/v1", headers: { authorization: "Bearer sk-secret" } }), local: mic.local, ...(options.allowed !== undefined ? { allowed: () => options.allowed! } : {}), live: (owner, update) => heard.push({ owner, update }) })
+    const clock = createVirtualClock()
+    const voice = createVoice({ dir, clock, recorder: recorder.recorder, fetch: http.fetcher, settings: () => ({ voice: options.voice }) as Settings, credentials: () => ({ baseUrl: "https://api.openai.test/v1", headers: { authorization: "Bearer sk-secret" } }), local: mic.local, ...(options.allowed !== undefined ? { allowed: () => options.allowed! } : {}), live: (owner, update) => heard.push({ owner, update }) })
     cleanups.push(() => voice.dispose())
-    return { voice, recorder, http, mic, heard, owner: {} }
+    return { voice, recorder, http, mic, heard, clock, owner: {} }
   }
+
+  test("a held space records on-device with no limit: minutes past max_seconds it still listens, and a closed terminal ends it", async () => {
+    const h = onDevice({ voice: { max_seconds: 60 } })
+    const started = await h.voice.start(h.owner, true)
+    expect(started.ok && started.value.maxSeconds).toBe(0)
+    h.clock.advance(10 * 60_000)
+    expect(h.mic.calls.kills).toBe(0)
+    expect(h.clock.pendingTimers()).toBe(0)
+    const stopped = await h.voice.stop(h.owner)
+    expect(stopped.ok && stopped.value).toMatchObject({ text: "hola mundo", seconds: 600 })
+    await h.voice.start(h.owner, true)
+    h.voice.forget(h.owner)
+    expect(h.mic.calls.kills).toBe(1)
+  })
+
+  test("a toggled recording (not held) keeps max_seconds", async () => {
+    const h = onDevice({ voice: { max_seconds: 60 } })
+    const started = await h.voice.start(h.owner)
+    expect(started.ok && started.value.maxSeconds).toBe(60)
+    h.clock.advance(60_000 + 60_000)
+    expect(h.mic.calls.kills).toBe(1)
+  })
 
   test("where it runs it is the default and on without a setting: no key, no recorder program, no upload", async () => {
     const h = onDevice()

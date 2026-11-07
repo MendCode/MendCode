@@ -18,9 +18,11 @@ const MAX_AUDIO_BYTES = 24 * 1024 * 1024
 /** A WAV header alone is 44 bytes; anything smaller than this carries no speech. */
 const MIN_AUDIO_BYTES = 1000
 const MAX_TEXT_CHARS = 20_000
+/** A held recording that is uploaded stops where its 16 kHz mono 16-bit WAV would pass the upload size (32 000 bytes a second). */
+const HELD_UPLOAD_SECONDS = Math.floor(MAX_AUDIO_BYTES / 32_000 / 60) * 60
 const ERROR_BODY_CHARS = 200
 
-type Active = { owner: object; file: string; recording: VoiceRecording; startedAt: number; timer: TimerHandle; /** On-device dictation: the transcript comes from the helper, no file or upload. */ local?: LocalSession }
+type Active = { owner: object; file: string; recording: VoiceRecording; startedAt: number; timer: TimerHandle; /** Where it stops by itself; 0 for a held on-device recording, which runs until let go. */ maxSeconds: number; /** On-device dictation: the transcript comes from the helper, no file or upload. */ local?: LocalSession }
 
 /** The provider name of on-device dictation, and how it reads in `/voice status`. */
 export const LOCAL_PROVIDER = "local"
@@ -121,12 +123,14 @@ export function createVoice(input: {
     try { for (const name of readdirSync(folder)) if (/^rec-.*\.wav$/.test(name)) discard(path.join(folder, name)) } catch {}
   }
 
-  async function start(owner: object): Promise<VoiceResult<VoiceReport>> {
+  async function start(owner: object, held = false): Promise<VoiceResult<VoiceReport>> {
     if (disposed) return { ok: false, code: "invalid_command", message: "[VOICE]: daemon is stopping" }
     // On-device dictation hears nothing beyond this machine, so it is on unless turned off; an upload waits for `/voice on`.
     if (!(config().enabled ?? (Boolean(local()) && (input.allowed?.() ?? true)))) return { ok: false, code: "invalid_command", message: "[VOICE]: voice dictation is off; turn it on with /voice on" }
     if (active) return { ok: false, code: "busy", message: active.owner === owner ? "[VOICE]: already recording" : "[VOICE]: another terminal is recording" }
-    if (config().provider === LOCAL_PROVIDER || local()) return startLocal(owner)
+    // A held space records until it is let go: on-device with no limit (a closed terminal still ends it), uploaded up to the upload size.
+    if (config().provider === LOCAL_PROVIDER || local()) return startLocal(owner, held ? 0 : limit())
+    const maxSeconds = held ? Math.max(limit(), HELD_UPLOAD_SECONDS) : limit()
     const route = transport()
     if (!route.ok) return route
     if (!input.recorder.name()) return { ok: false, code: "invalid_command", message: "[VOICE]: no recorder found; install sox (rec), arecord or ffmpeg" }
@@ -143,17 +147,17 @@ export function createVoice(input: {
       discard(file)
       return { ok: false, code: "busy", message: "[VOICE]: already recording" }
     }
-    const state: Active = { owner, file, recording, startedAt: input.clock.now(), timer: { cancel() {} } }
+    const state: Active = { owner, file, recording, startedAt: input.clock.now(), timer: { cancel() {} }, maxSeconds }
     // The clip ends at the limit; a vanished client's clip is dropped a minute later.
-    state.timer = input.clock.setTimer(limit() * 1000, () => {
+    state.timer = input.clock.setTimer(maxSeconds * 1000, () => {
       void recording.stop().catch(() => {})
       state.timer = input.clock.setTimer(60_000, () => release(state))
     })
     active = state
-    return { ok: true, value: report() }
+    return { ok: true, value: { ...report(), maxSeconds } }
   }
 
-  async function startLocal(owner: object): Promise<VoiceResult<VoiceReport>> {
+  async function startLocal(owner: object, maxSeconds: number): Promise<VoiceResult<VoiceReport>> {
     const device = local()
     const why = device ? device.available() : "on-device dictation is not available here"
     if (!device || why) return { ok: false, code: "invalid_command", message: `[VOICE]: ${why}` }
@@ -167,11 +171,12 @@ export function createVoice(input: {
       session.kill()
       return { ok: false, code: "busy", message: "[VOICE]: already recording" }
     }
-    const state: Active = { owner, file: "", recording: { stop: async () => {}, kill: () => session.kill() }, startedAt: input.clock.now(), timer: { cancel() {} }, local: session }
-    // At the limit the terminal stops it; a vanished client's recording is dropped a minute after that.
-    state.timer = input.clock.setTimer(limit() * 1000 + 60_000, () => release(state))
+    const state: Active = { owner, file: "", recording: { stop: async () => {}, kill: () => session.kill() }, startedAt: input.clock.now(), timer: { cancel() {} }, local: session, maxSeconds }
+    // At the limit the terminal stops it; a vanished client's recording is dropped a minute after that. A held one has no limit:
+    // the terminal stops it when space is let go, and a closed terminal ends it (`forget`).
+    if (maxSeconds > 0) state.timer = input.clock.setTimer(maxSeconds * 1000 + 60_000, () => release(state))
     active = state
-    return { ok: true, value: report() }
+    return { ok: true, value: { ...report(), maxSeconds } }
   }
 
   async function transcribe({ bytes, name, mime, language }: { bytes: Uint8Array; name: string; mime: string; language?: string }): Promise<Transcription> {
@@ -218,7 +223,8 @@ export function createVoice(input: {
     if (!state || state.owner !== owner) return { ok: false, code: "invalid_command", message: "[VOICE]: not recording" }
     active = undefined
     state.timer.cancel()
-    const seconds = Math.min(limit(), Math.round((input.clock.now() - state.startedAt) / 100) / 10)
+    const elapsed = Math.round((input.clock.now() - state.startedAt) / 100) / 10
+    const seconds = state.maxSeconds > 0 ? Math.min(state.maxSeconds, elapsed) : elapsed
     if (state.local) {
       try {
         return { ok: true, value: { text: (await state.local.stop()).slice(0, MAX_TEXT_CHARS), seconds } }
