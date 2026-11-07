@@ -45,7 +45,7 @@ const WINDOW_MS = 14 * 86_400_000
 const DAY_MS = 86_400_000
 const EARLY_TURNS = 10
 /** The settings that decide what a request carries or how often the history is packed. The model is not one: its own tab compares models. */
-const WATCHED = ["compactAtTokens", "idleCompactAtTokens", "promptCache", "promptCacheTtl", "claudeCacheTtl", "cacheLifetimeMinutes", "compaction", "modelContext", "tier", "handoffTokenCap"] as const
+const WATCHED = ["compactAtTokens", "idleCompactAtTokens", "promptCache", "promptCacheTtl", "claudeCacheTtl", "claudeContext", "cacheLifetimeMinutes", "compaction", "modelContext", "tier", "handoffTokenCap"] as const
 /** Changes of one setting this close together are one decision (a toggle tried and set back, a value typed twice). */
 const SETTLE_MS = 10 * 60_000
 

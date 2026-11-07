@@ -641,9 +641,9 @@ export const daemon = await startDaemon({
           usesClaude: (sessionId, override) => modelEngine(turnModel(sessionId, override), modelCatalog) === "claude",
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
-            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits, claudeLean } = await import("@mendcode/engine-claude")
-            // `claude_lean` (opt-in): read when each process starts, so a switch takes effect with the session's next Claude Code process.
-            const lean = () => claudeLean(featureOn(store.settings.get(), "claude_lean", { safeMode }))
+            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits, claudeContextArgs } = await import("@mendcode/engine-claude")
+            // `claudeContext` (lean when unset): read when each process starts, so a change takes effect with the session's next Claude Code process.
+            const lean = () => claudeContextArgs(store.settings.get().claudeContext ?? "lean")
             const harnessText = await harnessSystem()
             const appendSystem = withMemoryFor(harnessText)
             const engine = createClaudeEngine({

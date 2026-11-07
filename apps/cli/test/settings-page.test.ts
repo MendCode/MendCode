@@ -98,7 +98,7 @@ describe("/settings page", () => {
     await h.key(" ")
     await down(h, 3)
     await h.key(RIGHT)
-    await down(h, 11)
+    await down(h, 12)
     await h.type("0415")
     await h.key(DOWN)
     await h.key(RIGHT)
@@ -118,7 +118,7 @@ describe("/settings page", () => {
     await down(h, 5)
     await h.key(RIGHT)
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { defaultPermission: "ask" } })
-    await down(h, 9)
+    await down(h, 10)
     await h.key(RIGHT)
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { onboarded: false } })
     await down(h, 2)
@@ -152,7 +152,7 @@ describe("/settings page", () => {
 
   test("a typed dream time applies at once and a bad one is refused; retention days are range-checked", async () => {
     const h = await open({ onboarded: true })
-    await down(h, 16)
+    await down(h, 17)
     await h.type("2599")
     expect(patches(h)).toHaveLength(0)
     expect(h.text()).toContain("time must be HH:MM")
@@ -171,7 +171,7 @@ describe("/settings page", () => {
 
   test("worktree cleanup starts at 14 days and cycles through off (0), 7, 14 and 30 or takes a typed count", async () => {
     const h = await open({ onboarded: true })
-    await down(h, 18)
+    await down(h, 19)
     expect(h.text()).toContain("worktree gc")
     expect(h.text()).toContain("14 days")
     await h.key(RIGHT)
@@ -187,7 +187,7 @@ describe("/settings page", () => {
 
   test("worktree cleanup is turned off with 0, which the cycle reaches from 7 days", async () => {
     const h = await open({ onboarded: true, worktreeGcDays: 7 })
-    await down(h, 18)
+    await down(h, 19)
     await h.key(LEFT)
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 0 } })
   })
@@ -205,7 +205,7 @@ describe("/settings page", () => {
 
   test("areas are shown, not edited here", async () => {
     const h = await open(FULL)
-    await down(h, 11)
+    await down(h, 12)
     for (const key of ["\r", RIGHT, LEFT, " "]) await h.key(key)
     expect(patches(h)).toEqual([])
     expect(h.text()).toContain("not editable here")
@@ -213,7 +213,7 @@ describe("/settings page", () => {
 
   test("link rows open /customize, /extensions, /model, /tools, /profiles and /storage", async () => {
     const reply = (command: Record<string, unknown>) => (command.type === "extensions.list" ? { ok: true, result: { extensions: [] } } : undefined)
-    const rows: Array<[number, string]> = [[12, "tools"], [13, "packages"], [15, "model"], [19, "storage"], [20, "customize"], [21, "extensions"], [22, "acp"]]
+    const rows: Array<[number, string]> = [[13, "tools"], [14, "packages"], [16, "model"], [20, "storage"], [21, "customize"], [22, "extensions"], [23, "acp"]]
     for (const [count, page] of rows) {
       const h = await open({ onboarded: true }, reply)
       await down(h, count)
@@ -272,9 +272,9 @@ describe("settings page units", () => {
     for (let i = 0; i < 40; i++) state = settingsPageKey(state, "j", values, { themes: ["mend"] }).state
     expect(state.row).toBe(SETTINGS_GROUPS.flatMap((group) => group.rows).length - 1)
     // Letters never start typing on the time row, digits do.
-    expect(settingsPageKey({ row: 16 }, "x", values, { themes: ["mend"] }).state).toEqual({ row: 16 })
-    expect(settingsPageKey({ row: 16 }, "0", values, { themes: ["mend"] }).state).toEqual({ row: 16, typing: "0" })
-    expect(settingsPageKey({ row: 17, typing: "12" }, "a", values, { themes: ["mend"] }).state).toEqual({ row: 17, typing: "12" })
+    expect(settingsPageKey({ row: 17 }, "x", values, { themes: ["mend"] }).state).toEqual({ row: 17 })
+    expect(settingsPageKey({ row: 17 }, "0", values, { themes: ["mend"] }).state).toEqual({ row: 17, typing: "0" })
+    expect(settingsPageKey({ row: 18, typing: "12" }, "a", values, { themes: ["mend"] }).state).toEqual({ row: 18, typing: "12" })
   })
 
   test("renders exactly width x height and never wider, from a phone to a wide screen", () => {
@@ -287,7 +287,7 @@ describe("settings page units", () => {
 
   test("the focused row stays on screen on a short terminal", () => {
     let state = createSettingsPageState()
-    for (let i = 0; i < 20; i++) state = settingsPageKey(state, "j", values, { themes: ["mend"] }).state
+    for (let i = 0; i < 21; i++) state = settingsPageKey(state, "j", values, { themes: ["mend"] }).state
     const rows = renderSettingsPage({ state, values, width: 80, height: 14, glyphs: glyphs({}) }).map((row) => row.map((span) => span.text).join(""))
     expect(rows.join("\n")).toContain("extensions")
   })

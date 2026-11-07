@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeLean, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1243,10 +1243,18 @@ describe("claude protocol helpers", () => {
     expect(claudeArgs({ permission: "ask", model: "sonnet" })).not.toContain("--advisor")
   })
 
-  test("claude_lean: on keeps only MendCode's MCP servers, drops the skills listing and auto memory; off adds nothing", () => {
-    expect(claudeLean(false)).toEqual({ args: [] })
-    expect(claudeLean(true)).toEqual({ args: ["--strict-mcp-config", "--disable-slash-commands"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
-    expect(claudeLean(true).args).not.toContain("--setting-sources")
+  test("claudeContext: full adds nothing; lean keeps only MendCode's MCP servers and drops auto memory; isolated also drops CLAUDE.md, hooks and output style; no level turns off /compact", () => {
+    expect(claudeContextArgs("full")).toEqual({ args: [] })
+    expect(claudeContextArgs("lean")).toEqual({ args: ["--strict-mcp-config"], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    for (const level of ["lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--disable-slash-commands")
+    expect(claudeContextArgs("isolated")).toEqual({
+      args: ["--strict-mcp-config", "--settings", JSON.stringify({ disableAllHooks: true, outputStyle: "default" })],
+      env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" },
+    })
+    // Settings files keep loading in every level: permission rules and login never change.
+    for (const level of ["full", "lean", "isolated"] as const) expect(claudeContextArgs(level).args).not.toContain("--setting-sources")
+    // The flag-layer settings merge with fast mode's instead of one replacing the other.
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeContextArgs("isolated").args])).toContain(JSON.stringify({ fastMode: true, disableAllHooks: true, outputStyle: "default" }))
   })
 
   test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {

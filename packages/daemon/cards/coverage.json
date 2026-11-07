@@ -8,7 +8,7 @@
     "plans": "feature:plan_files setting:plan_files_location",
     "one-tree": "feature:one_tree",
     "background": "setting:processLimits flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
-    "budgets": "feature:usage_resume feature:claude_lean command:usage command:limit command:stats-project file:spend.json",
+    "budgets": "feature:usage_resume setting:claudeContext command:usage command:limit command:stats-project file:spend.json",
     "cache-ttl": "feature:wait_cache feature:cache_countdown feature:message_threads setting:promptCacheTtl setting:claudeCacheTtl setting:zeroDataRetention",
     "codegraph": "feature:codegraph feature:graph_autopilot feature:graph_context feature:orientation command:graph setting:codegraph_index tool:apply_patch tool:code_search tool:diagnostics tool:graph_callers tool:graph_file_api tool:graph_find tool:graph_impact tool:graph_map tool:lsp file:formatter.json file:lsp.json",
     "commands": "feature:slash_menu file:mendcode.json",

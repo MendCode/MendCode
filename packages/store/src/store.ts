@@ -86,10 +86,14 @@ import { acquireWriterLock } from "./writer-lock"
 /** Upper bound for one stored event row. Big content belongs in blobs (A9, FC-36). */
 export const MAX_EVENT_BYTES = 80 * 1024
 
-/** Retired adapter switches never invalidate unrelated saved feature overrides. New patches still reject them. */
+/**
+ * Retired switches never invalidate unrelated saved feature overrides. New patches still reject them. `claude_lean` became the
+ * `claudeContext` setting, whose unset default is the same lean level, so dropping the switch keeps an opted-in user where they were.
+ */
+const RETIRED_FEATURES = new Set(["opencode", "cursor", "claude_lean"])
 function savedSetting(key: string, value: unknown): unknown {
   if (key !== "features" || !value || typeof value !== "object" || Array.isArray(value)) return value
-  return Object.fromEntries(Object.entries(value).filter(([id]) => id !== "opencode" && id !== "cursor"))
+  return Object.fromEntries(Object.entries(value).filter(([id]) => !RETIRED_FEATURES.has(id)))
 }
 
 /** The saved entries of a settings payload that still validate, one key at a time; corrupt JSON reads as no settings. */

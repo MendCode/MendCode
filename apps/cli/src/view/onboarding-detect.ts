@@ -328,13 +328,15 @@ function unavailableSources(input: { input: DetectInput; loggedIn: boolean; nati
  * Claude Code as `claude auth status` reports it: installed, signed in, and the plan only when it says so. Without the daemon's
  * report (an older daemon) a catalog that has Claude Code models says only that it is installed, never that it is signed in.
  */
+/** Where a signed-in user picks how much of their own Claude Code setup a session loads (lean by default). */
+const CLAUDE_CONTEXT_HINT = "context: /settings claude context"
 function claudeItem(harness: DetectHarness | undefined, listed: boolean): ReadyItem {
   const label = "Claude Code"
   if (!harness) return listed ? { id: "claude", label, ok: true, detail: "installed · sign-in not checked" } : { id: "claude", label, ok: false, detail: "not found", fix: CLAUDE_INSTALL }
   if (!harness.installed) return { id: "claude", label, ok: false, detail: "not installed", fix: CLAUDE_INSTALL }
   if (harness.signedIn === false) return { id: "claude", label, ok: false, detail: "installed · not signed in", fix: harness.login ?? "claude auth login" }
   if (harness.signedIn === undefined) return { id: "claude", label, ok: true, detail: "installed · sign-in not confirmed" }
-  return { id: "claude", label, ok: true, detail: `signed in · ${harness.plan ? `${harness.plan} plan` : "plan not reported"}` }
+  return { id: "claude", label, ok: true, detail: `signed in · ${harness.plan ? `${harness.plan} plan` : "plan not reported"} · ${CLAUDE_CONTEXT_HINT}` }
 }
 
 /** The Codex CLI: with `ownLogins` it is only reported, since MendCode signs in to ChatGPT for itself (`/connect chatgpt`). */
