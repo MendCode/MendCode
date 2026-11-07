@@ -233,7 +233,7 @@ Readers keep their share of the cap (above). If it is spent, or no reader can an
 On GitHub, a release PR (for example `beta` into `stable`) reuses the last contiguous reviewed tree from merged PRs in its range.
 
 1. The reviewer checks at most two pages of recently updated closed PRs, and at most two pages of reviews per matching PR.
-2. Only its own account's latest MendCode review counts, with a completion marker for exactly the head that was merged. A stale, partial, missing or unreadable review does not establish coverage.
+2. Only its own account and reviewer identity count. A complete review must start at the covered tree; stacked reviews record the parent head they actually reviewed from. Complete incremental reviews, including those with no new findings, chain from the preceding reviewed head to the merged head; that is why a push with nothing new still gets a short review recording the range it covered. A stale, partial, missing or unreadable review does not establish coverage.
 3. In first-parent order, an unreviewed PR or direct push stops coverage; merge-only changes remain to be reviewed.
 
 The summary says `Already reviewed in #82, #83, #84; this review covers only <baseline>..<head>`. If the trees are identical, it publishes a short note that nothing else changed, without calling a model.

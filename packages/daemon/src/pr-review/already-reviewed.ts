@@ -1,7 +1,7 @@
 import { z } from "zod"
 import type { GitRun } from "./context"
 import { DEFAULT_REVIEWER, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
-import { FULL_REVIEW_MARKER, REVIEW_MARKER } from "./state"
+import { FULL_REVIEW_MARKER, RANGE_REVIEW_MARKER, REVIEW_MARKER } from "./state"
 
 const Sha = z.string().regex(/^[0-9a-f]{40,64}$/)
 const Pull = z.object({ number: z.number().int().positive(), merged_at: z.string().nullable(), merge_commit_sha: Sha.nullable(), head: z.object({ sha: Sha }), base: z.object({ sha: Sha }) })
@@ -98,11 +98,26 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
       }
       // A full second page cannot prove which review was last. Partial reviews have no head marker.
       if (!complete) break
-      const last = reviews.filter((review) => review.state !== "PENDING" && review.submitted_at && review.user?.login.toLowerCase() === self!.toLowerCase()
-        && reviewerFromBody(review.body)?.reviewer === identity).sort((a, b) => a.submitted_at!.localeCompare(b.submitted_at!)).at(-1)
+      const ordered = reviews.filter((review) => review.state !== "PENDING" && review.submitted_at && review.user?.login.toLowerCase() === self!.toLowerCase()
+        && reviewerFromBody(review.body)?.reviewer === identity).sort((a, b) => a.submitted_at!.localeCompare(b.submitted_at!))
+      const last = ordered.at(-1)
       if (!last || last.commit_id !== pr.head.sha || REVIEW_MARKER.exec(last.body ?? "")?.[1] !== pr.head.sha) break
-      // Optional prose/sections may hide stacked or incremental scope; absence is not proof.
-      if (FULL_REVIEW_MARKER.exec(last.body ?? "")?.[1] !== pr.base.sha) break
+      let coveredHead: string | undefined
+      for (const review of ordered) {
+        const reviewedHead = REVIEW_MARKER.exec(review.body ?? "")?.[1]
+        if (!reviewedHead || review.commit_id !== reviewedHead) { coveredHead = undefined; continue }
+        const fullBase = FULL_REVIEW_MARKER.exec(review.body ?? "")?.[1]
+        if (fullBase) {
+          let tree = trees.get(fullBase)
+          if (!tree) {
+            const resolvedBase = await git(["rev-parse", `${fullBase}^{tree}`], directory, 128)
+            if (resolvedBase.code === 0 && !resolvedBase.cut && Sha.safeParse(resolvedBase.out.trim()).success) tree = resolvedBase.out.trim()
+          }
+          coveredHead = tree === cursorTree ? reviewedHead : undefined
+        } else if (RANGE_REVIEW_MARKER.exec(review.body ?? "")?.[1] === coveredHead && coveredHead) coveredHead = reviewedHead
+        else coveredHead = undefined
+      }
+      if (coveredHead !== pr.head.sha) break
       const reviewedTree = trees.get(pr.head.sha)
       if (!reviewedTree) break
       if (mergedTree === reviewedTree) {

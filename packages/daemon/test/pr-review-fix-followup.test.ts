@@ -252,9 +252,13 @@ describe("D1: a pushed fix is reviewed at the head it pushed", () => {
     const job = d.job(12)!
     expect(job).toMatchObject({ state: "done", head: pushed })
     expect(job.checkpoint.rounds).toEqual([expect.objectContaining({ open: [], commit: pushed })])
-    // The fix's review closed the thread of the finding it fixed; it posted no second review for a head with nothing new.
+    // The fix's review closed the thread of the finding it fixed. With nothing new, its review is a short one at the pushed head
+    // that records the range it covered, so a later release PR can skip these commits instead of reviewing them again.
     expect(hub.threads.get(12)?.map((thread) => [thread.body.includes(FINDING_ID), thread.resolved])).toEqual([[true, true]])
-    expect(hub.reviews.get(12)).toHaveLength(1)
+    const reviews = hub.reviews.get(12)!
+    expect(reviews).toHaveLength(2)
+    expect(JSON.stringify(reviews.at(-1))).toContain(`mendcode:review head=${pushed}`)
+    expect(JSON.stringify(reviews.at(-1))).toContain("mendcode:range base=")
     expect(d.notices.find((text) => text.includes("fix mode ended"))).toBe("acme/app#12: fix mode ended done after 1 round.")
     // The two late reads were waited out with the first two delays.
     expect(d.slept).toEqual(HEAD_CONFIRM_DELAYS_MS.slice(0, 2))

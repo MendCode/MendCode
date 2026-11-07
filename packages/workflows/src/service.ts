@@ -49,6 +49,7 @@ export type CreateWorkflowInput = {
   directory: string
   permission: WorkflowRun["permission"]
   originSessionId?: SessionId
+  packageRoot?: string
   definitionId?: string
   revisionId?: string
   revision?: number
@@ -662,6 +663,7 @@ export function createWorkflowService(options: {
       const workflowId = ids("workflow")
       const rootSessionId = options.createSession({ directory: input.directory, title: `workflow · ${input.name ?? input.plan.name}`, ...(input.originSessionId ? { parentId: input.originSessionId } : {}) })
       const run = createRun({ workflowId, plan: input.plan, planHash: input.planHash, directory: input.directory, permission: input.permission, rootSessionId, ...(input.originSessionId ? { originSessionId: input.originSessionId } : {}), at: clock.now() })
+      if (input.packageRoot) run.packageRoot = input.packageRoot
       if (input.definitionId) Object.assign(run, { definitionId: input.definitionId, revisionId: input.revisionId, revision: input.revision })
       if (input.name) run.name = input.name
       if (input.startKey) run.startKey = input.startKey
@@ -693,6 +695,7 @@ export function createWorkflowService(options: {
         return {
           execution,
           sourceDirectory: run.directory,
+          ...(run.packageRoot ? { packageRoot: run.packageRoot } : {}),
           beforeCall: () => {
             const current = runs.get(run.workflowId)!
             const taskNow = current.tasks.find((entry) => entry.id === task.id)!

@@ -14,6 +14,7 @@ import { LANGUAGE_NAME, languageFromMarkers } from "./language"
 export const REVIEW_MARKER = /<!-- mendcode:review head=([0-9a-f]{7,64}) -->/
 /** Positive proof of a whole-PR review; a head marker alone also describes reduced ranges. */
 export const FULL_REVIEW_MARKER = /<!-- mendcode:full-review base=([0-9a-f]{40,64}) -->/
+export const RANGE_REVIEW_MARKER = /<!-- mendcode:range base=([0-9a-f]{40,64}) -->/
 export const FINDING_MARKER = /<!-- mendcode:f=([0-9a-f]{40}) -->/
 export const reviewMarker = (head: string) => `<!-- mendcode:review head=${head} -->`
 export const findingMarker = (id: string) => `<!-- mendcode:f=${id} -->`

@@ -2,6 +2,10 @@
 
 Permissions decide which tool calls run, ask you first or are refused. Choose the session's mode on `/permissions`; the table below shows what happens to writes and execution.
 
+Workflows use the permission chosen at start or the originating session's mode; a script's permission is a default, not a cap. A session cannot grant a workflow more than its own mode.
+
+Package workflow agents may read their own package directory without an external-directory approval; writes and explicit deny rules are unchanged.
+
 Every tool call has a permission: `read`, `write` (edits files) or `execute` (runs things).
 
 Reads inside the project run unless a tool/path rule asks or denies them. Reads of `.env` and `.env.*` ask by default; `.env.example` is allowed.

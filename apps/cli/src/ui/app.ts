@@ -706,7 +706,7 @@ export function createApp(input: AppInput) {
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
-  const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name) })
+  const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name), loadWorkflows: () => loadWorkflows() })
   const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
     resetAudio: audio.reset,
     newTranscript,

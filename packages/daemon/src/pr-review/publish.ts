@@ -246,7 +246,7 @@ export async function publishReview({ repo, number, result, previous, process: g
   // A partial review is not a review of the head: the state keeps the last head that was whole, so the next `/pr review` is not answered as "already reviewed".
   const state: ReviewState = { ...previous, published: { ...previous.published }, ...(partial ? {} : { lastHead: result.head }) }
   // A later head (or the same one asked again) with nothing new posts no second notification; it only closes the threads it fixed.
-  if (!fresh.length && previous.lastHead && !partial) {
+  if (!fresh.length && previous.lastHead && !partial && !(info?.rangeBase && previous.lastHead !== result.head)) {
     const same = previous.lastHead === result.head
     if (same && !resolve.length) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: "this head was already reviewed and nothing is new" }
     if (await isStale(isCurrent)) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: STALE, stale: true }

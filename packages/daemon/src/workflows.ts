@@ -1,4 +1,5 @@
 import type { ExtensionLayer } from "@mendcode/packages"
+import path from "node:path"
 import { redactSecrets, summarizeWorkflow, type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
 import type { CheckRunner } from "@mendcode/loops"
 import type { WorkflowPort } from "@mendcode/tools"
@@ -8,7 +9,7 @@ import type { WorkflowRevisionReceipt, WorkflowScriptInput, WorkflowScriptOrigin
 type Permission = WorkflowRun["permission"]
 type Reply = { ok: true; result?: Record<string, unknown> } | { ok: false; code: ErrorCode; message: string }
 type TimerHandle = { cancel(): void }
-type Resolved = { plan: WorkflowPlan; receipt?: WorkflowRevisionReceipt } | { problems: string[] }
+type Resolved = { plan: WorkflowPlan; receipt?: WorkflowRevisionReceipt; packageRoot?: string } | { problems: string[] }
 /** Who is asking: script workflows run code, so only a local client (not a remote address or an authenticated peer) may start or change one. `origin` is set by the daemon, never by a client. */
 export type WorkflowAccess = { local: boolean; origin?: WorkflowScriptOrigin }
 const LOCAL: WorkflowAccess = { local: true }
@@ -21,7 +22,7 @@ export type WorkflowCommand =
   | { type: "workflow.list"; directory?: string | undefined }
   | { type: "workflow.get"; workflowId: WorkflowId }
   | { type: "workflow.control"; workflowId: WorkflowId; action: "pause" | "resume" | "stop" | "retry" | "verify" | "accept" | "delete" | "approve" | "reject"; taskId?: string | undefined; reason?: string | undefined }
-  | { type: "workflow.preview"; directory: string; plan: WorkflowPlanInput }
+  | { type: "workflow.preview"; directory: string; plan: WorkflowPlanInput; permission?: Permission | undefined; originSessionId?: SessionId | undefined }
   | Omit<import("@mendcode/protocol").Command & { type: "workflow.save" }, "id" | "clientId">
   | { type: "workflow.definitions"; directory: string; limit?: number }
   | { type: "workflow.revision.get"; directory: string; revisionId: string }
@@ -64,6 +65,7 @@ export function createWorkflowsHost(options: {
   /** Tests: a host other than the sandboxed process one. */
   scriptHost?: ScriptHostPort
   defaultPermission(directory: string): PermissionMode | undefined
+  sessionPermission?(sessionId: SessionId): PermissionMode | undefined
   createSession(input: import("@mendcode/workflows").WorkflowSessionInput): SessionId
   prepareTask?: Parameters<typeof import("@mendcode/workflows").createWorkflowService>[0]["prepareTask"]
   routingProblems?(directory: string, plan: WorkflowPlan): string[]
@@ -149,17 +151,19 @@ export function createWorkflowsHost(options: {
     const [{ readContracts, readWorkflowPlans }, { resolveContract, validatePlan }] = await Promise.all([import("./workflow-files"), import("@mendcode/workflows")])
     const layers = options.layersFor(directory)
     let raw: unknown = input
+    let packageRoot: string | undefined
     if ("ref" in input) {
       const saved = readWorkflowPlans(layers).find((entry) => entry.name === input.ref)
       if (!saved) return { problems: [`no saved workflow named "${input.ref}"`] }
       if (!saved.plan) return { problems: [`workflows/${input.ref}.json: ${saved.problem}`] }
       raw = saved.plan
+      if (saved.pkg) packageRoot = path.dirname(path.dirname(saved.file))
     }
     const checked = validatePlan(raw)
     if (!checked.ok) return { problems: checked.problems }
     if (checked.plan.script && !access.local) return { problems: [SCRIPT_LOCAL_ONLY] }
     const resolved = resolveContract(checked.plan, (name) => readContracts(layers).find((entry) => entry.name === name)?.contract)
-    return resolved.ok ? { plan: resolved.plan } : { problems: resolved.problems }
+    return resolved.ok ? { plan: resolved.plan, ...(packageRoot ? { packageRoot } : {}) } : { problems: resolved.problems }
   }
 
   /**
@@ -173,6 +177,7 @@ export function createWorkflowsHost(options: {
     const layers = options.layersFor(directory)
     let source: string
     let origin: WorkflowScriptOrigin
+    let packageRoot: string | undefined
     if ("script" in input) {
       source = input.script
       origin = access.origin ?? (input.origin === "file" ? "file" : "inline")
@@ -183,13 +188,14 @@ export function createWorkflowsHost(options: {
       if (found.source === "project" && !options.isTrusted?.(directory)) return { problems: [`workflows/${input.scriptRef}.js comes from this project, which is not trusted for code. Trust it first (/tools trust)`] }
       source = found.text
       origin = found.pkg ? "package" : found.source
+      if (found.pkg) packageRoot = path.dirname(path.dirname(found.file))
     }
     const built = buildScriptPlan({ source, args: input.args, origin })
     if (!built.ok) return { problems: built.problems }
     const checked = validatePlan(built.plan)
     if (!checked.ok) return { problems: checked.problems }
     const resolved = resolveContract(checked.plan, (name) => readContracts(layers).find((entry) => entry.name === name)?.contract)
-    return resolved.ok ? { plan: resolved.plan } : { problems: resolved.problems }
+    return resolved.ok ? { plan: resolved.plan, ...(packageRoot ? { packageRoot } : {}) } : { problems: resolved.problems }
   }
 
   function summaryOf(plan: WorkflowPlan, permission: Permission) {
@@ -210,6 +216,13 @@ export function createWorkflowsHost(options: {
       ...(plan.maxConcurrent ? { maxConcurrent: plan.maxConcurrent } : {}),
       ...(plan.maxRuntimeMinutes ? { maxRuntimeMinutes: plan.maxRuntimeMinutes } : {}),
     }
+  }
+
+  function workflowPermission(plan: WorkflowPlan, command: Extract<WorkflowCommand, { type: "workflow.start" | "workflow.preview" }>): Permission {
+    const session = command.originSessionId ? options.sessionPermission?.(command.originSessionId) : undefined
+    if (session !== undefined) return appliedPermission(command.permission, session)
+    if (command.permission) return command.permission
+    return appliedPermission(plan.permission, options.defaultPermission(command.directory))
   }
 
   async function handle(command: WorkflowCommand, access: WorkflowAccess = LOCAL): Promise<Reply> {
@@ -250,7 +263,7 @@ export function createWorkflowsHost(options: {
         }
         if (command.type === "workflow.preview") {
           if ("problems" in resolved) return { ok: true, result: { problems: resolved.problems } }
-          return { ok: true, result: { problems: [], summary: { ...summaryOf(resolved.plan, appliedPermission(resolved.plan.permission, options.defaultPermission(command.directory))), ...(resolved.receipt ? { definitionId: resolved.receipt.definitionId, revisionId: resolved.receipt.revisionId, revision: resolved.receipt.revision, planHash: resolved.receipt.planHash } : {}) } } }
+          return { ok: true, result: { problems: [], summary: { ...summaryOf(resolved.plan, workflowPermission(resolved.plan, command)), ...(resolved.receipt ? { definitionId: resolved.receipt.definitionId, revisionId: resolved.receipt.revisionId, revision: resolved.receipt.revision, planHash: resolved.receipt.planHash } : {}) } } }
         }
         if ("problems" in resolved) return fail("invalid_command", resolved.problems.join("; "))
         const workflows = await load()
@@ -260,10 +273,10 @@ export function createWorkflowsHost(options: {
         const hasWork = resolved.plan.script ? SCRIPT_WORK.test(resolved.plan.script.source) : resolved.plan.tasks.some((task) => task.kind === "agent" && task.mode === "work" || task.kind === "map" && task.map.taskTemplate.mode === "work")
         const clash = workflows.list(command.directory).find((run) => !["completed", "failed", "stopped"].includes(run.state) && run.tasks.some((task) => task.mode === "work"))
         if (hasWork && clash && !resolved.plan.overlapPolicy) return fail("busy", `workflow "${clash.name}" is already changing this directory`)
-        const permission = appliedPermission(resolved.plan.permission, command.permission ?? options.defaultPermission(command.directory))
+        const permission = workflowPermission(resolved.plan, command)
         const receipt = resolved.receipt ?? (await savedPlans()).save({ directory: command.directory, plan: resolved.plan, source: "session-generated", saved: false })
         try {
-          const run = workflows.create({ plan: receipt.plan, planHash: receipt.planHash, definitionId: receipt.definitionId, revisionId: receipt.revisionId, revision: receipt.revision, name: receipt.definition.name, directory: command.directory, permission, ...(command.originSessionId ? { originSessionId: command.originSessionId } : {}), ...(command.startKey ? { startKey: command.startKey } : {}), ...(command.loopId ? { loopId: command.loopId } : {}), ...(command.loopRunId ? { loopRunId: command.loopRunId } : {}) })
+          const run = workflows.create({ plan: receipt.plan, planHash: receipt.planHash, definitionId: receipt.definitionId, revisionId: receipt.revisionId, revision: receipt.revision, name: receipt.definition.name, directory: command.directory, permission, ...(resolved.packageRoot ? { packageRoot: resolved.packageRoot } : {}), ...(command.originSessionId ? { originSessionId: command.originSessionId } : {}), ...(command.startKey ? { startKey: command.startKey } : {}), ...(command.loopId ? { loopId: command.loopId } : {}), ...(command.loopRunId ? { loopRunId: command.loopRunId } : {}) })
           return { ok: true, result: { workflow: summarizeWorkflow(run) } }
         } catch (error) { return fail("busy", error instanceof Error ? error.message : String(error)) }
       }
@@ -307,7 +320,7 @@ export function createWorkflowsHost(options: {
     port(sessionId: SessionId, directory: string): WorkflowPort {
       return {
         async preview(plan) {
-          const reply = await handle({ type: "workflow.preview", directory, plan: plan as WorkflowPlanInput }, MODEL)
+          const reply = await handle({ type: "workflow.preview", directory, plan: plan as WorkflowPlanInput, originSessionId: sessionId }, MODEL)
           if (!reply.ok) return { problems: [reply.message] }
           const problems = (reply.result?.problems ?? []) as string[]
           const summary = reply.result?.summary as ReturnType<typeof summaryOf> | undefined

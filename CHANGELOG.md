@@ -9,6 +9,29 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.6 - 2026-11-06
+
+Workflows run with the permission you choose and no longer stall on their own package files, approving from the
+terminal never hangs, `/workflows` navigation is fixed, and release reviews stop re-reading reviewed code.
+
+### Upgrade notes
+
+- Same code as v0.0.6-beta.1.
+
+## v0.0.6-beta.1 - 2026-11-06
+
+Workflows run with the permission you choose and no longer stall on their own package files, approving from the
+terminal never hangs, `/workflows` navigation is fixed, and release reviews stop re-reading reviewed code.
+
+### Fixed
+
+- Returning from a workflow task with ↑ goes back to the workflows list.
+- Package workflow agents can read their own package files without an external-directory prompt.
+- Workflow previews and runs honor the user's chosen permission instead of silently lowering it to the script default.
+- Headless runs explain when a session is waiting for an earlier approval instead of hanging.
+- The workflows page shows runs from other projects without requiring a scope switch.
+- Release reviews reuse completed stacked and incremental reviews without skipping unreviewed changes.
+
 ## v0.0.5 - 2026-11-06
 
 A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your

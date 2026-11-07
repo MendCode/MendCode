@@ -1048,7 +1048,6 @@ export function loopRows(loops: Loop[]) {
 }
 
 const TASK_MARK: Record<WorkflowRun["tasks"][number]["state"], string> = { pending: "[ ]", running: "[/]", needs_input: "[?]", done: "[x]", failed: "[!]", skipped: "[-]", stopped: "[-]" }
-const PERMISSION_RANK: Record<WorkflowPermission, number> = { ask: 0, edits: 1, full: 2 }
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 
 export function workflowRows(workflows: WorkflowSummary[]) {
@@ -1114,7 +1113,7 @@ export function previewText({ target, plan, summary, granted }: { target: string
     if (scriptInfo.args !== undefined) lines.push(`arguments: ${JSON.stringify(scriptInfo.args)}`)
     const checkNames = Array.isArray(info?.checks) ? info.checks : []
     for (const command of checkNames) lines.push(`  check: ${String(command)}`)
-    const applied = granted ?? permissionOf(info?.permission)
+    const applied = permissionOf(info?.permission) ?? granted
     lines.push(`permission: ${applied ?? "set by the daemon at start"}`)
     return `${lines.join("\n")}\n`
   }
@@ -1132,8 +1131,7 @@ export function previewText({ target, plan, summary, granted }: { target: string
   else if (contract) lines.push(`contract: ${Array.isArray(contract.criteria) ? contract.criteria.length : 0} criteria · audit ${word(contract.audit) ?? "auto"}`)
   else if (inline) lines.push("contract: none (unverified)")
   for (const check of checks) lines.push(`  check${word(check.id) ? ` ${word(check.id)}` : ""}: ${word(check.command) ?? "?"}`)
-  const caps = [granted ?? permissionOf(info?.permission), permissionOf(inline?.permission)].filter((permission) => permission !== undefined)
-  const applied = caps.length ? caps.reduce((low, next) => (PERMISSION_RANK[next] < PERMISSION_RANK[low] ? next : low)) : undefined
+  const applied = permissionOf(info?.permission) ?? granted
   lines.push(applied ? `permission: ${applied}` : "permission: set by the daemon at start")
   return `${lines.join("\n")}\n`
 }
@@ -1822,7 +1820,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       if (start?.wait && !deps.listenGlobal) return fail("this client cannot receive workflow events; start without --wait", EXIT.failed, "unsupported")
       const loaded = await loadPlan(command.target, command.script)
       if ("error" in loaded) return fail(loaded.error)
-      const previewed = await daemon({ type: "workflow.preview", directory: dir, plan: loaded.plan as never })
+      const previewed = await daemon({ type: "workflow.preview", directory: dir, plan: loaded.plan as never, ...(start?.permission ? { permission: start.permission } : {}) })
       if (!previewed.ok) return fail(previewed.message, EXIT.failed, previewed.code)
       const problems = ((previewed.result.problems ?? []) as unknown[]).map(String)
       if (problems.length) {

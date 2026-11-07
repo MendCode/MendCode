@@ -4,7 +4,7 @@ import type { AppContext } from "./context"
 
 export type SessionNavigation = "session.child.first" | "session.child.next" | "session.child.previous" | "session.parent"
 
-export function createSubagents(ctx: AppContext, actions: { switchSession(id: SessionId): Promise<void>; loadPage(name: "tasks"): Promise<void> }) {
+export function createSubagents(ctx: AppContext, actions: { switchSession(id: SessionId): Promise<void>; loadPage(name: "tasks"): Promise<void>; loadWorkflows(): Promise<void> }) {
   const { state, input, fail, requestFrame } = ctx
   const agentView = createAgentView(ctx)
   async function loadTasks() {
@@ -50,6 +50,14 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
   async function navigate(action: SessionNavigation) {
     // A sub-agent thread open in the chat: the same keys return to the conversation and change sibling, with no session to switch.
     if (agentView.open) return action === "session.parent" ? agentView.close() : action === "session.child.first" ? false : agentView.cycle(action === "session.child.next" ? 1 : -1)
+    const back = state.workflowReturn
+    if (back && action === "session.parent" && state.sessionId === back.task) {
+      state.workflowReturn = undefined
+      if (back.previous !== back.task) await actions.switchSession(back.previous)
+      state.page = "workflows"
+      await actions.loadWorkflows()
+      return true
+    }
     const current = state.sessionId
     const reply = await input.send({ type: "session.get", sessionId: current })
     if (!reply.ok) { fail(reply.error.message); return false }
@@ -73,6 +81,8 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
     // No child session to open: the session's own sub-agents (an engine's, as Claude Code's) open as a thread.
     if ((!next || next === current) && action === "session.child.first") return agentView.first()
     if (!next || next === current) return false
+    // Only leaving the task drops the way back to /workflows; a failed or no-op move keeps it.
+    state.workflowReturn = undefined
     await actions.switchSession(next)
     return true
   }

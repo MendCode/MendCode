@@ -474,6 +474,7 @@ export type AppState = {
   /** A `/loop` written as a phrase, waiting for its one-line confirmation (enter starts it, `e` edits it, a mode word lowers its permission). */
   loopDraft?: import("./loops").LoopDraft | undefined
   workflowsState: ReturnType<typeof createWorkflowsPageState>
+  workflowReturn?: { task: SessionId; previous: SessionId } | undefined
   workflows: WorkflowSummary[]
   workflowsLoaded: boolean
   workflowsError: string
