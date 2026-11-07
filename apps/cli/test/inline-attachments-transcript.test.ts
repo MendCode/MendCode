@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { messageRows, outsideText } from "../src/view/chat-blocks"
+import { foldAttachedFiles, messageRows, outsideText } from "../src/view/chat-blocks"
 import { textWidth } from "../src/view/wrap"
 import { conversation } from "./session-ui-harness"
 import { bench } from "./inline-attachments-helpers"
@@ -34,6 +34,14 @@ describe("messageRows", () => {
   test("a folder or text file token (no ref, its block follows it) is a secondary chip too", () => {
     const rows = messageRows("lee [notes.txt]\n\n[attached file: notes.txt]\n```\nx\n```\n\nya [a] b", [], 80, [])
     expect(rows.flatMap((row) => row.filter((span) => span.bg))).toEqual([expect.objectContaining({ text: "[notes.txt]", bg: "secondary" })])
+  })
+
+  test("a text file's token is a chip when its block comes after the line, and the block folds to its name and size", () => {
+    const sent = 'pregunta es el " [launch.html] "?\n\n[attached file: launch.html]\n```\n<html>\n<body></body>\n</html>\n```'
+    const folded = foldAttachedFiles(sent)
+    expect(folded).toBe('pregunta es el " [launch.html] "?\n\n[attached file: launch.html] · 3 lines · ctrl-o')
+    const rows = messageRows(folded, [], 80, [])
+    expect(rows.flatMap((row) => row.filter((span) => span.bg))).toEqual([expect.objectContaining({ text: "[launch.html]", bg: "secondary" })])
   })
 
   test("no label anywhere: the plain wrap it always was", () => {

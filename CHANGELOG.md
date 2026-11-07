@@ -25,8 +25,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - pi and ACP agent sessions receive the same memory block as native, Claude Code and Codex ones.
 - Unused code graph caches, and those of folders that no longer exist, are cleaned up automatically.
 
+### Changed
+
+- The start screen's infinity mark has the website logo's wide shape, with MendCode in big letters under it when the terminal has room.
+
 ### Fixed
 
+- A file pasted in the middle of a sentence no longer splits it: the model gets the whole sentence, then the file, and the transcript shows the file folded to its name.
+- The built-in pets drop the old green: MendGirl and her robot are in Ink's black and white, and MendAscii takes every theme's own primary color (the Mend theme keeps the mint robot).
 - Changing a Claude Code session's model no longer ends its background agents: the model switches live, and a new effort waits until they finish.
 - Page tabs draw their shortcut number dim and apart, so it no longer reads as the tab's count; `/today` shows each count once.
 - The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.

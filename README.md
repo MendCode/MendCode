@@ -7,7 +7,11 @@
 
 <h1 align="center">MendCode</h1>
 
-<p align="center"><strong>A coding agent for the terminal, with sessions that outlive the window.</strong></p>
+<p align="center"><sub>Code. Mend. Repeat.</sub></p>
+
+<h3 align="center">Your coding agent. Your rules.</h3>
+
+<p align="center">As little or as much coding agent as you want: in the terminal, with sessions that outlive the window.</p>
 
 <p align="center">
   <a href="https://github.com/MendCode/MendCode/actions/workflows/ci.yml"><img src="https://github.com/MendCode/MendCode/actions/workflows/ci.yml/badge.svg" alt="CI"></a>

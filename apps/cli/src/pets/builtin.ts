@@ -5,6 +5,7 @@ import type { PetInfo } from "./manifest"
 /**
  * MendGirl's frames: 30 cells of 200 x 198 in six columns. The sheet is the owner's own art (MendGirl, with neko ears, and her
  * little robot), reduced from 352-pixel cells to just above the size any pet is drawn at with the default cell, as a lossy WebP.
+ * Its mint and green were moved to Ink's neutral greys pixel by pixel (lightness and alpha kept), so every frame keeps its place.
  */
 const MENDGIRL_LAYOUT: PetLayout = {
   art: "smooth",
