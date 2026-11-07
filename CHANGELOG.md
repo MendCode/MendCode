@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- Release reviews reuse completed stacked and incremental reviews without skipping unreviewed changes.
+
 ## v0.0.5 - 2026-11-06
 
 A setup that finds your tools and sign-ins, a redone Marketplace and `/sessions` with search, replies that stay in your
