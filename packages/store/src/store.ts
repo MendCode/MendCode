@@ -1325,6 +1325,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     tasks: parity.tasks,
     continuity,
     extraction: parity.extraction,
+    memoryReviews: parity.reviews,
     recall,
     /** How a session spent its time and tokens: turns, days, hours, models, tools, sub-agents, approvals. */
     sessionStats,

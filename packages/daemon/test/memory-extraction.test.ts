@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIdFactory, type ExtractionJob } from "@mendcode/protocol"
@@ -13,7 +13,8 @@ async function until(predicate: () => boolean) {
   for (let count = 0; count < 300; count++) { if (predicate()) return; await Bun.sleep(2) }
   throw new Error("worker did not settle")
 }
-function fixture(extract?: (job: ExtractionJob, signal: AbortSignal) => Promise<ExtractedMemory[]>) {
+type Timers = Array<{ ms: number; run: () => void; cancelled: boolean }>
+function fixture(extract?: (job: ExtractionJob, signal: AbortSignal) => Promise<ExtractedMemory[]>, extra: Partial<Parameters<typeof createMemoryExtraction>[0]> = {}, settings: Record<string, unknown> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "memory-extraction-"))
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
   const store = openStore({ dir })
@@ -21,8 +22,9 @@ function fixture(extract?: (job: ExtractionJob, signal: AbortSignal) => Promise<
   const sessionId = ids("session")
   store.createSession({ id: sessionId, directory: "/project", title: "Extraction" })
   const proposals: ExtractedMemory[] = []
-  store.settings.set({ memoryGenerate: true })
-  const worker = createMemoryExtraction({ store, settings: () => store.settings.get(), now: Date.now, extract, retryMs: 1, timeoutMs: 20, commit: (_job, memories) => { proposals.push(...memories); return memories.length } })
+  store.settings.set({ memoryGenerate: true, memoryReviewEveryTurns: 2, ...settings })
+  const timers: Timers = []
+  const worker = createMemoryExtraction({ store, settings: () => store.settings.get(), now: Date.now, extract, retryMs: 1, timeoutMs: 20, eligibleDirectory: () => true, setTimer: (ms, run) => { const timer = { ms, run, cancelled: false }; timers.push(timer); return { cancel: () => { timer.cancelled = true } } }, commit: (_job, memories) => { proposals.push(...memories); return memories.length }, ...extra })
   cleanup.push(() => worker.stop())
   const turn = (text = "Always use pnpm for this repository") => {
     const turnId = ids("turn")
@@ -34,7 +36,9 @@ function fixture(extract?: (job: ExtractionJob, signal: AbortSignal) => Promise<
     worker.observe(event)
     return event
   }
-  return { dir, store, sessionId, proposals, worker, turn }
+  const live = () => timers.filter((timer) => !timer.cancelled)
+  const compaction = () => worker.observe(store.sessionSink.append({ type: "compaction.updated", sessionId, turnId: ids("turn"), reason: "auto", state: "writing", followUp: "" }))
+  return { dir, store, sessionId, proposals, worker, turn, timers, live, compaction }
 }
 
 test("completed turns enqueue once; worker persists attempts and proposals without tool or secret output", async () => {
@@ -43,7 +47,8 @@ test("completed turns enqueue once; worker persists attempts and proposals witho
     expect(job.text).not.toContain("sk_live_")
     return [{ scope: "project", category: "commands", text: "Use pnpm" }]
   })
-  const event = h.turn()
+  h.turn()
+  const event = h.turn("Never use npm here")
   h.worker.observe(event)
   await until(() => h.proposals.length === 1 && h.store.extraction.list().length === 0)
   expect(h.proposals).toHaveLength(1)
@@ -55,16 +60,21 @@ test("use and generation are independent; disabling generation or memory prevent
   const h = fixture(async () => [])
   h.store.settings.set({ memoryUse: false })
   h.turn()
+  h.turn()
   await until(() => h.worker.status().lastRun === "completed")
   h.store.settings.set({ memoryGenerate: false })
   h.turn()
+  h.turn()
+  h.turn()
   h.store.settings.set({ memoryEnabled: false, memoryGenerate: true })
+  h.turn()
   h.turn()
   expect(h.store.extraction.list()).toHaveLength(0)
 })
 
 test("unconfigured extractor leaves a durable queued job with an explicit reason", async () => {
   const h = fixture()
+  h.turn()
   h.turn()
   expect(h.worker.configured).toBe(false)
   expect(h.store.extraction.list()[0]).toMatchObject({ state: "queued", attempts: 0, reason: "Extractor not configured" })
@@ -73,6 +83,7 @@ test("unconfigured extractor leaves a durable queued job with an explicit reason
 test("errors retry twice then fail; explicit retry starts a new bounded attempt series", async () => {
   let fail = true
   const h = fixture(async () => { if (fail) throw new Error("bad extraction"); return [] })
+  h.turn()
   h.turn()
   await until(() => h.store.extraction.list()[0]?.state === "failed")
   const job = h.store.extraction.list()[0]!
@@ -87,6 +98,7 @@ test("worker times out an extractor that ignores abort, without accepting late r
   let finish!: (value: ExtractedMemory[]) => void
   const h = fixture(() => new Promise((resolve) => { finish = resolve }))
   h.turn()
+  h.turn()
   await until(() => h.store.extraction.list()[0]?.state === "failed")
   finish([{ scope: "project", category: "commands", text: "late" }])
   await Bun.sleep(3)
@@ -97,10 +109,11 @@ test("worker times out an extractor that ignores abort, without accepting late r
 test("shutdown pauses a live extraction and a new worker recovers the durable job", async () => {
   const h = fixture(() => new Promise(() => {}))
   h.turn()
+  h.turn()
   await until(() => h.store.extraction.list()[0]?.state === "running")
   await h.worker.stop()
   expect(h.store.extraction.list()[0]).toMatchObject({ state: "queued", attempts: 0, reason: "Paused for shutdown" })
-  const next = createMemoryExtraction({ store: h.store, settings: () => h.store.settings.get(), now: Date.now, extract: async () => [], commit: () => 0 })
+  const next = createMemoryExtraction({ store: h.store, settings: () => h.store.settings.get(), now: Date.now, eligibleDirectory: () => true, extract: async () => [], commit: () => 0 })
   cleanup.push(() => next.stop())
   next.wake()
   await until(() => h.store.extraction.list().length === 0)
@@ -108,6 +121,7 @@ test("shutdown pauses a live extraction and a new worker recovers the durable jo
 
 test("settlement is transactional; failed writes roll back both proposals and completion", () => {
   const h = fixture()
+  h.turn()
   h.turn()
   const job = h.store.extraction.list()[0]!
   expect(() => h.store.extraction.settle(job, () => {
@@ -122,6 +136,7 @@ test("disabling generation while an extraction is in flight skips the result", a
   let finish!: (value: ExtractedMemory[]) => void
   const h = fixture(() => new Promise((resolve) => { finish = resolve }))
   h.turn()
+  h.turn()
   await until(() => h.store.extraction.list()[0]?.state === "running")
   h.store.settings.set({ memoryGenerate: false })
   finish([{ scope: "user", category: "preferences", text: "Discard me" }])
@@ -129,7 +144,7 @@ test("disabling generation while an extraction is in flight skips the result", a
   expect(h.proposals).toEqual([])
 })
 
-test("memory/model graph calls still allow extraction; the commit deduplicates written facts", () => {
+test("memory/model graph calls still count as substantive turns; the commit deduplicates written facts", () => {
   const h = fixture()
   for (const tool of ["memory", "memory_graph"]) {
     const turnId = ids("turn")
@@ -140,24 +155,23 @@ test("memory/model graph calls still allow extraction; the commit deduplicates w
     h.store.sessionSink.append({ type: "item.started", sessionId: h.sessionId, turnId, itemId: ids("item"), kind: "tool_call", meta: { tool } })
     h.worker.observe(h.store.sessionSink.append({ type: "turn.completed", sessionId: h.sessionId, turnId }))
   }
-  expect(h.store.extraction.list()).toHaveLength(2)
-  h.turn()
-  expect(h.store.extraction.list()).toHaveLength(3)
+  expect(h.store.extraction.list()).toHaveLength(1)
 })
 
-test("status queue count includes jobs outside the bounded display list", () => {
-  const h = fixture()
+test("a hundred turns of one session queue one job, not a hundred", () => {
+  const h = fixture(undefined, {}, { memoryReviewEveryTurns: 10 })
   for (let index = 0; index < 100; index++) h.turn(`Rule ${index}`)
-  expect(h.worker.list()).toHaveLength(80)
-  expect(h.worker.status()).toMatchObject({ queue: 100, lastRun: "never", lastError: "Extractor not configured" })
+  expect(h.worker.list()).toHaveLength(1)
+  expect(h.worker.status()).toMatchObject({ queue: 1, lastRun: "never", lastError: "Extractor not configured" })
 })
 
-test("a greeting with no tool call enqueues nothing; a short but real preference and any tool turn still do", async () => {
+test("a greeting with no tool call counts for nothing; real preferences still make a review", async () => {
   const h = fixture(async () => [])
   h.turn("hi")
   h.turn("thanks")
-  expect(h.store.extraction.list()).toEqual([])
   h.turn("Always use pnpm for this repository")
+  expect(h.store.extraction.list()).toEqual([])
+  h.turn("Never commit to main")
   await until(() => h.store.extraction.list().length === 0 && h.worker.status("/project").lastRun === "completed")
   expect(h.worker.status("/project").lastRun).toBe("completed")
 })
@@ -183,4 +197,171 @@ test("only greetings and acknowledgements without a tool call are trivial; a sho
   expect(isTrivialTurn(events("use bun"))).toBe(false)
   expect(isTrivialTurn(events("remember: Use pnpm"))).toBe(false)
   expect(isTrivialTurn(events("ok", "tool_call"))).toBe(false)
+})
+
+test("a review fires every N substantive turns and its digest covers only the turns since the last one", async () => {
+  const seen: string[] = []
+  const h = fixture(async (job) => { seen.push(job.text); return [] }, {}, { memoryReviewEveryTurns: 3 })
+  h.turn("Rule one is alpha"); h.turn("Rule two is beta")
+  expect(h.store.extraction.list()).toEqual([])
+  h.turn("Rule three is gamma")
+  await until(() => seen.length === 1)
+  await until(() => h.store.extraction.list().length === 0)
+  h.turn("Rule four is delta"); h.turn("Rule five is epsilon"); h.turn("Rule six is zeta")
+  await until(() => seen.length === 2)
+  expect(seen[0]).toContain("alpha")
+  expect(seen[0]).toContain("gamma")
+  expect(seen[1]).toContain("delta")
+  expect(seen[1]).not.toContain("alpha")
+  expect(h.store.memoryReviews.list().map((row) => [row.trigger, row.turns, row.outcome])).toEqual([["turns", 3, "ran"], ["turns", 3, "ran"]])
+})
+
+test("an idle session is reviewed once after the idle time, only with at least two unreviewed turns", async () => {
+  const seen: string[] = []
+  const h = fixture(async (job) => { seen.push(job.text); return [{ scope: "project", category: "commands", text: "Use pnpm" }] }, {}, { memoryReviewEveryTurns: 10, memoryReviewIdleMinutes: 5 })
+  h.turn("Use pnpm in this repository")
+  expect(h.live()).toHaveLength(0)
+  h.turn("Never use npm")
+  expect(h.live()).toHaveLength(1)
+  expect(h.live()[0]!.ms).toBe(5 * 60_000)
+  h.turn("Prefer small commits")
+  expect(h.timers.filter((timer) => timer.cancelled)).toHaveLength(1)
+  h.live()[0]!.run()
+  await until(() => seen.length === 1)
+  await until(() => h.store.extraction.list().length === 0)
+  expect(seen[0]).toContain("small commits")
+  expect(h.store.memoryReviews.list()[0]).toMatchObject({ trigger: "idle", turns: 3, proposed: 1, calls: 1, outcome: "ran" })
+  expect(h.timers).toHaveLength(2)
+})
+
+test("a compaction reviews what was said before it; one unreviewed turn sends and records nothing", async () => {
+  const seen: string[] = []
+  const h = fixture(async (job) => { seen.push(job.text); return [] }, {}, { memoryReviewEveryTurns: 10 })
+  h.turn("Only one real turn")
+  h.compaction()
+  expect(h.store.extraction.list()).toEqual([])
+  expect(h.store.memoryReviews.list()).toEqual([])
+  h.turn("A second real turn")
+  h.compaction()
+  await until(() => seen.length === 1)
+  await until(() => h.store.memoryReviews.list().some((row) => row.outcome === "ran"))
+  expect(h.store.memoryReviews.list()[0]).toMatchObject({ trigger: "compaction", turns: 2, outcome: "ran" })
+  // Nothing new since that review: another compaction neither reviews nor records.
+  h.compaction()
+  expect(h.store.memoryReviews.list()).toHaveLength(1)
+})
+
+test("a newer snapshot replaces a waiting review and covers its turns; a request during a run is made again after it", async () => {
+  let release!: () => void
+  const seen: string[] = []
+  const h = fixture(async (job) => { seen.push(job.text); if (seen.length === 1) await new Promise<void>((resolve) => { release = resolve }); return [] }, { timeoutMs: 5_000 }, { memoryReviewEveryTurns: 2 })
+  h.turn("First batch alpha"); h.turn("First batch beta")
+  await until(() => h.store.extraction.list()[0]?.state === "running")
+  h.turn("Second batch gamma"); h.turn("Second batch delta")
+  expect(h.store.extraction.list()).toHaveLength(1)
+  release()
+  await until(() => seen.length === 2)
+  expect(seen[1]).toContain("gamma")
+  expect(seen[1]).not.toContain("alpha")
+  await until(() => h.store.extraction.list().length === 0)
+  expect(h.store.memoryReviews.list().filter((row) => row.outcome === "ran")).toHaveLength(2)
+})
+
+test("a waiting review is replaced by the newest snapshot, which also covers the older turns", () => {
+  const h = fixture(undefined, {}, { memoryReviewEveryTurns: 2 })
+  h.turn("Alpha rule"); h.turn("Beta rule")
+  const first = h.store.extraction.list()
+  expect(first).toHaveLength(1)
+  h.turn("Gamma rule"); h.turn("Delta rule")
+  const jobs = h.store.extraction.list()
+  expect(jobs).toHaveLength(1)
+  expect(jobs[0]!.jobId).not.toBe(first[0]!.jobId)
+  expect(jobs[0]!.text).toContain("Alpha")
+  expect(jobs[0]!.text).toContain("Delta")
+})
+
+test("ineligible sessions are never reviewed and are counted once with the reason, in memory and not on disk", () => {
+  const h = fixture(undefined, { eligibleDirectory: () => false })
+  h.turn(); h.turn(); h.turn()
+  expect(h.store.extraction.list()).toEqual([])
+  expect(h.live()).toHaveLength(0)
+  expect(h.store.memoryReviews.list()).toEqual([])
+  expect(h.worker.ineligible()).toEqual({ "ineligible: temporary, missing or linked-worktree folder": 1 })
+})
+
+test("the real folder filter refuses temp folders, missing folders and linked worktrees; a plain project passes", () => {
+  const root = mkdtempSync(path.join(process.cwd(), ".review-"))
+  cleanup.push(() => rmSync(root, { recursive: true, force: true }))
+  const plain = path.join(root, "plain"); mkdirSync(plain)
+  const linked = path.join(root, "linked"); mkdirSync(linked); writeFileSync(path.join(linked, ".git"), "gitdir: elsewhere")
+  const verdicts: Record<string, string | undefined> = {}
+  for (const [name, directory] of [["plain", plain], ["linked", linked], ["missing", path.join(root, "gone")], ["temp", mkdtempSync(path.join(tmpdir(), "review-"))]] as const) {
+    const dir = mkdtempSync(path.join(tmpdir(), "memory-extraction-"))
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
+    const store = openStore({ dir })
+    cleanup.push(() => store.close())
+    const sessionId = ids("session")
+    store.createSession({ id: sessionId, directory, title: "Work" })
+    store.settings.set({ memoryGenerate: true, memoryReviewEveryTurns: 2 })
+    const worker = createMemoryExtraction({ store, settings: () => store.settings.get(), now: Date.now, commit: () => 0 })
+    for (const text of ["Use bun here", "Never use npm"]) {
+      const turnId = ids("turn"), itemId = ids("item")
+      store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+      store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind: "user_message" })
+      store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text })
+      worker.observe(store.sessionSink.append({ type: "turn.completed", sessionId, turnId }))
+    }
+    verdicts[name] = store.extraction.list().length ? "reviewed" : Object.keys(worker.ineligible())[0]
+    cleanup.push(() => worker.stop())
+  }
+  expect(verdicts).toEqual({ plain: "reviewed", linked: "ineligible: temporary, missing or linked-worktree folder", missing: "ineligible: temporary, missing or linked-worktree folder", temp: "ineligible: temporary, missing or linked-worktree folder" })
+})
+
+test("child sessions, loop and review sessions and scripted runs are skipped", () => {
+  const scripted = new Set<string>()
+  const h = fixture(undefined, { ineligible: (id) => scripted.has(id) ? "scripted run" : undefined })
+  scripted.add(h.sessionId)
+  h.turn(); h.turn()
+  expect(Object.keys(h.worker.ineligible())).toEqual(["ineligible: scripted run"])
+  const make = (title: string, parentId?: typeof h.sessionId) => {
+    const id = ids("session")
+    h.store.createSession({ id, directory: "/project", title, ...(parentId ? { parentId } : {}) })
+    return id
+  }
+  const loop = make("loop · nightly")
+  const child = make("Sub work", h.sessionId)
+  for (const sessionId of [loop, child]) for (const text of ["One rule here", "Another rule here"]) {
+    const turnId = ids("turn"), itemId = ids("item")
+    h.store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+    h.store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind: "user_message" })
+    h.store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text })
+    h.worker.observe(h.store.sessionSink.append({ type: "turn.completed", sessionId, turnId }))
+  }
+  expect(h.store.extraction.list()).toEqual([])
+  expect(Object.keys(h.worker.ineligible()).sort()).toEqual(["ineligible: child session", "ineligible: loop, workflow or review session", "ineligible: scripted run"])
+  expect(h.store.memoryReviews.list()).toEqual([])
+})
+
+test("the daily cap stops extractor calls, records the skip, and a cap of 0 stops them all", async () => {
+  let calls = 0
+  const h = fixture(async () => { calls++; return [] }, {}, { memoryReviewDailyCap: 2 })
+  for (let batch = 0; batch < 3; batch++) {
+    h.turn(`Batch ${batch} rule one`); h.turn(`Batch ${batch} rule two`)
+    await until(() => h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
+  }
+  expect(calls).toBe(2)
+  expect(h.store.memoryReviews.list().map((row) => `${row.outcome}:${row.reason}`)).toEqual(["skipped:daily cap", "ran:", "ran:"])
+  expect(h.store.extraction.list()[0]).toMatchObject({ state: "skipped", reason: "Daily review cap reached" })
+  h.store.settings.set({ memoryReviewDailyCap: 0 })
+  h.turn("Cap zero rule one"); h.turn("Cap zero rule two")
+  await until(() => h.store.memoryReviews.list()[0]!.reason === "daily cap" && h.store.memoryReviews.list().length === 4)
+  expect(calls).toBe(2)
+})
+
+test("the review record stays bounded", () => {
+  const h = fixture()
+  for (let index = 0; index < 340; index++) h.store.memoryReviews.add({ at: index, sessionId: h.sessionId, directory: "/project", trigger: "idle", turns: 2, calls: 1, proposed: 0, outcome: "ran", reason: "" })
+  expect(h.store.memoryReviews.list(1000)).toHaveLength(300)
+  expect(h.store.memoryReviews.list(1)[0]!.at).toBe(339)
+  expect(h.store.memoryReviews.callsSince(335)).toBe(5)
 })

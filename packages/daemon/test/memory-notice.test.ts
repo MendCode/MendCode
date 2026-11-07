@@ -30,11 +30,12 @@ test("memory.changed says what changed: scope, status and text for a save, an ed
 })
 
 test("a proposal that waits for review says pending, never saved", async () => {
-  const h = await boot({ steps: [stop("done")], extractMemory: async () => [{ scope: "project", text: "Review me", category: "commands" }] })
+  const h = await boot({ dreamEligible: () => true, steps: [stop("done"), stop("more")], extractMemory: async () => [{ scope: "project", text: "Review me", category: "commands" }] })
   all.push(h)
   const id = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2 } })
   await say(h, id, "Something durable")
+  await say(h, id, "Something else durable")
   await until(() => changes(h).length >= 1)
   expect(changes(h)[0]).toMatchObject({ change: "added", status: "pending", text: "Review me" })
 })
@@ -97,17 +98,19 @@ test("with approval on, the card still asks for an unrelated model save", async 
 
 test("the extractor waits for review on a fact that restates the request, and saves a stated standing one", async () => {
   let reply: Array<{ scope: "project" | "user"; text: string; category: string }> = [{ scope: "user", text: RESTATED, category: "preferences" }]
-  const h = await boot({ steps: [stop("done"), stop("done")], extractMemory: async () => reply })
+  const h = await boot({ dreamEligible: () => true, steps: [stop("a"), stop("b"), stop("c"), stop("d")], extractMemory: async () => reply })
   all.push(h)
   const id = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryRequireApproval: false, memoryPolicies: { preferences: "auto" } } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2, memoryRequireApproval: false, memoryPolicies: { preferences: "auto" } } })
   await say(h, id, REQUEST)
+  await say(h, id, "Show me the next step")
   await until(() => pending(h).length === 1 && h.store.extraction.list().length === 0)
   expect(saved(h)).toHaveLength(0)
   expect(pending(h).map((entry) => entry.text)).toEqual([RESTATED])
   expect(notices(h)).toHaveLength(0)
   reply = [{ scope: "user", text: "Answer with tables and a task list", category: "preferences" }]
   await say(h, id, "From now on answer with tables and a task list")
+  await say(h, id, "Show me the step after that")
   await until(() => notices(h).length === 1)
   expect(saved(h).map((entry) => entry.text)).toEqual(["Answer with tables and a task list"])
 })

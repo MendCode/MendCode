@@ -485,7 +485,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
 | [Visible plan (todo and its guidance)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
 | [Code graph autopilot](docs/code-graph.md) (`graph_autopilot`) | — | — | Included | /tier graph_autopilot on\|off (on by default in nightly, dev and local builds only) |
-| [Automatic memory (use, generate, nightly consolidation)](docs/memory.md) (`memory_auto`) | — | — | Included | /tier memory_auto off · memoryUse · memoryGenerate · memoryRequireApproval · dreamConsolidationPolicy (a switch you set wins) |
+| [Automatic memory (use, selective review; nightly consolidation in full)](docs/memory.md) (`memory_auto`) | — | Included | Included | /tier memory_auto off · memoryUse · memoryGenerate · memoryRequireApproval · memoryReviewEveryTurns · memoryReviewDailyCap · dreamConsolidationPolicy in full (a switch you set wins) |
 | [Resume note in a new chat](docs/memory.md) (`resume_context`) | — | — | Included | /tier resume_context off |
 | [Plans kept as Markdown files](docs/plan-review.md) (`plan_files`) | — | Included | Included | /tier plan_files off · plan_files_location |
 | [Claude message threads](docs/message-threads.md) (`message_threads`) | Included | Included | Included | /tier message_threads off · zeroDataRetention |

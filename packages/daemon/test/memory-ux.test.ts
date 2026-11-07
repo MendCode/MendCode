@@ -10,11 +10,12 @@ const notices = (h: NativeHarness) => h.events.filter((event) => event.type === 
 
 test("explicit Spanish consent saves once, normalized extractor duplicate writes nothing", async () => {
   let extracted = 0
-  const h = await boot({ memoryTools: true, steps: [callTool("memory_graph", fact), stop("done")], extractMemory: async () => { extracted++; return [{ scope: "user", text: "  THE USER'S name IS   Nora.  ", category: "preferences" }] } })
+  const h = await boot({ memoryTools: true, dreamEligible: () => true, steps: [callTool("memory_graph", fact), stop("done"), stop("more")], extractMemory: async () => { extracted++; return [{ scope: "user", text: "  THE USER'S name IS   Nora.  ", category: "preferences" }] } })
   all.push(h)
   const id = await openSession(h, "ask")
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2 } })
   await say(h, id, "me llamo Nora recuerda eso")
+  await say(h, id, "Also keep answers short")
   await until(() => extracted === 1 && h.store.extraction.list().length === 0)
   expect(requests(h)).toHaveLength(0)
   expect(saved(h)).toHaveLength(1)
@@ -75,15 +76,17 @@ test("repeated write is a no-op with no saved notice; saved facts can be edited 
 
 test("extractor announces only committed saved facts, not pending or failed proposals", async () => {
   let count = 0
-  const h = await boot({ steps: [stop("done"), stop("done")], extractMemory: async () => [{ scope: "user", text: `Use bun ${++count}`, category: "commands" }] })
+  const h = await boot({ dreamEligible: () => true, steps: [stop("a"), stop("b"), stop("c"), stop("d")], extractMemory: async () => [{ scope: "user", text: `Use bun ${++count}`, category: "commands" }] })
   all.push(h)
   const id = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryPolicies: { commands: "auto" } } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2, memoryPolicies: { commands: "auto" } } })
   await say(h, id, "A durable rule")
+  await say(h, id, "A second durable rule")
   await until(() => count === 1 && h.store.extraction.list().length === 0)
   expect(notices(h)).toHaveLength(0)
   await h.client.send({ type: "settings.set", patch: { memoryRequireApproval: false } })
   await say(h, id, "Another durable rule")
+  await say(h, id, "Yet another durable rule")
   await until(() => notices(h).length === 1)
   expect(notices(h)[0]).toMatchObject({ text: `Memory  saved · user · "Use bun 2"`, meta: { memoryChange: "saved", memoryText: "Use bun 2" } })
 })

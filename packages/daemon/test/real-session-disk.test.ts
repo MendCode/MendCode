@@ -52,7 +52,8 @@ export async function runShortSession(options: { fullMemory?: boolean } = {}) {
     project,
     provider: { id: "chatgpt", model: "gpt-6-astra" },
     complete: async () => "Theme Color Hex Values",
-    ...(options.fullMemory ? { extractMemory: async () => [{ scope: "project" as const, category: "conventions", text: "The palette lives in src/theme.ts" }] } : {}),
+    // The demo folder sits in the temp dir; memory treats it as the real project it stands for (a temp folder is never reviewed).
+    ...(options.fullMemory ? { dreamEligible: () => true, extractMemory: async () => [{ scope: "project" as const, category: "conventions", text: "The palette lives in src/theme.ts" }] } : {}),
     steps: [
       [{ type: "tool_call", call: { callId: "call_A4vKrfvbYIx3p8FLqNo8mOyn", name: "read", args: { path: "src/theme.ts" } } }, usage(6796, 23, 0), { type: "finish", reason: "tool_calls" }],
       [...chunks(ANSWER, 3), usage(267, 98, 6656), { type: "finish", reason: "stop" }],
@@ -104,11 +105,13 @@ test("a turn that changed no file keeps no snapshot row, and its changes read as
   } finally { rmSync(project, { recursive: true, force: true }) }
 }, 30_000)
 
-test("full tier with memory generation on stores no extraction row for a turn that was extracted", async () => {
+test("full tier with memory generation on: a one-turn session is below the review threshold and stores no extraction row", async () => {
   const { harness: h, sessionId, project } = await runShortSession({ fullMemory: true })
   try {
-    await until(() => h.store.memories.list({ directory: h.project }).length > 0)
-    await until(() => h.store.extraction.list().length === 0)
+    // Reviews run at checkpoints over at least two substantive turns: one short turn sends nothing and keeps nothing.
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(h.store.memories.list({ directory: h.project })).toHaveLength(0)
+    expect(h.store.extraction.list()).toHaveLength(0)
     const db = new Database(path.join(h.dir, "mendd.db"), { readonly: true })
     const result = sessionBytes(db, sessionId)
     db.close()

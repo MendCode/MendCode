@@ -55,12 +55,16 @@ describe("feature manifest", () => {
     expect(featureOn({ tier: "minimalist" }, "usage_resume")).toBe(true)
     expect(featureOn({ tier: "minimalist", features: { usage_resume: false } }, "usage_resume")).toBe(false)
     expect(rows.threads).toEqual([false, true, true])
-    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "plan_files", "whats_new"], removed: [] })
+    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "memory_auto", "plan_files", "whats_new"], removed: [] })
     // `/whatsnew` is balanced's and full's; with no tier it is there as before tiers; minimalist keeps only the release notes' prompt.
     expect(rows.whats_new).toEqual([false, true, true])
     expect(featureOn({}, "whats_new")).toBe(true)
     // The visible plan (todo listed, its prompt line and the progress row) is balanced's and full's; minimalist has none of it.
     expect(rows.visible_plan).toEqual([false, true, true])
+    // Automatic memory (use and a selective review) is balanced's and full's; minimalist and no tier keep exactly the switches set.
+    expect(rows.memory_auto).toEqual([false, true, true])
+    expect(featureOn({}, "memory_auto")).toBe(false)
+    expect(featureOn({ tier: "minimalist", features: { memory_auto: true } }, "memory_auto")).toBe(true)
     expect(featureOn({}, "visible_plan")).toBe(true)
     // The project backlog is the full tier's alone: no tool and no prompt text, so it costs a request nothing.
     expect(tierDiff("balanced", "full").added).toContain("backlog")

@@ -16,6 +16,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Pending proposals nobody decides are archived after a while (`memoryPendingDays`; 0 keeps them).
 - Claude Code and Codex sessions receive the same memory block as native ones.
 - Memories record the session and engine they came from.
+- Balanced now remembers by itself: saved facts reach prompts and new ones are proposed to Pending; minimalist stays off until you turn it on.
+- Memory is reviewed once per session at checkpoints (after several turns, when a session goes idle, before compaction) instead of after every turn, with a daily call limit; temporary folders, worktrees and child sessions are skipped.
+- pi and ACP agent sessions receive the same memory block as native, Claude Code and Codex ones.
 - Unused code graph caches, and those of folders that no longer exist, are cleaned up automatically.
 
 ### Fixed

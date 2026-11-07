@@ -87,7 +87,7 @@ export type PiEngineOptions = {
   /** The session's `/env` credentials: in the process environment, and their names in the system prompt when the engine has one. */
   environment?(sessionId: SessionId): EngineEnvironment | undefined
   /** Text for a project directory added after pi's own system prompt (`--append-system-prompt`, which keeps it): what MendCode draws that pi's terminal does not. */
-  appendSystem?(cwd: string): string | undefined
+  appendSystem?(cwd: string, sessionId: SessionId): string | undefined
   /** The `language` setting's line for a turn (docs/prompt-modes.md): sent after the user's text in the prompt, as the plan note is; MendCode's transcript keeps what the user typed. */
   replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   /** Existing project-tools trust, checked before every turn and compaction. Absent means untrusted. */
@@ -473,7 +473,7 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
     // A session file that is gone (pi's own store was cleaned) starts a new pi session instead of failing.
     const file = bound && fileExists(bound) ? bound : undefined
     // One value: pi took a single `--append-system-prompt` before it allowed several.
-    const appended = [options.appendSystem?.(cwd), policy.environment?.note].filter(Boolean).join("\n\n")
+    const appended = [options.appendSystem?.(cwd, sessionId), policy.environment?.note].filter(Boolean).join("\n\n")
     const args = ["--mode", "rpc", ...config.args, ...(appended ? ["--append-system-prompt", appended] : []), ...(!trusted && disableExtensions ? ["--no-extensions"] : []), "-e", gatePath(), ...(config.sessionDir ? ["--session-dir", config.sessionDir] : []), ...(file ? ["--session", file] : []), ...(pattern ? ["--model", pattern] : [])]
     const gateToken = randomUUID()
     const launch = { command: config.command, args, env: { ...config.env, ...policy.environment?.values, [GATE_TOKEN_ENV]: gateToken }, cwd, ...(sandbox ? { sandbox } : {}) }

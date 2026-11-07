@@ -43,7 +43,7 @@ import { createDebug } from "./debug"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
 import { createMemoryModel, type MemoryOrigin } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
-import { consolidationCategories, memorySettings } from "./memory-config"
+import { consolidationCategories, fullMemoryTier, memorySettings } from "./memory-config"
 import { daemonLogs } from "./daemon-logs"
 import { consolidateMemory } from "./memory-consolidation"
 import { createSemanticConsolidator } from "./memory-consolidator"
@@ -1576,6 +1576,9 @@ export async function startDaemon(options: DaemonOptions) {
   let extractedNotices: MemoryEntry[] = []
   const extraction = createMemoryExtraction({
     store, now: () => clock.now(), settings: (directory) => memorySettings(store.settings.get(), directory), extract: extractBudgeted,
+    // A scripted run (headless, eval, replay, PR review child) configures run limits: it is not a conversation to learn from.
+    ineligible: (sessionId) => runLimits.get(sessionId as SessionId) ? "scripted run" : undefined,
+    ...(options.dreamEligible ? { eligibleDirectory: options.dreamEligible } : {}), dataDir: options.dir,
     commit: (job, memories) => {
       let proposed = 0
       const notices: MemoryEntry[] = []
@@ -2001,7 +2004,7 @@ export async function startDaemon(options: DaemonOptions) {
               } catch (error) { failedCall = true; budgets.record(); throw error }
               finally { if (!failedCall || used) auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
-            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
+            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && fullMemoryTier(store.settings.get()),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
               archive: (memory) => { store.memories.update(memory.memoryId, { status: "archived" }); globalSink.append({ type: "memory.changed", memoryId: memory.memoryId, change: "updated" }) },
               ...(meter ? { semantic: createSemanticConsolidator({ call: meter.call }) } : {}),
@@ -4705,7 +4708,7 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: true, result: { thread, archives: memoryAssistant.archives(directory) } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       case "memory.extraction.list":
-        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), reviews: extraction.reviews(), ineligible: extraction.ineligible(), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
       case "memory.extraction.retry":
         try { extraction.retry(command.jobId); return reply(connection, command.id, { ok: true }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error) }) }

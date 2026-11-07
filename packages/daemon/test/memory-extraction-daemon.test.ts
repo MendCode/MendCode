@@ -7,18 +7,21 @@ afterEach(async () => { for (const h of all.splice(0).reverse()) await h.cleanup
 
 test("daemon extraction obeys approval and scoped caps; use stays independent", async () => {
   let count = 0
-  const h = await boot({ steps: [stop("one"), stop("two"), stop("three")], extractMemory: async () => [{ scope: "project", text: `Use pnpm ${++count}`, category: "commands" }] })
+  const h = await boot({ steps: ["one", "two", "three", "four", "five", "six"].map((text) => stop(text)), extractMemory: async () => [{ scope: "project", text: `Use pnpm ${++count}`, category: "commands" }], dreamEligible: () => true })
   all.push(h)
   const sessionId = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryUse: false, memoryPolicies: { commands: "auto" }, memoryProjectMaxEntries: 2 } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryUse: false, memoryPolicies: { commands: "auto" }, memoryProjectMaxEntries: 2, memoryReviewEveryTurns: 2 } })
   await say(h, sessionId, "First durable preference")
+  await say(h, sessionId, "First durable preference again")
   await until(() => count === 1 && h.store.extraction.list().length === 0)
   expect(h.store.memories.list({ directory: h.project })[0]?.status).toBe("pending")
   await h.client.send({ type: "settings.set", patch: { memoryRequireApproval: false } })
   await say(h, sessionId, "Second durable preference")
+  await say(h, sessionId, "Second durable preference again")
   await until(() => count === 2 && h.store.extraction.list().length === 0)
   expect(h.store.memories.list({ directory: h.project }).some((memory) => memory.status === "saved")).toBe(true)
   await say(h, sessionId, "Third durable preference")
+  await say(h, sessionId, "Third durable preference again")
   await until(() => count === 3 && h.store.extraction.list().length === 0)
   expect(h.store.memories.list({ directory: h.project })).toHaveLength(2)
   const report = await h.client.extractions(h.project)
@@ -47,18 +50,19 @@ test("daemon maintenance previews then archives generated duplicates without cha
 })
 
 test("a memory extracted after a turn records the session and the engine it came from", async () => {
-  const h = await boot({ steps: [stop("one")], extractMemory: async () => [{ scope: "project", text: "Deploys go through the release script", category: "commands" }] })
+  const h = await boot({ steps: [stop("one"), stop("two")], dreamEligible: () => true, extractMemory: async () => [{ scope: "project", text: "Deploys go through the release script", category: "commands" }] })
   all.push(h)
   const sessionId = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2 } })
   await say(h, sessionId, "How do we deploy this service to production?")
+  await say(h, sessionId, "And how do we roll back a bad deploy?")
   await until(() => h.store.memories.list({ directory: h.project }).length === 1)
   expect(h.store.memories.list({ directory: h.project })[0]?.details).toMatchObject({ originSessionId: sessionId, originEngine: expect.any(String) })
 })
 
 test("an extraction the provider refused is a failed job, not an auxiliary call with no tokens; one that reported usage is counted", async () => {
   let calls = 0
-  const h = await boot({ steps: [stop("one"), stop("two")], extractMemory: async (_job, _signal, onUsage) => {
+  const h = await boot({ steps: [stop("one"), stop("two")], dreamEligible: () => true, extractMemory: async (_job, _signal, onUsage) => {
     calls++
     if (calls <= 3) throw new Error("chatgpt 400 Bad Request")
     onUsage?.({ provider: "chatgpt", model: "m", input: 100, output: 5 })
@@ -66,8 +70,9 @@ test("an extraction the provider refused is a failed job, not an auxiliary call 
   } })
   all.push(h)
   const sessionId = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true } })
+  await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryReviewEveryTurns: 2 } })
   await say(h, sessionId, "How do we deploy this service to production?")
+  await say(h, sessionId, "And how do we roll back a bad deploy?")
   await until(() => calls >= 3, 15_000)
   const { localDay } = await import("../src/usage-today")
   const day = localDay(Date.now())

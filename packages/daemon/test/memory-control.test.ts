@@ -158,12 +158,14 @@ describe("B19 daemon memory controls", () => {
     expect(h.daemon.store.memories.get(memoryId)?.status).toBe("saved")
   })
   test("project generation config reaches the durable extraction worker with global generation off", async () => {
-    const h = await boot({ extractMemory: async () => [{ scope: "project", category: "commands", text: "Build this repository with pnpm build" }] })
+    const h = await boot({ dreamEligible: () => true, extractMemory: async () => [{ scope: "project", category: "commands", text: "Build this repository with pnpm build" }] })
     await h.control({ operation: "config", project: true, patch: { memoryGenerate: true } })
+    await h.client.send({ type: "settings.set", patch: { memoryReviewEveryTurns: 2 } })
     const created = await h.client.send({ type: "session.create", directory: "/repo" })
     const sessionId = created.ok && created.result?.sessionId as SessionId
     if (!sessionId) throw new Error("No session")
     await h.client.send({ type: "user.submit", sessionId, text: "Our build procedure", attachments: [] })
+    await h.client.send({ type: "user.submit", sessionId, text: "And how we release it", attachments: [] })
     for (let i = 0; i < 200 && h.daemon.store.memories.list().length === 0; i++) await Bun.sleep(5)
     expect(h.daemon.store.extraction.list()).toEqual([])
     expect(h.daemon.store.settings.get().memoryGenerate).toBeUndefined()

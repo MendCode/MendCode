@@ -120,7 +120,7 @@ export function classifyEntry(relative: string, probe?: () => { head: Uint8Array
 export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
   "theme", "view", "pet", "reducedMotion", "compactAtTokens", "modelContext", "defaultContextWindow", "idleCompactAtTokens", "compactNoticePercent", "cacheLifetimeMinutes", "promptCacheTtl",
   "claudeCacheTtl", "handoffTokenCap", "disabledSkills", "agentMentions", "memoryMaintenance", "memoryEnabled", "memoryUse", "memoryGenerate", "memoryMaxPromptTokens",
-  "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "memoryPendingDays", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
+  "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "memoryPendingDays", "memoryReviewEveryTurns", "memoryReviewIdleMinutes", "memoryReviewDailyCap", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
   "git", "footer", "promptCache", "outputStyle", "language", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
   "subagentOwnerWake", "subagentCatalog", "processLimits", "resumeAfterRestart", "zeroDataRetention",

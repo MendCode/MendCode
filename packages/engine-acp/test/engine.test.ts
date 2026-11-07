@@ -22,7 +22,7 @@ function temp() {
   return dir
 }
 
-function setup({ env = {}, agentName = "fake", idleMs, releasedIdleMs, bindings, trace, hostServers, modelFor, onModels, effortFor, onEfforts, appendSystem }: { env?: Record<string, string>; agentName?: string; idleMs?: number; releasedIdleMs?: number; bindings?: Map<string, string>; trace?: (direction: "in" | "out", line: string) => void; hostServers?: Parameters<typeof createAcpEngine>[0]["hostServers"]; modelFor?: () => string | undefined; onModels?: Parameters<typeof createAcpEngine>[0]["onModels"]; effortFor?: () => string | undefined; onEfforts?: Parameters<typeof createAcpEngine>[0]["onEfforts"]; appendSystem?: (cwd: string) => string | undefined } = {}) {
+function setup({ env = {}, agentName = "fake", idleMs, releasedIdleMs, bindings, trace, hostServers, modelFor, onModels, effortFor, onEfforts, appendSystem }: { env?: Record<string, string>; agentName?: string; idleMs?: number; releasedIdleMs?: number; bindings?: Map<string, string>; trace?: (direction: "in" | "out", line: string) => void; hostServers?: Parameters<typeof createAcpEngine>[0]["hostServers"]; modelFor?: () => string | undefined; onModels?: Parameters<typeof createAcpEngine>[0]["onModels"]; effortFor?: () => string | undefined; onEfforts?: Parameters<typeof createAcpEngine>[0]["onEfforts"]; appendSystem?: (cwd: string, sessionId: string) => string | undefined } = {}) {
   const dir = temp()
   const log = join(dir, "log.jsonl")
   const config: AcpAgentConfig = { command: process.execPath, args: [FAKE], env: { FAKE_ACP_LOG: log, ...env } }
@@ -139,6 +139,13 @@ describe("a normal turn", () => {
       [{ type: "text", text: "back" }],
     ])
     expect(roots).toEqual([dir])
+  })
+
+  test("appendSystem is asked for the turn's own session, so the daemon can add that session's memory block", async () => {
+    const { engine, received } = setup({ appendSystem: (_root, sessionId) => `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
+    const sessionId = ids("session")
+    expect(await engine.runTurn(turnInput({ sessionId }).input)).toEqual({ status: "ok" })
+    expect(received().find((message) => message.method === "session/prompt").params.prompt[0]).toEqual({ type: "text", text: `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
   })
 
   test("no appended text keeps the first prompt as the user's alone", async () => {

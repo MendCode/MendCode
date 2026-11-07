@@ -74,7 +74,7 @@ export function jumpClock(): Clock & { jump(ms: number): void } {
   }
 }
 
-export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[] } = {}) {
+export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; dreamEligible?: (directory: string) => boolean; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[] } = {}) {
   const cleanups: Array<() => Promise<void> | void> = []
   const temp = (prefix: string) => {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)))
@@ -106,6 +106,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
     ...(options.http ? { http: { enabled: true }, httpListen: false, defaultDirectory: project } : {}),
     ...(options.mcp ? { mcp: options.mcp } : {}),
     ...(options.extractMemory ? { extractMemory: options.extractMemory } : {}),
+    ...(options.dreamEligible ? { dreamEligible: options.dreamEligible } : {}),
     ...(options.complete ? { complete: options.complete } : {}),
     ...(options.setupComplete ? { setupComplete: options.setupComplete } : {}),
     models: { selectable: true, defaults: { model: "script-1" }, list: () => [...["script-1", "gpt-6-luna", "gpt-6-sol"].map((id): ModelInfo => ({ id, name: id, efforts: ["low", "medium", "high"], variants: { high: { effort: "high" } } })), ...(options.extraModels ?? [])] },
