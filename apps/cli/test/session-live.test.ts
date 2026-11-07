@@ -36,7 +36,7 @@ async function harness(initial: SessionSummary[]) {
       return full.replace(/^│ /, "").replace(/ │$/, "").trimEnd()
     })
     .filter((line) => line.length > 0)
-  const titleRow = () => text().find((line) => line.startsWith("all projects"))!
+  const titleRow = () => text().find((line) => line.includes("● all projects"))!
   return { app, text, titleRow, frames }
 }
 

@@ -119,7 +119,7 @@ The field is additive: an older daemon sends none and its chats read as before. 
 
 In `/sessions`, press Ctrl+A to archive or restore the selected row. Ctrl+O includes or hides archived sessions; typing keeps that scope.
 
-The shared panel grid fills the page, with selection details from 110 columns and one column below 70. Hints stay in the header. The left sidebar includes archived rows under Settled.
+The shared panel grid fills the page, with selection details from 110 columns and one column below 70. The header shows `enter open · / search · tab folder · ? keys · esc back`; `?` (with nothing typed) lists every key. The left sidebar includes archived rows under Settled.
 
 Archiving the open session leaves its transcript open. Opening or sending to an archived session by ID works without restoring it.
 
@@ -1046,7 +1046,7 @@ That is how the model answers "when did I ask that?": the times are not in the c
 
 ### Enable recall tools
 
-The native engine exposes `session_search`, `session_read` and `session_notes` only when the daemon setting `experimental.session_recall` is `true` (absent means off).
+The native engine exposes `session_search`, `session_read`, `session_notes` and `session_open` only when the daemon setting `experimental.session_recall` is `true` (absent means off).
 
 Enable it through `settings.set` with a patch such as `{ experimental: { ...current.experimental, session_recall: true } }`; preserve the other experimental settings.
 
@@ -1056,9 +1056,10 @@ External engines keep their own tool catalogs; these tools are not injected into
 
 | Model tool | Input and result |
 |---|---|
-| `session_search` | `query`, optional `session_id`, `before`, `limit`; returns `{ session_id, messages, next_cursor?, more }` |
+| `session_search` | `query`, optional `session_id`, `before`, `limit`; returns `{ session_id, messages, next_cursor?, more }`. With `scope: "project"` (optional `cursor`, `limit`) it finds other sessions of this project instead: `{ scope: "project", sessions: [{ session_id, title, at, snippet }], next_cursor?, more }` |
 | `session_read` | the same paging fields without a required query; `message_id` and optional `offset` read one message as `{ session_id, message_id, at, text, next_offset? }` |
 | `session_notes` | `action: "read"` with optional `version`, or `action: "write"` with current `version` and replacement `text`; returns `{ version, text, current_version }` |
+| `session_open` | `session_id`: the full id (`ses_…`) or its end (8 characters or more) of another session of this project; replies with the full id, its title and `mendcode attach <id>`, and the terminal switches to it (see below) |
 
 ### Which sessions can be recalled
 
@@ -1067,6 +1068,36 @@ Recall defaults to the calling session.
 An explicit target must be that session or a linked descendant, with every ancestor in the same canonical project directory.
 
 Siblings, ancestors, unrelated projects and cycles are refused; message IDs and cursors must belong to the selected session.
+
+The one widening is a project search: a session that `session_search { scope: "project" }` returned may then be read (and
+searched) by the session that searched, while it stays in the same canonical project directory. The daemon keeps those ids in
+memory only (32 searching sessions, 200 ids each, oldest dropped first) until it restarts; another project's session is
+refused as before, and a remote or peer client cannot run a project search (`forbidden`).
+
+### Find another session of this project
+
+`session_search` with `scope: "project"` answers "which session did we do X in?" without guessing titles. It reads the
+existing rows on demand (no index, table or background work): the sessions whose folder is this session's folder (archived
+and child sessions too, the calling session left out), newest first, and for each its title, then its newest 300 user and
+assistant messages inside the last 3000 events (never tool output), as the picker's message search does. A page holds at most
+10 sessions with one snippet each (about 120 characters around the match, redacted) and reads at most 40 sessions within
+250 ms; `next_cursor` (pass it as `cursor`) continues with the next sessions, even when a page found nothing.
+
+Measured on a synthetic store (`packages/store/test/synthetic-data.ts`) of 1,000 compressed sessions in one folder, six turns
+each and the phrase in none of them: a page that reads its 40 sessions took 7.5 ms (median, 9.1 ms at most), and paging
+through the whole folder (25 pages) took 0.19 s in all. Nothing is held between calls but the cursor the model passes back.
+
+### Open a found session for the user
+
+When the user asks to be taken to a session, the agent calls `session_open { session_id }`. Only a session of this
+canonical project directory opens (any session there, including the ones a project search returned; the end of an id is
+looked up among those); another project's session, an unknown id and the calling session are refused. Nothing is stored:
+the tool's completed item carries `openSession: <id>` in its meta, and the terminal attached to the calling session
+switches to that session when the turn ends, the same switch as choosing it in `/sessions` (the calling session, its turn
+and its draft stay as they were). A headless run or another client gets the reply's `mendcode attach <id>` instead. The
+tool is deferred behind `tool_search` and listed on its own once a `session_search { scope: "project" }` ran in the
+session; a Claude Code or Codex session reaches it as `mcp__mendcode__session_open` where MendCode lends it its tools.
+Every id the tools give is the full one: `sessions read=<short id>` heads its page with the full `ses_…` id.
 
 This is the conservative isolation boundary for the audit's pending policy decision: broader access is not enabled or configurable without user approval.
 
@@ -1193,11 +1224,32 @@ The grant lives in daemon memory (64 sessions) and ends on restart.
 
 ### Filter and sort the session picker
 
+`/sessions` opens on **this project**: the sessions whose folder is the one MendCode runs in, each child session nested right
+under its parent (`session.list { directory, roots: false }`). A folder inside it is another project, and the user's home is a
+folder like any other: started in `~`, the list shows the sessions started in `~`, not every project under it. Ctrl+L switches
+to **all projects** (the top sessions of every folder, grouped by folder) and back; row two shows the scope as a toggle
+(`● this folder · all projects ^L`) next to the counters that are not zero (sessions or matches, working, needing approval,
+settled shown, sort, named only, message search).
+
+The page has a search row on top (`/ Search sessions, folders or ids`). Typing searches at once; `/` only focuses the row, so
+a query never starts with it (`/glass` searches `glass`, a slash inside a path is kept). Esc clears the query, then goes back.
+↑↓ move, PgUp/PgDn move ten rows, Home/End go to the first and last session, and the mouse wheel moves the selection; the
+selection follows its session when another terminal's activity reorders the list, and the selected row is always on screen.
+
+Search past the loaded page: the list loads the newest 200 sessions. When it is full, each new query also asks the daemon
+for `session.list { find, limit: 50 }` (in the list's scope) with the query's longest plain word; `find` matches the title,
+the folder path or the id, in any case. What it returns joins the list under its folder until the query changes. A list
+that holds every session asks nothing; a regular expression or `tag:`/`color:` alone is matched only in the loaded page.
+
+Tab opens the folder picker: All folders, this folder, then every listed folder by latest activity with its session count.
+Typing filters the folders by path (`~/` works), Enter shows only that folder (`session.list { directory, roots: false }`),
+All folders goes back to every project, Esc or Tab closes the picker and keeps the list as it was.
+
 `/sessions` filters with a small query language:
 
 | Query | Matches |
 |---|---|
-| Plain words | all must be in the title, directory, tags, agent or model |
+| Plain words | all must be in the title, folder, tags, agent or model; a word of 8 characters or more also matches the session id, so a pasted full id (`ses_…`), its start or its end finds the session |
 | `"a phrase"` | a phrase |
 | `re:pattern` | the rest of the line, case-insensitive |
 | `tag:x` | a tag starting with x |
@@ -1206,10 +1258,10 @@ The grant lives in daemon memory (64 sessions) and ends on restart.
 | Key | Cycles |
 |---|---|
 | Ctrl+S | sort: recent, created, name |
-| Ctrl+L | scope: all projects, the open session's project |
+| Ctrl+L | scope: this project (the default), all projects |
 | Ctrl+E | named-only filter: sessions the user titled (`SessionSummary.named`) |
 
-The summary line names every non-default toggle.
+Row two names every non-default toggle.
 
 ### Search message text
 

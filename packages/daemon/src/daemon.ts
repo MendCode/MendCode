@@ -6012,9 +6012,10 @@ export async function startDaemon(options: DaemonOptions) {
       case "session.recall.search":
       case "session.recall.read":
       case "session.notes": {
+        if (command.type === "session.recall.search" && command.input.scope === "project" && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: searching other sessions is local only" })
         try {
           const port = recall.port(command.sessionId)
-          const result = command.type === "session.recall.search" ? port.search(command.input)
+          const result = command.type === "session.recall.search" ? (command.input.scope === "project" ? port.find!(command.input) : port.search(command.input))
             : command.type === "session.recall.read" ? port.read(command.input) : port.notes(command.input)
           return reply(connection, command.id, { ok: true, result })
         } catch (error) {

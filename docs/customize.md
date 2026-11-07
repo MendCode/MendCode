@@ -265,7 +265,7 @@ The palette also links to identity, title text/font, custom ASCII and the split 
 
 Ctrl+S opens sessions on an empty home; its queue behavior during chat is unchanged.
 
-Agent View lists the waiting, looping and working sessions of this project and the folders inside it (another project's sessions show on that project's home); opened in the user's home folder it lists every project, as v1 does.
+Agent View lists the waiting, looping and working sessions whose folder is the one MendCode runs in (a folder inside it is another project, whose sessions show on its own home). The user's home folder is no exception: opened in `~`, it lists the sessions started in `~`.
 
 Sessions that already run or wait for input in other terminals are there from the start, and its spinners and clocks move while one works.
 

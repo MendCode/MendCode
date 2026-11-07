@@ -47,17 +47,19 @@ test("Ctrl+P Home welcome mode picker changes and persists; Ctrl+S on home opens
   expect(h.app.page).toBe("sessions")
 })
 
-test("Agent View lists this project's sessions and its folders' only, and its spinner moves while they work", async () => {
+test("Agent View lists only this folder's sessions (a folder inside it is another project), and its spinner moves while they work", async () => {
   const { h } = create({ homeLayout: "split", logoKind: "mascot", sidebar: "hidden" }, 180, 50)
-  h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: ids("session"), directory: "/work/mend/packages/api", title: "Child folder work", state: "generating", updatedAt: NOW })
+  h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: ids("session"), directory: "/work/mend", title: "This folder work", state: "generating", updatedAt: NOW })
   h.app.onGlobal({ type: "session.activity", gseq: 2, at: NOW, sessionId: ids("session"), directory: "/work/other", title: "Other project work", state: "generating", updatedAt: NOW })
   h.app.onGlobal({ type: "session.activity", gseq: 3, at: NOW, sessionId: ids("session"), directory: "/work/mend-two", title: "Sibling prefix work", state: "generating", updatedAt: NOW })
+  h.app.onGlobal({ type: "session.activity", gseq: 4, at: NOW, sessionId: ids("session"), directory: "/work/mend/packages/api", title: "Inner folder work", state: "generating", updatedAt: NOW })
   h.app.render()
-  expect(text(h)).toContain("Child folder work")
+  expect(text(h)).toContain("This folder work")
   expect(text(h)).not.toContain("Other project work")
   expect(text(h)).not.toContain("Sibling prefix work")
+  expect(text(h)).not.toContain("Inner folder work")
   expect(text(h)).toMatch(/0 wait · 0 loop · 1 work/)
-  const row = () => text(h).split("\n").find((line) => line.includes("Child folder work"))
+  const row = () => text(h).split("\n").find((line) => line.includes("This folder work"))
   const before = row()
   await Bun.sleep(300)
   expect(row()).not.toBe(before)

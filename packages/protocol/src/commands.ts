@@ -351,6 +351,8 @@ export const SessionList = lazySchema(() => z.strictObject({
   project: z.string().min(1).max(4096).optional(),
   since: z.number().int().nonnegative().optional(),
   search: z.string().max(200).optional(),
+  /** Text in the title, the folder path or the id (any case); what /sessions asks for past the sessions it loaded. */
+  find: z.string().min(1).max(200).optional(),
   agent: z.string().max(100).optional(),
   model: z.string().max(100).optional(),
   state: z.string().max(100).optional(),

@@ -7,9 +7,8 @@ import {
   groupSessions,
   orderSessions,
   relativeTime,
-  renderSessionList,
-  sessionListKey,
 } from "../src/view/session-list"
+import { renderSessionList, sessionListKey } from "../src/view/sessions-page"
 import type { Line } from "../src/ui/theme"
 import { shortenMiddle, textWidth, truncateEnd } from "../src/view/wrap"
 
@@ -63,6 +62,12 @@ describe("filterSessions", () => {
     expect(result.every((s) => s.title.includes("usage") && s.directory.includes("codeconfig"))).toBe(true)
     expect(filterSessions(fixture, "usage nonexistentterm")).toHaveLength(0)
   })
+  test("finds a session by its pasted full id or the short end of it the agent shows; a short word never matches ids", () => {
+    const target = fixture[7]!
+    expect(filterSessions(fixture, target.sessionId).map((s) => s.sessionId)).toEqual([target.sessionId])
+    expect(filterSessions(fixture, target.sessionId.slice(-8).toUpperCase()).map((s) => s.sessionId)).toContain(target.sessionId)
+    expect(filterSessions(fixture, "ses_")).toHaveLength(0)
+  })
 })
 
 describe("sessionListKey", () => {
@@ -86,10 +91,10 @@ describe("sessionListKey", () => {
     const filtered = sessionListKey({ selected: 0, filter: "flaky" }, "\x1b[B", fixture)
     expect(filtered.state.selected).toBeLessThan(filterSessions(fixture, "flaky").length)
   })
-  test("typing appends to filter and resets selection", () => {
+  test("typing appends to filter, resets selection and asks the daemon past the loaded page", () => {
     const typed = sessionListKey({ selected: 5, filter: "fi" }, "x", fixture)
     expect(typed.state).toEqual({ selected: 0, filter: "fix" })
-    expect(typed.action).toEqual({ type: "changed" })
+    expect(typed.action).toEqual({ type: "search" })
   })
   test("backspace edits filter and is a no-op when empty", () => {
     expect(sessionListKey({ selected: 3, filter: "ab" }, "\x7f", fixture).state).toEqual({ selected: 0, filter: "a" })
@@ -105,7 +110,10 @@ describe("sessionListKey", () => {
     expect(sessionListKey(start, "\r", []).action).toEqual({ type: "none" })
     expect(sessionListKey({ selected: 0, filter: "zzz" }, "\r", fixture).action).toEqual({ type: "none" })
   })
-  test("escape closes and unknown sequences are ignored", () => {
+  test("escape clears a filter first, then closes; unknown sequences are ignored", () => {
+    const clearing = sessionListKey({ selected: 0, filter: "fix" }, "\x1b", fixture)
+    expect(clearing.state.filter).toBe("")
+    expect(clearing.action).toEqual({ type: "search" })
     expect(sessionListKey(start, "\x1b", fixture).action).toEqual({ type: "close" })
     expect(sessionListKey(start, "\x1b[C", fixture).action).toEqual({ type: "none" })
   })
@@ -171,7 +179,7 @@ describe("renderSessionList", () => {
   test("header names Sessions and the summary reflects the loaded list", () => {
     const lines = render()
     expect(text(lines[0]!)).toStartWith("Sessions")
-    expect(text(lines[1]!).trimEnd()).toBe("all projects · unarchived · 30 sessions")
+    expect(text(lines[1]!)).toMatch(/^· this folder {3}● all projects {2}\^L\s+30 sessions$/)
     expect(plain(lines).join("\n")).not.toMatch(/MENDCODE|LIVE/)
     expect(text(lines[2]!)).toContain("┌─ Sessions")
     expect(text(lines[4]!).trim().length).toBeGreaterThan(0)
@@ -181,7 +189,7 @@ describe("renderSessionList", () => {
     for (const width of [60, 100, 160]) {
       const lines = plain(render({ width, height: 30 }))
       expect(lines[0]).toContain("esc back")
-      expect(lines[0]).toContain("^A settle/restore")
+      expect(lines[0]).not.toContain("^A")
       expect(lines.slice(1).join("")).not.toContain("esc back")
       if (width >= 70) expect(lines.at(-1)!).toContain("└")
       else expect(lines.join("")).not.toMatch(/[┌┐└┘│]/)
@@ -189,7 +197,7 @@ describe("renderSessionList", () => {
   })
 
   test("a filter shows how many of the sessions match", () => {
-    expect(text(render({ state: { selected: 0, filter: "flaky" } })[1]!).trimEnd()).toMatch(/\d+ of 30 sessions$/)
+    expect(text(render({ state: { selected: 0, filter: "flaky" } })[1]!).trimEnd()).toMatch(/\d+ match(es)?$/)
   })
 
   test("is exactly width x height at 60x20, 80x30, 120x40 and 160x50", () => {
@@ -206,15 +214,15 @@ describe("renderSessionList", () => {
     const state = { selected: 0, filter: "command #26" }
     const rows = plain(render({ width: 120, height: 40, state, home: "/Users/dev" }))
     const selected = fixture.find((entry) => entry.title === "add usage command #26")!
-    // The filter row of the list and the detail's title share the first body row.
+    // The search row of the list and the detail's title share the first body row; the folder header follows the rule.
     const first = rows[4]!
-    expect(first).toContain("/ command #26")
+    expect(first).toContain("/ command #26▏")
     expect(first).toContain("add usage command #26")
-    expect(rows[5]).toContain("(1)")
-    expect(rows[5]).toContain("~/Code/")
+    expect(rows[6]).toContain("(1)")
+    expect(rows[6]).toContain("~/Code/")
     expect(rows.find((line) => line.includes("state"))).toMatch(/state\s+idle/)
     expect(rows.find((line) => line.includes("updated"))).toMatch(/updated\s+\d+[hd] ago/)
-    expect(rows.find((line) => /\bid\s/.test(line))).toContain(selected.sessionId.slice(0, 16))
+    expect(rows.some((line) => line.includes(selected.sessionId))).toBe(true)
     const narrow = plain(render({ width: 100, height: 40, state, home: "/Users/dev" }))
     expect(narrow.some((line) => line.includes("updated"))).toBe(false)
   })
@@ -257,18 +265,19 @@ describe("renderSessionList", () => {
     expect(empty.some((line) => line.includes("no sessions yet"))).toBe(true)
 
     const noMatch = plain(render({ state: { selected: 0, filter: "zzz" } }))
-    expect(noMatch.some((line) => line.includes('no match for "zzz"'))).toBe(true)
+    expect(noMatch.some((line) => line.includes('no session matches "zzz"'))).toBe(true)
 
     const untitled = render({ sessions: [session({ title: "" })] })
     expect(untitled.some((line) => line.some((span) => span.text === "untitled" && span.fg === "muted"))).toBe(true)
   })
 
-  test("filter line is shown only when filtering", () => {
+  test("the search row is always there: a placeholder until something is typed, then the query", () => {
     const noFilter = plain(render())
-    expect(noFilter.some((line) => line.startsWith("/ "))).toBe(false)
+    expect(noFilter.some((line) => line.includes("/ ▏Search sessions, folders or ids"))).toBe(true)
 
     const filtered = plain(render({ state: { selected: 0, filter: "fix" } }))
-    expect(filtered.some((line) => line.includes("/ fix"))).toBe(true)
+    expect(filtered.some((line) => line.includes("/ fix▏"))).toBe(true)
+    expect(filtered.some((line) => line.includes("Search sessions"))).toBe(false)
   })
 
   test("long title is truncated with an ellipsis and keeps the time visible", () => {
