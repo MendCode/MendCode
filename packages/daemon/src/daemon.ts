@@ -2379,6 +2379,7 @@ export async function startDaemon(options: DaemonOptions) {
     const { takeHeld } = await import("./restart-drain")
     for (const sessionId of takeHeld(store.meta)) {
       if (stopped) return
+      if (store.settings.get().resumeAfterRestart === false) continue
       if (!store.hasSession(sessionId as SessionId)) continue
       if (await actorFor(sessionId as SessionId)?.releaseRestoredHold()) logLine("info", `[DAEMON]: session ${sessionId}: the messages the restart held go on`)
     }
@@ -2739,6 +2740,7 @@ export async function startDaemon(options: DaemonOptions) {
     const actor = actorFor(sessionId)
     if (!actor) throw new Error("Unknown session")
     if (action !== "stop") {
+      if (action === "pause") restartDrain?.userPaused(sessionId)
       const paused = await actor.pause(action === "pause")
       if (!paused) goals.resumed(sessionId)
       return { paused, cancelledTurn: false, cancelledChildren: 0 }

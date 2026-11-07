@@ -84,6 +84,14 @@ describe("loop check whole output", () => {
     expect(result.output.endsWith("LAST")).toBe(true)
   })
 
+  test("a whitespace-heavy captured prefix retains overflow evidence when the final line is discarded", async () => {
+    const result = await print(`process.stdout.write("HEADER\\n"); for (let i = 0; i < 64; i++) process.stdout.write(" ".repeat(65_536)); process.stdout.write("LAST")`, true)
+    expect(result.exitCode).toBe(0)
+    expect(Buffer.byteLength(result.full!, "utf8")).toBeGreaterThan(FULL_OUTPUT_BYTES)
+    expect(result.full!.trimEnd()).toBe("HEADER")
+    expect(result.output.endsWith("LAST")).toBe(true)
+  })
+
   test("without fullOutput a long output keeps only today's 64K tail and no start", async () => {
     const result = await print(`process.stdout.write("START" + "z".repeat(1_200_000) + "END")`)
     expect(result.full).toBeUndefined()

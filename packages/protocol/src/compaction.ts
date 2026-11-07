@@ -10,7 +10,7 @@ export type CompactionOverride = z.infer<typeof CompactionOverride>
 
 /**
  * What a new `threshold` may be: a percent of the context window, above 0 and at most 100. Saved values stay readable as they were
- * (the engine reads a value at most 1 as a fraction), so only a write is held to it: `settings.set` and `providers.set`.
+ * (the engine reads a value strictly between 0 and 1 as a fraction; 1 remains 1%), so only a write is held to it: `settings.set` and `providers.set`.
  */
 export const THRESHOLD_RULE = "compaction.threshold is a percent of the context window, for example 80 for 80%: more than 0 and at most 100"
 export const CompactionThresholdInput = lazySchema(() => z.number({ error: THRESHOLD_RULE }).finite({ error: THRESHOLD_RULE }).gt(0, { error: THRESHOLD_RULE }).max(100, { error: THRESHOLD_RULE }))

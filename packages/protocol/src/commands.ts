@@ -1326,7 +1326,7 @@ export const ProvidersSet = lazySchema(() => z.strictObject({
   apiKeyEnv: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/).optional(),
   headers: z.record(z.string().min(1).max(100), z.string().max(2048)).optional(),
   enabled: z.boolean().optional(),
-  models: z.array(ProviderModel).max(1000).optional(),
+  models: z.array(ProviderModel.extend({ compaction: CompactionOverrideInput.optional() })).max(1000).optional(),
   compaction: CompactionOverrideInput.nullable().optional(),
 }))
 

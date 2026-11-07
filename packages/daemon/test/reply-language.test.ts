@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test"
+import { readFileSync } from "node:fs"
 import { UNSURE_LINE, messageLanguage, replyLanguageLine } from "../src/reply-language"
+
+test("the standalone Codex constructor receives the daemon's reply-language callback", () => {
+  // Importing main starts a daemon. Check its constructor wiring without starting services;
+  // engine-codex/test/engine.test.ts covers the callback's effect on turn input.
+  const main = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8")
+  const standalone = main.split('? createCodexEngine!({')[1]?.split(': createFauxEngine!')[0]
+  expect(standalone).toBeDefined()
+  expect(standalone).toMatch(/^\s*replyLanguage\s*,/m)
+})
 
 test("auto names the language of the user's latest message: Spanish, English, Portuguese, French", () => {
   expect(replyLanguageLine(undefined, "Arregla el test que falla y dime qué cambió en la sesión")).toBe("Reply in Spanish.")

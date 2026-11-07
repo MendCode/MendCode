@@ -201,7 +201,8 @@ export function marketplaceKey(current: MarketplaceState, key: string, data: Mar
   if (state.confirm) {
     const confirm = state.confirm
     delete state.confirm
-    const yes = key === "\r" || key === "y" || (confirm.kind === "remove" && key === "d") || (confirm.kind === "remove-source" && key === "d")
+    const removing = confirm.kind === "remove" || confirm.kind === "remove-source"
+    const yes = key === "y" || (removing ? key === "d" : key === "\r")
     if (!yes) return { state, action: NONE }
     if (confirm.kind === "remove") return { state, action: { type: "remove", name: confirm.name, scope: confirm.scope } }
     if (confirm.kind === "remove-source") return { state, action: { type: "remove-source", sourceId: confirm.sourceId } }
@@ -281,7 +282,7 @@ function catalogKey(state: MarketplaceState, key: string, data: MarketplaceData)
     const index = Math.max(0, filters.findIndex((filter) => filter.id === state.kind))
     const next = filters[(index + (key === "\t" ? 1 : filters.length - 1)) % filters.length]!
     const { selectedId: _id, ...unselected } = state
-    return { state: { ...unselected, kind: next.id, selected: 0, scroll: 0 }, action: NONE }
+    return { state: { ...unselected, kind: next.id, selected: 0, scroll: 0 }, action: data.preview ? { type: "close-preview" } : NONE }
   }
   if (key === "s") return { state, action: { type: "sources" } }
   if (key === "p") {
@@ -531,17 +532,20 @@ function catalogSummary(data: MarketplaceData, state: MarketplaceState, error: s
   return { text: [plural(entries.length, "profile"), on ? `${on} on` : "", updates ? plural(updates, "update") : "", state.sourceId ? `source ${state.sourceId}` : "", `installs ${scopeWords(state.scope)}`].filter(Boolean).join(" · "), tone: "muted" }
 }
 
-function sourceRows(state: MarketplaceState, sources: PackageSourceInfo[], width: number): Line[] {
+function sourceRows(state: MarketplaceState, sources: PackageSourceInfo[], width: number, room: number): Line[] {
   const head = confirmRow(state, { sources }, width)
   if (state.editing === "id" || state.editing === "location") {
     const label = state.editing === "id" ? "source id " : `folder or https catalog for ${state.draftId} `
     head.unshift(fit([{ text: label, fg: "warning", bold: true }, { text: state.input, fg: "text" }, { text: "▏", fg: "primary" }], width), [])
   }
   if (!sources.length) return [...head, row("reading the sources…", "muted")]
+  const visible = Math.max(1, room - head.length)
+  const selected = Math.max(0, Math.min(state.selected, sources.length - 1))
+  const start = Math.max(0, selected - visible + 1)
   const id = Math.min(24, Math.max(...sources.map((source) => textWidth(source.id))))
-  return [...head, ...sources.map((source, i): Line => fit([
-    i === state.selected ? { text: "› ", fg: "primary", bold: true } : { text: "  " },
-    { text: `${source.id} · ${source.enabled ? "on" : "off"}${source.remote ? " · remote" : ""}`.padEnd(id + 16), fg: i === state.selected ? "primary" : "text", bold: i === state.selected },
+  return [...head, ...sources.slice(start, start + visible).map((source, i): Line => fit([
+    start + i === selected ? { text: "› ", fg: "primary", bold: true } : { text: "  " },
+    { text: `${source.id} · ${source.enabled ? "on" : "off"}${source.remote ? " · remote" : ""}`.padEnd(id + 16), fg: start + i === selected ? "primary" : "text", bold: start + i === selected },
     { text: source.builtin ? "installed profiles" : shortenMiddle(source.location, Math.max(1, width - id - 20)), fg: "muted" },
   ], width))]
 }
@@ -581,7 +585,8 @@ export function renderMarketplacePage(input: { state: MarketplaceState; report?:
   scrollLimit = 0
   if (state.mode === "sources") {
     const source = input.sources[Math.max(0, Math.min(state.selected, input.sources.length - 1))]
-    const list: GridPanel = { title: "Sources", active: true, weight: 3, body: (w) => sourceRows(state, input.sources, w) }
+    const listRoom = panelRoom(split || compact ? room : stackedTop(room))
+    const list: GridPanel = { title: "Sources", active: true, weight: 3, body: (w) => sourceRows(state, input.sources, w, listRoom) }
     const detail: GridPanel = { title: source?.remote ? "Remote catalog" : "Local catalog", weight: 2, scroll: state.scroll, body: (w) => limited(sourceDetailRows(source, w)) }
     body = layout({ list, detail, width, room, split, compact, showDetail: !!state.sourceDetail })
     summary = { text: input.error ? `last action failed · ${input.error}` : `${plural(input.sources.length, "source")} · ${input.sources.filter((item) => item.enabled).length} on`, tone: input.error ? "error" : "muted" }

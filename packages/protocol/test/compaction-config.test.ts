@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { Command, CompactionConfig, Settings, createIdFactory, isReadOnlyCommand } from "../src"
+import { Command, CompactionConfig, ProviderModel, ProvidersSet, Settings, THRESHOLD_RULE, createIdFactory, isReadOnlyCommand } from "../src"
 
 const ids = createIdFactory()
 test("B23 compaction config is additive, bounded and retains the v1 configuration names", () => {
@@ -17,4 +17,24 @@ test("B23 provider and model thresholds pass the existing mutation boundary, nev
   expect(Command.safeParse({ ...command, compaction: { token_limit: -1 } }).success).toBe(false)
   expect(isReadOnlyCommand("providers.set")).toBe(false)
   expect(isReadOnlyCommand("settings.set")).toBe(false)
+})
+
+test("providers.set bounds model thresholds on writes without rejecting saved legacy models", () => {
+  const base = { id: ids("command"), clientId: ids("client"), type: "providers.set", provider: "openai", compaction: { threshold: 80 } }
+  for (const threshold of [0.8, 1, 80, 100]) {
+    const command = { ...base, models: [{ id: "custom", compaction: { threshold } }] }
+    expect(ProvidersSet.parse(command).models?.[0]?.compaction?.threshold).toBe(threshold)
+    expect(Command.safeParse(command).success).toBe(true)
+  }
+  for (const threshold of [0, -5, 150, Infinity, NaN]) {
+    const command = { ...base, models: [{ id: "valid" }, { id: "custom", compaction: { threshold } }] }
+    const result = ProvidersSet.safeParse(command)
+    expect(result.success).toBe(false)
+    expect(result.error?.issues[0]?.path).toEqual(["models", 1, "compaction", "threshold"])
+    expect(result.error?.issues[0]?.message).toBe(THRESHOLD_RULE)
+    expect(Command.safeParse(command).success).toBe(false)
+  }
+  expect(ProviderModel.parse({ id: "legacy", compaction: { threshold: 150 } }).compaction).toEqual({ threshold: 150 })
+  expect(ProvidersSet.safeParse({ ...base, models: [{ id: "custom", compaction: { token_limit: 1000 } }] }).success).toBe(true)
+  expect(ProvidersSet.safeParse({ ...base, models: [] }).success).toBe(true)
 })

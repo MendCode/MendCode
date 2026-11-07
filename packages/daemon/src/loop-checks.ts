@@ -34,25 +34,31 @@ export const runLoopCheck: CheckRunner = async ({ argv, cwd, signal, timeoutSeco
   // Only with `fullOutput` is the start kept as well, until it passes FULL_OUTPUT_BYTES (by at most one chunk); later chunks only feed the tail.
   let head = fullOutput ? "" : undefined
   let headBytes = 0
+  let fullTruncated = false
+  const append = (text: string) => {
+    output += text
+    if (output.length > OUTPUT_TAIL_CHARS * 2) output = output.slice(-OUTPUT_TAIL_CHARS)
+    if (head !== undefined) {
+      if (headBytes <= RUNNER_FULL_OUTPUT_BYTES) {
+        head += text
+        headBytes += Buffer.byteLength(text, "utf8")
+      } else if (text.length > 0) fullTruncated = true
+    }
+  }
   const collect = async (stream: ReadableStream<Uint8Array> | undefined) => {
     if (!stream) return
     const decoder = new TextDecoder()
     for await (const chunk of stream) {
-      const text = decoder.decode(chunk, { stream: true })
-      output += text
-      if (output.length > OUTPUT_TAIL_CHARS * 2) output = output.slice(-OUTPUT_TAIL_CHARS)
-      if (head !== undefined && headBytes <= RUNNER_FULL_OUTPUT_BYTES) {
-        head += text
-        headBytes += chunk.byteLength
-      }
+      append(decoder.decode(chunk, { stream: true }))
     }
+    append(decoder.decode())
   }
   await Promise.all([collect(child.stdout as ReadableStream<Uint8Array>), collect(child.stderr as ReadableStream<Uint8Array>)])
   const exitCode = await child.exited
   clearTimeout(timer)
   signal.removeEventListener("abort", kill)
   const timeout = timedOut ? `\ntimed out after ${timeoutSeconds} s` : ""
-  return { exitCode, output: output.slice(-OUTPUT_TAIL_CHARS) + timeout, ...(head !== undefined ? { full: head + timeout } : {}) }
+  return { exitCode, output: output.slice(-OUTPUT_TAIL_CHARS) + timeout, ...(head !== undefined ? { full: head + timeout, fullTruncated } : {}) }
 }
 
 /** git's output, or undefined when it fails or cannot start (no git, or a directory that is gone). */

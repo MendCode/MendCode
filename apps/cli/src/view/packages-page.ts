@@ -337,7 +337,7 @@ export function renderPackagesPage(input: { report: PackagesReport | undefined; 
     return packages.slice(offset, offset + capacity).map((pkg, i) => packageRow({ pkg, selected: offset + i === selected, width: w, widths, glyphs }))
   } }
   const detail = state.keys
-    ? { title: "Keys", weight: 4, body: (w: number): Line[] => keysRows(w) }
+    ? { title: "Keys", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => keysRows(w) }
     : { title: "Profile", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => packages[selected] ? detailRows(packages[selected]!, w, now, activation) : [] }
   const top = Math.max(6, Math.floor((room - 1) * 0.4))
   const body = panelGrid({ width, rows: split ? [[list, detail]] : [[list], [detail]], heights: split ? [room] : [top, Math.max(0, room - top - 1)], compact: false, padding: true, maxColumns: split ? 2 : 1 })

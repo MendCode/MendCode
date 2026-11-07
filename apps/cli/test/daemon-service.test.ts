@@ -266,6 +266,34 @@ describe("daemon lifecycle CLI", () => {
     expect(restart.calls.indexOf("waitStopped")).toBeLessThan(restart.calls.indexOf("host.start"))
   })
 
+  test("forced service restart drains once and starts the replacement for managed and unmanaged daemons", async () => {
+    for (const loaded of [false, true]) {
+      const h = harness(true, true, loaded)
+      h.report.activeTurns = 1
+      h.drains.push({ waiting: [], until: 120_000, done: true })
+      expect(await h.run("daemon", "service", "restart", "--force")).toBe(0)
+      expect(h.error()).toBe("")
+      expect(h.calls.filter((call) => call.startsWith("drain"))).toEqual(["drain 120000"])
+      expect(h.calls).not.toContain("daemon.shutdown")
+      expect(h.calls.filter((call) => call === "host.start")).toHaveLength(1)
+      expect(h.calls.indexOf("waitStopped")).toBeLessThan(h.calls.indexOf("host.start"))
+    }
+  })
+
+  test("forced service restart validates missing and mismatched definitions before draining", async () => {
+    for (const installed of [false, true]) {
+      const h = harness(true, installed, true)
+      h.report.activeTurns = 1
+      if (installed) {
+        const status = h.deps.host.status
+        h.deps.host.status = async () => ({ ...await status(), drift: ["data-dir"] })
+      }
+      expect(await h.run("daemon", "service", "restart", "--force")).toBe(1)
+      expect(h.error()).toContain("Install a matching user service definition first")
+      expect(h.calls).toEqual([])
+    }
+  })
+
   test("once uses the protocol and foreground never launches a second detached process", async () => {
     const h = harness(true)
     expect(await h.run("memory", "dream", "daemon", "--once", "--execute")).toBe(0)

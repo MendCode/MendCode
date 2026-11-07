@@ -392,9 +392,9 @@ export function createWorkflowService(options: {
     const run$ = options.runCheck
     const stdin = run.script ? scripts.stdinOf(run, taskId) : undefined
     // A script gets the whole output (up to CHECK_OUTPUT_LIMIT); the gate's detail, which events and the journal keep, stays the tail.
-    let whole: { exitCode: number; text: string } | undefined
+    let whole: { exitCode: number; text: string; truncated?: boolean } | undefined
     const runner: CheckRunner | undefined = run$ && run.script ? (input) => run$({ ...input, fullOutput: true }).then((result) => {
-      whole = { exitCode: result.exitCode, text: result.full ?? result.output }
+      whole = { exitCode: result.exitCode, text: result.full ?? result.output, truncated: result.fullTruncated ?? false }
       return result
     }) : run$
     const gates = runner ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: runner, timeouts: [timeoutSeconds], ...(run.script ? { keepOutput: true } : {}), ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])

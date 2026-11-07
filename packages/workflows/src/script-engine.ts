@@ -93,10 +93,10 @@ const CHECK_DETAIL_CLIP = 2_000
 
 /** `exit N` and the output from its start, cut at a character boundary within `limit` bytes. */
 export function wholeCheckDetail(exitCode: number, output: string, limit = CHECK_OUTPUT_LIMIT): { detail: string; truncated: boolean } {
+  const truncated = Buffer.byteLength(output, "utf8") > limit
   let text = output.replace(/\s+$/, "")
   const bytes = Buffer.from(text, "utf8")
-  const truncated = bytes.length > limit
-  if (truncated) {
+  if (bytes.length > limit) {
     let end = limit
     while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--
     text = bytes.subarray(0, end).toString("utf8")
@@ -597,7 +597,7 @@ export function createScriptEngine(ctx: Context) {
    * A finished check call: the journal keeps the short `detail` (the tail); `whole` is the command's output from its start, which
    * the script gets up to CHECK_OUTPUT_LIMIT, held in memory for the running host only.
    */
-  function recordCheck(run: WorkflowRun, taskId: string, ok: boolean, detail: string, whole?: { exitCode: number; text: string }) {
+  function recordCheck(run: WorkflowRun, taskId: string, ok: boolean, detail: string, whole?: { exitCode: number; text: string; truncated?: boolean }) {
     const entry = SPEC_KEY(run.workflowId, taskId)
     const memo = `${run.workflowId}/${taskId}`
     stdins.delete(memo)
@@ -607,7 +607,7 @@ export function createScriptEngine(ctx: Context) {
     const full = whole ? wholeCheckDetail(whole.exitCode, whole.text) : undefined
     const long = full !== undefined && full.detail !== short
     if (long && hosts.has(run.workflowId)) outputs.set(memo, full.detail)
-    write(run.workflowId, `call:${entry.key}`, { kind: "check", ok, detail: short, ...(long ? { long: true } : {}), ...(full?.truncated ? { truncated: true } : {}), taskId, at: ctx.clock.now() } satisfies CallEntry)
+    write(run.workflowId, `call:${entry.key}`, { kind: "check", ok, detail: short, ...(long ? { long: true } : {}), ...(whole?.truncated || full?.truncated ? { truncated: true } : {}), taskId, at: ctx.clock.now() } satisfies CallEntry)
   }
 
   /** The user's answer to an `ask`: an approval carries the note (checked against the options), a rejection rejects the call. */
