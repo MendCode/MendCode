@@ -73,6 +73,8 @@ export function createMemoryExtraction(options: {
   let draining: Promise<void> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let completedAt = 0
+  /** When the daily-cap skip was last written: one row per day, so skips can never push the calls that count out of the kept log. */
+  let capLoggedAt = Number.NEGATIVE_INFINITY
   const tracks = new Map<string, Track>()
   const meta = new Map<string, { turns: number; trigger: ReviewTrigger }>()
   const reportedIneligible = new Set<string>()
@@ -179,7 +181,10 @@ export function createMemoryExtraction(options: {
         const info = meta.get(first.jobId) ?? { turns: 0, trigger: "retry" as ReviewTrigger }
         if (first.attempts === 0 && store.memoryReviews.callsSince(now() - DAY_MS) >= reviewPolicy(options.settings(first.directory)).dailyCap) {
           put(first, { state: "skipped", reason: "Daily review cap reached" })
-          log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, outcome: "skipped", reason: "daily cap" })
+          if (now() - capLoggedAt >= DAY_MS) {
+            capLoggedAt = now()
+            log({ sessionId: first.sessionId, directory: first.directory, trigger: info.trigger, turns: info.turns, outcome: "skipped", reason: "daily cap" })
+          }
           const entry = tracks.get(first.sessionId)
           if (entry) { entry.queuedFrom = undefined; entry.queuedTurns = 0 }
           release(first)

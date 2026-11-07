@@ -64,7 +64,10 @@ export const ROLE_FALLBACKS: Partial<Record<ModelRole, readonly ModelRole[]>> = 
  */
 export function resolveModel(input: { role: ModelRole; session?: ModelChoice | undefined; roles: ModelRoles; catalog: ModelCatalog; cheapSubagent?: boolean }): ModelChoice {
   const { role, session, roles, catalog } = input
-  const cheap = role === "subagent" && input.cheapSubagent && !roles.subagent ? cheapSubagentModel(session ?? roles.main ?? catalog.defaults, catalog) : undefined
+  // Memory review is background work: with neither its own model nor `small` set, it takes the main model's cheaper peer
+  // (Luna for Sol), never the large model itself.
+  const cheapMemory = role === "memoryExtractor" && !roles.memoryExtractor && !roles.small
+  const cheap = (role === "subagent" && input.cheapSubagent && !roles.subagent) || cheapMemory ? cheapSubagentModel((role === "subagent" ? session : undefined) ?? roles.main ?? catalog.defaults, catalog) : undefined
   const candidates = [role !== "main" ? roles[role] : undefined, ...(ROLE_FALLBACKS[role] ?? []).map((fallback) => roles[fallback]), cheap, session, roles.main]
   return usableEffort(candidates.find((choice) => choice && catalog.allows?.(choice.model) !== false && (role === "main" || !modelEngine(choice, catalog) && !choice.model.startsWith("acp:"))) ?? catalog.defaults, catalog)
 }

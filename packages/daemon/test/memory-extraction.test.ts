@@ -354,8 +354,40 @@ test("the daily cap stops extractor calls, records the skip, and a cap of 0 stop
   expect(h.store.extraction.list()[0]).toMatchObject({ state: "skipped", reason: "Daily review cap reached" })
   h.store.settings.set({ memoryReviewDailyCap: 0 })
   h.turn("Cap zero rule one"); h.turn("Cap zero rule two")
-  await until(() => h.store.memoryReviews.list()[0]!.reason === "daily cap" && h.store.memoryReviews.list().length === 4)
+  await until(() => h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
   expect(calls).toBe(2)
+  // One cap row a day: further skips are not written, so they can never push the counted calls out of the kept log.
+  expect(h.store.memoryReviews.list()).toHaveLength(3)
+})
+
+test("the daily cap counts every folder's reviews and survives a restart: a new worker on the same store still refuses", async () => {
+  let calls = 0
+  const extract = async () => { calls++; return [] }
+  const h = fixture(extract, {}, { memoryReviewDailyCap: 2 })
+  h.turn("First rule here"); h.turn("Second rule here")
+  await until(() => calls === 1)
+  // Another project's session spends the second call of the same day.
+  const other = ids("session")
+  h.store.createSession({ id: other, directory: "/other-project", title: "Other work" })
+  const drive = (worker: { observe(event: never): void }, sessionId: typeof other, text: string) => {
+    const turnId = ids("turn"), itemId = ids("item")
+    h.store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+    h.store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind: "user_message" })
+    h.store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text })
+    worker.observe(h.store.sessionSink.append({ type: "turn.completed", sessionId, turnId }) as never)
+  }
+  drive(h.worker, other, "Other rule one"); drive(h.worker, other, "Other rule two")
+  await until(() => calls === 2)
+  await until(() => h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
+  // The daemon restarts: a fresh worker on the same database, no memory of what ran.
+  await h.worker.stop()
+  const restarted = createMemoryExtraction({ store: h.store, settings: () => h.store.settings.get(), now: Date.now, extract, retryMs: 1, timeoutMs: 20, eligibleDirectory: () => true, commit: () => 0 })
+  cleanup.push(() => restarted.stop())
+  drive(restarted, other, "After restart one"); drive(restarted, other, "After restart two")
+  await until(() => h.store.extraction.list().every((job) => job.state !== "queued" && job.state !== "running"))
+  expect(calls).toBe(2)
+  expect(h.store.memoryReviews.callsSince(Date.now() - 86_400_000)).toBe(2)
+  expect(h.store.memoryReviews.list()[0]).toMatchObject({ outcome: "skipped", reason: "daily cap" })
 })
 
 test("the review record stays bounded", () => {

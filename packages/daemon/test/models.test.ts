@@ -53,6 +53,12 @@ describe("resolveModel", () => {
     expect(sub("gpt-6-sol", {}, false)).toBe("gpt-6-sol")
     // Other roles never take it.
     expect(resolveModel({ role: "compaction", session: { model: "gpt-6-sol" }, roles: {}, catalog: keyed, cheapSubagent: true }).model).toBe("gpt-6-sol")
+    // Memory review with no model of its own and no `small`: the main model's cheaper peer, whatever the session runs; a set role wins.
+    const review = (roles: object) => resolveModel({ role: "memoryExtractor", session: { model: "gpt-6-sol" }, roles, catalog: keyed }).model
+    expect(review({ main: { model: "gpt-6-sol" } })).toBe("gpt-6-luna")
+    expect(review({ main: { model: "anthropic:claude-opus-5-5" } })).toBe("anthropic:claude-sonnet-5-5")
+    expect(review({ main: { model: "gpt-6-sol" }, small: { model: "plain" } })).toBe("plain")
+    expect(review({ main: { model: "gpt-6-sol" }, memoryExtractor: { model: "anthropic:claude-haiku-5-5" } })).toBe("anthropic:claude-haiku-5-5")
   })
 
   test("Claude Code's sub-agents: the subagent role when it is a Claude model, else Sonnet under Opus or Fable; never over the daemon's own variable", () => {
