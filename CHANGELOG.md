@@ -27,6 +27,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A file pasted in the middle of a sentence no longer splits it: the model gets the whole sentence, then the file, and the transcript shows the file folded to its name.
 - Changing a Claude Code session's model no longer ends its background agents: the model switches live, and a new effort waits until they finish.
 - Page tabs draw their shortcut number dim and apart, so it no longer reads as the tab's count; `/today` shows each count once.
 - The PR reviewer measures MendCode's own pull requests again from a checkout without installed dependencies, and a failed measurement names its error instead of bun's version.

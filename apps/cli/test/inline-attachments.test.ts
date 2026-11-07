@@ -22,7 +22,7 @@ describe("what lands in the prompt", () => {
     expect(b.prompt()).toContain("de [Image #1] [codeconfig/]")
   })
 
-  test("the model is sent the sentence with its tokens, the folder listing after its token, and the image's position", async () => {
+  test("the model is sent the sentence with its tokens, the folder listing after the token's line, and the image's position", async () => {
     const b = bench()
     await b.type("mira ")
     await b.type(paste(SHOT))
@@ -30,8 +30,8 @@ describe("what lands in the prompt", () => {
     await b.type("fin")
     await b.type("\r")
     const sent = b.submitted()!
-    expect(sent.text.startsWith("mira [Image #1] [codeconfig/]\n\n[attached file: codeconfig]\n```\n")).toBe(true)
-    expect(sent.text.endsWith("```\n\nfin")).toBe(true)
+    expect(sent.text.startsWith("mira [Image #1] [codeconfig/] fin\n\n[attached file: codeconfig]\n```\n")).toBe(true)
+    expect(sent.text.endsWith("```")).toBe(true)
     expect(sent.attachments).toHaveLength(1)
     expect(sent.attachments[0]).toMatchObject({ label: "[Image #1]", name: "one.png", mime: "image/png", at: "mira [Image #1]".length })
   })
@@ -64,13 +64,13 @@ describe("what lands in the prompt", () => {
     expect(b.prompt()).toContain("[PDF design-spec.pdf] [notes.txt]")
   })
 
-  test("a text file is sent inside the text, after its token", async () => {
+  test("a text file is sent inside the text, after its token's line, so the sentence around it stays whole", async () => {
     const b = bench()
     await b.type("lee ")
     await b.type(paste(NOTES))
     await b.type("ya")
     await b.type("\r")
-    expect(b.submitted()!.text).toBe("lee [notes.txt]\n\n[attached file: notes.txt]\n```\nline one\nline two\n```\n\nya")
+    expect(b.submitted()!.text).toBe("lee [notes.txt] ya\n\n[attached file: notes.txt]\n```\nline one\nline two\n```")
     expect(b.submitted()!.attachments).toEqual([])
   })
 
@@ -227,9 +227,14 @@ describe("the pure parts", () => {
     expect(out.attachments[0]).toMatchObject({ label: "[Image #1]", at: "IDE: x\n\n".length + "a [Image #1]".length })
   })
 
-  test("composeSubmission: a folder's block follows its token; spaces after it do not indent the sentence", () => {
-    const out = composeSubmission("lee [codeconfig/]  y luego", [folder])
-    expect(out.text).toBe("lee [codeconfig/]\n\n[attached file: codeconfig]\n```\nAGENTS.md\n```\n\ny luego")
+  test("composeSubmission: a folder's block follows its token's line; the next line resumes under it", () => {
+    const out = composeSubmission("lee [codeconfig/]  y luego\nsegunda", [folder])
+    expect(out.text).toBe("lee [codeconfig/]  y luego\n\n[attached file: codeconfig]\n```\nAGENTS.md\n```\n\nsegunda")
+  })
+
+  test("composeSubmission: a question around a pasted file reaches the model whole, the file after it", () => {
+    const html = { kind: "text" as const, name: "launch.html", label: "[launch.html]", content: "<html>\n</html>" }
+    expect(composeSubmission('pregunta es el " [launch.html] "?', [html]).text).toBe('pregunta es el " [launch.html] "?\n\n[attached file: launch.html]\n```\n<html>\n</html>\n```')
   })
 
   test("composeSubmission: an attachment with no token or whose token is gone goes last, as before", () => {
