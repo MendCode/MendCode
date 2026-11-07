@@ -171,6 +171,11 @@ export const PrJobSummary = lazySchema(() => z.strictObject({
   findings: z.strictObject({ confirmed: z.number().int().nonnegative(), plausible: z.number().int().nonnegative(), candidates: z.number().int().nonnegative(), resolved: z.number().int().nonnegative(), blocking: z.number().int().nonnegative().optional() }),
   /** The pull request's GitHub state, when it was read (GitHub only; `status` with `pullRequests`). */
   pullRequest: PrPullRequestState.optional(),
+  /**
+   * The findings open on the pull request after this job (`status` with `pullRequests`): its own plus earlier published ones not
+   * resolved, as the commit status counts them. `findings` holds only this run's; an incremental job's can be empty while a blocker stays.
+   */
+  unresolved: z.strictObject({ open: z.number().int().nonnegative(), blocking: z.number().int().nonnegative() }).optional(),
   tokens: PrTokenUsage,
   /** The part of `tokens` the cheap readers spent (the rest is the review and verify passes' model); absent when no reader ran. */
   readTokens: PrTokenUsage.optional(),

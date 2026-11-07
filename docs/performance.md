@@ -98,7 +98,7 @@ The probe is `scripts/perf-attrib-preload.ts`, loaded with `BUN_OPTIONS=--preloa
 
 Metrics calibration never saw get 5 % of their value with a floor per unit.
 
-Recalibrate after changing the machine, the Bun version or the script's scenario. The committed file was measured with `solo`; `split` metrics reuse it where the names match and fall back to the default otherwise.
+Recalibrate after changing the machine, the Bun version or the script's scenario. The committed file was measured with `solo`; `split` metrics reuse it where the names match and fall back to the default otherwise. A shorter recalibration never narrows the file: each metric keeps the widest spread of the runs it replaces and the new ones (2026-11-07: 6 runs of main 5fc825e5 on a loaded machine moved `tui.cpu_ms.after` from 165 to 1,029 ms, 7.4 to 8.4 s for the same build).
 
 Not done: CPU by function (`--cpu-prof`); CPU is reported per phase only.
 

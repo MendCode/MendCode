@@ -684,6 +684,7 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   /**
    * `status` only: read the pull requests' GitHub state (one `gh pr list` per repository): `cached` reads a repository whose
    * last read is older than a minute, `refresh` reads it now. Unset, the last read state is attached and nothing is fetched.
+   * Set, each job also carries `unresolved`, the findings still open on its PR.
    */
   pullRequests: z.enum(["cached", "refresh"]).optional(),
 }))

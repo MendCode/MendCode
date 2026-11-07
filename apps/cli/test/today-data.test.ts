@@ -93,6 +93,32 @@ describe("loadTodayData", () => {
     expect(row.older).toBeUndefined()
   })
 
+  test("an incremental review that found nothing new keeps the PR in Attention while an earlier blocker stays open on it", async () => {
+    const none = { confirmed: 0, plausible: 0, candidates: 0, resolved: 0 }
+    const jobs = [
+      job("old", { number: 5, head: "aaa1111", createdAt: NOW - 10 * H, updatedAt: NOW - 9 * H, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 } }),
+      // The empty commit's job: its own run has no findings, the published blocker is still unresolved.
+      job("new", { number: 5, head: "bbb2222", createdAt: NOW - 2 * H, updatedAt: NOW - H, findings: none, unresolved: { open: 2, blocking: 1 } }),
+      // Another PR whose earlier blocker was resolved: answered.
+      job("done", { number: 6, head: "ccc3333", findings: none, unresolved: { open: 0, blocking: 0 } }),
+    ]
+    const { source } = fake({ "pr.review": { dashboard: { jobs } } })
+    const { attention } = await loadTodayData(source)
+    expect(attention.map((item) => item.id)).toEqual(["pr:github:acme/shop#5"])
+    expect(attention[0]).toMatchObject({ why: "1 blocking finding of 2 open", link: { ref: "new" } })
+  })
+
+  test("dismissed rows do not use up Attention's cap: the 41st waiting session is listed once the first 40 are dismissed", async () => {
+    const sessions = Array.from({ length: 41 }, (_, i) => session(`w${i}`, { status: "waiting_for_input", since: NOW - (50 - i) * H, updatedAt: NOW - (50 - i) * H }))
+    const dismissed = Object.fromEntries(sessions.slice(0, 40).map((entry) => [`attention:${entry.sessionId}`, entry.since]))
+    const { source } = fake({ "session.list": { sessions } }, { dismissed })
+    const { attention } = await loadTodayData(source)
+    const open = attention.filter((item) => !(dismissed[`attention:${item.id}`]! >= item.since))
+    expect(open.map((item) => item.id)).toEqual(["ses_w40"])
+    // The dismissed ones stay listed for the `d` view, under their own cap.
+    expect(attention).toHaveLength(41)
+  })
+
   test("a review row nobody touched for a week is marked older, and the cap keeps the newest of those", async () => {
     const jobs = Array.from({ length: 50 }, (_, i) => job(`old_${i}`, { number: 100 + i, createdAt: NOW - (8 * 24 + i) * H - H, updatedAt: NOW - (8 * 24 + i) * H, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 } }))
     jobs.push(job("fresh", { number: 1, updatedAt: NOW - H, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 } }))

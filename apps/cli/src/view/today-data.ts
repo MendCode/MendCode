@@ -1,6 +1,6 @@
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { DreamRun, MemoryEntry, MemoryGraphReport, PrJobSummary, SessionSummary, WorkflowSummary } from "@mendcode/protocol"
-import { DISMISS_DAYS, type AttentionItem, type MemoryProposal, type PickupItem, type TodayData, type TodayDream, type TodayEvent } from "./today-page"
+import { DISMISS_DAYS, todayKey, type AttentionItem, type MemoryProposal, type PickupItem, type TodayData, type TodayDream, type TodayEvent } from "./today-page"
 
 /**
  * The data behind /today: assembled from what the daemon already answers (docs/today.md), read-only, with no model call and no
@@ -34,6 +34,8 @@ export type TodaySource = {
   now: number
   /** Epoch ms of the last visit to /today; 0 or absent when there was none. */
   lastVisit?: number | undefined
+  /** The page's dismissals (`tab:id` → the row's time when dismissed): Attention's cap counts the rows still listed, not these. */
+  dismissed?: Record<string, number> | undefined
 }
 
 const clip = (text: string, max: number) => {
@@ -93,9 +95,11 @@ function attentionOfPullRequest(jobs: PrJobSummary[], foldAfter: number): Attent
   const job = ordered.find((candidate) => candidate.head === newest.head && REVIEWED.has(candidate.state))
   if (!job) return undefined
   const waiting = job.state === "waiting"
-  const blocking = job.findings.blocking ?? 0
+  // What stays open on the PR (earlier published findings nobody resolved, plus this job's), not only this run's: an incremental
+  // or unchanged-tree job's own findings can be empty while an earlier blocker is still open.
+  const blocking = job.unresolved ? job.unresolved.blocking : job.findings.blocking ?? 0
   if (!waiting && blocking === 0) return undefined
-  const open = Math.max(0, job.findings.confirmed - job.findings.resolved)
+  const open = job.unresolved ? job.unresolved.open : Math.max(0, job.findings.confirmed - job.findings.resolved)
   const findings = blocking ? `${plural(blocking, "blocking finding")}${open > blocking ? ` of ${open} open` : ""}` : plural(open, "open finding")
   const earlier = ordered.filter((candidate) => candidate !== job)
   const heads = new Set(earlier.map((candidate) => candidate.head).filter((head) => head !== job.head)).size
@@ -107,7 +111,7 @@ function attentionOfPullRequest(jobs: PrJobSummary[], foldAfter: number): Attent
     project: job.repo,
     since: job.updatedAt,
     why: waiting ? (open ? `waiting for you · ${findings}` : "the review is waiting for you") : findings,
-    explain: [waiting ? "The review waits for a decision from you." : "", open ? `${findings} on the newest head (${job.head.slice(0, 7)}) from ${job.reviewer} that no fix round has resolved.` : "", job.stop?.remaining ?? "", folded ? `${folded}.` : ""].filter(Boolean).join(" "),
+    explain: [waiting ? "The review waits for a decision from you." : "", open ? `${findings} open on the newest head (${job.head.slice(0, 7)}) from ${job.reviewer} that nothing has resolved.` : "", job.stop?.remaining ?? "", folded ? `${folded}.` : ""].filter(Boolean).join(" "),
     next: job.sessionId ? "Open the reviewer session to read the findings." : "Open /reviews to read the findings and act on the job.",
     history: [
       { at: job.updatedAt, text: `review ${job.state}${job.phase ? ` · ${job.phase}` : ""} · head ${job.head.slice(0, 7)}` },
@@ -291,8 +295,15 @@ export async function loadTodayData(source: TodaySource): Promise<TodayData> {
     ...workflows.flatMap((workflow) => attentionOfWorkflow(workflow) ?? []),
     ...(graph?.links ? attentionOfConflicts(graph) : []),
   ].sort((a, b) => a.since - b.since)
-  // Reviews nobody touched for a while fold under one "older" line; the cap keeps the newest of them.
-  const attention = [...waitingRows.filter((item) => !item.older).slice(0, MAX_ATTENTION), ...waitingRows.filter((item) => item.older).slice(-MAX_ATTENTION)]
+  // Reviews nobody touched for a while fold under one "older" line; the cap keeps the newest of them. Dismissed rows are capped on
+  // their own (the `d` list), so dismissing rows never leaves waiting work past the cap unlisted.
+  const dismissedAt = source.dismissed ?? {}
+  const dismissed = (item: AttentionItem) => { const at = dismissedAt[todayKey("attention", item.id)]; return at !== undefined && item.since <= at }
+  const capped = (rows: AttentionItem[], keep: (list: AttentionItem[]) => AttentionItem[]) => {
+    const chosen = new Set([...keep(rows.filter((item) => !dismissed(item))), ...keep(rows.filter(dismissed))])
+    return rows.filter((item) => chosen.has(item))
+  }
+  const attention = [...capped(waitingRows.filter((item) => !item.older), (list) => list.slice(0, MAX_ATTENTION)), ...capped(waitingRows.filter((item) => item.older), (list) => list.slice(-MAX_ATTENTION))]
   const pickup = sessions
     .flatMap((session) => pickupOfSession(session, git) ?? [])
     .sort((a, b) => b.leftAt - a.leftAt)

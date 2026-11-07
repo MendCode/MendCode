@@ -50,7 +50,7 @@ A pull request has no row when:
 
 - GitHub reports it merged or closed (the page reads each repository's pull requests once, cached and time-boxed, as `/reviews` does);
 - its newest head is being reviewed right now, or every review of that head failed (`/reviews` shows those);
-- its newest review has no open blocking finding and does not wait for you.
+- its newest review has no open blocking finding and does not wait for you. Open means open on the pull request, as the commit status counts it: that review's own findings plus earlier published ones nobody resolved, so an incremental review that found nothing new keeps an earlier blocker's row.
 
 A review row nobody touched for 7 days folds under one line at the end of the list, "3 older reviews folded (untouched 7+ days) · o lists them". The tab count and the paragraph count only the rows the list shows and say how many are folded or dismissed.
 
@@ -58,7 +58,7 @@ A review row nobody touched for 7 days folds under one line at the end of the li
 
 `x` hides the selected row from its tab, in any tab. It stays hidden until something newer happens on it: a new question in the session, a review of a new head. `X` dismisses every review untouched for 7 days or more in one go: the paragraph asks first, `+` and `-` change the days, `y` confirms and any other key cancels.
 
-`d` lists the dismissed rows, where `x` brings one back and `X` (after `y`) brings back every row. Dismissing runs nothing and changes nothing in the session, review or memory. The page keeps the dismissals in the terminal profile as `todayDismissed` (the row id and the row's time, the newest 300), written by MendCode; you never edit a file for it.
+`d` lists the dismissed rows, where `x` brings one back and `X` (after `y`) brings back every row. Dismissing runs nothing and changes nothing in the session, review or memory. The page keeps the dismissals in the terminal profile as `todayDismissed` (the row id and the row's time, the newest 300), written by MendCode; you never edit a file for it. Attention lists at most 40 rows plus 40 older reviews, counted without the dismissed ones, so dismissing rows brings up the waiting ones past the limit.
 
 ## Triage
 

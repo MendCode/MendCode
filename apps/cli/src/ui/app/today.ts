@@ -51,6 +51,7 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
       reviews: featureOn(state.settingsNow, "pr_review"),
       now: now(),
       lastVisit: since,
+      dismissed: state.tuiProfile.todayDismissed,
     })
     if (ticket !== visit) return
     data = loaded

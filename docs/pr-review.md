@@ -429,7 +429,7 @@ published findings in the files it changed, whether their lines were rewritten, 
 them changed (a fix often inserts the missing call above the flagged line): one that no longer reproduces gets its thread resolved.
 A finding in a file the push did not touch is not asked about again. A measured cost rise ([Performance of MendCode's own pull
 requests](#performance-of-mendcodes-own-pull-requests)) is never re-checked by a model: the new head's measurement decides, and a
-head measured without a rise resolves it.
+head measured without a rise resolves it, on an incremental review or a whole-PR one (after a force push, or with `coverage: full`).
 A head with nothing to review costs no model call: the same files as the reviewed head (an empty commit, a reworded or re-signed
 commit, a force push that changed nothing), or only files the config ignores. Its summary says so, and nothing new is posted.
 The last reviewed head is the saved state's, or, when this device has none (another device reviewed, the data directory was wiped),

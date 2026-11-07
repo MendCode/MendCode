@@ -67,8 +67,9 @@ export type ReviewRun = {
   inherited?: number
   /**
    * The ids of earlier findings (published and unresolved, plus `recheck`) the re-check of an incremental review found fixed: their
-   * threads are resolved with the post. Set only when that re-check ran (a complete incremental review); a whole-PR review finds
-   * again what is still there, so it has none.
+   * threads are resolved with the post. Set when that re-check ran (a complete incremental review), or when a complete review of any
+   * kind measured this head without a rise (the earlier measured rises it settles); a whole-PR review otherwise finds again what is
+   * still there, so it has none.
    */
   fixed?: string[]
 }
@@ -587,7 +588,8 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     const rechecked = complete && !nothingLeft && (incremental || !!input.full)
     const recheckFactory = (factory: ReviewSessionFactory) => meteredSessions({ factory, account: input.account, calling: input.calling, resuming: false, failures: [], language: config.template.language })
     const byModel = rechecked && asked.length ? await fixedFindings({ sessionFactory: withFallbacks({ primary: recheckFactory(input.sessionFactory), sources: fallbackSources.map((source) => ({ model: source.model, factory: recheckFactory(source.factory) })), state: fallbackState }), previous: asked, context, language: config.template.language }) : []
-    const byMeasure = rechecked && perf?.status === "measured" && !perf.rose ? previous.filter(isMeasuredRise).map((finding) => finding.id) : []
+    // Any complete review that measured this head settles them, incremental or not (a force push, `coverage: full`).
+    const byMeasure = complete && perf?.status === "measured" && !perf.rose ? previous.filter(isMeasuredRise).map((finding) => finding.id) : []
     const fixed = [...byModel, ...byMeasure]
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
@@ -605,7 +607,7 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
       rounds: input.checkpoint?.rounds ?? [], decisions: plan.decisions, ...(outcome.sections ? { sections: outcome.sections } : {}),
     })
-    const reviewed = { ...common, outcome: { ...outcome, result }, info, checkpoint, ...(inherited ? { inherited } : {}), ...(rechecked ? { fixed } : {}) }
+    const reviewed = { ...common, outcome: { ...outcome, result }, info, checkpoint, ...(inherited ? { inherited } : {}), ...(rechecked || byMeasure.length ? { fixed } : {}) }
     // A review that reached its token budget and closed with a short check is posted as a partial review, never as nothing. Its stop and
     // checkpoint stay with the job (`keep`), so the next /pr review continues with the parts and candidates still missing.
     const closing = !!outcome.partial && outcome.stop?.kind === "budget"

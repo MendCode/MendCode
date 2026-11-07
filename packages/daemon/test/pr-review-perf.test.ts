@@ -225,12 +225,14 @@ describe("the review of a MendCode pull request", () => {
  * verifier is asked about it again (a model re-reading code to judge a number it cannot measure is spent for nothing).
  */
 describe("a measured rise on a later head", () => {
-  async function later(headline: string) {
+  async function later(headline: string, { forcePush = false } = {}) {
     const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
     const first = await review(repo, { dir: temp(), run: runner({ code: 1, out: TABLE(RISE) }).run }, child())
     const rise = first.outcome!.result.findings.find((item) => item.category === "performance")!
     writeFileSync(path.join(repo.dir, "apps/cli/src/a.ts"), "export const a = 2\n")
-    await git(repo.dir, "commit", "-q", "-am", "smaller")
+    // A force push rewrites the reviewed head away, so the next review is a whole-PR one (incremental false, no explicit full).
+    if (forcePush) await git(repo.dir, "commit", "-q", "--amend", "-am", "smaller")
+    else await git(repo.dir, "commit", "-q", "-am", "smaller")
     const head = await git(repo.dir, "rev-parse", "HEAD")
     const kids = child()
     const run = await runPrReview({
@@ -246,6 +248,18 @@ describe("a measured rise on a later head", () => {
     expect(run.incremental).toBe(true)
     expect(run.fixed).toEqual([rise.id])
     expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
+  })
+
+  test("after a force push, a whole-PR review measured without the rise fixes it too", async () => {
+    const { run, rise } = await later(SAME, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed).toEqual([rise.id])
+  })
+
+  test("after a force push, a head that still rises keeps it open", async () => {
+    const { run, rise } = await later(RISE, { forcePush: true })
+    expect(run.incremental).toBe(false)
+    expect(run.fixed ?? []).not.toContain(rise.id)
   })
 
   test("a head that still rises keeps it open, and no verifier is asked about it either", async () => {
