@@ -101,6 +101,8 @@ export function createToday(ctx: AppContext, deps: { switchSession(sessionId: Se
   async function dismiss(rows: Array<{ key: string; at: number }>, on: boolean) {
     const next = withDismissed({ ...createTodayState(), dismissed: { ...state.tuiProfile.todayDismissed } }, rows, on).dismissed ?? {}
     await save({ todayDismissed: next }, ["todayDismissed"])
+    // The rows a cap left out take the dismissed rows' places, as `r` would read them.
+    if (view && state.page === "today") await load(false)
   }
 
   /** One `today.triage` call with the rows on the page; its answer only fills the triage view. */

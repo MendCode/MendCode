@@ -1,4 +1,4 @@
-import { PrReviewDashboard, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
+import { PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { JobState, ReviewJob } from "./contracts"
 import type { ReviewState } from "./state"
 
@@ -64,10 +64,14 @@ export function unresolvedCounts(job: Pick<ReviewJob, "checkpoint">, state: Pick
   const { verified, rounds } = job.checkpoint
   const lastOpen = rounds.at(-1)?.open
   const stillOpen = lastOpen ? new Set(lastOpen) : undefined
-  const judged = new Set(verified.map((finding) => finding.id))
-  const open = verified.filter((finding) => finding.verdict === "confirmed" && (!stillOpen || stillOpen.has(finding.id)))
-  for (const [id, entry] of Object.entries(state.published)) if (entry.finding && !entry.resolved && !judged.has(id)) open.push(entry.finding)
-  return { open: open.length, blocking: open.filter((finding) => finding.severity === "critical" || finding.severity === "major").length }
+  // As the commit status: every published finding not resolved (a plausible one a strict review posted included) except those a fix
+  // round of this job closed, plus this job's confirmed findings still open.
+  const fixed = new Set(stillOpen ? verified.filter((finding) => !stillOpen.has(finding.id)).map((finding) => finding.id) : [])
+  const open = new Map<string, PrFinding>()
+  for (const [id, entry] of Object.entries(state.published)) if (entry.finding && !entry.resolved && !fixed.has(id)) open.set(id, entry.finding)
+  for (const finding of verified) if (finding.verdict === "confirmed" && !fixed.has(finding.id)) open.set(finding.id, finding)
+  const list = [...open.values()]
+  return { open: list.length, blocking: list.filter((finding) => finding.severity === "critical" || finding.severity === "major").length }
 }
 
 /** One ledger job as the page shows it: `sessionId` is the review session (not the watch's), strings cut to the protocol's bounds. */

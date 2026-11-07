@@ -129,6 +129,18 @@ describe("/today in the app", () => {
     expect(h.text()).toContain("Add the coupon route")
   })
 
+  test("x reads the rows again, so rows a cap left out take the dismissed row's place", async () => {
+    const h = harness({ "session.list": SESSIONS })
+    await h.run("/today")
+    const reads = () => h.sent.filter((command) => command.type === "session.list").length
+    const before = reads()
+    await h.key("x")
+    await Bun.sleep(10)
+    expect(reads()).toBeGreaterThan(before)
+    const last = h.sent.filter((command) => command.type === "session.list").at(-1)
+    expect(last).toBeDefined()
+  })
+
   test("X reaches the page as a capital (the Caps Lock fold spares it), asks once, and only y dismisses the old reviews", async () => {
     const old = { ...SESSIONS.sessions[0]! }
     const review = { id: "prj_old", provider: "github", repo: "acme/shop", number: 9, title: "Old", reviewer: "global", scope: "global", trigger: "opened", state: "done", coverage: "full", base: "main", head: "abc1234", attempts: 1, createdAt: NOW - 12 * 864e5, updatedAt: NOW - 10 * 864e5, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0, blocking: 1 }, tokens: { input: 0, output: 0 } }
