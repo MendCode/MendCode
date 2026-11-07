@@ -1,6 +1,6 @@
 import { estimateTokens } from "@mendcode/protocol/wire"
 /** What a model call gives back: the text, optionally with the provider's token counts. */
-export type Completion = string | { text: string; usage?: { input: number; output: number } | undefined }
+export type Completion = string | { text: string; usage?: { input: number; output: number; cacheRead?: number | undefined; costMicros?: number | undefined; model?: string | undefined } | undefined }
 
 /** Tokens of a text when the provider reports none: about four characters each. */
 export { estimateTokens } from "@mendcode/protocol/wire"
@@ -9,7 +9,7 @@ export { estimateTokens } from "@mendcode/protocol/wire"
 const ANSWER_RESERVE_TOKENS = 1_000
 
 export type MeterSnapshot = {
-  model: { calls: number; inputTokens: number; outputTokens: number; estimated: boolean }
+  model: { calls: number; inputTokens: number; outputTokens: number; estimated: boolean; name?: string; cacheReadTokens?: number; costMicros?: number }
   budget: { limit: number; used: number; stopped: boolean; reason?: string }
 }
 
@@ -18,7 +18,7 @@ export type MeterSnapshot = {
  * (`refused` says why, and the run reports itself as stopped by the budget); a call already made is always kept.
  */
 export function createMeter(input: { limit: number; complete(prompt: string, signal: AbortSignal): Promise<Completion>; signal: AbortSignal }) {
-  const state = { calls: 0, inputTokens: 0, outputTokens: 0, estimated: false, reason: undefined as string | undefined }
+  const state = { calls: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheReported: false, costMicros: undefined as number | undefined, name: undefined as string | undefined, estimated: false, reason: undefined as string | undefined }
   const used = () => state.inputTokens + state.outputTokens
   return {
     used,
@@ -37,6 +37,10 @@ export function createMeter(input: { limit: number; complete(prompt: string, sig
       if (usage) {
         state.inputTokens += usage.input
         state.outputTokens += usage.output
+        if (usage.cacheRead !== undefined) { state.cacheReported = true; state.cacheReadTokens += usage.cacheRead }
+        // A cost only when the provider reported one; never a guess.
+        if (usage.costMicros !== undefined) state.costMicros = (state.costMicros ?? 0) + usage.costMicros
+        if (usage.model) state.name = usage.model.slice(0, 200)
       } else {
         state.estimated = true
         state.inputTokens += estimateTokens(prompt.length)
@@ -46,7 +50,7 @@ export function createMeter(input: { limit: number; complete(prompt: string, sig
     },
     snapshot(): MeterSnapshot {
       return {
-        model: { calls: state.calls, inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimated: state.estimated },
+        model: { calls: state.calls, inputTokens: state.inputTokens, outputTokens: state.outputTokens, estimated: state.estimated, ...(state.name ? { name: state.name } : {}), ...(state.cacheReported ? { cacheReadTokens: state.cacheReadTokens } : {}), ...(state.costMicros !== undefined ? { costMicros: state.costMicros } : {}) },
         budget: { limit: input.limit, used: used(), stopped: state.reason !== undefined, ...(state.reason ? { reason: state.reason.slice(0, 200) } : {}) },
       }
     },

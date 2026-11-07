@@ -64,7 +64,7 @@ type Setup = {
   args?: string[]
   smartBash?: (input: { args: Record<string, unknown>; cwd: string }) => "allow" | "ask" | "deny"
   environment?: () => { values: Record<string, string>; note: string } | undefined
-  appendSystem?: (cwd: string) => string | undefined
+  appendSystem?: (cwd: string, sessionId: string) => string | undefined
   replyLanguage?: (sessionId: string, text: string) => string | undefined
 }
 
@@ -239,6 +239,13 @@ describe("a normal turn", () => {
     const bare = setup({ appendSystem: () => undefined })
     expect(await bare.engine.runTurn(turnInput({ sessionId: ids("session") }).input)).toEqual({ status: "ok" })
     expect(bare.spawned[0]).not.toContain("--append-system-prompt")
+  })
+
+  test("appendSystem is asked for the turn's own session, so the daemon can add that session's memory block", async () => {
+    const h = setup({ appendSystem: (_root, sessionId) => `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
+    const sessionId = ids("session")
+    expect(await h.engine.runTurn(turnInput({ sessionId }).input)).toEqual({ status: "ok" })
+    expect(h.spawned[0]).toEqual(expect.arrayContaining(["--append-system-prompt", `<mendcode_memory>for ${sessionId}</mendcode_memory>`]))
   })
 
   test("the process stays up between turns and the bridge file goes away with the engine", async () => {

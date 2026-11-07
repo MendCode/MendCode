@@ -190,7 +190,7 @@ and `readers.code: all` (the default), the cheap readers read all the changed co
 3. Every range is checked against the diff: both ends must be new-side lines of that file. Invalid ranges are dropped and counted in the review note.
 4. The review pass gets the PR title and description, the list of changed files with their sizes, each file's summary and risk spots, the exact hunks the risk spots touch, and the code graph's callers and callees of the changed symbols. A small file (about 2,400 characters of diff or less) is shown whole. It never gets the whole diff by default, and it can open any file with its own read-only tools, which its prompt tells it to do for anything that matters.
 
-A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent, the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
+A file goes to the review pass **raw**, its whole diff and no summary, when a reader cannot be trusted with it. That is any of: no cheap model for the provider, the readers' share of the cap is spent (or, on a small diff whose scaled cap gives the readers less than one call's fixed cost, it never covered a call; the note then says the diff is small), the reader call failed or timed out, the answer is not the asked JSON, the file has no answer in it or no description of what changed, it cites risk spots but every one is outside the diff, or it names no risk spot and does not say there is none. A file larger than about 48,000 characters of diff is never sent to a reader. Nothing is marked reviewed unless something read it. A reader never falls back to a larger model.
 
 Summaries are hints and can miss a defect: a risk spot a reader did not flag is a hunk the review pass does not see unless it opens the file. That is the trade for a much smaller review prompt. It is bounded by what comes after: a finding is published only after the verify pass confirms it against the real code, so a miss costs a missed finding, never a false one. Nothing a reader says is published.
 
@@ -1206,7 +1206,9 @@ When the repository under review is MendCode itself (the checkout's root package
 the daemon measures the pull request before the model pass: it runs `bun scripts/perf-attrib.ts --base <merge base> --cand <head>
 --markdown` as a separate subprocess (the review model stays read-only and builds nothing), on the offline faux engine, so it uses no
 model and no login. The table goes into the review's details and to the model as input, so a finding can cite its numbers; the only
-model cost is the table's text.
+model cost is the table's text. A review checkout without installed dependencies gets them from the lockfile first
+(`bun install --frozen-lockfile`, as the script does for each build) and loses them again afterwards; a run that still fails is
+reported by its error line.
 
 - A metric that rose above the measured noise (the script exits 1) adds a critical `performance` finding on the first changed line
   of the code that can change cost. Within the noise is no difference.

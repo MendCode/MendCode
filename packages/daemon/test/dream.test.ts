@@ -73,6 +73,7 @@ describe("dream in the daemon", () => {
       socketPath: path.join(dir, "mendd.sock"),
       clock,
       engine: ({ clock: c }) => createFauxEngine({ clock: c, deltaMs: 1 }),
+      dreamEligible: () => true,
       dream: { complete: async (p) => (directories.push(/working in (\S+)\./.exec(p)?.[1] ?? "?"), '{"proposals":[],"notes":""}') },
     })
     cleanups.push(() => daemon.stop())

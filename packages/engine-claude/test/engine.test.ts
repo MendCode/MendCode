@@ -1123,6 +1123,17 @@ describe("the daemon's own tools inside claude code", () => {
   })
 })
 
+describe("text appended to Claude Code's system prompt", () => {
+  test("appendSystem is asked for the turn's own session, so the daemon can add that session's memory block", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine, spawned } = engineWith([fake], { appendSystem: (_cwd: string, sessionId: string) => `<mendcode_memory>for ${sessionId}</mendcode_memory>` })
+    const { input } = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(spawned[0]!.args[spawned[0]!.args.indexOf("--append-system-prompt") + 1]).toContain(`for ${input.sessionId}`)
+    engine.stop?.()
+  })
+})
+
 describe("MCP servers changed during a turn", () => {
   test("the process ends with that turn and the next turn starts a new one that resumes the conversation", async () => {
     const adds = fakeClaude({

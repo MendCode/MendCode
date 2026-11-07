@@ -1,5 +1,6 @@
 export * from "./store"
 export * from "./writer-lock"
+export type { MemoryReviewRow } from "./parity-records"
 export type { PendingResume } from "./restart-resume"
 export { isRefusedEnvironmentName } from "./environment"
 export { historyMark, previewOf, SNAPSHOT_TURNS_KEPT, type CallFileSnapshot, type FileSnapshot, type FileState, type PartialRevert, type SnapshotRecord, type TurnRecord, type TurnStatus } from "./turns"

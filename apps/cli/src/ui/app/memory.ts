@@ -266,6 +266,14 @@ export function createMemory(ctx: AppContext) {
       if (path) say(`${suggestion.kind} written to ${path}`, "success")
       return requestFrame()
     }
+    if (action.type === "batch") {
+      const status = action.decision === "approve" ? "saved" : "archived"
+      let failed = 0
+      for (const id of action.memoryIds.slice(0, 250)) if (!(await input.send({ type: "memory.update", memoryId: id as MemoryId, status })).ok) failed++
+      if (failed) fail(`${failed} of ${action.memoryIds.length} could not be ${action.decision === "approve" ? "approved" : "rejected"}`)
+      else say(`${action.memoryIds.length} ${action.decision === "approve" ? "approved" : "rejected"}`, "success")
+      return
+    }
     const memoryId = "memoryId" in action ? (action.memoryId as MemoryId) : undefined
     if (!memoryId) return
     if (action.type === "scope") return moveMemoryScope(memoryId, action.scope)

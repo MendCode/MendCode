@@ -47,6 +47,12 @@ export const DreamReport = lazySchema(() => z.strictObject({
     outputTokens: z.number().int().nonnegative(),
     /** True when a count was estimated (characters / 4) because the provider reported no usage. */
     estimated: z.boolean(),
+    /** The model that answered, as the provider named it; absent on runs with no call or recorded before it was kept. */
+    name: z.string().max(200).optional(),
+    /** Prompt tokens served from the provider's cache (already counted in `inputTokens` or not, as the provider reports them). */
+    cacheReadTokens: z.number().int().nonnegative().optional(),
+    /** Cost in millionths of the currency, only when the provider reported one. */
+    costMicros: z.number().nonnegative().optional(),
   }),
   budget: z.strictObject({ limit: z.number().int().positive(), used: z.number().int().nonnegative(), stopped: z.boolean(), reason: z.string().max(200).optional() }),
   evolution: EvolutionReport.optional(),

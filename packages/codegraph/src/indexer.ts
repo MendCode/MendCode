@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { buildGraph, type Graph } from "./graph"
 import { HOSTED_SCAN_FILES, hostedScan } from "./scan-host"
@@ -139,7 +139,10 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, scan
     if (signal.aborted) throw aborted()
     let state = states.get(cwd)
     if (!state) {
-      const cache = (await loadCache({ file: cachePath(cwd), cwd })) ?? { version: CACHE_VERSION, cwd, builtAt: 0, graftMtimeMs: null, partial: false, files: {} }
+      const loaded = await loadCache({ file: cachePath(cwd), cwd })
+      // Loading a cache is using it: renew its age so the pruning (prune.ts) keeps what a project still asks for.
+      if (loaded) { const at = new Date(now()); void utimes(cachePath(cwd), at, at).catch(() => undefined) }
+      const cache = loaded ?? { version: CACHE_VERSION, cwd, builtAt: 0, graftMtimeMs: null, partial: false, files: {} }
       state = { cache, graph: undefined, dirty: false }
       states.set(cwd, state)
     }

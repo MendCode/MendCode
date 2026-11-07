@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { gitRun } from "../src/pr-review/context"
@@ -111,6 +111,33 @@ describe("measurePerf", () => {
     expect(failed).toEqual({ status: "not-measured", reason: "perf-attrib failed (exit 2): build failed in base" })
     const thrown = await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), run: async () => { throw new Error("spawn bun ENOENT") } } })
     expect(thrown).toMatchObject({ status: "not-measured", reason: expect.stringContaining("spawn bun ENOENT") })
+  })
+
+  test("an uncaught error is reported by its error line, not by bun's version footer", () => {
+    const result = { code: 1, out: "", err: "error: Cannot find module '@mendcode/store' from '/x/scripts/perf-attrib.ts'\n\nBun v1.3.13 (macOS arm64)\n", timedOut: false }
+    expect(perfOutcome({ result, from: "a", head: "b", timeoutMs: 1 })).toEqual({ status: "not-measured", reason: "perf-attrib failed (exit 1): error: Cannot find module '@mendcode/store' from '/x/scripts/perf-attrib.ts'" })
+  })
+
+  test("the real runner installs a checkout's missing dependencies from the lockfile first, then removes them", async () => {
+    const { perfAttribProcess } = await import("../src/pr-review/perf")
+    const bin = temp()
+    const checkout = temp()
+    const log = path.join(bin, "calls.log")
+    // A stand-in bun: install creates node_modules; the script answers only when they exist, as the real one does.
+    writeFileSync(path.join(bin, "bun"), `#!/bin/sh\necho "$*" >> "${log}"\nif [ "$1" = install ]; then mkdir -p node_modules; exit 0; fi\n[ -d node_modules ] || { echo "error: Cannot find module '@mendcode/store'" >&2; exit 1; }\necho "**perf-attrib: same**"\n`, { mode: 0o755 })
+    const saved = process.env.PATH
+    process.env.PATH = `${bin}:${saved}`
+    try {
+      const result = await perfAttribProcess({ directory: checkout, base: "a", head: "b", cacheDir: temp(), tmpDir: temp(), timeoutMs: 30_000 })
+      expect(result).toMatchObject({ code: 0, out: "**perf-attrib: same**\n" })
+      expect(readFileSync(log, "utf8").split("\n").filter(Boolean)).toEqual(["install --frozen-lockfile", expect.stringContaining("scripts/perf-attrib.ts --base a --cand b --markdown --cache")])
+      expect(existsSync(path.join(checkout, "node_modules"))).toBe(false)
+      // A checkout that has them is left as it is: no install, nothing removed.
+      mkdirSync(path.join(checkout, "node_modules"))
+      await perfAttribProcess({ directory: checkout, base: "a", head: "b", cacheDir: temp(), tmpDir: temp(), timeoutMs: 30_000 })
+      expect(readFileSync(log, "utf8").split("\n").filter((line) => line.startsWith("install"))).toHaveLength(1)
+      expect(existsSync(path.join(checkout, "node_modules"))).toBe(true)
+    } finally { process.env.PATH = saved }
   })
 
   test("without bun the phase says so", async () => {

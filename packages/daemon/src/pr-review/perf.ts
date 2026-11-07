@@ -63,7 +63,11 @@ async function pullRequestFiles({ git, directory, base, head }: { git: GitRun; d
   return listed.code === 0 ? { files: listed.out.split("\n").map((line) => line.trim()).filter(Boolean), from } : undefined
 }
 
-const firstLine = (text: string) => text.split("\n").map((line) => line.trim()).filter(Boolean).at(-1)?.slice(0, 200)
+/** The line that says why: an `error:` line when there is one (bun ends an uncaught error with its version, which says nothing), else the last. */
+const firstLine = (text: string) => {
+  const lines = text.split("\n").map((line) => line.trim()).filter((line) => line && !/^Bun v\d+\.\d+\.\d+ \(/.test(line))
+  return (lines.findLast((line) => /^(error|\w*Error)\b/.test(line)) ?? lines.at(-1))?.slice(0, 200)
+}
 
 /** The run's result as an outcome: the markdown and its verdict, or why the table does not exist. */
 export function perfOutcome({ result, from, head, timeoutMs }: { result: PerfRunResult; from: string; head: string; timeoutMs: number }): PerfOutcome {
@@ -130,10 +134,27 @@ export async function measurePerf({ directory, base, head, git, options, fork = 
  * group of its own (a timeout kills the daemon and terminal processes the script started too), with a scratch directory under
  * the reviewer's data and an environment of its own: no tokens, no API keys.
  */
-export const perfAttribProcess: PerfRunner = ({ directory, base, head, cacheDir, tmpDir, timeoutMs }) => new Promise((resolve) => {
+export const perfAttribProcess: PerfRunner = async ({ directory, base, head, cacheDir, tmpDir, timeoutMs }) => {
   const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin", TMPDIR: tmpDir, CI: "1" }
   for (const name of ["HOME", "BUN_INSTALL", "LANG"]) if (process.env[name]) env[name] = process.env[name]!
-  const child = spawn("bun", ["scripts/perf-attrib.ts", "--base", base, "--cand", head, "--markdown", "--cache", cacheDir], { cwd: directory, env, detached: true, stdio: ["ignore", "pipe", "pipe"] })
+  // A review checkout has no dependencies installed, and the script imports the workspace packages: without them it stops at its
+  // first import (exit 1, "Cannot find module"). They are installed from the lockfile, as the script does for each build, and
+  // removed afterwards so the checkout keeps no extra weight on disk.
+  const modules = path.join(directory, "node_modules")
+  const installed = !existsSync(modules)
+  const started = Date.now()
+  try {
+    if (installed) {
+      const install = await runBun({ argv: ["install", "--frozen-lockfile"], directory, env, timeoutMs })
+      if (install.timedOut || install.code !== 0) return { ...install, out: "", err: `dependencies could not be installed (bun install --frozen-lockfile, exit ${install.code ?? "none"}): ${firstLine(install.err) ?? ""}` }
+    }
+    return await runBun({ argv: ["scripts/perf-attrib.ts", "--base", base, "--cand", head, "--markdown", "--cache", cacheDir], directory, env, timeoutMs: Math.max(1_000, timeoutMs - (Date.now() - started)) })
+  } finally { if (installed) rmSync(modules, { recursive: true, force: true }) }
+}
+
+/** One `bun` process in a group of its own, killed with everything it started when the time runs out. */
+const runBun = ({ argv, directory, env, timeoutMs }: { argv: string[]; directory: string; env: Record<string, string>; timeoutMs: number }) => new Promise<PerfRunResult>((resolve) => {
+  const child = spawn("bun", argv, { cwd: directory, env, detached: true, stdio: ["ignore", "pipe", "pipe"] })
   let out = ""
   let err = ""
   let timedOut = false

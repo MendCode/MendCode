@@ -17,6 +17,8 @@ export type ToolContext = {
   readStoredFile?: ((file: string) => Uint8Array | undefined) | undefined
   /** Absolute project root; relative paths resolve against it. */
   cwd: string
+  /** The session whose turn runs this call, for tools that record where their result came from (memory). */
+  sessionId?: string | undefined
   /** Frozen by the engine before permission review; never persisted or sent to clients. */
   environment?: Readonly<NodeJS.ProcessEnv>
   shell?: string | undefined

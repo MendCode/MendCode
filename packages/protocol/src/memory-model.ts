@@ -43,6 +43,9 @@ export const MemoryDetails = lazySchema(() => z.strictObject({
   sensitivity: z.enum(["low", "medium", "high"]).optional(),
   action: MemoryAssistantAction.optional(),
   originDirectory: z.string().max(4096).optional(),
+  /** Where an agent-made memory came from: the session whose turn or tool call produced it, and the engine that ran it (`native`, `claude`, `codex`, `pi`, `acp:<agent>`, or `dream`). */
+  originSessionId: z.string().max(64).optional(),
+  originEngine: z.string().max(40).optional(),
   graphScope: z.enum(["workspace", "group-view"]).optional(),
 }))
 export type MemoryDetails = z.infer<typeof MemoryDetails>

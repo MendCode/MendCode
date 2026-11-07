@@ -58,3 +58,29 @@ export function systemWithLimits(system: string, limits: RunLimits | undefined) 
   const base = limits.systemPrompt ?? system
   return limits.appendSystemPrompt ? `${base}\n\n${limits.appendSystemPrompt}` : base
 }
+
+type AppendBase = (root: string) => string | undefined
+
+/**
+ * The `<mendcode_memory>` block for the engines that run whole sessions in their own process (Claude Code, Codex, pi, ACP agents):
+ * appended once to the system text they start with, with no prompt, so the choice and its order stay put and their cached prefix
+ * holds. A session whose run limits say no memory (a PR review child) gets the base text alone. Kept here, a module the daemon
+ * already loads at start, so it adds no module of its own.
+ */
+export function createMemoryAppender({ block, noMemory }: { block(input: { directory: string; prompt: string; sessionId: SessionId }): string; noMemory(sessionId: SessionId): boolean }) {
+  const forSession = (base: AppendBase, sessionId: SessionId) => (root: string) =>
+    [base(root), noMemory(sessionId) ? "" : block({ directory: root, prompt: "", sessionId })].filter(Boolean).join("\n\n") || undefined
+  return {
+    /** An engine built per session (Codex): the text for that session. */
+    forSession,
+    /** An engine shared by sessions that asks with the session id (Claude Code, pi, ACP agents). */
+    perSession: (base: AppendBase) => (root: string, sessionId: SessionId) => forSession(base, sessionId)(root),
+  }
+}
+
+/** Why memory review skips a session with run limits: a PR review child (no memory) or another scripted or headless run; else undefined. */
+export function reviewIneligible(limits: Pick<RunLimitsStore, "get">, sessionId: SessionId): string | undefined {
+  const own = limits.get(sessionId)
+  if (!own) return undefined
+  return own.noMemory ? "PR review or no-memory run" : "scripted run"
+}

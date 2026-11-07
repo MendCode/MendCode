@@ -74,7 +74,7 @@ export type AcpEngineOptions = {
    * Text for a project directory the agent should know: what MendCode draws that the agent's terminal does not. ACP has no
    * system prompt, so it is a text block before the first prompt of an agent session; the agent's own prompt stays as it is.
    */
-  appendSystem?(cwd: string): string | undefined
+  appendSystem?(cwd: string, sessionId: SessionId): string | undefined
   clock?: Clock
   /** Silence after which a turn is cut. Unset (the default) never cuts one, as the engine's own CLI does not: it times out and
    *  retries its own calls, and a long think can be quiet for minutes. */
@@ -391,7 +391,7 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         return { status: "ok" }
       }
       // A loaded session already holds it in its history.
-      const context = connection.unprompted ? options.appendSystem?.(options.cwdFor(input.sessionId)) : undefined
+      const context = connection.unprompted ? options.appendSystem?.(options.cwdFor(input.sessionId), input.sessionId) : undefined
       connection.unprompted = false
       const prompt = context ? [{ type: "text", text: context }, ...body] : body
       return new Promise<TurnOutcome>((resolve) => {

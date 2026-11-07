@@ -206,7 +206,7 @@ export function createClaudeEngine(options: {
   /** An applied plan: the session moves to the plan's destination agent (the reviewer's choice, else the configured one), as the native engine does. */
   planApplied?(sessionId: SessionId, destination: string | undefined): void
   /** Text added after Claude Code's own system prompt for a project directory: what MendCode draws that Claude Code's terminal does not. */
-  appendSystem?(cwd: string): string | undefined
+  appendSystem?(cwd: string, sessionId: SessionId): string | undefined
   /**
    * What each of Claude Code's own sub-agents is told when it starts (its `SubagentStart` hook): they get a system prompt of
    * their own, without the main one's, so MendCode's tools (the code graph first) would otherwise go unused by them.
@@ -635,7 +635,7 @@ export function createClaudeEngine(options: {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
     // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
-    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })

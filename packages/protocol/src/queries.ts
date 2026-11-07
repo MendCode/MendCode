@@ -660,6 +660,14 @@ const SharedSettings = lazySchema(() => z.strictObject({
   /** Set once the first-run setup page was completed or dismissed. */
   onboarded: z.boolean().optional(),
   memoryGlobalCompactionMaxEntries: z.number().int().min(1).max(10_000).optional(),
+  /** Days an agent proposal may wait in Pending before it is archived (a revision is dropped); default 14, 0 keeps them until decided. */
+  memoryPendingDays: z.number().int().min(0).max(365).optional(),
+  /** Substantive user turns of a session between two memory reviews (default 10 in balanced, 6 in full). */
+  memoryReviewEveryTurns: z.number().int().min(2).max(100).optional(),
+  /** Minutes a session may sit idle before its unreviewed turns are reviewed (default 10). */
+  memoryReviewIdleMinutes: z.number().int().min(1).max(240).optional(),
+  /** Most extractor calls per day; 0 stops automatic extraction (default 12 in balanced, 30 in full). */
+  memoryReviewDailyCap: z.number().int().min(0).max(500).optional(),
   dreamConsolidationPolicy: z.enum(["disabled", "preview", "auto-consolidate"]).optional(),
   memoryProjects: z.record(z.string().min(1).max(4096), MemoryConfigPatch).optional(),
   /** Primary destination after an explicitly applied plan; build when unset or unavailable. */

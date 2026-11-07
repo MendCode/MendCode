@@ -375,6 +375,10 @@ export type TuiProfile = {
   activitySound: "off" | "pulse" | "hum"
   sidebarWidgets: SidebarWidget[]
   rightSidebar: boolean
+  /** Epoch ms of the last visit to /today, the "since" of its summary; 0 when it was never opened (docs/today.md). Not a look setting. */
+  todayLastVisit: number
+  /** Rows pinned with `m` on /today, for one local day (`YYYY-MM-DD`); another day reads as none. At most 50 ids. */
+  todayMarks: { day: string; ids: string[] }
   /** Cells the right bar takes; 0 keeps the automatic 48 (56 from 150 columns). */
   sidebarWidth: number
   /** `border` draws `READY › model › effort › repo › branch › ctx` in the prompt's top rule and leaves the row under it telemetry only. */
@@ -608,6 +612,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   activitySound: "off",
   sidebarWidgets: [],
   rightSidebar: false,
+  todayLastVisit: 0,
+  todayMarks: { day: "", ids: [] },
   sidebarWidth: 0,
   promptStatus: "off",
   sidebar: "auto",
@@ -650,6 +656,14 @@ function oneLine(value: unknown, max: number): string {
 }
 
 const oneOf = <T extends string>(list: readonly T[], value: unknown): T | undefined => list.find((item) => item === value)
+
+/** /today's pins: a local day and up to 50 short ids; anything else reads as none. */
+function todayMarksOf(value: unknown): TuiProfile["todayMarks"] {
+  const source = value && typeof value === "object" ? (value as { day?: unknown; ids?: unknown }) : {}
+  const day = typeof source.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(source.day) ? source.day : ""
+  const ids = day && Array.isArray(source.ids) ? [...new Set(source.ids.filter((id): id is string => typeof id === "string" && id.length > 0 && id.length <= 220))].slice(0, 50) : []
+  return { day, ids }
+}
 
 /** v1's picker folds the legacy fonts into `mendcode`. */
 function fontOf(value: unknown): LogoFont | undefined {
@@ -962,6 +976,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     activitySound: oneOf(["off", "pulse", "hum"] as const, source.activitySound) ?? "off",
     sidebarWidgets: sidebarSpec(source.sidebarWidgets),
     rightSidebar: typeof source.rightSidebar === "boolean" ? source.rightSidebar : false,
+    todayLastVisit: typeof source.todayLastVisit === "number" && Number.isSafeInteger(source.todayLastVisit) && source.todayLastVisit > 0 ? source.todayLastVisit : 0,
+    todayMarks: todayMarksOf(source.todayMarks),
     sidebarWidth: typeof source.sidebarWidth === "number" && Number.isInteger(source.sidebarWidth) && source.sidebarWidth >= 32 && source.sidebarWidth <= 80 ? source.sidebarWidth : 0,
     promptStatus: oneOf(["off", "border"] as const, source.promptStatus) ?? "off",
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,

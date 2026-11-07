@@ -10,6 +10,10 @@ Without configured auto-consolidation, updates and archives of saved memories wa
 
 Dream runs when you ask (`/dream`, `dream.run`). With `dreamAt` set, it also runs once a day for every project with a session updated in the last 24 hours.
 
+The schedule and the recovery only run on real projects: a folder that exists, is not under the operating system's temporary directory or MendCode's own data, sits inside a git repository whose root is a full checkout (not a linked worktree such as a lane, a PR review or a replay, nor a subfolder of one), and has a session with a user turn that is not a loop, workflow or review. Never the home folder or a folder above it, a hidden folder anywhere on the path (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, a repo's `.git`), `~/Library`, a folder named like keys, secrets or credentials, or a folder under a parent tools make for clones (a name ending in `-wt`, `worktrees`). A plain folder outside git is skipped: Dream learns project facts, and it has no project. An explicit tick (`memory dream tick`, `daemon.tick`) answers `skipped` with each left-out folder and its reason; it is also the only way the schedule runs on a development daemon, which never arms its timer. `/dream` on a folder you name always runs.
+
+A scheduled or recovered run for a project with nothing new since its last finished run (no session of the project touched, no memory saved or proposed) is recorded as `skipped` with the note `Nothing new since the last run` and makes no model call. `/dream` always runs.
+
 It yields to foreground work. A project has at most one run at a time.
 
 ### Daemon service and control plane
@@ -72,11 +76,11 @@ A digest is cached and reused while both the session's last event number and the
 
 ## Model and interruptions
 
-Dream uses the `dream` model role (`/model`). Unset, it falls back to the `small` role and then to `main`, so a cheap `small` model runs the nightly pass without more setup.
+Dream uses the `dream` model role (`/model`). Unset, it falls back to the `small` role; with neither set it runs on the main model's cheaper peer of the same provider (Luna for Sol), and on `main` only when there is none.
 
 ### Resume after interruption
 
-A run cut short because the daemon stopped or was killed is closed as `Interrupted` at the next start. It runs again once for its project only while the schedule is on and within 36 hours.
+A run cut short because the daemon stopped or was killed is closed as `Interrupted` at the next start. It runs again once for its project only while the schedule is on and within 36 hours. Every interrupted project is found, not only the latest runs; at most five resume per check (every 15 minutes) so a backlog never starts all at once.
 
 Digests already built are cached, so the second run starts where the first stopped.
 
@@ -92,7 +96,7 @@ Every run stores a report (`DreamRun.report`; `dream.list` carries it for the ne
 | `proposed` | what Dream proposed (new, update, archive), its category and what became of it: `pending`, `saved` or `dropped` |
 | `refused` | what the model suggested and Dream did not take, with the reason: duplicates, invalid items, over the limit, unknown or busy memory ids, unsafe text, dropped by policy |
 | `redactions` | secrets redacted in the evidence and in proposals (a proposal that had one always waits for review) |
-| `model` | calls and input/output tokens; `estimated` when the provider reported none (then characters / 4) |
+| `model` | calls and input/output tokens; `estimated` when the provider reported none (then characters / 4); `name` (the model that answered), `cacheReadTokens` and `costMicros` when the provider reported them, never guessed |
 | `budget` | the limit, the tokens used, and whether the budget stopped the run, with the reason |
 | `evolution` | what [Evolution](evolution.md) did, when it is on |
 | `failures` | why a step failed |
@@ -139,6 +143,7 @@ It checks at the window and at most every 15 minutes before it: a timer can be l
 | `dreamAt` | daily time; off when unset |
 | `dreamMaxTokens` | token cap per run |
 | `evolution` | `off` (default), `observe`, `suggest`, `auto-safe` — see [evolution.md](evolution.md) |
+| `memoryPendingDays` | days a pending agent proposal waits before it is archived; default 14, `0` never — see [memory.md](memory.md#pending-that-nobody-decides) |
 | `memoryPolicies` | per category policy — see [memory.md](memory.md#categories-and-policies) |
 
 ## Ported from v1, and not

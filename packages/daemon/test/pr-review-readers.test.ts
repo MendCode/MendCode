@@ -169,6 +169,20 @@ describe("readGroups", () => {
     expect(read.reasons).toContain("the readers' share of the review's token cap is spent")
   })
 
+  test("a small diff whose share cannot carry one reader call says so: nothing was spent, the review pass reads it", async () => {
+    const kids = readerKids()
+    // The default cap of a small incremental diff (150 000 + 8 per diff token) times the readers' 0.4 is below one call's fixed cost.
+    const small = Math.floor((150_000 + 8 * 2_000) * 0.4)
+    expect(small).toBeLessThan(READER_TURN_OVERHEAD + Math.ceil(batchGroups(groups())[0]!.tokens * 1.5))
+    const read = await readGroups({ groups: groups(), source: { ok: true, model: "claude-haiku", factory: kids.factory }, parallel: 1, allowance: small })
+    expect(read.calls).toBe(0)
+    expect(read.reasons).toContain("the diff is small: one reader call costs more than the readers' share of this review's cap, so the review pass reads it")
+    expect(read.reasons).not.toContain("the readers' share of the review's token cap is spent")
+    // After earlier reads of the same run counted tokens, a shortfall is a spent share again.
+    const later = await readGroups({ groups: groups(), source: { ok: true, model: "claude-haiku", factory: kids.factory }, parallel: 1, allowance: small, spentBefore: 10_000 })
+    expect(later.reasons).toContain("the readers' share of the review's token cap is spent")
+  })
+
   test("the tier sets how many read at once: minimalist 1, balanced 2, full 3", async () => {
     expect(READERS_BY_TIER).toEqual({ minimalist: 1, balanced: 2, full: 3 })
     for (const parallel of [1, 2, 3]) {

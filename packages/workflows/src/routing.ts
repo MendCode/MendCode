@@ -1,7 +1,8 @@
+import { WORKFLOW_PERMISSION_RANK } from "@mendcode/protocol"
 import type { WorkflowPermissionPolicy, WorkflowPlan, WorkflowRun, WorkflowTaskBudget, WorkflowTaskExecution, WorkflowTaskSpec, WorkflowTaskUsage } from "@mendcode/protocol"
 import { agentSpecs } from "./composition"
 
-const RANK = { ask: 0, edits: 1, full: 2 }
+const RANK = WORKFLOW_PERMISSION_RANK
 const intersect = (a?: string[], b?: string[]) => a && b ? a.filter((name) => b.includes(name)) : a ?? b
 
 /** Restrictions compose; an explicit task request can never increase the run's grant. */

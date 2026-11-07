@@ -33,7 +33,7 @@ For bounded single/cascade/critic candidates with immutable review and request/t
 - `mode: read` runs in plan mode (it cannot change anything); `work` gets the workflow's permission. Only one `work` task runs per directory at a time, across all workflows.
 - A task starts when everything it `needs` is done. A failed task skips what depends on it. An interrupted task (daemon restart, dropped turn) goes back to pending, up to three starts.
 - Each start restates the whole task: the objective, the prompt, up to eight results of the tasks it needs (fenced as untrusted), and the rework note after a rejected verification. A task may end with a `TASK_RESULT` block; `status: blocked` fails it.
-- An explicit `--permission`, or the originating session's mode, determines the workflow permission; a plan's `permission` is only the default when neither was supplied. A session cannot grant more than its own mode.
+- An explicit `--permission`, or the originating session's mode, determines the workflow permission; a plan's `permission` is only the default when neither was supplied. A session cannot grant more than its own mode, and a run started from one keeps that mode as it is: a plan session starts a plan run, a smart one a smart run (order plan < ask < smart < edits < full; `--permission` only lowers it). Started without a session, the default permission grants at most ask when it is plan or smart.
 
 ## Completion contract
 

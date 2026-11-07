@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import path from "node:path"
 import type { PrFinding, PrReviewConfigView, PrReviewDashboard, PrReviewerSummary, PrStopReason, PrTokenUsage } from "@mendcode/protocol"
-import { createIndexer } from "@mendcode/codegraph"
+import { cacheName, createIndexer } from "@mendcode/codegraph"
 import { ghProcess, parseRef, type GhRun } from "../pr-watch"
 import { createAccounting, accountingFile } from "./accounting"
 import { createReviewActivity, type ReviewActivityJob } from "./activity"
@@ -500,6 +500,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       await git(["worktree", "remove", "--force", worktree], directory)
       rmSync(worktree, { recursive: true, force: true })
       rmSync(graphCache, { recursive: true, force: true })
+      // The reviewer's session indexed this worktree in the shared graph cache; it goes with the worktree.
+      rmSync(path.join(options.dir, "codegraph", cacheName(worktree)), { force: true })
       await git(["worktree", "prune"], directory)
     }
   }

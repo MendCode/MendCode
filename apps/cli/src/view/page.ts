@@ -9,7 +9,8 @@ import { textWidth, wrap } from "./wrap"
  * then the page's keys). Sections are titled by weight, not boxes. Exactly width × height.
  */
 
-export type PageTab = { key: string; label: string; short?: string }
+/** `key` is the shortcut, drawn dim outside the active tab's background so it never reads as the count; `count` follows the label inside it. */
+export type PageTab = { key: string; label: string; short?: string; count?: number }
 export type Hint = { key: string; label: string }
 export type PageStatus = { label: string; tone?: "live" | "warn" | "error" }
 
@@ -105,7 +106,8 @@ export function tabsRow(tabs: PageTab[], active: number, width: number): Line {
     const row: Line = []
     tabs.forEach((tab, index) => {
       if (index > 0) row.push({ text: " ".repeat(gap) })
-      const text = tab.key ? ` ${tab.key} ${label(tab)} ` : ` ${label(tab)} `
+      if (tab.key) row.push({ text: ` ${tab.key}`, fg: "muted", dim: true })
+      const text = ` ${label(tab)}${tab.count ? ` ${tab.count}` : ""} `
       row.push(index === active ? { text, fg: "text", bg: "element", bold: true } : { text, fg: "muted" })
     })
     return row

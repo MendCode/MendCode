@@ -1104,6 +1104,23 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         if (rows.length) db.query("UPDATE dream_runs SET status = 'failed', ended_at = ?, error = ? WHERE status = 'running'").run(now(), error.slice(0, 500))
         return rows.map((row) => ({ runId: row.id, directory: row.directory }))
       },
+      /**
+       * Directories whose newest run was cut short (its error starts with `errorPrefix`) since `since`, newest first, at most `limit`.
+       * A project with a later run, finished or not, is not listed. Unlike `list` it is not bounded by the last 20 runs overall.
+       */
+      interrupted(input: { since: number; errorPrefix: string; limit?: number }): string[] {
+        return db
+          .query<{ directory: string }, [number, string, number]>(
+            "SELECT directory FROM dream_runs r WHERE status = 'failed' AND started_at >= ?1 AND substr(error, 1, length(?2)) = ?2 AND id = (SELECT MAX(id) FROM dream_runs WHERE directory = r.directory) ORDER BY id DESC LIMIT ?3",
+          )
+          .all(input.since, input.errorPrefix, Math.min(Math.max(input.limit ?? 50, 1), 200))
+          .map((row) => row.directory)
+      },
+      /** The newest run of a project that ended normally (done or skipped), for "is there anything new since". */
+      lastFinished(directory: string): { startedAt: number; endedAt: number } | undefined {
+        const row = db.query<{ started_at: number; ended_at: number | null }, [string]>("SELECT started_at, ended_at FROM dream_runs WHERE directory = ? AND status IN ('done', 'skipped') ORDER BY id DESC LIMIT 1").get(directory)
+        return row ? { startedAt: row.started_at, endedAt: row.ended_at ?? row.started_at } : undefined
+      },
       /** One run with its report. */
       get(runId: number): DreamRun | undefined {
         const row = db.query<DreamRunRow, [number]>("SELECT * FROM dream_runs WHERE id = ?").get(runId)
@@ -1124,6 +1141,13 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       },
       set(key: string, value: string) {
         db.query("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value.slice(0, 500))
+      },
+      delete(key: string) {
+        db.query("DELETE FROM meta WHERE key = ?").run(key)
+      },
+      /** Keys starting with `prefix`, at most `limit` of them (the key is the primary key, so this is an index range). */
+      list(prefix: string, limit = 1_000): Array<{ key: string; value: string }> {
+        return db.query<{ key: string; value: string }, [string, string, number]>("SELECT key, value FROM meta WHERE key >= ? AND key < ? ORDER BY key LIMIT ?").all(prefix, `${prefix}￿`, limit)
       },
     },
     limitCheckpoints: createLimitCheckpoints(db, codec),
@@ -1308,6 +1332,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     tasks: parity.tasks,
     continuity,
     extraction: parity.extraction,
+    memoryReviews: parity.reviews,
     recall,
     /** How a session spent its time and tokens: turns, days, hours, models, tools, sub-agents, approvals. */
     sessionStats,

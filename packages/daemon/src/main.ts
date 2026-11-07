@@ -7,8 +7,8 @@ import { remoteInstructions } from "./remote-instructions"
 import { createWebfetchResources } from "./webfetch-resources"
 import { installNetworkPolicy } from "./network-policy"
 import { sweepHostMcpDirs } from "./host-mcp-sweep"
-import { systemWithLimits } from "./run-limits"
-import { memorySettings } from "./memory-config"
+import { createMemoryAppender, systemWithLimits } from "./run-limits"
+import { fullMemoryTier, memorySettings } from "./memory-config"
 import packageJson from "../../../apps/cli/package.json"
 import { otlpFromEnvironment } from "./tracing"
 import { PROGRAM_NAME } from "@mendcode/program"
@@ -116,6 +116,7 @@ import { createCacheTtl } from "./cache-ttl"
 import { readUsageProfile } from "./usage-profile"
 import { windowOverride } from "./session-context-window"
 import { memoryExtractionPrompt } from "./memory-extract-prompt"
+import { wellFormed } from "./well-formed"
 import { createResumeSource } from "./memory-resume"
 import type { ModelChoice, ModelInfo } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, findModel, modelContextOf, setBuildChannel } from "@mendcode/protocol"
@@ -598,6 +599,12 @@ export const daemon = await startDaemon({
         return ownPlan && featureOn(store.settings.get(), "visible_plan", { safeMode }) ? `${text}\n${visiblePlanText().harness}` : text
       }
     }
+    // Claude Code, Codex, pi and ACP agents take the same `<mendcode_memory>` block as a native session, appended once to the system text their process
+    // starts with (no prompt, so the choice and its order stay put and their cached prefix holds). Their `memory` tool still searches by prompt.
+    const memoryAppender = createMemoryAppender({ block: (input) => memorySelector.block(input), noMemory: (sessionId) => runLimits.get(sessionId)?.noMemory === true })
+    const withMemory = memoryAppender.forSession
+    /** The engines that start one process per session and ask for its appended text with the session id (Claude Code, pi, ACP agents). */
+    const withMemoryFor = memoryAppender.perSession
     const transcripts = createSessionTranscripts(dir, Date.now, store.writeStoredFile)
     const configured = engineName === "native"
       ? withAcpEngine({
@@ -614,7 +621,7 @@ export const daemon = await startDaemon({
               onEfforts: acpAgents.learnEfforts,
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
               environment: credentialsFor,
-              appendSystem: await harnessSystem(),
+              appendSystem: withMemoryFor(await harnessSystem()),
               hostServers: (sessionId) => harness.servers(sessionId),
               waitingForMcp: harness.waiting,
               bindings: {
@@ -635,7 +642,8 @@ export const daemon = await startDaemon({
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
             const { createClaudeEngine, claudeCacheEnv, claudeRunLimits } = await import("@mendcode/engine-claude")
-            const appendSystem = await harnessSystem()
+            const harnessText = await harnessSystem()
+            const appendSystem = withMemoryFor(harnessText)
             const engine = createClaudeEngine({
               bin: claudeBin,
               clock,
@@ -933,7 +941,7 @@ export const daemon = await startDaemon({
           // A PR review child or fix session: none of the checkout's AGENTS.md, `.codex/` config, hooks, rules or skills; a review child neither memories nor skills.
           runLimits: runLimits.get(turn.sessionId),
           replyLanguage,
-          appendSystem: await harnessSystem(),
+          appendSystem: withMemory(await harnessSystem(), turn.sessionId),
           ...(hostServers.length ? { hostServers, hostInstructions, waitingForMcp: harness.waiting } : {}),
           storeImage: async (bytes, mime, sessionId) => {
             const ref = store.putBlob(bytes, mime)
@@ -959,7 +967,7 @@ export const daemon = await startDaemon({
           cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
           environment: credentialsFor,
           // pi has no todo or plan tool of its own: it is not told of a pinned list.
-          appendSystem: await harnessSystem(false),
+          appendSystem: withMemoryFor(await harnessSystem(false)),
           replyLanguage,
           projectTrusted: (root) => (store.settings.get().trustedToolDirs ?? []).some((entry) => canonicalDir(entry) === canonicalDir(root)),
           sandbox: sessionSandbox,
@@ -1025,8 +1033,8 @@ export const daemon = await startDaemon({
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
-      const fullMemory = featureOn(extractionSettings(), "memory_auto")
-      const result = await dreamComplete(memoryExtractionPrompt(job.text, fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
+      const fullMemory = fullMemoryTier(extractionSettings())
+      const result = await dreamComplete(memoryExtractionPrompt(wellFormed(job.text), fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
       if (typeof result !== "string" && result.usage) onUsage?.(result.usage)
       const text = typeof result === "string" ? result : result.text
       const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""))

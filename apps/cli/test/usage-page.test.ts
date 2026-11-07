@@ -199,7 +199,7 @@ describe("usage page layout", () => {
     expect(text(lines[0]!)).toContain("Home/End Edges")
     expect(text(lines[1]!)).toContain("global stats · daily · 365d")
     expect(text(lines[2]!)).toContain("6 Sessions")
-    expect(lines[2]!.find((span) => span.text === " 1 Overview ")).toMatchObject({ bg: "element" })
+    expect(lines[2]!.find((span) => span.text === " Overview ")).toMatchObject({ bg: "element" })
     expect(joined(lines)).not.toContain("ada@example.com")
     expect(text(render({ state: state({ tab: 5 }), width: 220 })[0]!)).toContain("Enter Open")
   })

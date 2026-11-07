@@ -427,7 +427,7 @@ describe("profiles page: what a profile overrides", () => {
 
 describe("profiles tabs", () => {
   test("row two holds the tabs in the order What it takes over | Installed | Marketplace, the active one marked", () => {
-    for (const [state, active] of [[createPackagesPageState(), "2 Installed"], [{ selected: 0, overrides: { key: "user:toolbox", selected: 0 } }, "1 What it takes over"]] as const) {
+    for (const [state, active] of [[createPackagesPageState(), "Installed"], [{ selected: 0, overrides: { key: "user:toolbox", selected: 0 } }, "What it takes over"]] as const) {
       const lines = render(state as PackagesPageState, 160, 40)
       const row = plain(lines)[1]!
       expect(row.indexOf("1 What it takes over")).toBeLessThan(row.indexOf("2 Installed"))

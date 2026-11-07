@@ -186,6 +186,20 @@ export function memoryCategoryId(category: string): MemoryCategoryId {
   return MEMORY_CATEGORY_IDS.find((id) => id === key) ?? "other"
 }
 
+/**
+ * A category a model wrote, checked against the catalogue before it is stored. Case, v1's `project.`/`user.` prefixes,
+ * a singular form and wrapping words (`category conventions`) are forgiven when exactly one known id is meant; empty
+ * means none (`other`). Anything else is refused with the list, so the model can call again with a known id.
+ */
+export function checkMemoryCategory(category: string | undefined): { category: string } | { error: string } {
+  const raw = (category ?? "").trim().toLowerCase()
+  if (!raw) return { category: "" }
+  const words = raw.replace(/^(?:project|user)\./, "").split(/[^a-z]+/).filter(Boolean)
+  const meant = new Set(MEMORY_CATEGORY_IDS.filter((id) => words.some((word) => word === id || `${word}s` === id)))
+  if (meant.size === 1) return { category: [...meant][0]! }
+  return { error: `Unknown memory category "${category!.trim().slice(0, 64)}"; use one of: ${MEMORY_CATEGORY_IDS.join(", ")}` }
+}
+
 /** The policy for an agent proposal in `category`: the user's override, else the category's default. */
 export function memoryPolicyFor(category: string, overrides?: Partial<Record<string, MemoryPolicyValue>>): MemoryPolicyValue {
   const id = memoryCategoryId(category)

@@ -47,3 +47,15 @@ describe("remember tool", () => {
     expect(proposed[1]).toEqual({ scope: "user", directory: "/repo", text: "Prefers terse answers", category: "" })
   })
 })
+
+describe("memory writes name their session", () => {
+  test("the remember and memory tools hand the calling session to the port", async () => {
+    const seen: Array<string | undefined> = []
+    const port = { request: (_directory: string, _input: unknown, sessionId?: string) => (seen.push(sessionId), { memory: undefined, written: false }) }
+    const { createMemoryTool } = await import("../src")
+    const context = { cwd: "/repo", sessionId: "ses_abc", signal: new AbortController().signal }
+    await createRememberTool(() => "pending", port).execute({ text: "Deploy with fly deploy", scope: "project" }, context)
+    await createMemoryTool(port).execute({ action: "add", text: "Another fact" }, context)
+    expect(seen).toEqual(["ses_abc", "ses_abc"])
+  })
+})
