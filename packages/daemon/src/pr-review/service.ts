@@ -354,14 +354,14 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   /** Records one model turn of `job`: in the accounting ledger (per PR head and attempt) and on the job. Never throws. */
   const accountFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["account"] => job ? ({ purpose, tokens, sessionId }) => {
     try { accounting.record({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, input: tokens.input, output: tokens.output, cached: tokens.cached, unreported: tokens.unreported, ...(sessionId ? { sessionId, parentSessionId: job.sessionId } : {}) }) } catch { /* a bad report is dropped, the review goes on */ }
-    try { ledger.addTokens(job.id, tokens) } catch { /* the job may have been pruned */ }
+    try { ledger.addTokens(job.id, tokens, purpose === "read") } catch { /* the job may have been pruned */ }
     try { options.reviewUsage?.({ directory: job.directory, childSessionId: sessionId, tokens }) } catch { /* bookkeeping never stops a review */ }
   } : undefined
   /** The call `job` starts, kept on disk until it ends: one a killed daemon never ended is accounted as unknown at the next start. */
   const callingFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["calling"] => job ? ({ purpose, sessionId }) => {
     const id = accounting.begin({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, ...(sessionId ? { sessionId } : {}) })
     // The phase /reviews shows while the job runs: the review pass is `analysis`, the verify passes (and a resume's) `corroboration`.
-    try { ledger.checkpoint(job.id, { phase: purpose === "review" ? "analysis" : "corroboration" }) } catch { /* the job may have been pruned */ }
+    try { ledger.checkpoint(job.id, { phase: purpose === "review" ? "analysis" : purpose === "read" ? "readers" : "corroboration" }) } catch { /* the job may have been pruned */ }
     return () => accounting.end(id)
   } : undefined
   // Calls a previous process left open died with it: accounted now, unknown spend as unknown, plus what their child sessions recorded.

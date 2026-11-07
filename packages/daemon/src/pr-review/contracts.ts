@@ -3,6 +3,9 @@ import type { PrReviewControl } from "@mendcode/protocol"
 import type { z } from "zod"
 import type { ReviewConfig } from "./config"
 
+/** A cheap reader's structured read of one changed code file: what changed and the risk spots (RIGHT-side line ranges) a reviewer should open. */
+export type CodeRead = { path: string; changed: string; risks: Array<{ start: number; end: number; kind: string; why: string }>; nothingRisky: boolean }
+
 /**
  * The review platform's shared contracts (docs/pr-review.md): the shapes that cross module boundaries between the job ledger,
  * the providers, the routing, the memory context, the fix sessions, the phases, the stacks, the budget and the TUI page. Each
@@ -42,7 +45,7 @@ export type JobCheckpoint = {
   /** The template's own sections the review pass wrote (`template.sections` with a prompt), so a resumed review still renders them. */
   sections?: Record<string, string> | undefined
   /** The readers' summaries of this head (readers.ts), so a resume of the same head does not pay for them again. */
-  readers?: Array<{ id: string; paths: string[]; text: string; by: string }> | undefined
+  readers?: Array<{ id: string; paths: string[]; text: string; by: string; code?: CodeRead[] | undefined }> | undefined
 }
 
 export type ReviewJob = {
@@ -75,6 +78,8 @@ export type ReviewJob = {
   control?: "reviewer" | "user" | undefined
   checkpoint: JobCheckpoint
   tokens: PrTokenUsage
+  /** The part of `tokens` spent by cheap readers (purpose `read`). */
+  readTokens?: PrTokenUsage | undefined
   stop?: PrStopReason | undefined
   error?: string | undefined
   /** Failing on transient errors (the network, the forge's servers, a sleep) since `since`, `waits` retries so far: no attempt spent. */
@@ -111,7 +116,8 @@ export interface JobLedger {
   /** Throws `RangeError` for a transition `JOB_TRANSITIONS` does not allow. */
   transition(id: string, state: JobState, patch?: Partial<Omit<ReviewJob, "id" | "state">>): ReviewJob
   checkpoint(id: string, patch: Partial<JobCheckpoint>): ReviewJob
-  addTokens(id: string, tokens: PrTokenUsage): ReviewJob
+  /** `read`: the tokens are a cheap reader's; they count in `tokens` too and are also kept apart in `readTokens`. */
+  addTokens(id: string, tokens: PrTokenUsage, read?: boolean): ReviewJob
   list(filter?: { repo?: string; number?: number; states?: readonly JobState[]; reviewer?: string }): ReviewJob[]
   /** Jobs that were `running`, `fixing` or `validating` when the daemon stopped: back to `pending` with `trigger` kept and `attempts` + 1. */
   recover(): ReviewJob[]
@@ -347,12 +353,12 @@ export type RunPlatformInput = {
   memory?: ((query: { title: string; files: string[] }) => Promise<ReviewMemoryContext | undefined>) | undefined
   contextWindow?: number | undefined
   /** One call per model turn of the run (accounting.ts `record`); `sessionId`: the child session the turn ran in, when it has one. */
-  account?: ((entry: { purpose: "review" | "verify" | "fix" | "explain" | "resume"; tokens: PrTokenUsage; sessionId?: string | undefined }) => void) | undefined
+  account?: ((entry: { purpose: "review" | "verify" | "fix" | "explain" | "resume" | "read"; tokens: PrTokenUsage; sessionId?: string | undefined }) => void) | undefined
   /**
    * Called as a model turn starts (accounting.ts `begin`, kept on disk); the function it returns is called when the turn ends,
    * whatever way. A turn the daemon did not see end (it was killed mid-call) is accounted at the next start as unknown.
    */
-  calling?: ((call: { purpose: "review" | "verify" | "fix" | "explain" | "resume"; sessionId?: string | undefined }) => () => void) | undefined
+  calling?: ((call: { purpose: "review" | "verify" | "fix" | "explain" | "resume" | "read"; sessionId?: string | undefined }) => () => void) | undefined
   /** A stacked PR: its own range starts at the parent's head; the parent's confirmed findings are not repeated. */
   stack?: { base: string; parentFindings: PrFinding[]; parent: number } | undefined
   /** Publishing identity and the guard against stale results (publish.ts). */

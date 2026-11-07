@@ -33,6 +33,7 @@ language, restarts that never interrupt or leave sessions held, prompt history t
 
 ### Changed
 
+- The PR reviewer has cheap readers read all the changed code first and sends your main model their summaries and the risky hunks instead of the whole diff, so reviews use far fewer main-model tokens; `readers: { code: overflow }` in `.mendcode/review.yaml` brings back the old behaviour, and `/reviews` shows what the readers used.
 - MendCode's license is now Apache 2.0: still open source, and copies and forks must keep the notice that credits MendCode and its author. Earlier versions keep their MIT license. The MendCode name and logo are not licensed to forks.
 - MendAscii takes the theme's colors: under the default Ink theme it is a black and white robot with pink cheeks; the Mend theme and the others keep the mint and teal one.
 - Every notice is now one short row in words with the same look and place: a severity mark, the message and what to do next, with `F4 details` for the full text (`/tier` says the tier, its prompt and how many features are on, instead of a list of flag ids); errors stay until your next prompt or command.

@@ -172,6 +172,8 @@ export const PrJobSummary = lazySchema(() => z.strictObject({
   /** The pull request's GitHub state, when it was read (GitHub only; `status` with `pullRequests`). */
   pullRequest: PrPullRequestState.optional(),
   tokens: PrTokenUsage,
+  /** The part of `tokens` the cheap readers spent (the rest is the review and verify passes' model); absent when no reader ran. */
+  readTokens: PrTokenUsage.optional(),
   stop: PrStopReason.optional(),
   error: z.string().max(600).optional(),
   stack: z.strictObject({ parent: z.number().int().positive().optional(), children: z.array(z.number().int().positive()).max(50), depth: z.number().int().nonnegative() }).optional(),

@@ -151,13 +151,16 @@ export const ReviewConfig = z.strictObject({
    * Data and generated files (triage.ts) go to readers on a cheap model instead of the review pass whole (readers.ts). `parallel`:
    * readers at once (unset: by the install tier, minimalist 1, balanced 2, full 3). `model`: a cheap model of the reviewer's own
    * provider (reader-models.ts); one off that list is refused with a note and the automatic pick is used. `enabled: false` sends
-   * every diff to the review pass as before.
+   * every diff to the review pass as before. `code`: `all` (the default) has the readers read every changed code file and the review
+   * pass gets their summaries and the hunks of the risk spots they name; `overflow` keeps the earlier behaviour, the review pass
+   * reads the code itself and readers take only data files and code too large for it.
    */
   readers: z.strictObject({
     enabled: z.boolean().default(true),
     parallel: z.number().int().min(1).max(8).optional(),
     model: z.string().min(1).max(160).optional(),
-  }).default({ enabled: true }),
+    code: z.enum(["all", "overflow"]).default("all"),
+  }).default({ enabled: true, code: "all" }),
 })
 export type ReviewConfig = z.infer<typeof ReviewConfig>
 export const DEFAULT_REVIEW_CONFIG: ReviewConfig = ReviewConfig.parse({})

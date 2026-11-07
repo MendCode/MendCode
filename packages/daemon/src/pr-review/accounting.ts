@@ -16,7 +16,8 @@ import { addUsage, countedTokens } from "./budget"
  * every call even after its entry is trimmed. A damaged file is set aside as `accounting.json.damaged` and starts empty.
  */
 
-export const ACCOUNTING_PURPOSES = ["review", "verify", "fix", "explain", "resume"] as const
+/** `read`: a cheap reader's turn (readers.ts); files written before it existed have none and still load. */
+export const ACCOUNTING_PURPOSES = ["review", "verify", "fix", "explain", "resume", "read"] as const
 export type AccountingPurpose = (typeof ACCOUNTING_PURPOSES)[number]
 /** One pull request head as one reviewer sees it: what `tokens_per_pr` counts against. */
 export type AccountingKey = { repo: string; number: number; head: string; reviewer: string }

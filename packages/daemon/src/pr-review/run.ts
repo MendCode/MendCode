@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import type { PrFinding, PrStopReason, PrTokenUsage, Tier } from "@mendcode/protocol"
-import { groupFiles, READER_SHARE, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
+import { groupFiles, READER_SHARE, READER_SHARE_ALL, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
 import { cheapReaderList, isCheapReaderModel } from "./reader-models"
 import type { Graph } from "@mendcode/codegraph"
 import { failureStop, budgetPolicy, scaledBudget, stopText } from "./budget"
@@ -195,8 +195,8 @@ type Calling = RunPlatformInput["calling"]
 export function meteredSessions({ factory, account, calling, resuming, failures, language }: { factory: ReviewSessionFactory; account: Account; calling?: Calling; resuming: boolean; failures: ReviewTurnError[]; language?: string | undefined }): ReviewSessionFactory {
   return async ({ purpose }) => {
     const session = await factory({ purpose, ...(language ? { language } : {}) })
-    // A reader's turn is review-pass work in the ledger (its child session tells /usage which model ran it).
-    const label = purpose === "read" ? "review" : resuming && purpose === "verify" ? "resume" : purpose
+    // A reader's turn is its own purpose in the ledger, so a cheap model's tokens show apart from the review pass's (its child session tells /usage which model ran it).
+    const label = purpose === "read" ? "read" : resuming && purpose === "verify" ? "resume" : purpose
     const id = (session as { id?: unknown }).id
     const sessionId = typeof id === "string" && id.length <= 120 ? id : undefined
     const of = sessionId ? { sessionId } : {}
@@ -406,8 +406,9 @@ async function baseAttributes(git: GitRun, directory: string, ref: string): Prom
  */
 function runReaders({ input, config, resume }: { input: RunPrReviewInput; config: ReviewConfig; resume: ReviewCheckpoint | undefined }) {
   const parallel = config.readers.parallel ?? READERS_BY_TIER[input.readers?.tier ?? "balanced"]
+  const share = config.readers.code === "all" ? READER_SHARE_ALL : READER_SHARE
   const notes: string[] = []
-  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, reasons: [] }
+  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, codeRead: 0, dropped: 0, reasons: [] }
   const kept: ReaderSummary[] = []
   let reused = 0
   let source: ReaderSource | undefined
@@ -421,27 +422,31 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
     return source
   }
-  const read: ContextReaders = async ({ data, cut, diffTokens, load }) => {
-    const groups = groupFiles({ data, cut })
+  const read: ContextReaders = async ({ data, cut, code, diffTokens, load }) => {
+    // Code is read only by a model: without a cheap reader model the review pass reads it, as before, and the note says why once.
+    const chosenForCode = code?.length ? pick() : undefined
+    if (chosenForCode && !chosenForCode.ok) notes.push(`readers.code is all, but ${chosenForCode.reason}; the review pass reads the code itself.`)
+    const groups = groupFiles({ data, cut, code: chosenForCode?.ok ? code : undefined })
     const cached = resume?.readers ?? []
-    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.by !== "not read" && (group.kind !== "code" || summary.by !== "local") && summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
+    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.by !== "not read" && summary.by !== "raw" && (group.reason !== "code" || !!summary.code) && (group.kind !== "code" || summary.by !== "local") && summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
     const out: ReaderSummary[] = []
     const fresh = groups.filter((group) => { const hit = covered(group); if (hit) { out.push(hit); reused += hit.paths.length } return !hit })
     if (fresh.length) {
       const cap = scaledBudget(config.budget, diffTokens)
-      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
+      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * share) - spent(total.tokens)
       const chosen = pick()
       tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
       const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance, load, directory: input.directory })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
-      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal; total.codeRead += result.codeRead; total.dropped += result.dropped
+      if (result.raw?.length) (total.raw ??= []).push(...result.raw)
       if (result.notRead?.length) (total.notRead ??= []).push(...result.notRead)
       total.model ??= result.model
       for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
     }
     // Job checkpoints already allow at most 500 summaries. Unread markers are rebuilt, not stored as successful coverage.
-    kept.push(...out.filter((summary) => summary.by !== "not read").slice(0, Math.max(0, 500 - kept.length)))
+    kept.push(...out.filter((summary) => summary.by !== "not read" && summary.by !== "raw").slice(0, Math.max(0, 500 - kept.length)))
     return out
   }
   const note = () => [
@@ -449,7 +454,8 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     readersNote(total, parallel),
     reused ? `Readers: the summaries of ${reused.toLocaleString("en-US")} file${reused === 1 ? "" : "s"} were kept from this head's earlier run, not read again.` : undefined,
   ].filter((line): line is string => !!line)
-  return { read, note, spent: () => spent(total.tokens), summaries: () => kept }
+  /** Whether a model read changed code this run: only then is the main pass held to the share the readers leave it. */
+  return { read, note, share, spent: () => spent(total.tokens), summaries: () => kept, readCode: () => total.codeRead > 0 }
 }
 
 export async function runPrReview(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
@@ -495,8 +501,8 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     const readers = config.readers.enabled && input.readers?.tier !== "minimalist" ? runReaders({ input, config, resume }) : undefined
     const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
     // An oversized diff must also fit the pass's existing cap after readers and verification. Leave room for summaries/briefs.
-    const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - READER_SHARE) * REVIEW_PASS_SHARE * 0.9 * 4)
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes })
+    const mainBytes = budget.tokensPerPr === undefined ? undefined : Math.floor(budget.tokensPerPr * (1 - (readers?.share ?? READER_SHARE)) * REVIEW_PASS_SHARE * 0.9 * 4)
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes, mainBytes, readCode: config.readers.code === "all" && !!input.readers })
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
@@ -517,7 +523,8 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     // The diffs readers read count too, so the cap is the same with or without them; what the readers counted comes off it.
     const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
     const cap = scaledBudget(config.budget, diffTokens)
-    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, cap - (readers?.spent() ?? 0))
+    // Readers that read the code carry most of the reading, so the review and verify passes are held to what the readers' share leaves them, not to every token the readers did not use.
+    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, readers?.readCode() ? Math.min(cap - readers.spent(), Math.floor(cap * (1 - readers.share))) : cap - (readers?.spent() ?? 0))
     const engineConfig = { ...engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory }), ...(input.progress ? { onVerify: (candidates: number) => tell(input, { phase: "corroboration", label: `Verifying ${plural(candidates, "candidate")}` }) } : {}) }
     // A resume that already has the review pass goes on with what it kept (its verify step says so); otherwise the pass starts here.
     if (!resume?.result) tell(input, { phase: "analysis", label: "Analysis", detail: `${plural(context.files.length, "file")}${incremental ? " · incremental" : ""}` })
