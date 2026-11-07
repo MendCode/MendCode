@@ -184,7 +184,7 @@ export function createRememberTool(propose: (entry: { scope: "user" | "project";
       category: z.string().max(64).optional().describe("Short label, e.g. commands, conventions, preferences, architecture, stack, security"),
     }),
     async execute(args, context) {
-      if (port) return memoryResult(port.request(context.cwd, { ...args, action: "add" }), "remember")
+      if (port) return memoryResult(port.request(context.cwd, { ...args, action: "add" }, context.sessionId), "remember")
       const result = propose({ scope: args.scope, directory: context.cwd, text: args.text, category: args.category ?? "" })
       const outcome = typeof result === "string" ? "pending" : result.outcome
       const output = outcome === "saved" ? "Saved: this category is set to save automatically." : outcome === "dropped" ? "Not kept: the user's policy for this category drops proposals." : "Proposed; the user will review it in /memory."
@@ -193,7 +193,7 @@ export function createRememberTool(propose: (entry: { scope: "user" | "project";
   })
 }
 
-export type MemoryModelPort = { request(directory: string, input: ModelInput): Record<string, unknown> }
+export type MemoryModelPort = { request(directory: string, input: ModelInput, sessionId?: string): Record<string, unknown> }
 
 function memoryResult(result: Record<string, unknown>, title: string) {
   const memory = result.memory as MemoryEntry | undefined
@@ -213,7 +213,7 @@ export function createMemoryTool(port: MemoryModelPort) {
     args: MemoryModelInput.extend({ action: z.enum(["status", "categories", "list", "search", "context", "add", "update", "delete", "propose"]) }),
     async execute(args, context) {
       try {
-        const result = port.request(context.cwd, args.action === "propose" ? { ...args, action: "add" } : args)
+        const result = port.request(context.cwd, args.action === "propose" ? { ...args, action: "add" } : args, context.sessionId)
         return memoryResult(result, `memory ${args.action}`)
       } catch (error) {
         return { output: error instanceof Error ? error.message : String(error), title: `memory ${args.action}`, truncated: false, isError: true }
@@ -223,7 +223,7 @@ export function createMemoryTool(port: MemoryModelPort) {
 }
 
 export type MemoryGraphPort = {
-  request?(directory: string, input: ModelInput): Record<string, unknown>
+  request?(directory: string, input: ModelInput, sessionId?: string): Record<string, unknown>
   graph(directory: string): MemoryGraphReport
   link(input: { from: MemoryId; to: MemoryId; kind: MemoryLinkKind }): MemoryLink | undefined
 }
@@ -256,7 +256,7 @@ export function createMemoryGraphTool(port: MemoryGraphPort) {
       if (args.action === "upsert_fact" || args.action === "validate" || args.action === "link" && port.request) {
         try {
           if (!port.request) throw new Error("Memory model API unavailable")
-          const result = port.request(context.cwd, MemoryModelInput.parse(args))
+          const result = port.request(context.cwd, MemoryModelInput.parse(args), context.sessionId)
           const link = result.link as MemoryLink | undefined
           const output = memoryResult(result, `memory_graph ${args.action}`)
           return { ...output, ...(link ? { output: `linked ${link.from} ${link.kind} ${link.to}` } : {}), meta: { ...output.meta, graphSnapshot: JSON.stringify(result), memoryAction: args.action } }

@@ -35,6 +35,8 @@ export type MemoryPageState = {
   /** Index of the first visible entry; the renderer moves it further when the selection would be off screen. */
   scroll: number
   confirmDelete: boolean
+  /** Set after `A` or `X` on Pending: the next `y` (or the same key) approves or rejects every proposal the list shows. */
+  confirmBatch?: "approve" | "reject" | undefined
   pick?: MemoryPick
   workspace: WorkspaceSelection
   sharing: SharingState
@@ -69,6 +71,7 @@ export type MemoryPageAction = SharingAction | ExtractionAction
   | { type: "close" }
   | { type: "approve"; memoryId: string }
   | { type: "reject"; memoryId: string }
+  | { type: "batch"; decision: "approve" | "reject"; memoryIds: string[] }
   | { type: "restore"; memoryId: string }
   | { type: "delete"; memoryId: string }
   | { type: "edit"; memoryId: string; text: string }
@@ -98,7 +101,7 @@ const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e"])
 
 const PICK_HINTS = "↑↓ choose · 1-9 pick · enter set · esc cancel"
 const HINTS: Record<MemoryPageTab, string> = {
-  pending: "a approve · x reject · e edit · c category · d delete · / search · w projects · tab/1-9 tabs · esc back",
+  pending: "a approve · x reject · A/X all shown · e edit · c category · d delete · / search · w projects · tab/1-9 tabs · esc back",
   saved: "p pin · x archive · e edit · c category · s scope · d delete · / search · w projects · tab/1-9 tabs · esc back",
   archived: "r restore · e edit · c category · d delete · / search · w projects · tab/1-9 tabs · esc back",
   dream: dreamTabHints({ selected: 0 }),
@@ -257,7 +260,7 @@ export function memoryPageKey(
     const delta = UP.has(key) || key === "k" ? -1 : DOWN.has(key) || key === "j" ? 1 : 0
     return { state: { ...state, workspace: { ...state.workspace, picking: Math.max(0, Math.min(index + delta, options.length - 1)) } }, action: NONE }
   }
-  const typing = state.filtering || state.pick || state.confirmDelete || state.dream.typing !== undefined || state.extraction.editing !== undefined || state.sharing.confirmation !== undefined || state.sharing.busy
+  const typing = state.filtering || state.pick || state.confirmDelete || state.confirmBatch || state.dream.typing !== undefined || state.extraction.editing !== undefined || state.sharing.confirmation !== undefined || state.sharing.busy
   if (key === "w" && !typing) return { state: { ...state, workspace: { ...state.workspace, picking: Math.max(0, options.findIndex((option) => option.view === state.workspace.view && (option.view !== "project" || ("root" in option && option.root === (state.workspace.root ?? data?.currentDirectory))))) } }, action: NONE }
   if (state.tab === "sharing") {
     const switched = state.sharing.confirmation === undefined && !state.sharing.busy ? tabSwitch(state, key) : undefined
@@ -308,6 +311,11 @@ export function memoryPageKey(
     return { state, action: NONE }
   }
 
+  if (state.confirmBatch) {
+    const decision = state.confirmBatch
+    if ((key === "y" || key === (decision === "approve" ? "A" : "X")) && visible.length) return stay({ confirmBatch: undefined }, { type: "batch", decision, memoryIds: visible.map((memory) => memory.memoryId) })
+    return stay({ confirmBatch: undefined })
+  }
   if (state.confirmDelete) {
     if ((key === "d" || key === "y") && target) return stay({ confirmDelete: false }, { type: "delete", memoryId: target.memoryId })
     return stay({ confirmDelete: false })
@@ -343,6 +351,10 @@ export function memoryPageKey(
       return go(selected + 1)
     case "a":
       return tab === "pending" && target ? { state, action: { type: "approve", memoryId: target.memoryId } } : { state, action: NONE }
+    case "A":
+    case "X":
+      if (tab !== "pending" || visible.length < 2) return { state, action: NONE }
+      return stay({ confirmBatch: key === "A" ? "approve" : "reject" })
     case "x":
       return tab !== "archived" && target ? { state, action: { type: "reject", memoryId: target.memoryId } } : { state, action: NONE }
     case "r":
@@ -535,7 +547,7 @@ export function renderMemoryPage(input: {
   const counts = { pending: 0, saved: 0, archived: 0 } as Record<MemoryTab, number>
   for (const tab of TABS) counts[tab] = memories.filter((m) => m.status === tab).length
 
-  const status: DeckStatus | undefined = state.confirmDelete ? { label: "Confirm", tone: "warn" } : undefined
+  const status: DeckStatus | undefined = state.confirmDelete || state.confirmBatch ? { label: "Confirm", tone: "warn" } : undefined
   const workspaceLabel = state.workspace.view === "all" ? "All projects" : state.workspace.view === "user" ? "User memories" : directory ? `dir ${shortenMiddle(directory, 42)}` : "global"
   const subtitle = ["pending", "saved", "archived", "graph", "sharing"].includes(state.tab) ? workspaceLabel : directory ? `dir ${shortenMiddle(directory, 42)}` : "global"
   const summaryRoom = width - 2 - textWidth(`Memory · ${subtitle}`) - 1 - (status ? textWidth(status.label) + 3 : 0)
@@ -589,6 +601,7 @@ export function renderMemoryPage(input: {
   const headRows: Line[] = []
   const searchRow = pageSearchRow({ open: state.filtering, query: state.filter }, visible.length, listWidth)
   if (searchRow) headRows.push(searchRow)
+  if (state.confirmBatch) headRows.push(clampLine([{ text: `${state.confirmBatch} all ${visible.length} shown? y or ${state.confirmBatch === "approve" ? "A" : "X"} confirm · any other key cancels`, fg: "error", bold: true }], listWidth))
   if (state.confirmDelete) headRows.push(clampLine([{ text: "delete this memory? d/y confirm · any other key cancels", fg: "error", bold: true }], listWidth))
   if (state.pick) headRows.push(...pickRows({ pick: state.pick, target: active, categories: input.data?.categories, width: listWidth, max: Math.max(2, Math.min(7, room - 6)) }))
   if (headRows.length) headRows.push([])

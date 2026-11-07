@@ -151,3 +151,36 @@ test("status queue count includes jobs outside the bounded display list", () => 
   expect(h.worker.list()).toHaveLength(80)
   expect(h.worker.status()).toMatchObject({ queue: 100, lastRun: "never", lastError: "Extractor not configured" })
 })
+
+test("a greeting with no tool call enqueues nothing; a short but real preference and any tool turn still do", async () => {
+  const h = fixture(async () => [])
+  h.turn("hi")
+  h.turn("thanks")
+  expect(h.store.extraction.list()).toEqual([])
+  h.turn("Always use pnpm for this repository")
+  await until(() => h.store.extraction.list().length === 0 && h.worker.status("/project").lastRun === "completed")
+  expect(h.worker.status("/project").lastRun).toBe("completed")
+})
+
+test("a digest cut through a surrogate pair is sent well formed", async () => {
+  const { wellFormed } = await import("../src/well-formed")
+  expect(wellFormed("ok \uD83D")).toBe("ok �")
+  expect(wellFormed("\uDE00 ok")).toBe("� ok")
+  expect(wellFormed("fine 😀")).toBe("fine 😀")
+  const { isTrivialTurn } = await import("../src/memory-extraction")
+  expect(isTrivialTurn([])).toBe(false)
+})
+
+test("only greetings and acknowledgements without a tool call are trivial; a short rule is not", async () => {
+  const { isTrivialTurn } = await import("../src/memory-extraction")
+  const events = (text: string, ...extra: string[]) => [
+    { type: "item.started", itemId: "u", kind: "user_message" },
+    { type: "item.completed", itemId: "u", text },
+    ...extra.map((kind, index) => ({ type: "item.started", itemId: `x${index}`, kind })),
+  ] as never
+  expect(isTrivialTurn(events("Thanks!"))).toBe(true)
+  expect(isTrivialTurn(events("ok"))).toBe(true)
+  expect(isTrivialTurn(events("use bun"))).toBe(false)
+  expect(isTrivialTurn(events("remember: Use pnpm"))).toBe(false)
+  expect(isTrivialTurn(events("ok", "tool_call"))).toBe(false)
+})

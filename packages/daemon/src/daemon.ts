@@ -41,7 +41,7 @@ import { createMessageMutations } from "./message-mutations"
 import { createSessionHttpApi, validateSessionHttpListener } from "./session-http"
 import { createDebug } from "./debug"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
-import { createMemoryModel } from "./memory-model"
+import { createMemoryModel, type MemoryOrigin } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
 import { consolidationCategories, memorySettings } from "./memory-config"
 import { daemonLogs } from "./daemon-logs"
@@ -112,7 +112,8 @@ import type { CodegraphStatus, CodegraphStatusHub } from "./codegraph-status"
 import { graphIndexMode } from "./graph-gate"
 import { normalizeQuotaRefresh, type QuotaRefreshProvider } from "@mendcode/protocol/wire"
 import { capPermission, declaredRoots, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
-import { memoryMaintenance } from "./memory-maintenance"
+import { expiredPending, memoryMaintenance } from "./memory-maintenance"
+import { findDuplicate } from "./memory-duplicates"
 import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
 import { createTaskOwnerWake } from "./task-owner-wake"
@@ -250,6 +251,7 @@ import { createAutomationLedgerHost } from "./automation-ledger"
 import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
 import { memoryGraph } from "./memory-graph"
 import { checkWindow, dateKey, nextCheckIn, windows } from "./dream-schedule"
+import { dreamEligibleDirectory, dreamMachinery, hasNewMaterial } from "./dream-projects"
 import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
@@ -475,6 +477,8 @@ export type DaemonOptions = RemoteListenerOptions & {
    */
   extractMemory?(job: import("@mendcode/protocol").ExtractionJob, signal: AbortSignal, onUsage?: (usage: BudgetUsage) => void): Promise<ExtractedMemory[]>
   dream?: { complete(prompt: string, signal: AbortSignal, model?: ModelChoice): Promise<Completion> }
+  /** Whether the schedule and the recovery may run Dream for a folder; the default skips temporary folders, missing folders, linked worktrees and the data directory. */
+  dreamEligible?(directory: string): boolean
   /** One tool-less model call (`/btw` side questions); without it they are refused. */
   complete?(input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice; onText?(text: string): void }): Promise<string>
   /** Setup helper completion with observed usage when the adapter exposes it. */
@@ -516,7 +520,7 @@ export type DaemonOptions = RemoteListenerOptions & {
  * propose new ones. A proposal follows its category's policy: review (pending, the default), auto (saved) or never (dropped).
  */
 export type MemoryAccess = {
-  request(directory: string, input: import("@mendcode/protocol").MemoryModelInput): Record<string, unknown>
+  request(directory: string, input: import("@mendcode/protocol").MemoryModelInput, sessionId?: string): Record<string, unknown>
   saved(directory: string): MemoryEntry[]
   /** Saved memories visible to a session: its profile's user memories, its project's and (with `sessionId`) its own. */
   visible(input: { directory: string; sessionId?: SessionId }): MemoryEntry[]
@@ -1132,10 +1136,13 @@ export async function startDaemon(options: DaemonOptions) {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
     await budgets.guard({ model: model.model, signal })
     let usage: BudgetUsage | undefined
+    let failed = false
     try { return await options.extractMemory!(job, signal, (value) => { usage = value }) }
+    catch (error) { failed = true; throw error }
     finally {
       budgets.record(usage)
-      auxiliaryUsage.record({ role: "memoryExtractor", sessionId: job.sessionId, directory: job.directory }, usage, model.model)
+      // A request the provider refused or that was cut short used no tokens: it is a failed job (the extraction ledger has it), not a call.
+      if (!failed || usage) auxiliaryUsage.record({ role: "memoryExtractor", sessionId: job.sessionId, directory: job.directory }, usage, model.model)
     }
   } : undefined
   const debug = createDebug({ options, store, agents, extensions: manager, customTools, skills, id: () => ids("session"), paths: (directory) => systemReport("config-paths", { dir: options.dir, directory, socketPath: options.socketPath, engine: options.info?.engine ?? "unknown", settings: store.settings.get(), catalog }).facts.paths })
@@ -1338,7 +1345,7 @@ export async function startDaemon(options: DaemonOptions) {
     inlineShell: (text) => inlineShells.find(text),
     emitGlobal: (event) => void globalSink.append(event),
     memory: {
-      request: (directory, input) => modelMemory.request(directory, input),
+      request: (directory, input, sessionId) => modelMemory.request(directory, input, sessionId ? originOf(sessionId as SessionId) : undefined),
       saved: (directory) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory) }),
       visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
       related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
@@ -1577,10 +1584,8 @@ export async function startDaemon(options: DaemonOptions) {
       const asked = job.text.split("\n").filter((line) => line.startsWith("user:")).map((line) => line.slice(5)).join(" ")
       for (const memory of memories.slice(0, 20)) {
         if (!memory.text.trim() || memory.text.length > 2_000) continue
-        const entries = store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) })
-        const normalized = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()
-        if (entries.some((entry) => normalized(entry.text) === normalized(memory.text) && entry.status !== "archived")) continue
-        const result = proposeMemory({ ...memory, directory: job.directory, forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
+        if (findDuplicate(store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) }), memory.text)) continue
+        const result = proposeMemory({ ...memory, directory: job.directory, origin: originOf(job.sessionId), forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
         if (result.outcome !== "dropped") proposed++
         if (result.outcome === "saved" && result.memoryId) {
           const written = store.memories.get(result.memoryId as MemoryId)
@@ -1607,6 +1612,11 @@ export async function startDaemon(options: DaemonOptions) {
     if (report.policy === "auto-consolidate" && settings.memoryEnabled !== false) for (const duplicate of report.duplicates) {
       store.memories.update(duplicate.memoryId, { status: "archived" })
       globalSink.append({ type: "memory.changed", memoryId: duplicate.memoryId, change: "updated" })
+    }
+    // A proposal nobody decided in `memoryPendingDays` leaves Pending: restorable from Archived, never silently saved.
+    if (settings.memoryEnabled !== false) for (const expired of expiredPending(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), { now: clock.now(), days: settings.memoryPendingDays })) {
+      if (expired.action === "delete") { const before = store.memories.get(expired.memoryId); store.memories.delete(expired.memoryId); announceMemory(expired.memoryId, "deleted", before) }
+      else { store.memories.update(expired.memoryId, { status: "archived" }); announceMemory(expired.memoryId, "updated") }
     }
     return report
   }
@@ -1904,6 +1914,17 @@ export async function startDaemon(options: DaemonOptions) {
    * Dream for one project as a P5 background job: it yields to foreground work and never touches a
    * session actor (FC-01). One run per project at a time.
    */
+  /** A run the user did not ask for needs something new: a session of the project touched, or a memory saved or proposed, since the project's last finished run. */
+  function dreamHasNewMaterial(directory: string) {
+    const last = store.dreamRuns.lastFinished(directory)
+    if (!last) return true
+    return hasNewMaterial({
+      lastStartedAt: last.startedAt,
+      lastEndedAt: last.endedAt,
+      sessionsUpdatedAt: store.listSessions({ directory, limit: 12, hideEmpty: true }).map((session) => session.updatedAt),
+      memoriesUpdatedAt: store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }).filter((memory) => memory.status !== "archived" && !memory.details?.action).map((memory) => memory.updatedAt),
+    })
+  }
   function startDream(directory: string, trigger: DreamTrigger = "manual", policy?: "disabled" | "preview" | "auto-consolidate", deterministic = false): { runId: number; completion: Promise<import("@mendcode/protocol").DreamRun> } | { error: string; code: ErrorCode } {
     const dream = options.dream
     if (!dream) return { error: "[DAEMON]: Dream needs the native engine", code: "invalid_command" }
@@ -1924,6 +1945,7 @@ export async function startDaemon(options: DaemonOptions) {
           const { runDream } = await import("@mendcode/dream")
           const result = await runDream({
             directory,
+            ...(trigger !== "manual" && !dreamHasNewMaterial(directory) ? { skip: "Nothing new since the last run" } : {}),
             // Newest events of each session, and its last event number: an unchanged session reuses its cached digest without reading them.
             sessions: (dir) =>
               store.listSessions({ directory: dir, limit: 12 }).map((s) => ({ sessionId: s.sessionId, title: s.title, seq: s.lastSeq, events: () => visibleEvents(store.readAfter(s.sessionId, Math.max(0, s.lastSeq - 2_000), 2_000)) })),
@@ -1932,17 +1954,18 @@ export async function startDaemon(options: DaemonOptions) {
               const model = resolveModel({ role: "dream", roles: rolesFor(store.settings.get(), directory), catalog })
               await budgets.guard({ model: model.model, signal })
               let used: BudgetUsage | undefined
+              let failedCall = false
               try {
                 const completion = await dream.complete(prompt, signal, model)
                 const usage = typeof completion === "string" ? undefined : completion.usage
                 used = usage ? { provider: model.model.split(":")[0]!, model: model.model, ...usage } : undefined
                 budgets.record(used)
                 return completion
-              } catch (error) { budgets.record(); throw error }
-              finally { auxiliaryUsage.record({ role: "dream", directory }, used, model.model) }
+              } catch (error) { failedCall = true; budgets.record(); throw error }
+              finally { if (!failedCall || used) auxiliaryUsage.record({ role: "dream", directory }, used, model.model) }
             },
             // A user-scope proposal belongs to the profile of the project Dream read; the category's policy decides what becomes of it.
-            propose: (entry) => proposeMemory({ ...entry, directory: entry.directory ?? directory, ...(consolidationPolicy === "preview" ? { forceReview: true } : {}) }).outcome,
+            propose: (entry) => proposeMemory({ ...entry, directory: entry.directory ?? directory, origin: { originEngine: "dream" }, ...(consolidationPolicy === "preview" ? { forceReview: true } : {}) }).outcome,
             revise: (entry) => void addRevision(entry),
             signal: job.signal,
             checkpoint: job.checkpoint,
@@ -1968,14 +1991,15 @@ export async function startDaemon(options: DaemonOptions) {
             const meter = usable ? (await import("@mendcode/dream")).createMeter({ limit: Math.max(0, (settings.dreamMaxTokens ?? DREAM_DEFAULT_MAX_TOKENS) - result.report.budget.used), signal: job.signal, complete: async (prompt, signal) => {
               await budgets.guard({ model: usable.model, signal })
               let used: BudgetUsage | undefined
+              let failedCall = false
               try {
                 const completion = await dream.complete(prompt, signal, usable)
                 const usage = typeof completion === "string" ? undefined : completion.usage
                 used = usage ? { provider: usable.model.split(":")[0]!, model: usable.model, ...usage } : undefined
                 budgets.record(used)
                 return completion
-              } catch (error) { budgets.record(); throw error }
-              finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
+              } catch (error) { failedCall = true; budgets.record(); throw error }
+              finally { if (!failedCall || used) auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
             const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
@@ -2019,10 +2043,11 @@ export async function startDaemon(options: DaemonOptions) {
    * already built are cached, so the resumed run only does what is left. A project with a newer run is not listed.
    */
   function interruptedDreams(): string[] {
-    const since = clock.now() - 36 * 3_600_000
-    return [...new Set(store.dreamRuns.list().filter((run) => run.status === "failed" && run.startedAt >= since && run.error?.startsWith(DREAM_INTERRUPTED)).map((run) => run.directory))]
-      .filter((directory) => store.dreamRuns.list(directory)[0]?.error?.startsWith(DREAM_INTERRUPTED))
+    return store.dreamRuns.interrupted({ since: clock.now() - 36 * 3_600_000, errorPrefix: DREAM_INTERRUPTED, limit: 200 }).filter(dreamEligible).slice(0, MAX_RECOVERED_DREAMS)
   }
+  const dreamEligible = (directory: string) => options.dreamEligible ? options.dreamEligible(directory) : dreamEligibleDirectory(directory, { dataDir: options.dir })
+  /** At most this many interrupted projects are resumed per check; the rest wait for the next one (every 15 minutes while scheduled). */
+  const MAX_RECOVERED_DREAMS = 5
   let dreamTimer: TimerHandle | undefined
   /** `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. */
   function armDreamSchedule(reset = false): { status: string; reason: string; runs: Array<{ runId: number }> } {
@@ -2038,7 +2063,9 @@ export async function startDaemon(options: DaemonOptions) {
       if (verdict.action === "run") {
         store.meta.set(DREAM_WINDOW_KEY, verdict.day)
         const since = clock.now() - 86_400_000
-        const active = new Set(store.listSessions({ limit: 500 }).filter((s) => s.updatedAt >= since && !s.title.startsWith("loop · ") && !s.title.startsWith("workflow · ")).map((s) => s.directory))
+        // Real projects only: a session with a user turn, not machinery, in a folder that exists and is not a temporary or linked worktree.
+        const active = new Set(store.listSessions({ limit: 500, since, hideEmpty: true }).filter((s) => !dreamMachinery(s.title)).map((s) => s.directory))
+        for (const directory of active) if (!dreamEligible(directory)) active.delete(directory)
         for (const directory of active) {
           const started = startDream(directory, verdict.trigger)
           if (!("error" in started)) runs.push({ runId: started.runId })
@@ -2225,20 +2252,29 @@ export async function startDaemon(options: DaemonOptions) {
    * the caller allows nothing beyond review (Evolution's suggest mode). The agent only knows markers, but a proposal is
    * stored for long: a secret it still carries (read from a file) is redacted.
    */
-  function proposeMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; forceReview?: boolean; cap?: "review"; details?: MemoryEntry["details"] }): { memoryId?: string; outcome: "pending" | "saved" | "dropped" } {
+  function proposeMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; forceReview?: boolean; cap?: "review"; details?: MemoryEntry["details"]; origin?: MemoryOrigin }): { memoryId?: string; outcome: "pending" | "saved" | "dropped" } {
     const safe = redactSecrets(entry.text)
     const settings = memorySettings(store.settings.get(), entry.directory)
     if (settings.memoryEnabled === false) return { outcome: "dropped" }
-    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
+    const all = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) })
+    // Repeating a memory (saved, pending or archived, any scope here) proposes nothing: an archived one stays archived until the user restores it.
+    if (findDuplicate(all, safe.text)) return { outcome: "dropped" }
+    const entries = all.filter((memory) => memory.status !== "archived")
     if (entries.length >= (settings.memoryMaxEntries ?? 50)) return { outcome: "dropped" }
     if (entry.scope === "project" && entries.filter((memory) => memory.scope === "project").length >= (settings.memoryProjectMaxEntries ?? 3)) return { outcome: "dropped" }
     const policy = memoryPolicyFor(entry.category, settings.memoryPolicies)
     if (policy === "never") return { outcome: "dropped" }
     if (entry.scope === "session" && !(entry.sessionId && store.hasSession(entry.sessionId))) return { outcome: "dropped" }
     const review = policy === "review" || safe.count > 0 || entry.forceReview === true || entry.cap === "review"
-    const { forceReview: _forceReview, cap: _cap, ...rest } = entry
-    const memoryId = addMemory({ ...rest, text: safe.text, source: "agent", status: review ? "pending" : "saved" })
+    const { forceReview: _forceReview, cap: _cap, origin, ...rest } = entry
+    const memoryId = addMemory({ ...rest, ...(origin ? { details: { ...rest.details, ...origin } } : {}), text: safe.text, source: "agent", status: review ? "pending" : "saved" })
     return { memoryId, outcome: review ? "pending" : "saved" }
+  }
+
+  /** Where a memory a session produced came from: the session and the engine that ran its turns (`native`, `claude`, `codex`, `pi`, `acp:<agent>`). */
+  function originOf(sessionId: SessionId): MemoryOrigin {
+    const model = resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(sessionId)), catalog })
+    return { originSessionId: sessionId, originEngine: (engineKeyOf(model) ?? options.info?.engine ?? "native").slice(0, 40) }
   }
 
   /** Every category with the policy in force. */

@@ -39,6 +39,8 @@ export async function runDream(input: {
   digests?: DigestCache
   /** What Evolution does in this run (off or absent: nothing) and where it keeps what it learns. */
   evolution?: { mode: EvolutionMode; port: EvolutionPort; runId?: number; workflows?: boolean }
+  /** Why this run does nothing (for example, nothing is new since the project's last run): it is skipped before any session is read or model called. */
+  skip?: string
 }): Promise<DreamResult> {
   const limit = input.maxTokens ?? DREAM_DEFAULT_MAX_TOKENS
   const meter = createMeter({ limit, complete: input.complete, signal: input.signal })
@@ -64,6 +66,7 @@ export async function runDream(input: {
     return { status: "failed", error, report: report() }
   }
 
+  if (input.skip) return skipped(input.skip)
   const evidence: Evidence[] = collectEvidence(input.sessions(input.directory), input.digests ? { cache: input.digests } : {})
   for (const item of evidence.slice(0, 12)) {
     read.sessions.push({ sessionId: clip(item.sessionId, 64), title: clip(item.title, 80), digest: item.digest ?? "built", messages: item.messages ?? item.lines.length, redactions: item.redactions ?? 0 })

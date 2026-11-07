@@ -537,4 +537,14 @@ describe("memory page revisions", () => {
     expect(memoryPageKey(state, "r", all).action).toEqual({ type: "restore", memoryId: "a1" })
     expect(plain(at(100, 20, state)).join("\n")).toContain("r restore")
   })
+
+  test("A and X on Pending ask once, then approve or reject every proposal the list shows; anything else cancels", () => {
+    const press = (...keys: string[]) => keys.reduce((last, key) => memoryPageKey(last.state, key, MEMORIES), { state: createMemoryPageState(), action: { type: "none" } as ReturnType<typeof memoryPageKey>["action"] })
+    expect(press("A").state.confirmBatch).toBe("approve")
+    expect(press("A").action).toEqual({ type: "none" })
+    expect(press("A", "A").action).toEqual({ type: "batch", decision: "approve", memoryIds: ["p1", "p2"] })
+    expect(press("X", "y").action).toEqual({ type: "batch", decision: "reject", memoryIds: ["p1", "p2"] })
+    expect(press("X", "n")).toMatchObject({ state: { confirmBatch: undefined }, action: { type: "none" } })
+    expect(press("5", "A").state.confirmBatch).toBeUndefined()
+  })
 })

@@ -4,6 +4,7 @@ import path from "node:path"
 import { tmpdir } from "node:os"
 import { createClient } from "@mendcode/client"
 import { createFauxEngine } from "@mendcode/engine-faux"
+import { createVirtualClock } from "@mendcode/kernel"
 import { createIdFactory, type DreamRun, type MemoryEntry, type MemoryId, type SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src/daemon"
 import { dateKey, windows } from "../src/dream-schedule"
@@ -203,8 +204,11 @@ describe("B19 Dream controls", () => {
     expect(await h.client.dreamControl("/repo", { operation: "run" })).toMatchObject({ ok: false })
   })
   test("explicit ticks share the scheduler's persisted window and never repeat one", async () => {
-    const h = await boot({ dream: { complete: async () => JSON.stringify({ proposals: [], notes: "" }) } })
-    await h.client.send({ type: "session.create", directory: "/repo", title: "Active" })
+    const h = await boot({ dream: { complete: async () => JSON.stringify({ proposals: [], notes: "" }) }, dreamEligible: () => true })
+    const created = await h.client.send({ type: "session.create", directory: "/repo", title: "Active" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as import("@mendcode/protocol").SessionId
+    await h.client.send({ type: "user.submit", sessionId, text: "remember the release command", attachments: [] })
+    for (let i = 0; i < 300 && !h.daemon.store.readAfter(sessionId, 0).some((e) => e.type === "turn.completed"); i++) await new Promise((r) => setTimeout(r, 10))
     await h.client.send({ type: "settings.set", patch: { dreamAt: "03:00" } })
     const last = windows(Date.now(), "03:00").last
     h.daemon.store.meta.set("dream.window", dateKey(last - 86_400_000))
@@ -244,3 +248,42 @@ describe("B19 Dream controls", () => {
     expect((status.runs as DreamRun[])[0]?.report?.consolidation?.applied).toBe(1)
   })
 })
+
+describe("pending proposals expire", () => {
+  test("the maintenance after a turn archives an agent proposal that waited longer than the limit, and 0 keeps it", async () => {
+    const clock = createVirtualClock(Date.UTC(2026, 8, 1))
+    const h = await boot({ clock })
+    const old = h.seed("Old proposal nobody decided")
+    clock.advance(15 * 86_400_000)
+    const fresh = h.seed("Fresh proposal")
+    h.daemon.store.settings.set({ memoryPendingDays: 0 })
+    const turn = async (text: string) => {
+      const { sessionId } = (await h.client.send({ type: "session.create", directory: "/repo", title: "" }) as { ok: true; result: { sessionId: SessionId } }).result
+      await h.client.send({ type: "user.submit", sessionId, text, attachments: [] })
+      for (let i = 0; i < 100 && !h.daemon.store.readAfter(sessionId, 0).some((e) => e.type === "turn.completed"); i++) { clock.advance(10); await new Promise((r) => setTimeout(r, 5)) }
+    }
+    await turn("one")
+    expect(h.daemon.store.memories.get(old)?.status).toBe("pending")
+    h.daemon.store.settings.set({ memoryPendingDays: undefined as never })
+    await turn("two")
+    expect(h.daemon.store.memories.get(old)?.status).toBe("archived")
+    expect(h.daemon.store.memories.get(fresh)?.status).toBe("pending")
+  })
+})
+
+describe("duplicate proposals", () => {
+  test("a proposal repeating a saved, pending or archived memory (in any scope) proposes nothing", async () => {
+    const h = await boot()
+    h.seed("Run the release checks first", { status: "archived" })
+    h.seed("Prefers terse answers", { scope: "user", status: "saved" })
+    const propose = async (text: string, scope: "project" | "user" = "project") => {
+      const reply = await h.client.send({ type: "memory.model", directory: "/repo", input: { action: "propose", scope, text, category: "commands" } })
+      return reply.ok ? (reply.result as { outcome: string }).outcome : "error"
+    }
+    expect(await propose("run the RELEASE checks first!")).toBe("dropped")
+    expect(await propose("Prefers   terse answers.")).toBe("dropped")
+    expect(await propose("A brand new durable fact")).toBe("pending")
+    expect(await propose("a brand new durable fact")).toBe("dropped")
+  })
+})
+

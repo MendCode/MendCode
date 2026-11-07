@@ -41,6 +41,7 @@ async function boot(input: { dir?: string; clock?: ReturnType<typeof createVirtu
     socketPath: path.join(dir, "mendd.sock"),
     ...(input.clock ? { clock: input.clock } : {}),
     engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }),
+    dreamEligible: () => true,
     ...(input.noDream ? {} : { dream: { complete: async (prompt) => (calls.push(prompt), (input.complete ?? (() => '{"proposals":[]}'))(prompt)) } }),
   })
   cleanups.push(() => daemon.stop())
@@ -188,14 +189,16 @@ describe("missed Dream windows", () => {
     const start = new Date(2026, 8, 27, 2, 58, 0).getTime()
     const clock = createVirtualClock(start)
     const h = await boot({ clock })
-    await h.session("/active")
+    const { sessionId } = await h.ok<{ sessionId: SessionId }>({ type: "session.create", directory: "/active", title: "" })
+    await h.client.send({ type: "user.submit", sessionId, text: "we release with bun run release", attachments: [] })
+    // The virtual clock drives the faux engine: advance it until the turn ends.
+    for (let i = 0; i < 100 && !h.daemon.store.readAfter(sessionId, 0).some((e) => e.type === "turn.completed"); i++) { clock.advance(10); await new Promise((r) => setTimeout(r, 5)) }
     await h.ok({ type: "settings.set", patch: { dreamAt: "03:10" } })
     expect(h.daemon.store.dreamRuns.list("/active")).toEqual([])
     clock.advance(20 * 60_000)
     await settle()
-    // No conversation was readable, so the run is skipped; it is still a scheduled run.
-    await until(() => h.daemon.store.dreamRuns.list("/active").length === 1)
-    expect(h.daemon.store.dreamRuns.list("/active")[0]).toMatchObject({ trigger: "scheduled", status: "skipped" })
+    await until(() => h.daemon.store.dreamRuns.list("/active").some((run) => run.status === "done"))
+    expect(h.daemon.store.dreamRuns.list("/active")[0]).toMatchObject({ trigger: "scheduled", status: "done" })
   })
 })
 

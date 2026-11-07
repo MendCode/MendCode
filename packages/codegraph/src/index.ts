@@ -1,6 +1,8 @@
 export { createCodeGraphTools } from "./tools"
 export type { CodeGraphOptions } from "./tools"
 export { createIndexer, cacheName } from "./indexer"
+export { pruneCaches, CACHE_IDLE_MS } from "./prune"
+export type { PruneResult } from "./prune"
 export { indexStatus } from "./indexer"
 export { HOSTED_SCAN_FILES, scanHostCommand } from "./scan-host"
 export type { Indexer, IndexerOptions, IndexStatus, IndexProgress, IndexDrift } from "./indexer"

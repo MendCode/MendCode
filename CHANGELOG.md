@@ -9,6 +9,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `/today` lists what needs you, the sessions to pick up and Dream's memory proposals in one read-only page.
+- In /memory Pending, `A` and `X` approve or reject every proposal the list shows, after one confirmation.
+- Pending proposals nobody decides are archived after a while (`memoryPendingDays`; 0 keeps them).
+- Claude Code and Codex sessions receive the same memory block as native ones.
+- Memories record the session and engine they came from.
+- Unused code graph caches, and those of folders that no longer exist, are cleaned up automatically.
+
+### Fixed
+
+- Dream no longer runs on temporary folders, missing folders or worktrees, and skips projects with nothing new.
+- Dream recovers every interrupted project, not only the most recent runs.
+- A memory you rejected or archived is not proposed again, and repeats are matched ignoring case and punctuation.
+- Memory extraction skips greetings and no longer counts failed calls in usage.
+
 ## v0.0.6 - 2026-11-06
 
 Workflows run with the permission you choose and no longer stall on their own package files, approving from the

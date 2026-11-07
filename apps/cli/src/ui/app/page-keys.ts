@@ -74,6 +74,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   closeExtensionPage: () => void
   sessionNav: ReturnType<typeof import("./session-nav").createSessionNav>
   whatsNewKey(key: string): Promise<void>
+  todayKey(key: string): Promise<void>
   sessionTree: ReturnType<typeof import("./session-tree").createSessionTree>
   switchSession: ReturnType<typeof createSession>["switchSession"]
   changeSession: ReturnType<typeof createSession>["changeSession"]
@@ -244,7 +245,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     } else if (state.page === "memory-assistant") {
       await actions.memoryAssistantKey(key)
     } else if (state.page === "memory") {
-      if (key === "t" && !state.memoryState.filtering && state.memoryState.workspace.picking === undefined && state.memoryState.sharing.confirmation === undefined && state.memoryState.extraction.editing === undefined && state.memoryState.dream.typing === undefined && state.memoryState.pick === undefined && !state.memoryState.confirmDelete) return actions.openMemoryAssistant()
+      if (key === "t" && !state.memoryState.filtering && state.memoryState.workspace.picking === undefined && state.memoryState.sharing.confirmation === undefined && state.memoryState.extraction.editing === undefined && state.memoryState.dream.typing === undefined && state.memoryState.pick === undefined && !state.memoryState.confirmDelete && !state.memoryState.confirmBatch) return actions.openMemoryAssistant()
       const { width, height } = input.screen.size
       const graph = { report: state.memoryGraph, size: memoryGraphCanvas(width, height - 1, state.memoryWorkspaces !== undefined) }
       const result = memoryPageKey(state.memoryState, key, state.memories, Math.max(1, Math.floor((height - 3) / 3)), graph, state.dreamRuns, memoryPageData(width, height - 1))
@@ -591,6 +592,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   async function dispatchPageKey(key: string) {
     if (state.page === "compaction") return actions.compactionKey(key)
     if (state.page === "whatsnew") return actions.whatsNewKey(key)
+    if (state.page === "today") return actions.todayKey(key)
     if (state.page === "history") {
       const keys = /^[\x20-\x7e -￿]{2,}$/u.test(key) ? [...key] : [key]
       for (const each of keys) {

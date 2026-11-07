@@ -116,6 +116,7 @@ import { createCacheTtl } from "./cache-ttl"
 import { readUsageProfile } from "./usage-profile"
 import { windowOverride } from "./session-context-window"
 import { memoryExtractionPrompt } from "./memory-extract-prompt"
+import { wellFormed } from "./well-formed"
 import { createResumeSource } from "./memory-resume"
 import type { ModelChoice, ModelInfo } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, findModel, modelContextOf, setBuildChannel } from "@mendcode/protocol"
@@ -598,6 +599,10 @@ export const daemon = await startDaemon({
         return ownPlan && featureOn(store.settings.get(), "visible_plan", { safeMode }) ? `${text}\n${visiblePlanText().harness}` : text
       }
     }
+    // Claude Code and Codex take the same `<mendcode_memory>` block as a native session, appended once to the system text their process
+    // starts with (no prompt, so the choice and its order stay put and their cached prefix holds). Their `memory` tool still searches by prompt.
+    const withMemory = (base: (root: string) => string | undefined, sessionId: import("@mendcode/protocol").SessionId) => (root: string) =>
+      [base(root), runLimits.get(sessionId)?.noMemory ? "" : memorySelector.block({ directory: root, prompt: "", sessionId })].filter(Boolean).join("\n\n") || undefined
     const transcripts = createSessionTranscripts(dir, Date.now, store.writeStoredFile)
     const configured = engineName === "native"
       ? withAcpEngine({
@@ -635,7 +640,8 @@ export const daemon = await startDaemon({
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
             const { createClaudeEngine, claudeCacheEnv, claudeRunLimits } = await import("@mendcode/engine-claude")
-            const appendSystem = await harnessSystem()
+            const harnessText = await harnessSystem()
+            const appendSystem = (root: string, sessionId: import("@mendcode/protocol").SessionId) => withMemory(harnessText, sessionId)(root)
             const engine = createClaudeEngine({
               bin: claudeBin,
               clock,
@@ -933,7 +939,7 @@ export const daemon = await startDaemon({
           // A PR review child or fix session: none of the checkout's AGENTS.md, `.codex/` config, hooks, rules or skills; a review child neither memories nor skills.
           runLimits: runLimits.get(turn.sessionId),
           replyLanguage,
-          appendSystem: await harnessSystem(),
+          appendSystem: withMemory(await harnessSystem(), turn.sessionId),
           ...(hostServers.length ? { hostServers, hostInstructions, waitingForMcp: harness.waiting } : {}),
           storeImage: async (bytes, mime, sessionId) => {
             const ref = store.putBlob(bytes, mime)
@@ -1026,7 +1032,7 @@ export const daemon = await startDaemon({
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
       const fullMemory = featureOn(extractionSettings(), "memory_auto")
-      const result = await dreamComplete(memoryExtractionPrompt(job.text, fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
+      const result = await dreamComplete(memoryExtractionPrompt(wellFormed(job.text), fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
       if (typeof result !== "string" && result.usage) onUsage?.(result.usage)
       const text = typeof result === "string" ? result : result.text
       const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""))

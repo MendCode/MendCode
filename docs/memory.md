@@ -29,6 +29,7 @@ Use `/` to filter by text, category, scope, or the word `pinned`. The list inclu
 | key | tab | does |
 |---|---|---|
 | `a` / `x` | Pending | approve / reject |
+| `A` / `X` | Pending | approve / reject every proposal the list shows (after a `/` filter, only those). Asks first: `y` or the same key confirms, anything else cancels |
 | `x` | Saved | archive |
 | `r` | Archived | restore |
 | `e` | all | edit the text in the prompt (`enter` saves, `esc` cancels) |
@@ -131,9 +132,25 @@ Restart recovers interrupted jobs; settlement writes proposals and completion in
 
 The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
 
+### Pending that nobody decides
+
+An agent proposal that waits in Pending longer than `memoryPendingDays` (default 14; `0` keeps them until you decide) is archived, where it can still be restored; a pending Dream revision (update or archive) is dropped instead. Proposals you made yourself and assistant drafts never expire. The check runs with the maintenance after each turn, so it needs no timer.
+
+### Repeated proposals
+
+A proposal whose text matches a memory you already have is not proposed again. Case, spacing, punctuation and accents are ignored, the user and project scopes are compared together, and archived memories count: something you rejected or Dream archived stays archived until you restore it.
+
+### Where a memory came from
+
+A memory made by the agent, the post-turn extractor or Dream records the session and the engine behind it (`originSessionId`, `originEngine`: `native`, `claude`, `codex`, `pi`, `acp:<agent>` or `dream`) in its details, so you can tell a Claude Code origin from a native one. Memories you add yourself carry none.
+
+### Extraction calls
+
+A turn that only greets or acknowledges ("hi", "thanks", "ok") and calls no tool is not sent to the extractor. Digests are cut on a character boundary so a request is never malformed. A call that failed without a reply is a failed job (shown in Extraction), not a call in the usage totals.
+
 ### Duplicate maintenance
 
-Maintenance defaults disabled. Preview reports exact generated duplicates within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected.
+Maintenance defaults disabled. Preview reports exact generated duplicates (text compared without case, spacing or punctuation) within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected.
 
 Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
 
@@ -146,6 +163,10 @@ The agent does not get every saved memory, only the ones that matter for what yo
 3. A small share of the rest (at most a quarter of the budget, 1 500 characters), so standing rules and fresh notes still surface.
 
 The score of a memory is its match, its recency (half-life of 30 days), its links to matches, a small lift for `preferences`, `constraints` and `security` and for the session's own memories, minus a penalty when another saved memory *supersedes* it. A memory already shown earlier in the session gets a lift too, so the prompt changes only when the ranking clearly does (this keeps the provider's prompt cache useful). When the block leaves memories out it says how many and points to `memory_graph` search.
+
+### Claude Code and Codex sessions
+
+A session on Claude Code or Codex gets the same `<mendcode_memory>` block (same selection and limits, `memoryUse` on) appended to the system text its process starts with. It is chosen without the prompt, so its text and order stay stable and the cached prefix holds; it is fixed for that process (Claude Code) or turn (Codex), and the `memory` tool still searches by prompt. A scripted run with no memory gets none.
 
 ## Memory by tier
 

@@ -14,7 +14,7 @@ type CapsRule = { keep?: string; typing?: (state: State) => boolean }
  */
 export const CAPS_PAGES: Readonly<Record<string, CapsRule>> = {
   tools: {}, mcps: {}, context: {}, storage: {}, agent: {}, secrets: {}, extensions: {}, status: {}, hooks: {}, providers: {}, packages: {}, pet: {}, model: {},
-  agents: {}, workflows: {}, tasks: {}, help: {}, diagnostics: {}, compound: {}, "ai-config": {}, "release-channel": {}, tsm: {}, ide: {}, tree: {},
+  agents: {}, workflows: {}, today: {}, tasks: {}, help: {}, diagnostics: {}, compound: {}, "ai-config": {}, "release-channel": {}, tsm: {}, ide: {}, tree: {},
   text: { keep: "G" }, permissions: { keep: "R" }, messages: { keep: "Q" }, export: { keep: "Q" },
   history: { keep: "G", typing: (state) => state.historyState.editing },
   queue: { keep: "JK", typing: (state) => state.queueState?.edit !== undefined },

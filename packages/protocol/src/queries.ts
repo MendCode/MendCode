@@ -660,6 +660,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   /** Set once the first-run setup page was completed or dismissed. */
   onboarded: z.boolean().optional(),
   memoryGlobalCompactionMaxEntries: z.number().int().min(1).max(10_000).optional(),
+  /** Days an agent proposal may wait in Pending before it is archived (a revision is dropped); default 14, 0 keeps them until decided. */
+  memoryPendingDays: z.number().int().min(0).max(365).optional(),
   dreamConsolidationPolicy: z.enum(["disabled", "preview", "auto-consolidate"]).optional(),
   memoryProjects: z.record(z.string().min(1).max(4096), MemoryConfigPatch).optional(),
   /** Primary destination after an explicitly applied plan; build when unset or unavailable. */

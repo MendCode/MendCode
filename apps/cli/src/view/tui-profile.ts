@@ -375,6 +375,8 @@ export type TuiProfile = {
   activitySound: "off" | "pulse" | "hum"
   sidebarWidgets: SidebarWidget[]
   rightSidebar: boolean
+  /** Epoch ms of the last visit to /today, the "since" of its summary; 0 when it was never opened (docs/today.md). Not a look setting. */
+  todayLastVisit: number
   /** Cells the right bar takes; 0 keeps the automatic 48 (56 from 150 columns). */
   sidebarWidth: number
   /** `border` draws `READY › model › effort › repo › branch › ctx` in the prompt's top rule and leaves the row under it telemetry only. */
@@ -608,6 +610,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   activitySound: "off",
   sidebarWidgets: [],
   rightSidebar: false,
+  todayLastVisit: 0,
   sidebarWidth: 0,
   promptStatus: "off",
   sidebar: "auto",
@@ -962,6 +965,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     activitySound: oneOf(["off", "pulse", "hum"] as const, source.activitySound) ?? "off",
     sidebarWidgets: sidebarSpec(source.sidebarWidgets),
     rightSidebar: typeof source.rightSidebar === "boolean" ? source.rightSidebar : false,
+    todayLastVisit: typeof source.todayLastVisit === "number" && Number.isSafeInteger(source.todayLastVisit) && source.todayLastVisit > 0 ? source.todayLastVisit : 0,
     sidebarWidth: typeof source.sidebarWidth === "number" && Number.isInteger(source.sidebarWidth) && source.sidebarWidth >= 32 && source.sidebarWidth <= 80 ? source.sidebarWidth : 0,
     promptStatus: oneOf(["off", "border"] as const, source.promptStatus) ?? "off",
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,

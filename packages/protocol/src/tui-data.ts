@@ -205,6 +205,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "resumePrompts": false,
   "sidebarWidgets": [],
   "rightSidebar": false,
+  "todayLastVisit": 0,
   "sidebarWidth": 0,
   "promptStatus": "off",
   "sidebar": "auto",

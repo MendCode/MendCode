@@ -1,8 +1,24 @@
 import type { ExtractionJob, MemoryEntry, SessionEvent, Settings } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { buildDigest } from "../../dream/src/digest"
+import { wellFormed } from "./well-formed"
 
 export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string; details?: MemoryEntry["details"] }
+
+/** A message that is only a greeting or an acknowledgement. */
+const ACKNOWLEDGEMENT = /^(hi|hello|hey|hola|ok|okay|k|thanks?|thank you|thx|gracias|yes|yep|no|nope|si|sí|sure|great|cool|nice|perfect|done|got it|continue|go on|go ahead|continúa|continua)[\s.!?¡¿,]*$/i
+
+/** A turn whose user messages are all greetings or acknowledgements and that called no tool: a model call over it would find nothing. */
+export function isTrivialTurn(turn: readonly SessionEvent[]) {
+  if (turn.some((entry) => entry.type === "item.started" && entry.kind !== "user_message" && entry.kind !== "agent_message" && entry.kind !== "reasoning")) return false
+  const kinds = new Map<string, string>()
+  const said: string[] = []
+  for (const entry of turn) {
+    if (entry.type === "item.started") kinds.set(entry.itemId, entry.kind)
+    else if (entry.type === "item.completed" && kinds.get(entry.itemId) === "user_message") said.push(entry.text ?? "")
+  }
+  return said.length > 0 && said.every((text) => ACKNOWLEDGEMENT.test(text.trim()))
+}
 
 /** One bounded worker; jobs and retry deadlines survive daemon shutdown. */
 export function createMemoryExtraction(options: {
@@ -96,8 +112,9 @@ export function createMemoryExtraction(options: {
       const turn = events.slice(start)
       // Notices and extraction results never feed the extractor recursively.
       if (!turn.some((entry) => entry.type === "item.started" && entry.kind === "user_message")) return
-      const text = buildDigest(turn).lines.join("\n").slice(0, 64_000)
-      if (!text) return
+      // A cut may split a surrogate pair; a lone half is invalid in a JSON request body and the provider answers 400.
+      const text = wellFormed(buildDigest(turn).lines.join("\n").slice(0, 64_000))
+      if (!text.trim() || isTrivialTurn(turn)) return
       store.extraction.put({ jobId: `extract_${event.turnId}`, sessionId: event.sessionId, turnId: event.turnId, directory: store.sessionDirectory(event.sessionId)!, text, state: "queued", attempts: 0, nextAttemptAt: now(), reason: options.extract ? "" : "Extractor not configured", proposed: 0, createdAt: now(), updatedAt: now() })
       schedule()
     },
