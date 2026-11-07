@@ -9,6 +9,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.6 - 2026-11-06
+
+Workflows run with the permission you choose and no longer stall on their own package files, approving from the
+terminal never hangs, `/workflows` navigation is fixed, and release reviews stop re-reading reviewed code.
+
+### Upgrade notes
+
+- Same code as v0.0.6-beta.1.
+
+## v0.0.6-beta.1 - 2026-11-06
+
+Workflows run with the permission you choose and no longer stall on their own package files, approving from the
+terminal never hangs, `/workflows` navigation is fixed, and release reviews stop re-reading reviewed code.
+
 ### Fixed
 
 - Returning from a workflow task with ↑ goes back to the workflows list.
