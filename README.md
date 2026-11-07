@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/MendCode/MendCode/actions/workflows/ci.yml"><img src="https://github.com/MendCode/MendCode/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/MendCode/MendCode/releases"><img src="https://img.shields.io/github/v/release/MendCode/MendCode?include_prereleases&sort=semver&color=3F8F83" alt="Release"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9FB08E" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-9FB08E" alt="License: Apache-2.0"></a>
   <a href="https://www.mendcode.dev/"><img src="https://img.shields.io/badge/website-mendcode.dev-3F8F83" alt="Website"></a>
   <a href="docs/"><img src="https://img.shields.io/badge/docs-101_pages-9FB08E" alt="Docs"></a>
 </p>
@@ -465,4 +465,10 @@ bun test scripts/readme-tiers.test.ts apps/cli/test/footprint.test.ts apps/cli/t
 ./node_modules/.bin/tsc -p tsconfig.base.json --noEmit
 ```
 
-MIT: [LICENSE](LICENSE). Dependency notices: [THIRD_PARTY.md](THIRD_PARTY.md).
+## License
+
+MendCode is open source under the [Apache License 2.0](LICENSE). Anyone who copies or builds on it must keep the [NOTICE](NOTICE) that credits MendCode and its author, and say what they changed. Versions released before 2026-11-06 stay under the MIT license they shipped with.
+
+The MendCode name and logo are not licensed: forks must use their own name and logo.
+
+Dependency notices: [THIRD_PARTY.md](THIRD_PARTY.md).
