@@ -5,7 +5,7 @@ import { createHeadlessRun, EXIT } from "../src/run"
 
 const ids = createIdFactory()
 
-function harness(options: { thinking?: boolean; approve?: boolean } = {}) {
+function harness(options: { thinking?: boolean; approve?: boolean; compat?: boolean } = {}) {
   const sessionId = ids("session")
   const queueId = ids("queue")
   const turnId = ids("turn")
@@ -13,7 +13,7 @@ function harness(options: { thinking?: boolean; approve?: boolean } = {}) {
   const err: string[] = []
   const sent: unknown[] = []
   const client = { send: async (command: unknown) => { sent.push(command); return { ok: true, result: { queueId } } } } as unknown as Client
-  const run = createHeadlessRun({ client, sessionId, prompt: "go", json: false, approve: options.approve ?? false, thinking: options.thinking ?? false, out: { write: (t: string) => out.push(t) }, err: { write: (t: string) => err.push(t) } })
+  const run = createHeadlessRun({ client, sessionId, prompt: "go", json: false, approve: options.approve ?? false, thinking: options.thinking ?? false, ...(options.compat ? { compat: true } : {}), out: { write: (t: string) => out.push(t) }, err: { write: (t: string) => err.push(t) } })
   let seq = 0
   const emit = (e: Record<string, unknown>) => run.onEvent({ sessionId, seq: ++seq, at: 0, ...e } as SessionEvent)
   return { run, emit, out, err, sent, turnId, queueId }
@@ -26,6 +26,16 @@ describe("headless run output", () => {
     expect(await h.run.start()).toBe(EXIT.failed)
     expect(h.sent).toEqual([])
     expect(h.err.join("")).toContain("pending approval")
+  })
+
+  test("with the compatibility output, a pending approval is a structured error on stdout", async () => {
+    const h = harness({ compat: true })
+    h.emit({ type: "server.request", turnId: h.turnId, requestId: ids("request"), kind: "approval", title: "Read", detail: "external directory" })
+    expect(await h.run.start()).toBe(EXIT.failed)
+    expect(h.sent).toEqual([])
+    const envelope = JSON.parse(h.out.join("").trim())
+    expect(envelope).toMatchObject({ kind: "error", event: "error", data: { code: "approval_pending" } })
+    expect(h.err.join("")).toBe("")
   })
 
   test("a resolved historical approval does not block a new turn", async () => {

@@ -113,6 +113,26 @@ describe("workflows in the chat", () => {
     expect(text().join("\n")).toContain("ship")
     expect(sent.filter((command) => command.type === "workflow.list").length).toBeGreaterThan(1)
   })
+
+  test("a sibling move that goes nowhere keeps the way back to the workflow list", async () => {
+    const taskId = ids("session")
+    const live = run({ tasks: [{ id: "build", title: "Build", kind: "agent", mode: "work", needs: [], state: "running", attempt: 1, sessionId: taskId }] })
+    const { app, text, slash } = harness((command) => {
+      if (command.type === "workflow.list") return { ok: true, result: { workflows: [live] } }
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, parentId: live.rootSessionId } } }
+      if (command.type === "session.children") return { ok: true, result: { sessions: [{ sessionId: taskId, parentId: live.rootSessionId }] } }
+      return undefined
+    })
+    app.applySettings({})
+    await slash("/workflows")
+    await app.onKey("\r")
+    expect(app.sessionId).toBe(taskId)
+    await app.onKey("\x1b[C")
+    expect(app.sessionId).toBe(taskId)
+    await app.onKey("\x1b[A")
+    app.render()
+    expect(text().join("\n")).toContain("Workflows")
+  })
   test("the workflows page shows other projects immediately and can switch to this project", async () => {
     const here = run({ name: "local" })
     const elsewhere = run({ name: "elsewhere", directory: "/elsewhere", state: "needs_input" })

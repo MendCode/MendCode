@@ -193,7 +193,9 @@ export function createHeadlessRun(options: RunOptions) {
         else if (event.type === "server.request.resolved") pending.delete(event.requestId)
       }
       if ([...pending.values()].some((request) => request.kind === "approval")) {
-        options.err.write("error: this session has a pending approval; answer it from /workflows or attach to the session before running another message\n")
+        const message = "this session has a pending approval; answer it from /workflows or attach to the session before running another message"
+        if (options.compat) options.out.write(`${JSON.stringify(compatEnvelope({ kind: "error", command: "run", error: { code: "approval_pending", message, sessionId } }))}\n`)
+        else options.err.write(`error: ${message}\n`)
         settle(EXIT.failed)
         return done
       }

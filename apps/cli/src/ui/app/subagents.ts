@@ -58,7 +58,6 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
       await actions.loadWorkflows()
       return true
     }
-    state.workflowReturn = undefined
     const current = state.sessionId
     const reply = await input.send({ type: "session.get", sessionId: current })
     if (!reply.ok) { fail(reply.error.message); return false }
@@ -82,6 +81,8 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
     // No child session to open: the session's own sub-agents (an engine's, as Claude Code's) open as a thread.
     if ((!next || next === current) && action === "session.child.first") return agentView.first()
     if (!next || next === current) return false
+    // Only leaving the task drops the way back to /workflows; a failed or no-op move keeps it.
+    state.workflowReturn = undefined
     await actions.switchSession(next)
     return true
   }
