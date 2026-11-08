@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- `mendcode workflow show` prints a script's last log lines and what it returned, so a script that stopped early says why.
+
 ## v0.0.7 - 2026-11-07
 
 `/today` gathers what needs you in one page, memory works by itself in balanced and in every engine, Claude Code

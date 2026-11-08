@@ -1060,7 +1060,17 @@ export function waitingLines(workflow: Pick<WorkflowSummary, "tasks">) {
   return workflow.tasks.filter((task) => task.state === "needs_input").map((task) => `waiting: ${task.id}  session ${task.sessionId ?? "-"}\n`)
 }
 
-/** The full run: tasks, contract, last verification. */
+/** What a script run said: its phase, its last log lines, and what it returned or why it failed. A script that stops early returns its reason, so a "completed" run is read with it. */
+function scriptLines(script: WorkflowRun["script"]) {
+  if (!script) return []
+  const lines = [`script: ${script.host}${script.phase ? ` · phase ${oneLine(script.phase)}` : ""} · ${script.calls} agent calls`]
+  for (const log of script.logs) lines.push(`  log: ${oneLine(log)}`)
+  if (script.error) lines.push(`  error: ${oneLine(script.error)}`)
+  if (script.result) lines.push(`  returned: ${oneLine(script.result)}`)
+  return lines
+}
+
+/** The full run: tasks, the script's log and result, contract, last verification. */
 export function workflowText(run: WorkflowRun) {
   const lines = [`${run.workflowId}  ${run.state}  ${run.permission}  ${run.name}`, `objective: ${oneLine(run.objective)}`]
   if (run.reason) lines.push(`reason: ${oneLine(run.reason)}`)
@@ -1071,6 +1081,7 @@ export function workflowText(run: WorkflowRun) {
     lines.push(`  ${TASK_MARK[task.state]} ${task.id}  ${task.state.padEnd(11)}  ${kind}  ${task.title}${task.attempt > 1 ? `  (attempt ${task.attempt})` : ""}${task.sessionId ? `  ${task.sessionId}` : ""}`)
     if (task.reason) lines.push(`      ${oneLine(task.reason)}`)
   }
+  lines.push(...scriptLines(run.script))
   const contract = run.plan.contract
   if (contract === undefined) lines.push("contract: none (unverified)")
   else if (typeof contract === "string") lines.push(`contract: ${contract}`)
