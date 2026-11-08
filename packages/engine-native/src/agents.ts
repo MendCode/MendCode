@@ -48,12 +48,15 @@ const shortDescription = (text: string) => {
  * then how many more there are and how to list them. It is sent on every request, so it stays the same size however many
  * agents are installed; the full descriptions come from `agent: "?"` and a prompt only ever reaches the child it runs.
  */
-export function subagentCatalog(agents: readonly Pick<AgentProfile, "name" | "description">[], size = SUBAGENT_CATALOG_SIZE): string {
+export function subagentCatalog(agents: readonly (Pick<AgentProfile, "name" | "description"> & Partial<Pick<AgentProfile, "tools" | "deny" | "permissionRules">>)[], size = SUBAGENT_CATALOG_SIZE): string {
   const shown = agents.slice(0, Math.max(0, size))
   const rest = agents.length - shown.length
   const more = rest ? `${shown.length ? `+${rest} more` : `${rest} agents`}: agent "${LIST_AGENTS}" lists them` : ""
-  return ["Sub-agents (name one in `agent`):", ...shown.map((agent) => `- ${agent.name}: ${shortDescription(agent.description)}`), ...(more ? [more] : [])].join("\n")
+  return ["Sub-agents (name one in `agent`):", ...shown.map((agent) => `- ${agent.name}${nativeOnly(agent) ? " (native models only)" : ""}: ${shortDescription(agent.description)}`), ...(more ? [more] : [])].join("\n")
 }
+
+/** An agent with tool or path rules: other engines (Claude Code, Codex) cannot enforce them, so it runs on native models only. */
+const nativeOnly = (agent: Partial<Pick<AgentProfile, "tools" | "deny" | "permissionRules">>) => !!(agent.tools || agent.deny?.some((tool) => tool !== "todo") || agent.permissionRules?.length)
 
 /** Names other agent tools give their general sub-agent (Claude Code's `general-purpose`): a model trained on them writes these. */
 const GENERAL_ALIASES = new Set(["general", "general-purpose", "general_purpose", "generalpurpose", "general purpose", "default", "generalist"])

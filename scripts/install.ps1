@@ -185,6 +185,12 @@ try {
     [Environment]::SetEnvironmentVariable('Path', $NewPath, 'User')
   }
   Write-Host "Installed mendcode $Version to $Destination (starting tier: $Tier). Open a new terminal to refresh PATH."
+  # The installed binary runs: its own --version is the proof, not the download. Glyphs by code point keep this file ASCII.
+  try {
+    $Ran = (& $Destination --version 2>&1 | Select-Object -First 1)
+    if ($LASTEXITCODE -eq 0) { Write-Host "$([char]0x2713) mendcode runs: $Ran" } else { Write-Host "$([char]0x2717) mendcode did not start: $Ran" }
+  } catch { Write-Host "$([char]0x2717) mendcode did not start: $($_.Exception.Message)" }
+  Write-Host 'In a new terminal, mendcode starts it and mendcode doctor checks the installation.'
   if ($env:MENDCODE_INSTALL_SERVICE -eq '1') {
     throw 'Windows daemon services need a supported local socket transport; the binary was installed without a service.'
   }

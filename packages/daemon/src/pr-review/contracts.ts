@@ -123,6 +123,11 @@ export interface JobLedger {
   recover(): ReviewJob[]
   /** Pending and waiting jobs whose `notBefore` passed, oldest first. */
   due(now: number): ReviewJob[]
+  /**
+   * Removes a finished job and every other finished job of its pull request (one row of the reviews page, with its earlier
+   * runs); an audit job goes alone. Throws `RangeError` while any job of that pull request is still open. Returns how many went.
+   */
+  forget?(id: string): number
 }
 
 export const jobKey = (job: Pick<ReviewJob, "reviewer" | "repo" | "number" | "head" | "base" | "configKey">) => [job.reviewer, job.repo, job.number, job.head, job.base, job.configKey].join("\u0000")

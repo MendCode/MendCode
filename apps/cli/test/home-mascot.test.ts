@@ -19,7 +19,7 @@ import { setTheme, type Line } from "../src/ui/theme"
 import { customizePageKey, CUSTOMIZE_ROWS, rowShown } from "../src/view/customize-page"
 import { renderHome, type HomeMascot, type HomeMascotBox } from "../src/view/home"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile, tuiProfilePath, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
-import { LOGO_MARK } from "../src/view/logo-mark"
+import { LOGO_MARK, LOGO_TITLE } from "../src/view/logo-mark"
 import { mendSpriteLines } from "../src/view/mend-sprite"
 import { lineWidth } from "../src/view/wrap"
 import { hasHalfBlocks, mascotScene, petStore, type PetStore } from "./mascot-scene"
@@ -34,7 +34,8 @@ afterAll(() => {
 const text = (lines: readonly Line[]) => lines.map(plain)
 const pixel = sampleSprite()
 const blink = sheetOf([pixel, pixel, sampleSprite({ eyes: "closed" }), sampleSprite({ lift: 1 })])
-const TITLE = "█▄ ▄█"
+/** `both` draws the wordmark's own letters (the website's title, five rows); its first row identifies it. */
+const TITLE = LOGO_TITLE[0]!
 
 /** Timers the test fires by hand: `advance` runs what is due, in order. */
 function clock() {
@@ -93,7 +94,8 @@ describe("the start screen with a pet mascot", () => {
   const spriteRows = (lines: readonly Line[]) => lines.flatMap((line, row) => (line.some((span) => span.fgHex === "#9c7ae8") ? [row] : []))
 
   test("tall enough: the picture above the title, centered, the Agent View under them, and where it was drawn is reported", () => {
-    const { lines, shown, asked, rows } = home(100, 26)
+    // 28 rows: the picture, a blank row and the five-row title, then the Agent View.
+    const { lines, shown, asked, rows } = home(100, 28)
     expect(shown).toEqual([{ row: spriteRows(lines)[0]!, col: (100 - box.cols) / 2, ...box }])
     expect(asked).toEqual(["30x15"])
     expect(spriteRows(lines)).toHaveLength(box.rows)
@@ -101,7 +103,7 @@ describe("the start screen with a pet mascot", () => {
     expect(title).toBe(shown[0]!.row + box.rows + 1)
     expect(rows[shown[0]!.row]!.search(/\S/)).toBe(shown[0]!.col)
     expect(rows.findIndex((row) => row.includes("No sessions yet"))).toBeGreaterThan(title + 2)
-    expect(lines.length).toBeLessThanOrEqual(26)
+    expect(lines.length).toBeLessThanOrEqual(28)
   })
 
   test("a few rows shorter but wide: the picture at the left and the title beside it, at the column it reports", () => {
@@ -109,8 +111,8 @@ describe("the start screen with a pet mascot", () => {
     expect(shown).toHaveLength(1)
     expect(shown[0]).toMatchObject(box)
     const title = rows.findIndex((row) => row.includes(TITLE))
-    // The title is three rows high, centered against the picture's fifteen.
-    expect(title).toBe(shown[0]!.row + Math.floor((box.rows - 3) / 2))
+    // The title is five rows high, centered against the picture's fifteen.
+    expect(title).toBe(shown[0]!.row + Math.floor((box.rows - LOGO_TITLE.length) / 2))
     expect(rows[title]!.indexOf(TITLE)).toBe(shown[0]!.col + box.cols + 4)
     expect(rows[shown[0]!.row]!.search(/\S/)).toBe(shown[0]!.col)
     expect(lines.length).toBeLessThanOrEqual(21)

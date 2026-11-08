@@ -126,7 +126,8 @@ export function cacheLifetime(input: { provider: string; type?: string | undefin
 function fallbackCacheLifetime(input: { provider: string; type?: string | undefined; baseUrl?: string | undefined; ttl?: CacheTtl | undefined }): CacheLifetime | undefined {
   if (input.provider === "chatgpt") return { ms: CHATGPT_CACHE_LIFETIME_MS, source: "assumed" }
   // A call that was answered with `ttl: "1h"` in its request: an hour wherever that field is taken, Vertex included.
-  if (input.ttl === "1h" && input.type !== undefined && CACHE_TTL_PROVIDER_TYPES.includes(input.type)) return { ms: ANTHROPIC_CACHE_LIFETIME_1H_MS, source: "documented" }
+  // Claude Code (`claude`) reports `1h` when its calls wrote the one-hour cache (`ephemeral_1h_input_tokens`), as it does on a subscription.
+  if (input.ttl === "1h" && (input.provider === "claude" || (input.type !== undefined && CACHE_TTL_PROVIDER_TYPES.includes(input.type)))) return { ms: ANTHROPIC_CACHE_LIFETIME_1H_MS, source: "documented" }
   if (input.type === "anthropic") return { ms: ANTHROPIC_CACHE_LIFETIME_MS, source: "documented" }
   if (input.type === "openai" && /^https:\/\/api\.openai\.com(\/|$)/i.test(input.baseUrl ?? "")) return { ms: OPENAI_CACHE_LIFETIME_MS, source: "documented" }
   return undefined

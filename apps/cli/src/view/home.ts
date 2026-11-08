@@ -2,7 +2,7 @@ import type { ColorName, Line, Span } from "../ui/theme"
 import { clip, fit } from "./deck"
 import { tipLine } from "./home-tips"
 import { DEFAULT_LOGO_FONT, DEFAULT_LOGO_TEXT, logoRowsFor, rowsWidth, type LogoFont } from "./logo-fonts"
-import { isShippedWordmark, logoLockup, logoLockups } from "./logo-mark"
+import { isShippedWordmark, logoLockup, logoLockups, logoTitles } from "./logo-mark"
 import { relativeTime, shortenMiddle } from "./session-list"
 import { defaultHomeMascot } from "./mascot"
 import type { TuiProfile } from "./tui-profile"
@@ -80,7 +80,7 @@ export type HomeMascot = { pixel?: { boxes: ReadonlyArray<{ cols: number; rows: 
 /** The gap between the sprite and the title beside it. */
 export const HOME_MASCOT_GAP = 4
 
-export type HomeLook = Partial<Pick<TuiProfile, "logoKind" | "homeMascot" | "customAscii" | "density" | "homeRightPanel" | "tagline" | "homeHeader" | "homePanel">> & { productName?: string; logoText?: string; logoFont?: LogoFont; layout?: "centered" | "split"; /** The terminal draws ASCII glyphs only: the logo's mark is drawn in plain characters. */ ascii?: boolean }
+export type HomeLook = Partial<Pick<TuiProfile, "logoKind" | "homeMascot" | "customAscii" | "density" | "homeRightPanel" | "tagline" | "homeHeader" | "homePanel" | "homeAlign" | "logoSize">> & { productName?: string; logoText?: string; logoFont?: LogoFont; layout?: "centered" | "split"; /** The terminal draws ASCII glyphs only: the logo's mark is drawn in plain characters. */ ascii?: boolean }
 /** `mcp` is absent until the daemon answered, and the MCP part is left out when there are no servers (like v1). */
 export type HomeFooter = { mcp?: { total: number; connected: number; failed: boolean } }
 
@@ -300,17 +300,30 @@ export function homeIdentity(look?: HomeLook): string[] {
   if (kind === "wordmark" && isShippedWordmark(look)) return logoLockup(look?.productName ?? PRODUCT, look?.ascii === true)
   if (kind === "mascot") return chosen.split("\n")
   if (kind === "custom") return (look?.customAscii || defaultHomeMascot).split("\n")
-  if (kind === "both") {
-    const mascot = chosen.split("\n")
-    const width = Math.max(rowsWidth(mascot), rowsWidth(wordmark))
-    const center = (rows: string[]) => {
-      const pad = " ".repeat(Math.floor((width - rowsWidth(rows)) / 2))
-      return rows.map((row) => pad + row)
-    }
-    // A blank row keeps the mascot's feet off the wordmark; a tall mascot gets two.
-    return [...center(mascot), ...Array.from({ length: mascot.length >= 10 ? 2 : 1 }, () => ""), ...center(wordmark)]
-  }
+  if (kind === "both") return mascotOver(chosen.split("\n"), bothTitles(look)[0]!)
   return wordmark
+}
+
+/** The letters under the mascot: the wordmark's own (the website's title and then the name when left as shipped), else the chosen font. */
+function bothTitles(look: HomeLook | undefined): string[][] {
+  return isShippedWordmark(look) ? logoTitles(look?.productName ?? PRODUCT, look?.ascii === true) : [logoRows(look?.logoText, look?.logoFont)]
+}
+
+/** The mascot centered over `title`; a blank row keeps its feet off the letters, a tall mascot gets two. */
+function mascotOver(mascot: string[], title: string[]): string[] {
+  const width = Math.max(rowsWidth(mascot), rowsWidth(title))
+  const center = (rows: string[]) => {
+    const pad = " ".repeat(Math.floor((width - rowsWidth(rows)) / 2))
+    return rows.map((row) => pad + row)
+  }
+  return [...center(mascot), ...Array.from({ length: mascot.length >= 10 ? 2 : 1 }, () => ""), ...center(title)]
+}
+
+/** `logoSize` keeps the largest identities out: medium keeps only the smallest of several (the mark or mascot over the name), small only the plain name. */
+function sized<T>(arts: T[], size: HomeLook["logoSize"]): T[] {
+  if (size === "small") return []
+  if (size === "medium" && arts.length > 1) return arts.slice(-1)
+  return arts
 }
 
 function actionsPanel(width: number, room = 5): Line[] {
@@ -329,7 +342,11 @@ function actionsPanel(width: number, room = 5): Line[] {
  */
 function logoArt(input: { look: HomeLook | undefined; product: string; allowArt: boolean; width: number; center: (spans: Span[]) => Line }): { arts: Line[][]; plain: Line[] } {
   const look = input.look
-  const identities = (look?.logoKind ?? "wordmark") === "wordmark" && isShippedWordmark(look) ? logoLockups(look?.productName ?? PRODUCT, look?.ascii === true) : [homeIdentity(look)]
+  const kind = look?.logoKind ?? "wordmark"
+  const all = kind === "wordmark" && isShippedWordmark(look)
+    ? logoLockups(look?.productName ?? PRODUCT, look?.ascii === true)
+    : kind === "both" ? bothTitles(look).map((title) => mascotOver(defaultHomeMascot.split("\n"), title)) : [homeIdentity(look)]
+  const identities = sized(all, look?.logoSize)
   const tagline = look?.tagline ? [input.center([{ text: shortenMiddle(look.tagline, input.width), fg: "muted" }])] : []
   const plain = look?.logoKind === "none" ? [] : [input.center([{ text: input.product, fg: "text" }]), ...tagline]
   const fitting = input.allowArt ? identities.filter((rows) => input.width >= rowsWidth(rows) + 12) : []
@@ -349,17 +366,19 @@ function pixelIdentity(input: { look: HomeLook | undefined; mascot: HomeMascot |
   const center = (spans: Span[]): Line => centerIn(spans, width)
   const pixel = mascot?.pixel
   const kind = look?.logoKind
-  if (!pixel || (kind !== "both" && kind !== "mascot")) return []
+  // `logoSize` as for the text identity (`sized`): small is the plain name, medium keeps the smallest of the titles.
+  if (!pixel || (kind !== "both" && kind !== "mascot") || look?.logoSize === "small") return []
+  const titles = kind === "mascot" ? [[]] : look?.logoSize === "medium" ? bothTitles(look).slice(-1) : bothTitles(look)
   const tagline = (room: number): Line[] => (look?.tagline ? [[{ text: shortenMiddle(look.tagline, room), fg: "muted" }]] : [])
-  const wordmark = logoRows(look?.logoText, look?.logoFont)
-  const wide = rowsWidth(wordmark)
-  const title = (): Line[] => wordmark.map((row): Line => {
-    const padded = row + " ".repeat(wide - textWidth(row))
-    return mascot?.title?.(padded, wide) ?? [{ text: padded, fg: "text" }]
-  })
   const layouts: PixelLayout[] = []
-  // Each size in turn, the wanted one first: above the title, then beside it. The rows are asked for only when a layout is built.
-  for (const { cols, rows } of pixel.boxes) {
+  // Each size in turn, the wanted one first: above the title, then beside it, each with the largest of the text identity's letters
+  // that fits (`bothTitles`, the same as without a picture). The rows are asked for only when a layout is built.
+  for (const { cols, rows } of pixel.boxes) for (const wordmark of titles) {
+    const wide = rowsWidth(wordmark)
+    const title = (): Line[] => wordmark.map((row): Line => {
+      const padded = row + " ".repeat(wide - textWidth(row))
+      return mascot?.title?.(padded, wide) ?? [{ text: padded, fg: "text" }]
+    })
     if (width < cols + 4) continue
     const sprite = () => pixel.lines(cols, rows).map((line) => fit(line, cols))
     const col = Math.floor((width - cols) / 2)
@@ -447,7 +466,8 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
   content ??= build(undefined, room)
   // `top` keeps the identity under the header; `center` centers the identity and the prompt, the panel hanging below them.
   const spare = Math.max(0, room - content.length)
-  const top = 1 + (input.prompt?.at === "top" ? 0 : input.prompt ? Math.min(spare, Math.max(0, Math.floor((room - lead - promptRows) / 2))) : Math.floor(spare / 2))
+  // `homeAlign` top puts the block under the header with the prompt at the bottom too.
+  const top = 1 + (input.prompt?.at === "top" ? 0 : input.prompt ? Math.min(spare, Math.max(0, Math.floor((room - lead - promptRows) / 2))) : input.look?.homeAlign === "top" ? 0 : Math.floor(spare / 2))
   if (mascotAt) input.mascot?.shown?.({ ...mascotAt, row: header.length + top + mascotAt.row })
   if (promptRows && lead + promptRows <= room) input.prompt?.placed?.(header.length + top + lead)
   return [...header, ...blank(top), ...content.slice(0, room), ...(belowRows.length > 0 ? [[], ...belowRows] : [])]

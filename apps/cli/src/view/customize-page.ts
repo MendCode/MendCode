@@ -13,7 +13,7 @@ import { toolDesignNames, toolDesignOf } from "./tool-design"
 import { TIMESTAMP_PLACES } from "./tui-profile"
 import { overlayRule } from "./status-line"
 import { statusItems } from "./status-items"
-import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_INPUTS, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_MODES, TABLE_STYLES, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
+import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_ALIGNS, HOME_INPUTS, LOGO_SIZES, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_MODES, TABLE_STYLES, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
 import { IMAGE_MODES } from "../pets/detect"
 import { ALT_LABELS, QUOTA_COLORS, QUOTA_VIEWS, CODE_MAP_CARDS, DIFF_VIEWS, TOOL_DENSITIES, TOOL_LAYOUTS, TOOL_LAYOUT_NAMES, toolLayoutOf, KEY_PROTOCOLS, OPTION_KEYS, COMMENT_CHIP_STYLES, COMMENT_CHIPS, COMMENT_HINTS, COMMENT_KEYS, COMMENT_MODES, COMMENT_SENT_LAYOUTS } from "./tui-profile"
 import { FILE_OPENERS } from "./links"
@@ -67,6 +67,8 @@ export function rowShown(row: CustomizeRow, profile: TuiProfile, facts: Customiz
   if (row === "customAscii") return kind === "custom"
   if (row === "homeMascot" || row === "mascotMotion" || row === "mascotSize") return kind === "mascot" || kind === "both"
   if (row === "homeInput") return profile.homeLayout !== "split"
+  if (row === "homeAlign") return profile.homeLayout !== "split" && profile.homeInput === "bottom"
+  if (row === "logoSize") return kind !== "none" && profile.homeLayout !== "split"
   if (row === "homeRightPanel") return profile.homePanel
   if (row === "homeTips") return HOME_TIPS.length > 0
   if (row === "placeholderText") return profile.showPlaceholder
@@ -158,7 +160,7 @@ const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
   contextBar: ["top", "off"], contextStyle: ["bar", "percent", "both"], messageLayout: ["quiet", "classic"], messageMeta: ["off", "compact", "full"],
   promptContext: ["minimal", "focus", "guide", "full", "custom"],
   messageRenderer: ["plain", "markdown", "full"], submitScroll: ["bottom", "clear"], presentation: ["auto", "raw", "minimal", "mendcode", "balanced", "full"], reasoning: ["auto", "hidden", "collapsed", "expanded"], toolOutput: ["auto", "collapsed", "expanded"], toolDensity: TOOL_DENSITIES, codeMapCard: CODE_MAP_CARDS, diffView: DIFF_VIEWS,
-  logoKind: LOGO_KINDS, mascotSize: MASCOT_SIZES, petSize: PET_SIZES, logoFont: LOGO_FONTS, homeLayout: HOME_LAYOUTS, homeInput: HOME_INPUTS, homeRightPanel: HOME_PANELS, density: DENSITIES,
+  logoKind: LOGO_KINDS, logoSize: LOGO_SIZES, homeAlign: HOME_ALIGNS, mascotSize: MASCOT_SIZES, petSize: PET_SIZES, logoFont: LOGO_FONTS, homeLayout: HOME_LAYOUTS, homeInput: HOME_INPUTS, homeRightPanel: HOME_PANELS, density: DENSITIES,
   promptBorder: ["auto", "single", "rounded", "double", "ascii"],
   promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarSide: ["left", "right"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
 }
@@ -628,6 +630,8 @@ function rowNotes(field: CustomizeRow, profile: TuiProfile, input: CustomizeInpu
     case "logoFont": return [muted(LOGO_FONT_NOTE[profile.logoFont])]
     case "productName": return [muted("Named on the home's first row, in the window title and when the logo does not fit")]
     case "homeInput": return [muted("bottom: as in chat · center: under the logo, both centered · top: under the logo at the top")]
+    case "logoSize": return [muted("large: the biggest that fits · medium: the mark over the name · small: the name alone. A screen too small gets the next smaller")]
+    case "homeAlign": return [muted("center: the logo and the list in the middle · top: right under the first row. With the input at center or top, it decides")]
     case "altLabel": return [muted("auto: opt on a Mac, alt elsewhere; or alt, opt, symbol (⌥). Only the hints change, not keybindings.json")]
     case "optionKeys": return [muted("auto: on a Mac, œ ¬ ® π ≤ ≥ typed alone run opt+q l r p , . where that key works; off types them")]
     case "keyProtocol": return [muted("auto: on a Mac, asks the terminal for real key reports so Option+key is Alt+key; off never asks")]

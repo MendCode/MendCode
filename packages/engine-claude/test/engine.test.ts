@@ -1998,8 +1998,21 @@ describe("claude engine background tasks", () => {
     expect(h.spawned).toHaveLength(0)
     h.bound.set(fresh, "cc-session-1")
     expect(await compact(fresh)).toEqual({ status: "ok", note: expect.stringContaining("reported no compaction") })
-    expect(await h.engine.compact({ sessionId: fresh, turnId: ids("turn"), signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, idle: true })).toEqual({ status: "ok" })
+    // While idle the same `/compact` is sent (Claude Code driven through stream-json has no idle compaction of its own).
+    expect(await h.engine.compact({ sessionId: fresh, turnId: ids("turn"), signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, idle: true })).toEqual({ status: "ok", note: expect.stringContaining("reported no compaction") })
     h.engine.stop()
+  })
+
+  test("a turn whose calls wrote the one-hour cache reports it, so the idle compaction waits for the hour; the five-minute cache reports nothing", async () => {
+    const usageOf = async (cacheCreation: Record<string, number>) => {
+      const h = engineWith([fakeClaude({ onUser: (api) => { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result({ usage: { input_tokens: 18, cache_creation_input_tokens: 100, cache_read_input_tokens: 3000, output_tokens: 169, cache_creation: cacheCreation } })) } })])
+      const turn = turnInput()
+      await h.engine.runTurn(turn.input)
+      h.engine.stop()
+      return turn.events.find((event) => event.type === "usage") as Extract<EngineEvent, { type: "usage" }>
+    }
+    expect((await usageOf({ ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 100 })).cacheTtl).toBe("1h")
+    expect((await usageOf({ ephemeral_5m_input_tokens: 100, ephemeral_1h_input_tokens: 0 })).cacheTtl).toBeUndefined()
   })
 
   test("a background task is stopped through Claude Code's stop_task request", async () => {

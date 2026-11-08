@@ -706,6 +706,7 @@ export function createWorkflowService(options: {
         policyExecutions.set(sessionId, execution)
         return {
           execution,
+          workflowId: run.workflowId,
           sourceDirectory: run.directory,
           ...(run.packageRoot ? { packageRoot: run.packageRoot } : {}),
           beforeCall: () => {

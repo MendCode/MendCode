@@ -47,16 +47,16 @@ Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Na
 
 ### Start the daemon
 
-Start the headless daemon with its existing engine options:
+Start a foreground daemon that listens (`daemon start` and the background service stay local-only, so a stray `remote.json` never opens a port on their own):
 
 ```sh
-bun packages/daemon/src/main.ts --dir /srv/mendcode --cwd /srv/project --listen 127.0.0.1:9876
+mendcode daemon run --dir /srv/mendcode --cwd /srv/project --listen 127.0.0.1:9876
 ```
 
 No listener is enabled by default. Use literal `127.0.0.1` or `[::1]` for plaintext loopback. Hostnames, wildcard addresses and other IPs require both PEM files:
 
 ```sh
-bun packages/daemon/src/main.ts --dir /srv/mendcode --cwd /srv/project \
+mendcode daemon run --dir /srv/mendcode --cwd /srv/project \
   --listen 0.0.0.0:9876 --tls-cert /srv/tls/server.pem --tls-key /srv/tls/server-key.pem
 mendcode --connect server.example:9876 --token-file /private/path/mendcode-token --session SESSION_ID
 ```

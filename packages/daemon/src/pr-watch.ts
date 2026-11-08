@@ -55,6 +55,8 @@ export type Snapshot = {
   mergeable: "mergeable" | "conflicting" | "unknown"
   review?: string | undefined
   head: string
+  /** The head commit's SHA, when `gh` reports it: a review wait belongs to one commit. */
+  commit?: string | undefined
   base: string
   author?: string | undefined
   checks: Check[]
@@ -67,7 +69,7 @@ const Comment = z.object({ id: z.union([z.string(), z.number()]).optional(), aut
 const Review = z.object({ id: z.union([z.string(), z.number()]).optional(), author: Author, body: z.string().nullish(), state: z.string().optional() })
 const View = z.object({
   number: z.number().int().positive(), title: z.string(), url: z.string(), state: z.string(), isDraft: z.boolean().optional(), mergeable: z.string().optional(), reviewDecision: z.string().nullish(),
-  headRefName: z.string().optional(), baseRefName: z.string().optional(), author: Author, statusCheckRollup: z.array(Rollup).nullish(), comments: z.array(Comment).nullish(), reviews: z.array(Review).nullish(),
+  headRefName: z.string().optional(), headRefOid: z.string().optional(), baseRefName: z.string().optional(), author: Author, statusCheckRollup: z.array(Rollup).nullish(), comments: z.array(Comment).nullish(), reviews: z.array(Review).nullish(),
 })
 
 const FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"])
@@ -102,15 +104,23 @@ export function parseSnapshot(text: string): Snapshot | undefined {
     number: view.number, title: view.title, url: view.url, state, draft: view.isDraft === true,
     mergeable: view.mergeable === "CONFLICTING" ? "conflicting" : view.mergeable === "MERGEABLE" ? "mergeable" : "unknown",
     ...(view.reviewDecision ? { review: view.reviewDecision } : {}),
-    head: view.headRefName ?? "", base: view.baseRefName ?? "", ...(view.author?.login ? { author: view.author.login } : {}),
+    head: view.headRefName ?? "", ...(view.headRefOid ? { commit: view.headRefOid } : {}), base: view.baseRefName ?? "", ...(view.author?.login ? { author: view.author.login } : {}),
     checks: (view.statusCheckRollup ?? []).map((item) => ({ name: item.name ?? item.context ?? "check", bucket: bucketOf(item), ...((item.detailsUrl ?? item.targetUrl) ? { url: item.detailsUrl ?? item.targetUrl } : {}) })),
     remarks,
   }
 }
 
 /** What was already reported for a watch, so the same failure, conflict or comment never wakes twice. */
-export type Mark = { failed: string; passed: boolean; conflict: boolean; seen: string[] }
+/**
+ * `reviews`: MendCode review checks (`MendCode review`, `MendCode review (<id>)`, commit-status.ts) seen on this PR. A new head
+ * has none until its review starts, so for a while "all checks passed" would mean "the build passed"; one seen before and missing
+ * now counts as pending, at most `REVIEW_WAIT_MS` from `reviewWaitSince` (a reviewer that was turned off never blocks the notice).
+ */
+export type Mark = { failed: string; passed: boolean; conflict: boolean; seen: string[]; reviews?: string[] | undefined; reviewWaitSince?: number | undefined; reviewWaitCommit?: string | undefined }
 export type PrEvent = { kind: "checks_failed" | "checks_passed" | "conflict" | "comments"; lines: string[] }
+
+const REVIEW_CHECK = /^MendCode review(?: \(.+\))?$/
+export const REVIEW_WAIT_MS = 20 * 60_000
 
 const clip = (text: string, limit = EXCERPT) => { const flat = text.replace(/\s+/g, " ").trim(); return flat.length > limit ? `${flat.slice(0, limit)}...` : flat }
 const counts = (checks: readonly Check[]) => ({ pass: checks.filter((c) => c.bucket === "pass").length, fail: checks.filter((c) => c.bucket === "fail").length, pending: checks.filter((c) => c.bucket === "pending").length, skip: checks.filter((c) => c.bucket === "skip").length })
@@ -120,13 +130,20 @@ const counts = (checks: readonly Check[]) => ({ pass: checks.filter((c) => c.buc
  * passing run), someone other than the user commenting or reviewing, and the PR conflicting with its base. Pure.
  * Comments and reviews by `self` (the `gh` user; the PR's author when unknown) never wake the session.
  */
-export function evaluate({ snapshot, mark, self }: { snapshot: Snapshot; mark: Mark; self?: string | undefined }): { events: PrEvent[]; mark: Mark } {
+export function evaluate({ snapshot, mark, self, now = Date.now() }: { snapshot: Snapshot; mark: Mark; self?: string | undefined; now?: number }): { events: PrEvent[]; mark: Mark } {
   const events: PrEvent[] = []
   const failing = snapshot.checks.filter((check) => check.bucket === "fail")
   const failed = failing.map((check) => check.name).sort().join("\n")
   if (failing.length && failed !== mark.failed) events.push({ kind: "checks_failed", lines: [`Checks failed: ${failing.slice(0, 8).map((check) => `${clip(check.name, 80)}${check.url ? ` (${check.url})` : ""}`).join(", ")}${failing.length > 8 ? `, ${failing.length - 8} more` : ""}`] })
   const total = counts(snapshot.checks)
-  const passed = snapshot.checks.length > 0 && total.fail === 0 && total.pending === 0
+  const present = snapshot.checks.map((check) => check.name).filter((name) => REVIEW_CHECK.test(name))
+  const reviews = [...new Set([...(mark.reviews ?? []), ...present])].slice(-8)
+  const missing = reviews.filter((name) => !present.includes(name))
+  // Each head commit gets its own wait: a push late in one commit's wait never inherits what is left of it.
+  const sameCommit = mark.reviewWaitCommit === snapshot.commit
+  const waitSince = missing.length ? (sameCommit ? mark.reviewWaitSince : undefined) ?? now : undefined
+  const reviewPending = missing.length > 0 && now - waitSince! < REVIEW_WAIT_MS
+  const passed = snapshot.checks.length > 0 && total.fail === 0 && total.pending === 0 && !reviewPending
   if (passed && !mark.passed) events.push({ kind: "checks_passed", lines: [`All checks passed (${total.pass} passed${total.skip ? `, ${total.skip} skipped` : ""})${snapshot.review ? `; review: ${snapshot.review}` : ""}`] })
   const conflict = snapshot.mergeable === "conflicting"
   if (conflict && !mark.conflict) events.push({ kind: "conflict", lines: [`Conflicts with ${snapshot.base || "its base branch"}; it cannot merge until the branch is updated`] })
@@ -141,7 +158,7 @@ export function evaluate({ snapshot, mark, self }: { snapshot: Snapshot; mark: M
     if (others.length > 5) lines.push(`... ${others.length - 5} more`)
     events.push({ kind: "comments", lines })
   }
-  return { events, mark: { failed, passed, conflict, seen: [...mark.seen, ...fresh.map((remark) => remark.id)].slice(-MAX_SEEN) } }
+  return { events, mark: { failed, passed, conflict, seen: [...mark.seen, ...fresh.map((remark) => remark.id)].slice(-MAX_SEEN), ...(reviews.length ? { reviews } : {}), ...(waitSince !== undefined ? { reviewWaitSince: waitSince, ...(snapshot.commit ? { reviewWaitCommit: snapshot.commit } : {}) } : {}) } }
 }
 
 /** The state of a PR as lines: what `pr_watch watch`, `/pr` and `check` show. Title and names are the PR's own text, quoted. */
@@ -164,7 +181,7 @@ export type EndReason = "merged" | "closed" | "comment-limit" | "unreadable" | "
 const Last = z.object({ at: z.number(), state: z.enum(["open", "merged", "closed"]), pass: z.number(), fail: z.number(), pending: z.number(), review: z.string().optional(), mergeable: z.string(), draft: z.boolean() })
 const Watch = z.object({
   sessionId: z.string(), directory: z.string(), url: z.string(), number: z.number(), title: z.string(), head: z.string(), base: z.string(), createdAt: z.number(),
-  mark: z.object({ failed: z.string(), passed: z.boolean(), conflict: z.boolean(), seen: z.array(z.string()) }),
+  mark: z.object({ failed: z.string(), passed: z.boolean(), conflict: z.boolean(), seen: z.array(z.string()), reviews: z.array(z.string()).optional(), reviewWaitSince: z.number().optional(), reviewWaitCommit: z.string().optional() }),
   /** Read only to drop it: watches saved before reads were counted awake (`outage`) kept the wall time of the first failure. */
   wakes: z.number().default(0), unreadableSince: z.number().optional(),
   /**
@@ -358,7 +375,7 @@ export function createPrWatch(options: PrWatchOptions) {
     const { snapshot } = result
     remember(watch, snapshot)
     if (snapshot.state !== "open") { end(watch, snapshot.state); return }
-    const outcome = evaluate({ snapshot, mark: watch.mark, self: await self(watch.directory) })
+    const outcome = evaluate({ snapshot, mark: watch.mark, self: await self(watch.directory), now: now() })
     watch.mark = outcome.mark
     // The session heard of the outage: what changed meanwhile says it is over.
     if (outage?.told && outcome.events.length) watch.pending.push(options.mask(watch.sessionId, `Read again after ${Math.max(1, Math.round((now() - outage.since) / 60_000))} minutes of failures (${outage.reason}).`))

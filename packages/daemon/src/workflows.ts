@@ -19,7 +19,7 @@ const SCRIPT_WORK = /\bmode\s*:\s*["'`]work["'`]/
 
 export type WorkflowCommand =
   | { type: "workflow.start"; directory: string; plan: WorkflowPlanInput; permission?: Permission | undefined; originSessionId?: SessionId | undefined; startKey?: string | undefined; loopId?: string | undefined; loopRunId?: string | undefined }
-  | { type: "workflow.list"; directory?: string | undefined }
+  | { type: "workflow.list"; directory?: string | undefined; limit?: number | undefined }
   | { type: "workflow.get"; workflowId: WorkflowId }
   | { type: "workflow.control"; workflowId: WorkflowId; action: "pause" | "resume" | "stop" | "retry" | "verify" | "accept" | "delete" | "approve" | "reject"; taskId?: string | undefined; reason?: string | undefined }
   | { type: "workflow.preview"; directory: string; plan: WorkflowPlanInput; permission?: Permission | undefined; originSessionId?: SessionId | undefined }
@@ -287,7 +287,7 @@ export function createWorkflowsHost(options: {
       // Reads need no service when nothing was ever started: the store has the rows.
       if (command.type === "workflow.list") {
         const runs = service ? service.list(command.directory) : options.store.all().filter((run) => !command.directory || run.directory === command.directory)
-        return { ok: true, result: { workflows: runs.sort((a, b) => b.updatedAt - a.updatedAt).map(summarizeWorkflow) } }
+        return { ok: true, result: { workflows: runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, command.limit ?? runs.length).map(summarizeWorkflow) } }
       }
       if (command.type === "workflow.get") {
         const run = service ? service.get(command.workflowId) : options.store.all().find((entry) => entry.workflowId === command.workflowId)

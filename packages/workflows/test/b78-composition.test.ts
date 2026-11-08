@@ -252,6 +252,12 @@ describe("B78 outputs and bounded map", () => {
     expect(captureOutput(task, pretty)?.value).toBe('{"goal":"stop non-owners"}')
     const tildes = "~~~WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: 'a "quoted" } brace' }) + "\n~~~TASK_RESULT\nstatus: done"
     expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
+    const unclosed = "```WORKFLOW_OUTPUT\nSchema notation: {\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```"
+    expect(captureOutput(task, unclosed)?.value).toBe('{"goal":"stop non-owners"}')
+    // Prose in any script before an unclosed brace is still prose.
+    expect(captureOutput(task, "```WORKFLOW_OUTPUT\n结构说明： {\n" + JSON.stringify({ goal: "done" }) + "\n```")?.value).toBe('{"goal":"done"}')
+    // A truncated outer array is not prose: the object inside it is not an outermost answer.
+    expect(() => captureOutput(task, "```WORKFLOW_OUTPUT\n[" + JSON.stringify({ goal: "wrong outer type" }) + "\n```")).toThrow("not valid JSON")
   })
 
   test("aggregate output storage fails closed within the durable row limit", async () => {

@@ -117,8 +117,10 @@ const daemonFor = (start: WorkflowSummary, previewResult: Record<string, unknown
 
 describe("workflow argument parsing", () => {
   test("list", () => {
-    expect(parsed("workflow", "list")).toEqual({ kind: "workflow.list", all: false, json: false })
-    expect(parsed("workflow", "list", "--all", "--json")).toEqual({ kind: "workflow.list", all: true, json: true })
+    expect(parsed("workflow", "list")).toEqual({ kind: "workflow.list", all: false, limit: 50, json: false })
+    expect(parsed("workflow", "list", "--all", "--json")).toEqual({ kind: "workflow.list", all: true, limit: 50, json: true })
+    // `list --all` on a store with hundreds of runs was larger than one reply frame (273 KB) and failed.
+    expect(parsed("workflow", "list", "--limit", "200")).toMatchObject({ kind: "workflow.list", limit: 200 })
   })
 
   test("preview and start take a file or a saved name", () => {
@@ -260,11 +262,11 @@ describe("workflow list, show and control", () => {
     const send: Send = () => ({ ok: true, result: { workflows: [summary()] } })
     const scoped = harness({ send })
     expect(await runAutomation(parsed("workflow", "list"), scoped.deps)).toBe(0)
-    expect(scoped.sent[0]).toEqual({ type: "workflow.list", directory: "/work/app" })
+    expect(scoped.sent[0]).toEqual({ type: "workflow.list", limit: 50, directory: "/work/app" })
     expect(scoped.out.join("")).toContain("1/2 tasks  ship it")
     const all = harness({ send })
     await runAutomation(parsed("workflow", "list", "--all", "--json"), all.deps)
-    expect(all.sent[0]).toEqual({ type: "workflow.list" })
+    expect(all.sent[0]).toEqual({ type: "workflow.list", limit: 50 })
     expect(lines(all.out)).toEqual([{ schema: SCHEMA, kind: "result", command: "workflow.list", data: { workflows: [expect.objectContaining({ workflowId: WFL })] } }])
   })
 

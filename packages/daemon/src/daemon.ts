@@ -280,7 +280,7 @@ import { searchFiles } from "./files-index"
 import { createInteractiveProcesses } from "./interactive-processes"
 import { createBackgroundTasks, type BackgroundPort, type InteractivePort, type LoopPort, type PeerPort, type ReviewPort, type WorkflowPort } from "@mendcode/tools"
 import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-notice"
-import { catalogId, catalogModel, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
+import { catalogId, catalogModel, claudeFamilyId, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
 import { createLiveTokens } from "./live-tokens"
@@ -1099,7 +1099,15 @@ export async function startDaemon(options: DaemonOptions) {
     const agentReport = agents.report({ directory })
     const agentFindings: ResourceDiagnostics = { ...emptyDiagnostics(), overridden: agentReport.overridden ?? [], problems: agentReport.problems }
     const all: Array<[string, ResourceDiagnostics]> = [["skills", skills.inspect(directory).diagnostics], ["commands", commandReport], ["agents", agentFindings]]
-    return all.flatMap(([kind, diagnostics]) => diagnosticLines(diagnostics, 12).map((detail) => ({ name: `${kind} resources`, ok: diagnostics.problems.length === 0 && diagnostics.dropped.length === 0, detail })))
+    // An override (another layer's skill of the same name) and a field warning are worth a look, not a broken install.
+    const notice = (detail: string) => / is overridden by |: warning: |^warning: /.test(detail)
+    // Severity comes from the findings themselves, not the lines shown: "… and N more" fails only when a real problem is among them.
+    return all.flatMap(([kind, diagnostics]) => {
+      const failing = diagnostics.dropped.length > 0 || diagnostics.problems.some((problem) => !notice(`${problem.file}: ${problem.message}`))
+      return diagnosticLines(diagnostics, 12).map((detail) => notice(detail) || (!failing && detail.startsWith("…"))
+        ? { name: `${kind} resources`, ok: true, level: "warn" as const, detail }
+        : { name: `${kind} resources`, ok: !failing, detail })
+    })
   }
   /** `/name args` of a skill: the skill's text goes in as an argument so shell markers inside it stay inert. */
   const skillInvocation = async (directory: string, command: { name: string; skill?: boolean | undefined }, args: string) => {
@@ -1191,24 +1199,29 @@ export async function startDaemon(options: DaemonOptions) {
       if (shorthand && input.variant && shorthand !== input.variant) throw new Error("conflicting task variants")
       let raw = hash > 0 ? input.model!.slice(0, hash) : input.model
       // A model named without its provider (`gpt-6.1-terra`) is the one catalog id it can only mean.
-      if (raw) raw = catalogId(catalog, raw) ?? raw
-      if (input.engine) {
+      if (raw) raw = catalogId(catalog, raw) ?? claudeFamilyId(catalog, raw) ?? raw
+      // A model that only runs on another engine (Claude Code's `claude-opus`) names that engine itself: asking for it is the opt-in.
+      const engine = input.engine ?? (raw ? modelEngine({ model: raw }, catalog) : undefined)
+      const agent = agents.port().subagents(store.sessionDirectory(parent)!).find((agent) => agent.name === (input.agent ?? (input.task_id ? store.sessionAgent(input.task_id) : "general")))
+      // Everything wrong with an engine delegation in one error, so the next call is right instead of the third.
+      const restricted = !!engine && engine !== "native" && !!agent && !!(agent.tools || agent.deny?.some((tool) => tool !== "todo") || agent.permissionRules?.length)
+      const restrictedNote = restricted ? `agent "${agent!.name}" limits tools or paths, which ${engine} cannot enforce: omit agent (a general sub-agent) to use ${raw ?? "this model"}, or keep "${agent!.name}" on a native model` : undefined
+      if (engine) {
         if (store.meta.get(`session.local-tools.restricted:${parent}`) === "true") throw new Error("cross-engine delegation is local only")
-        if (options.safeMode || store.settings.get().tier !== "full" || !featureOn(store.settings.get(), "subagents")) throw new Error("cross-engine delegation needs the full tier")
+        if (options.safeMode || store.settings.get().tier !== "full" || !featureOn(store.settings.get(), "subagents")) throw new Error(`cross-engine delegation needs the full tier${raw ? ` (${raw} runs on the ${engine} engine)` : ""}`)
         const engineOf = (model: ModelChoice) => modelEngine(model, catalog) ?? (model.model.startsWith("acp:") ? acpAgentKey(model.model) : "native")
         raw ??= previous?.model
         // Another engine is never given a model it was not asked for; the error names that engine's ids so the next call can be exact.
-        const ofEngine = catalog.list(true).filter((model) => engineOf({ model: model.id }) === input.engine).map((model) => model.id)
-        if (!raw) throw new Error(ofEngine.length ? `engine delegation needs an exact model; ${input.engine} models: ${ofEngine.slice(0, 6).join(", ")}` : `no ${input.engine} model is configured: ${input.engine === "native" ? "connect a provider in /connect" : `${input.engine} must be installed and signed in`} (\`mendcode models\` lists the ids)`)
-        if (engineOf({ model: raw }) !== input.engine) throw new Error(`model ${raw} does not run on the ${input.engine} engine${ofEngine.length ? `; its models: ${ofEngine.slice(0, 6).join(", ")}` : ""}`)
+        const ofEngine = catalog.list(true).filter((model) => engineOf({ model: model.id }) === engine).map((model) => model.id)
+        if (!raw) throw new Error(ofEngine.length ? `engine delegation needs an exact model; ${engine} models: ${ofEngine.slice(0, 6).join(", ")}` : `no ${engine} model is configured: ${engine === "native" ? "connect a provider in /connect" : `${input.engine} must be installed and signed in`} (\`mendcode models\` lists the ids)`)
+        if (engineOf({ model: raw }) !== engine) throw new Error(`model ${raw} does not run on the ${engine} engine${ofEngine.length ? `; its models: ${ofEngine.slice(0, 6).join(", ")}` : ""}${restrictedNote ? `; also ${restrictedNote}` : ""}`)
       }
-      const agent = agents.port().subagents(store.sessionDirectory(parent)!).find((agent) => agent.name === (input.agent ?? (input.task_id ? store.sessionAgent(input.task_id) : "general")))
-      if (input.engine && input.engine !== "native" && agent && (agent.tools || agent.deny?.some((tool) => tool !== "todo") || agent.permissionRules?.length)) throw new Error("external child engines cannot enforce this agent's tool/path rules; choose general or native")
+      if (restrictedNote) throw new Error(restrictedNote)
       const fallback = previous ?? resolveModel({ role: "subagent", session: store.sessionModel(parent), roles: rolesFor(store.settings.get(), store.sessionDirectory(parent)), catalog, cheapSubagent: featureOn(store.settings.get(), "cheap_subagents", { safeMode: options.safeMode }) })
       const variant = input.variant ?? shorthand ?? (!raw && !previous ? agent?.model ? agent.variant : store.settings.get().subagent_variant : undefined)
       const choice = { ...(raw ? { model: raw } : !previous && agent?.model ? { model: agent.model } : fallback), ...(variant ? { variant } : {}), ...(!variant && !raw && !previous && agent?.effort ? { effort: agent.effort } : {}) }
       if (!catalog.selectable && !raw && !variant && !agent?.model && !agent?.effort) return previous
-      const problem = invalidChoice(choice, catalog, input.engine ? "main" : "subagent")
+      const problem = invalidChoice(choice, catalog, engine ? "main" : "subagent")
       // The model that asked gets the ids it probably meant, so its next call can be right.
       const near = problem?.startsWith("unknown model") ? nearModels(catalog, choice.model) : []
       if (problem) throw new Error(near.length ? `${problem}; use an exact id such as ${near.join(", ")}` : `${problem}; \`mendcode models\` lists the ids`)
@@ -6312,13 +6325,24 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: true, result: { operation: "precedence", ok: true, checks: [], failures: [], facts } })
         }
         let login: { ok: boolean; message?: string } | undefined
-        if (command.operation === "ai-env" || command.operation === "ai-status") {
+        if (command.operation === "ai-env" || command.operation === "ai-status" || command.operation === "doctor") {
           const checked = options.info?.login ? await options.info.login().catch(() => ({ ok: false, message: "login check failed" })) : undefined
           login = checked ? { ok: checked.ok, ...(checked.message ? { message: redactSecrets(checked.message).text.slice(0, 300) } : {}) } : undefined
         }
-        const report = systemReport(command.operation, { entry: command.entry, page: command.page, index: command.index, dir: options.dir, directory: canonicalDir(command.directory), socketPath: options.socketPath, transport: localSecret ? "tcp" : "unix", buildId: options.buildId, engine: options.info?.engine ?? "unknown", settings: { ...store.settings.get(), ...(options.logLevel ? { logLevel: options.logLevel } : {}) }, catalog, providers: options.providers, login, ...(command.operation === "config-layers" ? { invalidSettings: store.settings.invalid() } : {}) })
+        const reportInput: Parameters<typeof systemReport>[1] = { entry: command.entry, page: command.page, index: command.index, dir: options.dir, directory: canonicalDir(command.directory), socketPath: options.socketPath, transport: localSecret ? "tcp" : "unix", buildId: options.buildId, engine: options.info?.engine ?? "unknown", settings: { ...store.settings.get(), ...(options.logLevel ? { logLevel: options.logLevel } : {}) }, catalog, providers: options.providers, login, ...(command.operation === "config-layers" ? { invalidSettings: store.settings.invalid() } : {}) }
+        const report = systemReport(command.operation, reportInput)
         if (command.operation === "ai-env" || command.operation === "ai-status") report.facts.login = login ?? null
-        if (command.operation === "doctor") report.checks.push(...await resourceChecks(canonicalDir(command.directory)))
+        if (command.operation === "doctor") {
+          // A failure only when the main model cannot run (ai-status's readiness: its provider or the subscription it needs); a
+          // subscription that model does not use is information.
+          const ai = systemReport("ai-status", reportInput).facts as { ready?: boolean | null; blockers?: string[]; roles?: { main?: { model?: string | null } } }
+          const model = ai.roles?.main?.model ?? "the main model"
+          if (ai.ready === false || (ai.blockers ?? []).length > 0) report.checks.push({ name: "login", ok: false, detail: redactSecrets(`${model} cannot run: ${(ai.blockers ?? []).join("; ") || "not signed in"}`).text.slice(0, 300) })
+          else if (login) report.checks.push(login.ok ? { name: "login", ok: true, detail: "signed in" } : { name: "login", ok: true, level: "info", detail: redactSecrets(`${login.message ?? "not signed in"} (${model} does not need it)`).text.slice(0, 300) })
+          report.checks.push(...await resourceChecks(canonicalDir(command.directory)))
+          report.failures = report.checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
+          report.ok = report.failures.length === 0
+        }
         return reply(connection, command.id, { ok: true, result: report })
       }
       case "worktree.query":
@@ -7029,6 +7053,11 @@ export async function startDaemon(options: DaemonOptions) {
     .catch((error) => logLine("warn", `[DAEMON]: releasing the queues a restart held failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
   resumeTimer.unref?.()
 
+  /** No turn running or finishing in this session. */
+  const writerIdle = (sessionId: SessionId) => {
+    const actor = actors.get(sessionId)?.snapshot()
+    return actor === undefined || (actor.turnId === undefined && !BUSY.has(actor.foreground))
+  }
   return {
     socketPath: options.socketPath,
     /** Set when the local transport is loopback TCP: where and with which secret a local client connects. */
@@ -7056,6 +7085,15 @@ export async function startDaemon(options: DaemonOptions) {
     serverEventSubscriptions: () => serverEventObservers.size,
     /** Whether the workflow service was built (P6: false on a daemon that never saw a workflow). */
     workflowsLoaded: workflows.loaded,
+    /**
+     * Whether `reader` is a later step of the same workflow run as `writer`, and `writer`'s turn ended: its writes are handed
+     * to that step, never "another session's work" (one-tree.ts). Any other reader (a session of the user, another run) and a
+     * step still working are still told.
+     */
+    workflowStepFinished: (sessionId: SessionId, reader: SessionId) => {
+      const run = workflows.execution(sessionId)?.workflowId
+      return run !== undefined && workflows.execution(reader)?.workflowId === run && !live.has(sessionId) && writerIdle(sessionId)
+    },
     stop,
   }
 }

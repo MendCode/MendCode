@@ -15,6 +15,8 @@ GPT family (OpenAI) guidance:
 - Final answer: the outcome first, in one or two short paragraphs or at most five flat bullets; no headings for small tasks, no nested lists, no pasted file contents. Name files as `path:line`. Offer a next step only when one is natural.
 <!-- model "GPT-6 Luna low-effort notes" /luna/i -->
 At low reasoning effort (this model's default here): keep edits small, read before every edit, and run the check instead of reasoning about whether it would pass.
+<!-- model "GPT-6.1 Terra long-task notes" /terra/i -->
+Finish long tasks in this turn: while your todo has open items you can do, keep working. End the turn only when everything is done, a decision only the user can make is needed, or an error you cannot resolve stops you. A plan, one finished step or a list of pending items is not a final answer.
 <!-- model "OpenAI reasoning model notes" /(?:^|[^a-z0-9])o\d+(?:[^a-z0-9]|$)/i -->
 Reasoning models plan internally: skip "let me think" narration and long plans, keep preambles to one line, and spend the budget on checking results.
 <!-- model "Codex-tuned model notes" /codex/i -->

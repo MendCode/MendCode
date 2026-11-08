@@ -7,8 +7,8 @@ import path from "node:path"
 import { MEMORY_USAGE, parseMemoryAutomation, type MemoryAutomation } from "./memory-automation"
 import type { Client } from "@mendcode/client"
 import type { GlobalEvent, Loop, MemoryEntry, PackageInfo, Area, RecipesReport, Settings, SessionEvent, SessionId, SessionSummary, StorageCleanResult, StorageReport, StorageWorktreesReport, UsageReport, UsageWasteReport, WorkflowRun, WorkflowSummary } from "@mendcode/protocol"
-import { MODEL_ROLES, TUI_OPERATIONS, DEFAULT_AREA, AREA_NAME, areaFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
-import { createHeadlessRun } from "./run"
+import { AGENT_SHELL_ENV, MODEL_ROLES, TUI_OPERATIONS, DEFAULT_AREA, AREA_NAME, areaFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
+import { createHeadlessRun, EXIT as RUN_EXIT } from "./run"
 import { COMPAT, compatEnvelope } from "./compat"
 import { isScriptFile, parseRunArguments } from "./view/workflow-script"
 import { relativeTime } from "./view/session-list"
@@ -24,7 +24,7 @@ import { parseSession, sessionDirectories, type SessionAutomation } from "./sess
 import { sessionHuman, sessionModelPrefix, sessionSelection } from "./session-output"
 import { parseGlobalOptions } from "./global-options"
 import { composeLongText } from "./long-text"
-import { COMPLETION_SHELLS, completionScript, contextText, systemText, type CompletionShell } from "./support-output"
+import { COMPLETION_SHELLS, completionScript, contextText, installChecks, systemText, type CompletionShell } from "./support-output"
 import packageJson from "../package.json"
 import { CATALOG_USAGE, parseCatalog, type CatalogAutomation } from "./catalog-args"
 import { THEME_USAGE, parseTheme, type ThemeAutomation } from "./theme-args"
@@ -58,6 +58,8 @@ export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, d
 
 export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
 const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary"])
+/** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
+const WORKFLOW_LIST_LIMIT = 50
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
 /** Flags that may be given several times; their values are collected in order. */
 const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude"])
@@ -91,7 +93,7 @@ export type Automation = Common &
     | { kind: "loop.create"; objective: string; name: string; trigger: { kind: "manual" } | { kind: "interval"; everyMs: number } | { kind: "daily"; at: string }; budget: { mode: "goal"; maxRuns?: number } | { mode: "monitor" } | { mode: "fixed"; maxRuns: number }; criteria?: string; checks?: string[]; audit?: "none"; runNow: boolean }
     | { kind: "loop.control"; id: string; action: "pause" | "resume" | "stop" | "run" | "delete" }
     | { kind: "loop.fire"; id: string; note?: string }
-    | { kind: "workflow.list"; all: boolean }
+    | { kind: "workflow.list"; all: boolean; limit: number }
     | { kind: "workflow.preview"; target: string; script?: ScriptRun }
     | { kind: "workflow.new"; name: string; out?: string }
     | { kind: "workflow.convert"; target: string; out?: string }
@@ -257,7 +259,7 @@ export const USAGE: Record<string, string> = {
   workflow: [
     `usage: ${PROGRAM_NAME} workflow <command> [--dir D] [--json]   (also: workflows)`,
     "",
-    "  list|status             --all",
+    "  list|status             --all --limit N (newest 50)",
     "  save <file.json|name>   --definition-id ID --name NAME --description TEXT",
     "                          --source manual|saved|template|profile|",
     "                          session-generated",
@@ -799,7 +801,11 @@ export function parseAutomation(argv: string[]): ParseResult {
       }
       case "list":
       case "status":
-        return ok({ kind: "workflow.list", all: flags.has("all") })
+      {
+        const limit = number(flags, "limit", { min: 1, integer: true })
+        if (isError(limit) || (limit ?? WORKFLOW_LIST_LIMIT) > 500) return bad("--limit needs an integer from 1 to 500")
+        return ok({ kind: "workflow.list", all: flags.has("all"), limit: limit ?? WORKFLOW_LIST_LIMIT })
+      }
       case "definitions": {
         const limit = number(flags, "limit", { min: 1, integer: true })
         if (isError(limit) || (limit ?? 50) > 100) return bad("--limit must be 1–100")
@@ -1427,7 +1433,14 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const reply = await daemon({ type: "system.query", operation: command.operation, directory: dir })
       if (!reply.ok) return fail(reply.message)
       const report = reply.result as unknown as import("@mendcode/protocol").SystemReport
-      result(reply.result, systemText(report))
+      if (command.operation === "doctor") {
+        // What only this side knows: the binary that answered and whether a new terminal finds it.
+        const own = installChecks(process.execPath, process.env.PATH ?? "", process.env.SHELL ?? "")
+        report.checks.unshift(...own)
+        report.failures = report.checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
+        report.ok = report.failures.length === 0
+      }
+      result(report as never, systemText(report))
       return report.ok ? EXIT.ok : EXIT.failed
     }
     case "files": {
@@ -1535,7 +1548,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
         return result({ sessionId: task?.taskId ?? command.id, queueId: reply.result.queueId, ...(command.mode ? { steered } : {}), ...(task ? { task } : {}) }, `${steered ? "steered" : "queued"} ${reply.result.queueId}${task ? ` · ${task.taskId}` : ""}\n`)
       }
       const jsonOut = { write: (text: string) => void text.split("\n").filter(Boolean).forEach((entry) => line({ kind: "event", event: JSON.parse(entry) })) }
-      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, unapproved: "pending", ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
+      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, unapproved: "pending", ...(deps.env?.[AGENT_SHELL_ENV] ? { stopOnPending: true } : {}), ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
       let after = 0
       let observedSession = command.id as SessionId
       const consume = (event: SessionEvent) => {
@@ -1571,9 +1584,13 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       refresh?.cancel()
       timer?.cancel()
       deps.listen(undefined)
-      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: command.id, exitCode: code, status: code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
+      // The turn waits on an approval nobody here may answer (`run.ts` said what and where): exit 4, as any wait on the user.
+      // Its sessionId is the one that waits: a subtask command's child, not the session the message was sent to.
+      const waiting = code === RUN_EXIT.pending
+      const exit = waiting ? EXIT.needsInput : code
+      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: waiting ? run.sessionId : command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
       else if (code === EXIT.timeout) err.write("error: timed out waiting for the turn\n")
-      return code
+      return exit
     }
 
     case "session.export": case "session.import": {
@@ -1749,7 +1766,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     }
 
     case "workflow.list": {
-      const reply = await daemon({ type: "workflow.list", ...(command.all ? {} : { directory: dir }) })
+      const reply = await daemon({ type: "workflow.list", limit: command.limit, ...(command.all ? {} : { directory: dir }) })
       if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
       const workflows = (reply.result.workflows ?? []) as WorkflowSummary[]
       return result({ workflows }, workflowRows(workflows))

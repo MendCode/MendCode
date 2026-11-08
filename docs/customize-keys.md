@@ -83,6 +83,7 @@ Type one of these commands to open its row or toggle it. Where a command takes a
 | Key | Row label or detail |
 |---|---|
 | `logoKind` | Logo: Logo kind |
+| `logoSize` | Logo: Logo size |
 | `logoText` | Logo text |
 | `customAscii` | Logo art |
 | `logoFont` | Logo font |
@@ -98,6 +99,7 @@ Type one of these commands to open its row or toggle it. Where a command takes a
 |---|---|
 | `homeLayout` | Welcome layout |
 | `homeInput` | Input position |
+| `homeAlign` | Home position |
 | `homePanel` | Home panel |
 | `homeRightPanel` | Split panel |
 | `density` | Density |

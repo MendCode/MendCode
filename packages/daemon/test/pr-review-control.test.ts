@@ -120,6 +120,15 @@ describe("job actions", () => {
     expect(await run({ action: "job-cancel", jobId: done })).toMatchObject({ ok: false, message: expect.stringContaining("already done") })
   })
 
+  test("job-forget removes a finished review from the list and refuses a live one", async () => {
+    const { run, add, jobs } = await setup()
+    const live = add("waiting", 20)
+    expect(await run({ action: "job-forget", jobId: live })).toMatchObject({ ok: false, message: expect.stringContaining("cancel it first") })
+    const failed = add("failed", 21)
+    expect(await run({ action: "job-forget", jobId: failed })).toMatchObject({ ok: true, text: expect.stringContaining("Removed") })
+    expect(jobs.get(failed)).toBeUndefined()
+  })
+
   test("cancel stops a live job for good (not resumable) and names the PR", async () => {
     const { run, add, jobs } = await setup()
     const id = add("waiting")

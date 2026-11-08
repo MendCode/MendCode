@@ -158,7 +158,7 @@ describe("agents in a session's turns", () => {
     const sessionId = await openSession(h)
     await say(h, sessionId, "go")
     const task = h.requests[0]!.tools.find((t) => t.name === "task")!
-    expect(task.description).toContain("- scout: Finds things")
+    expect(task.description).toContain("- scout (native models only): Finds things")
     expect(task.description).not.toContain("theirs")
     expect(h.requests[1]!.system).toBe("BASE\n\n# Agent: scout\n\nYou scout.")
     expect([h.requests[1]!.model, h.requests[1]!.tools.map((t) => t.name)]).toEqual(["gpt-6-luna", ["read", "secrets"]])

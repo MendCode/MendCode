@@ -9,6 +9,45 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.9 - 2026-11-08
+
+Agents ask for Claude models by name and keep going on long tasks, Claude Code sessions compact while idle, PR watch waits
+for MendCode's own review, the reviews page can be cleaned up, and replies stay in your language.
+
+### Upgrade notes
+
+- Same code as v0.0.9-beta.2.
+
+## v0.0.9-beta.2 - 2026-11-08
+
+Agents ask for Claude models by name and keep going on long tasks, Claude Code sessions compact while idle, PR watch waits
+for MendCode's own review, the reviews page can be cleaned up, and replies stay in your language.
+
+### New
+
+- `/customize` → Home → Logo size picks large, medium or small for any logo kind, and Home position puts the home's block in the middle or at the top.
+
+### Fixed
+
+- Creating thousands of items in the same instant no longer fails with an id error.
+- `mendcode doctor` tells warnings (a skill another layer overrides, a field an agent file cannot use) apart from real problems, checks the binary, PATH and login, lists Claude Code, Codex and Rex when installed, and ends with one line saying whether MendCode works.
+- The installer runs the binary it installed and says whether its folder is on PATH, with the exact line to add for your shell.
+- The home's logo keeps its size and place while the slash menu is open.
+- Logo kind `both` draws the same letters as the wordmark instead of another font.
+- The big title sits a row further from the mark where the screen has room.
+- Replies stay in your language after a background task or Monitor ends in Claude Code, and after a short or mixed message; a Spanish message with English words is no longer answered in French.
+- `mendcode workflow list` shows the newest 50 runs (`--limit N` up to 500); with hundreds of runs `--all` failed.
+- A workflow step no longer reads the files an earlier, finished step of the same run wrote as another session's work, and no longer stops to leave them alone.
+- Asking for a sub-agent by a Claude family name ("opus", "sonnet") runs it on your Claude Code model the first time, without naming the engine; when a call still cannot run, one error says everything to change. Agents with tool or path rules are marked "native models only" in the task tool.
+- Reviews page: `d` removes a finished review (failed, cancelled, done) from the list; cancelling or removing keeps the selection where it was; ↓ on the last row goes back to the first, and ↑ on the first to the last.
+- Shift with ↑ or ↓ moves five rows at a time on every page with a list or text.
+- PR watch no longer says "all checks passed" on a new commit while MendCode's own review of it has not reported yet; it waits for that review (up to 20 minutes).
+- `mendcode daemon run --listen HOST:PORT` starts a daemon other machines can connect to; before, only a source checkout could. `--connect` to an address with no daemon prints a short error.
+- An agent that sends a message to another session and waits is told at once when that session needs your approval, instead of waiting ten minutes without saying so.
+- An agent asked to change MendCode's own source code no longer refuses it as if it were a settings file.
+- GPT-6.1 Terra carries long tasks through in one turn instead of stopping at a plan or a first step.
+- Claude Code sessions compact while idle, just before Claude Code's one-hour prompt cache expires, as the native engine does (full tier, `idle_compact`).
+
 ## v0.0.8 - 2026-11-07
 
 Workflow scripts say why they stopped and cheap models follow their steps more reliably, and test tokens are no longer

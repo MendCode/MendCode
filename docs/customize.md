@@ -253,7 +253,11 @@ Retired `small`, `standard`, `shadow`, `classic`, `opencode`, and the retired st
 
 Home > Input position (`homeInput`, every tier, default `bottom`) is where the chat input sits on the start screen: `bottom` (over the footer, as in a session), `center` (right under the logo, the logo and the input centered together, the session list under them) or `top` (under the logo at the top).
 
-The footer stays at the bottom; a slash menu opens over the rows above the input.
+The footer stays at the bottom; a slash menu opens over the rows above the input. With the input at the bottom, the menu covers the bottom of the home and the logo keeps its size and place while you type.
+
+Home > Logo size (`logoSize`, default `large`) caps the identity: `large` is the biggest that fits (the mark over the big title, two rows apart where the screen has them), `medium` the mark (or the mascot) over the name, `small` the name alone. A screen too small for the chosen size gets the next smaller. `both` uses the same letters as `wordmark`: the website's title when the logo text and font are left as shipped, your font otherwise.
+
+Home > Home position (`homeAlign`, default `center`, shown while the input is at the bottom) puts the logo and the session list in the middle of the screen or right under its first row.
 
 The split layout, a screen too small for the logo and the minimal view keep it at the bottom; once the session has a message the input is at the bottom as always.
 

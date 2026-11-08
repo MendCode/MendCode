@@ -87,7 +87,7 @@ const isPrFilter = (filter: StateFilter): filter is PrFilter => PR_FILTERS.some(
 /** Where the page's data stands: `unavailable` is a daemon whose `status` answer has no dashboard; `remote` a client that may not ask. */
 export type ReviewsData = { status: "loading" | "ready" | "error" | "unavailable" | "remote"; dashboard?: PrReviewDashboard; error?: string; fetchedAt?: number }
 
-export type ReviewsConfirm = { kind: "cancel" | "take-over" | "release"; jobId: string; number: number }
+export type ReviewsConfirm = { kind: "cancel" | "forget" | "take-over" | "release"; jobId: string; number: number }
 export type ReviewsConfigState = { jobId: string; number: number; scope: PrJobSummary["scope"]; status: "loading" | "ready" | "error"; view?: PrReviewConfigView; error?: string }
 
 export type ReviewsPageState = {
@@ -248,6 +248,8 @@ export const canPause = (job: PrJobSummary) => PAUSABLE.has(job.state)
 export const canResume = (job: PrJobSummary) => RESUMABLE.has(job.state)
 export const canCancel = (job: PrJobSummary) => CANCELLABLE.has(job.state)
 export const canRetry = (job: PrJobSummary) => RETRYABLE.has(job.state)
+/** A finished review leaves the list (`d`); the daemon drops its earlier runs of the same pull request too. */
+export const canForget = (job: PrJobSummary) => RETRYABLE.has(job.state)
 /** A fix session exists and the reviewer holds it. */
 export const canTakeOver = (job: PrJobSummary) => job.fixSessionId !== undefined && job.control !== "user"
 export const canRelease = (job: PrJobSummary) => job.fixSessionId !== undefined && job.control === "user"
@@ -526,9 +528,9 @@ export function metricsSummary(dashboard: PrReviewDashboard | undefined, width: 
 
 /** Every key of the jobs tab with what it does, for the `?` section. */
 const PAGE_KEYS: ReadonlyArray<readonly [string, string]> = [
-  ["↑↓", "select"], ["g G", "first, last"], ["enter", "detail"], ["/", "search"], ["f F", "state filter"], ["m", "repo filter"],
+  ["↑↓", "select (wraps)"], ["shift ↑↓", "5 at a time"], ["g G", "first, last"], ["enter", "detail"], ["/", "search"], ["f F", "state filter"], ["m", "repo filter"],
   ["o", "open PR"], ["s", "review session"], ["S", "fix session"], ["p", "pause"], ["u", "resume"], ["R", "retry (asks why)"],
-  ["x", "cancel"], ["t", "take over, release"], ["c", "config"], ["1 2 tab", "jobs, watches"], ["r", "refresh"],
+  ["x", "cancel"], ["d", "remove a finished review"], ["t", "take over, release"], ["c", "config"], ["1 2 tab", "jobs, watches"], ["r", "refresh"],
   ["esc", "follow latest, back"], ["q", "close"], ["?", "hide keys"],
 ]
 
@@ -586,8 +588,8 @@ export function reviewsHints(state: ReviewsPageState, job: PrJobSummary | undefi
 function promptRows(state: ReviewsPageState, width: number): Line[] {
   if (state.confirm) {
     const { kind, number } = state.confirm
-    const key = kind === "cancel" ? "x" : "t"
-    const verb = kind === "cancel" ? "cancel the job of" : kind === "take-over" ? "take over the fix session of" : "give the fix session back to the reviewer on"
+    const key = kind === "cancel" ? "x" : kind === "forget" ? "d" : "t"
+    const verb = kind === "cancel" ? "cancel the job of" : kind === "forget" ? "remove from the list" : kind === "take-over" ? "take over the fix session of" : "give the fix session back to the reviewer on"
     const texts = [`${verb} #${number}? ${key} or y confirms · any key keeps it`, `${kind} #${number}? ${key}/y confirm`]
     return [clampLine([{ text: texts.find((text) => textWidth(text) <= width) ?? texts[1]!, fg: "warning", bold: true }], width), []]
   }

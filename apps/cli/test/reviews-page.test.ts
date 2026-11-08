@@ -524,3 +524,38 @@ describe("the pull request's GitHub state", () => {
     expect(reviewsPageKey(createReviewsPageState(), "F", board).state.filter.state).toBe("closed")
   })
 })
+
+describe("moving through the list and clearing finished reviews", () => {
+  const data = dashboard(populated())
+  const ids = listedJobs(data, createReviewsPageState().filter).map((entry) => entry.id)
+  const at = (id: string): ReviewsPageState => ({ ...createReviewsPageState(), selectedId: id, selected: ids.indexOf(id) })
+  test("down on the last row goes to the first and up on the first to the last; shift with an arrow moves five", () => {
+    expect(reviewsPageKey(at(ids.at(-1)!), "\x1b[B", data).state.selectedId).toBe(ids[0])
+    expect(reviewsPageKey(at(ids[0]!), "\x1b[A", data).state.selectedId).toBe(ids.at(-1))
+    expect(reviewsPageKey(at(ids[0]!), "\x1b[1;2B", data).state.selectedId).toBe(ids[5])
+    expect(reviewsPageKey(at(ids[5]!), "\x1b[1;2A", data).state.selectedId).toBe(ids[0])
+  })
+  test("shift with an arrow scrolls five lines in a review's detail, its configuration and the Watches tab", () => {
+    for (const view of [{ detail: true }, { config: { jobId: ids[0]!, number: 1, scope: "global" as const, status: "loading" as const } }, { tab: 1 }]) {
+      const state = { ...at(ids[0]!), ...view, scroll: 7 } as ReviewsPageState
+      expect(reviewsPageKey(state, "\x1b[1;2B", data).state.scroll).toBe(12)
+      expect(reviewsPageKey(state, "\x1b[1;2A", data).state.scroll).toBe(2)
+    }
+  })
+  test("d asks before removing a finished review and, confirmed, sends job-forget and keeps the selection on the next row", () => {
+    const asked = reviewsPageKey(at("failed"), "d", data).state
+    expect(asked.confirm).toEqual({ kind: "forget", jobId: "failed", number: 416 })
+    expect(renderReviewsPage({ data: ready(), state: asked, width: 120, height: 40, now: NOW }).map(text).join("\n")).toContain("remove from the list #416?")
+    const done = reviewsPageKey(asked, "d", data)
+    expect(done.action).toEqual({ type: "job", action: "job-forget", jobId: "failed" })
+    expect(done.state.selectedId).toBe(ids[ids.indexOf("failed") + 1])
+    // A live job is cancelled first, never removed.
+    expect(reviewsPageKey(at("pending"), "d", data).state.confirm).toBeUndefined()
+  })
+  test("cancelling keeps the selection where it was instead of following the job to the cancelled group at the bottom", () => {
+    const asked = reviewsPageKey(at("checkpointed"), "x", data).state
+    const done = reviewsPageKey(asked, "x", data)
+    expect(done.action).toEqual({ type: "job", action: "job-cancel", jobId: "checkpointed" })
+    expect(done.state.selectedId).toBe(ids[ids.indexOf("checkpointed") + 1])
+  })
+})

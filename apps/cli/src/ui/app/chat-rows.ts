@@ -361,7 +361,8 @@ export function createChatRows(ctx: AppContext, actions: {
     const hovered = state.hoverLink
     // The address under the pointer is underlined on every row it covers, the way a browser shows a link.
     const underHover = (lines: Line[]) => hovered ? lines.map((line) => line.some((span) => span.link === hovered) ? line.map((span) => span.link === hovered ? { ...span, underline: true } : span) : line) : lines
-    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
+    // The home is laid out as if the slash menu were closed and cut at the bottom, so the logo keeps its size and place while one types.
+    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight + popup.length).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
     // message and the prompt; once it overflows the view follows the bottom.
     const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight

@@ -502,7 +502,7 @@ Deleting a busy session is refused.
 
 `session send ID [TEXT…]` streams its own turn and waits by default; `--async` returns the queued ID and the daemon continues independently. `--wait` overrides `--async`; `--interval-ms` optionally reconciles missed events.
 
-Without `--approve` or `--dangerously-skip-permissions`, approvals stay pending for the owner to answer in the terminal; sending a message does not approve or deny them.
+Without `--approve` or `--dangerously-skip-permissions`, approvals stay pending for the owner to answer in the terminal; sending a message does not approve or deny them. `--wait` prints what waits for approval as soon as it is asked; run from a session's own shell (an agent, which sees nothing until the command ends) it then stops with exit 4 and status `waiting_approval` instead of waiting into its timeout, and `session wait <id>` picks the turn up after the owner answers.
 
 The wait may time out while an approval is pending, without resolving it or cancelling the turn.
 

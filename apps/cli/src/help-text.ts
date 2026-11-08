@@ -59,6 +59,8 @@ export const DAEMON_HELP = text([
   "  start|run|stop|restart  --force: interrupt active work",
   "                          restart --force first waits for running commands,",
   "                          background tasks and agents: --grace S (0-3600, 120)",
+  "  run --listen HOST:PORT  foreground daemon that also takes remote clients",
+  "                          (--tls-cert F --tls-key F off loopback)",
   "  status",
   "  logs                    --lines N (1-1000)",
   "  service <action>        plan, install, start, stop, restart, status, logs,",

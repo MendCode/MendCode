@@ -320,9 +320,17 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   let liveSent = 0
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0)
 
+  /** Whether a call of the turn wrote its prompt to the one-hour cache (`cache_creation.ephemeral_1h_input_tokens`), as Claude Code does on a subscription. */
+  let hourCache = false
+  const notesHourCache = (usage: any) => {
+    if (count(usage?.cache_creation?.ephemeral_1h_input_tokens) > 0) hourCache = true
+  }
+  const cacheTtl = () => (hourCache ? { cacheTtl: "1h" as const } : {})
+
   /** A call's figures arrive more than once (start, delta, whole message): each field keeps its largest value, never a sum. */
   function noteSpend(id: unknown, usage: any, callModel?: unknown) {
     if (typeof id !== "string" || !id || !usage || typeof usage !== "object") return
+    notesHourCache(usage)
     const was = spent.get(id)
     const output = Math.max(was?.output ?? 0, count(usage.output_tokens))
     liveOutput += output - (was?.output ?? 0)
@@ -585,6 +593,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   function usage(result: ClaudeMessage): EngineEvent | undefined {
     const raw = result.usage
     if (!raw || typeof raw !== "object") return undefined
+    notesHourCache(raw)
     const modelName = Object.keys(result.modelUsage ?? {})[0] ?? model
     const reported = result.modelUsage?.[modelName]?.contextWindow
     const contextWindow = typeof reported === "number" && Number.isFinite(reported) && reported > 0 ? Math.floor(reported) : undefined
@@ -603,6 +612,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(input.compactAt ? { compactAt: input.compactAt } : {}),
       ...(clamped ? { contextApprox: true as const } : {}),
+      ...cacheTtl(),
     }
   }
 
@@ -611,7 +621,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     if (reported || !spent.size) return undefined
     const calls = [...spent.values()]
     const total = (field: "input" | "output" | "cacheRead" | "cacheWrite") => calls.reduce((sum, call) => sum + call[field], 0)
-    return { type: "usage", provider: "claude", model: model ?? calls.find((call) => call.model)?.model ?? "claude", input: total("input"), output: total("output"), reasoning: 0, cacheRead: total("cacheRead"), cacheWrite: total("cacheWrite"), partial: true }
+    return { type: "usage", provider: "claude", model: model ?? calls.find((call) => call.model)?.model ?? "claude", input: total("input"), output: total("output"), reasoning: 0, cacheRead: total("cacheRead"), cacheWrite: total("cacheWrite"), ...cacheTtl(), partial: true }
   }
 
   /** Closes what the turn left open: tool calls without a result end interrupted (or error), streamed text ends ok. */

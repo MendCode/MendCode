@@ -133,6 +133,19 @@ describe("a call Claude Code flags in full access reaches the user", () => {
     expect(second.code).toBe(EXIT.completed)
     expect(skipped.answers).toEqual([{ behavior: "allow", updatedInput: { command: COMMAND } }])
   })
+  test("session send --wait from an agent's shell without --approve stops at once on an approval it may not answer and says what waits and where", async () => {
+    const h = await boot()
+    const err: string[] = []
+    const run = createHeadlessRun({ client: h.client as Client, sessionId: h.sessionId, prompt: "clean it", json: false, approve: false, unapproved: "pending", stopOnPending: true, out: { write() {} }, err: { write: (text: string) => void err.push(text) } })
+    h.listeners.push((event) => run.onEvent(event))
+    // Before, the run waited for the turn until its timeout (10 minutes for an agent's shell) while the approval sat unseen.
+    expect(await run.start()).toBe(EXIT.pending)
+    expect(err.join("")).toContain(`waiting for approval in ${h.sessionId}`)
+    expect(err.join("")).toContain(`mendcode session attach ${h.sessionId}`)
+    // The approval stays for its owner: nothing was answered.
+    expect(h.answers).toEqual([])
+    expect(requestOf(h)).toBeDefined()
+  })
 })
 
 describe("terminal prompt and command line for a flagged call", () => {

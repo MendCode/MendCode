@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { COMMENT_WAKE_LIMIT, UNREADABLE_LIMIT_MS, createPrWatch, evaluate, parseRef, parseSnapshot, readFailureKind, type GhRun } from "../src/pr-watch"
+import { COMMENT_WAKE_LIMIT, REVIEW_WAIT_MS, UNREADABLE_LIMIT_MS, createPrWatch, evaluate, parseRef, parseSnapshot, readFailureKind, type GhRun } from "../src/pr-watch"
 import { cleanTemps, tempDir } from "../../../apps/cli/test/session-ui-harness"
 
 afterEach(() => cleanTemps())
@@ -92,6 +92,37 @@ test("gh output becomes checks, comments and reviews; drafts of a review stay ou
   expect(snapshot.remarks.map((item) => item.id)).toEqual(["c:IC_1", "r:R_1"])
   expect(parseSnapshot("not json")).toBeUndefined()
   expect(parseSnapshot("{}")).toBeUndefined()
+})
+
+test("a new head is not 'all checks passed' while the MendCode review that ran on earlier heads has not reported on it yet", () => {
+  const snap = (...checks: ReturnType<typeof check>[]) => parseSnapshot(JSON.stringify(pull({ statusCheckRollup: checks })))!
+  const at = 1_800_000_000_000
+  const reviewed = evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS"), check("MendCode review", "COMPLETED", "SUCCESS")), mark: { failed: "", passed: false, conflict: false, seen: [] }, self: "me", now: at })
+  expect(reviewed.events.map((event) => event.kind)).toEqual(["checks_passed"])
+  // A push: the build runs, then passes, before the review on this machine posts its pending check (NotchNull #24, 2026-11-08).
+  const building = evaluate({ snapshot: snap(check("build", "IN_PROGRESS", null)), mark: reviewed.mark, self: "me", now: at + 60_000 })
+  const built = evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS")), mark: building.mark, self: "me", now: at + 120_000 })
+  expect(built.events).toEqual([])
+  const done = evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS"), check("MendCode review", "COMPLETED", "SUCCESS")), mark: built.mark, self: "me", now: at + 300_000 })
+  expect(done.events.map((event) => event.kind)).toEqual(["checks_passed"])
+  // A review that never comes (turned off) holds the notice for REVIEW_WAIT_MS at most.
+  const again = evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS")), mark: { ...done.mark, passed: false }, self: "me", now: at + 400_000 })
+  expect(again.events).toEqual([])
+  expect(evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS")), mark: again.mark, self: "me", now: at + 400_000 + REVIEW_WAIT_MS }).events.map((event) => event.kind)).toEqual(["checks_passed"])
+})
+
+test("each head commit gets its own review wait: a push late in one commit's wait does not inherit what is left of it", () => {
+  const snap = (commit: string, ...checks: ReturnType<typeof check>[]) => parseSnapshot(JSON.stringify(pull({ headRefOid: commit, statusCheckRollup: checks })))!
+  const at = 1_800_000_000_000
+  const reviewed = evaluate({ snapshot: snap("aaa", check("build", "COMPLETED", "SUCCESS"), check("MendCode review", "COMPLETED", "SUCCESS")), mark: { failed: "", passed: false, conflict: false, seen: [] }, self: "me", now: at })
+  const waitingA = evaluate({ snapshot: snap("bbb", check("build", "IN_PROGRESS", null)), mark: reviewed.mark, self: "me", now: at + 60_000 })
+  expect(waitingA.mark.reviewWaitCommit).toBe("bbb")
+  // Commit ccc lands just before bbb's wait would end, and its build passes after it: ccc's own review is still awaited.
+  const late = at + 60_000 + REVIEW_WAIT_MS - 1_000
+  const pushed = evaluate({ snapshot: snap("ccc", check("build", "IN_PROGRESS", null)), mark: waitingA.mark, self: "me", now: late })
+  const built = evaluate({ snapshot: snap("ccc", check("build", "COMPLETED", "SUCCESS")), mark: pushed.mark, self: "me", now: late + 120_000 })
+  expect(built.events).toEqual([])
+  expect(evaluate({ snapshot: snap("ccc", check("build", "COMPLETED", "SUCCESS")), mark: built.mark, self: "me", now: late + REVIEW_WAIT_MS }).events.map((event) => event.kind)).toEqual(["checks_passed"])
 })
 
 test("evaluate reports each failure set, each pass, each conflict and each foreign comment once", () => {

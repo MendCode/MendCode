@@ -39,7 +39,9 @@ describe("doc search: words", () => {
     }
     expect(text("change")).toContain("/context-window 450k --always")
     expect(text("change")).toMatch(/"Global" = every session[^.]*not "all models"/)
-    expect(text("change")).toMatch(/Never read MendCode's binary or source/)
+    expect(text("change")).toMatch(/never read MendCode's binary or source/)
+    // The rule is about settings: coding on MendCode as the task is not refused (an agent stopped a MendCode feature over it).
+    expect(text("change")).toMatch(/coding on MendCode as the task is normal work/)
   })
   test("what a model typed when it looked for the window and the compaction point finds the card that answers, first", () => {
     const first = (query: string) => searchCards(query.split(" "), cards)[0]!.topic

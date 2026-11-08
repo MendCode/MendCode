@@ -58,6 +58,14 @@ const centeredOn = (rows: readonly string[], width: number) => {
   return rows.map((row) => pad + row)
 }
 
+/**
+ * The name in the logo's letters where they fit, largest first: the big title (half blocks, the shipped name only), then the
+ * plain name. A mascot beside or over the name uses these too, so `both` draws the same letters as the wordmark.
+ */
+export function logoTitles(name: string, ascii: boolean): string[][] {
+  return ascii || name !== TITLE_NAME ? [[name]] : [[...LOGO_TITLE], [name]]
+}
+
 /** The mark and, one row under it, `name` centered on it: the identity the home draws where the big title does not fit. */
 export function logoLockup(name: string, ascii: boolean): string[] {
   const mark = logoMark(ascii)
@@ -72,5 +80,7 @@ export function logoLockups(name: string, ascii: boolean): string[][] {
   const small = logoLockup(name, ascii)
   if (ascii || name !== TITLE_NAME) return [small]
   const width = Math.max(textWidth(LOGO_MARK[0]!), textWidth(LOGO_TITLE[1]!))
-  return [[...centeredOn(LOGO_MARK, width), "", ...centeredOn(LOGO_TITLE, width)], small]
+  const big = (gap: number) => [...centeredOn(LOGO_MARK, width), ...Array.from({ length: gap }, () => ""), ...centeredOn(LOGO_TITLE, width)]
+  // Two rows apart where the screen has them (with one the title reads as stuck to the mark), one where it is tight (80 x 24).
+  return [big(2), big(1), small]
 }

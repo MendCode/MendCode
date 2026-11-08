@@ -18,7 +18,7 @@
   <a href="https://github.com/MendCode/MendCode/releases"><img src="https://img.shields.io/github/v/release/MendCode/MendCode?include_prereleases&sort=semver&color=3F8F83" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-9FB08E" alt="License: Apache-2.0"></a>
   <a href="https://www.mendcode.dev/"><img src="https://img.shields.io/badge/website-mendcode.dev-3F8F83" alt="Website"></a>
-  <a href="docs/"><img src="https://img.shields.io/badge/docs-101_pages-9FB08E" alt="Docs"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/docs-114_pages-9FB08E" alt="Docs"></a>
 </p>
 
 <p align="center">
@@ -349,7 +349,7 @@ With Bun (CI pins 1.3.13) and the pinned pnpm 11.17.0 ([package.json](package.js
 ```sh
 pnpm install --frozen-lockfile --config.minimumReleaseAge=10080
 bun apps/cli/src/entry.ts --dir "$(mktemp -d)"   # disposable data; reuse a --dir to keep sessions
-bun run build                                    # dist/mendcode-next for this machine (--target, --outfile)
+bun run build                                    # dist/mendcode for this machine (--target, --outfile)
 ```
 
 `sh scripts/install-dev.sh` installs a `mendcode-next` wrapper in `~/.local/bin` that runs the checkout. Releases: pushing a `v*`
@@ -368,7 +368,7 @@ Every terminal surface is drawn through one of 22 view slots, and the built-in l
 - Chrome: `topbar`, `footer`, `notice`, `home`, `sessions.sidebar`, `panel.widget`, `slash.menu`.
 - Pages and overlays: `page`, `page.status`, `overlay`.
 
-Not replaceable: the prompt editor, the tasks and scratchpad dock, and the live compaction panel (their frame and surroundings are slots). Page bodies reach a view already drawn: a view restyles the rows, there is no typed model per page. Views are synchronous and data-only, keys and approvals stay with the terminal, and a view that throws or runs over 4 ms is replaced by the built-in. **Views run in the terminal process with your permissions and are not sandboxed**; installing one is trusting its author. Project views need a trusted project; remote and `--safe-mode` terminals load none. Start with `mendcode-next view scaffold <slot>`.
+Not replaceable: the prompt editor, the tasks and scratchpad dock, and the live compaction panel (their frame and surroundings are slots). Page bodies reach a view already drawn: a view restyles the rows, there is no typed model per page. Views are synchronous and data-only, keys and approvals stay with the terminal, and a view that throws or runs over 4 ms is replaced by the built-in. **Views run in the terminal process with your permissions and are not sandboxed**; installing one is trusting its author. Project views need a trusted project; remote and `--safe-mode` terminals load none. Start with `mendcode view scaffold <slot>`.
 
 ## Script workflows
 

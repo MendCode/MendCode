@@ -11,6 +11,8 @@ export type RunOptions = {
   approve: boolean
   /** Without an approval flag, `session send` leaves approvals for the owner; standalone runs deny them by default. */
   unapproved?: "deny" | "pending"
+  /** With `pending`: stop at the first such approval and say what waits and where (an agent's shell, which sees nothing until the command ends). */
+  stopOnPending?: boolean
   /** `--dangerously-skip-permissions`: also allows a command the engine itself flagged in full access, which `approve` alone rejects. */
   skipPermissions?: boolean
   thinking?: boolean
@@ -31,7 +33,7 @@ export const ENGINE_FLAGGED_DENIAL = "headless run: the engine flagged this comm
  * 5 the turn completed but an approval was denied for lack of --approve and no tool call succeeded after it; 64 is a usage error before any run.
  * `session send` leaves unapproved requests pending, so it does not produce exit 5.
  */
-export const EXIT = { completed: 0, failed: 1, stopped: 2, schema: 3, limit: 4, denied: 5 } as const
+export const EXIT = { completed: 0, failed: 1, stopped: 2, schema: 3, limit: 4, denied: 5, pending: 6 } as const
 
 /**
  * Headless turn for scripts, CI and VPS use: submits one prompt, streams only that turn's events,
@@ -124,7 +126,13 @@ export function createHeadlessRun(options: RunOptions) {
           })
           break
         }
-        if (!options.approve && !options.skipPermissions && options.unapproved === "pending") break
+        if (!options.approve && !options.skipPermissions && options.unapproved === "pending") {
+          // Nobody here may answer it: say what waits and where. An agent's shell stops waiting instead of running into its timeout;
+          // a person at a terminal keeps waiting for the owner's answer.
+          options.err.write(`waiting for approval in ${sessionId}: ${event.title}${event.detail ? `: ${event.detail}` : ""}. Answer it where the session is open (mendcode session attach ${sessionId})${options.stopOnPending ? `, then mendcode session wait ${sessionId}` : ""}\n`)
+          if (options.stopOnPending) settle(EXIT.pending)
+          break
+        }
         if (event.engineFlagged) {
           // The engine's own safety check, raised although the session is in full access: `--approve` never covers it, only `--dangerously-skip-permissions` does.
           const skipped = options.skipPermissions === true

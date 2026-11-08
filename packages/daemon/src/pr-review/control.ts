@@ -52,7 +52,7 @@ async function withinTime<T>(promise: Promise<T>, ms: number): Promise<T | undef
   } finally { clearTimeout(timer) }
 }
 
-const PLATFORM_ACTIONS = new Set<PlatformControlInput["action"]>(["status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"])
+const PLATFORM_ACTIONS = new Set<PlatformControlInput["action"]>(["status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "job-forget", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"])
 const CONFIG_ACTIONS = new Set<string>(["config-show", "config-preview", "config-apply", "config-revert", "config-history"])
 const RETRYABLE: ReadonlySet<JobState> = new Set(["failed", "cancelled", "stale", "checkpointed"])
 const FINISHED: ReadonlySet<JobState> = new Set(["done", "failed", "cancelled", "stale"])
@@ -178,6 +178,15 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     return { ok: true, text: `Cancelled ${describe(moved.job)}${holder ? ` (it was taken over by ${holder}; its fix session stays open)` : ""}. Nothing more is posted or pushed for it; job-retry with a reason queues it again.` }
   }
 
+  async function forget(input: PlatformControlInput): Promise<PlatformControlResult> {
+    const found = jobFor(input)
+    if ("refusal" in found) return found.refusal
+    if (!FINISHED.has(found.job.state)) return refuse(`${describe(found.job)} is ${found.job.state}; cancel it first, only a finished review leaves the list`)
+    if (!handle.jobs.forget) return refuse("this review ledger cannot remove jobs")
+    const count = handle.jobs.forget(found.job.id)
+    return { ok: true, text: `Removed ${describe(found.job)} from the list (${count} run${count === 1 ? "" : "s"}). Nothing on the pull request changed; a new push or /pr review starts it again.` }
+  }
+
   async function retry(input: PlatformControlInput): Promise<PlatformControlResult> {
     const found = jobFor(input)
     if ("refusal" in found) return found.refusal
@@ -235,6 +244,7 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
           case "job-resume": return await resume(input)
           case "job-cancel": return await cancel(input)
           case "job-retry": return await retry(input)
+          case "job-forget": return await forget(input)
           case "take-over": return await takeOverJob(input)
           case "release": return await releaseJob(input)
           case "audit": return await audit(input)
