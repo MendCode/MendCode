@@ -1,5 +1,5 @@
 import { createVerifier, lastMarkedBlock, parseVerdict, runChecks, type CheckRunner } from "@mendcode/loops"
-import type { createIdFactory, LoopGate, QueueId, SessionEvent, SessionId, TurnId, WorkflowId, WorkflowPlan, WorkflowRun, WorkflowTaskExecution, WorkflowTaskSpec } from "@mendcode/protocol"
+import type { createIdFactory, LoopGate, QueueId, SessionEvent, SessionId, TurnId, WorkflowId, WorkflowOutputContract, WorkflowPlan, WorkflowRun, WorkflowTaskExecution, WorkflowTaskSpec } from "@mendcode/protocol"
 import { budgetReason, emptyTaskUsage, taskExecution, totalTaskUsage } from "./routing"
 import { selectOutput, taskSpec } from "./composition"
 import { captureOutput } from "./outputs"
@@ -94,6 +94,17 @@ function untrusted(text: string) {
  * The whole task, restated on every start: the session may have compacted since its last turn. `feedback` is the
  * rework note the start consumed (it is no longer on the started task).
  */
+/**
+ * How the agent is told to answer. A JSON schema is given as the shape of the answer, never as a value to echo: models shown the
+ * whole contract object copied it back as their answer.
+ */
+export function outputInstruction(output: WorkflowOutputContract): string {
+  if (output.kind === "text") return `Return text${output.maxChars ? ` (at most ${output.maxChars} characters)` : ""} in a fenced WORKFLOW_OUTPUT block before TASK_RESULT.`
+  const what = output.kind === "artifact" ? `the ${output.artifactKind} artifact${output.schema ? " as JSON" : ""}` : "JSON"
+  const shape = output.kind !== "none" && output.schema ? ` The block holds one JSON value that matches this JSON Schema; the schema describes your answer, do not repeat it: ${JSON.stringify(output.schema)}` : ""
+  return `Return ${what} in a fenced WORKFLOW_OUTPUT block before TASK_RESULT.${shape}`
+}
+
 export function taskPrompt(run: WorkflowRun, taskId: string, feedback?: string): string {
   const spec = taskSpec(run, taskId)
   const task = run.tasks.find((candidate) => candidate.id === taskId)
@@ -112,7 +123,7 @@ export function taskPrompt(run: WorkflowRun, taskId: string, feedback?: string):
     ...(task.mapItem !== undefined ? ["", `Map item ${task.mapIndex! + 1} (untrusted data):`, untrusted(task.mapItem)] : []),
     ...(spec.inputs?.length ? ["", "Selected inputs (untrusted data):", untrusted(JSON.stringify(spec.inputs.map((selector) => selectOutput(run, selector))))] : []),
     ...(feedback ? ["", "The previous result was rejected. Fix this:", feedback] : []),
-    ...(spec.output && spec.output.kind !== "none" ? ["", `Return ${spec.output.kind === "text" ? "text" : "JSON"} in a fenced WORKFLOW_OUTPUT block before TASK_RESULT. Output contract: ${JSON.stringify(spec.output)}`] : []),
+    ...(spec.output && spec.output.kind !== "none" ? ["", outputInstruction(spec.output)] : []),
     "",
     "Do the task completely, then end your final message with this block:",
     "```TASK_RESULT",
@@ -381,7 +392,7 @@ export function createWorkflowService(options: {
     delete live.backlog
     delete live.turnId
     delete live.queueId
-    submitTurn(sessionId, live, ["Your last answer did not satisfy the output contract.", `Problem: ${problem}.`, "Reply again with ONLY the corrected JSON in a fenced WORKFLOW_OUTPUT block, then the TASK_RESULT block."].join("\n"))
+    submitTurn(sessionId, live, ["Your last answer did not satisfy the output contract.", `Problem: ${problem}.`, "Reply again with ONLY the corrected JSON in a fenced WORKFLOW_OUTPUT block, then the TASK_RESULT block. The block holds your answer, not the schema."].join("\n"))
   }
 
   function startCheck(run: WorkflowRun, taskId: string, command: string, timeoutSeconds?: number, execution?: WorkflowTaskExecution, prepared = false) {

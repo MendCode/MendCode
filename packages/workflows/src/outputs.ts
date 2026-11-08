@@ -63,6 +63,18 @@ export function matches(value: unknown, schema: unknown): boolean {
   return true
 }
 
+function lastMatchingLine(body: string, schema: Record<string, unknown>): unknown {
+  for (const line of body.split("\n").reverse()) {
+    const text = line.trim()
+    if (!text.startsWith("{") && !text.startsWith("[")) continue
+    try {
+      const value: unknown = JSON.parse(text)
+      if (matches(value, schema)) return value
+    } catch {}
+  }
+  return undefined
+}
+
 /** `limit` is the longest structured output kept: a static plan's rows are small (8000), a script's journal holds more. */
 export function captureOutput(spec: WorkflowAgentTaskSpec, answer: string, limit = 8_000): WorkflowTask["output"] {
   const contract = spec.output
@@ -74,7 +86,10 @@ export function captureOutput(spec: WorkflowAgentTaskSpec, answer: string, limit
   let value: unknown
   try { value = JSON.parse(body) } catch {
     if (contract.kind === "artifact" && !contract.schema) return { kind: "artifact", value: body, artifactKind: contract.artifactKind }
-    throw new RangeError("workflow output is not valid JSON")
+    // A block of several JSON lines (a model that echoed the schema before its answer): the last line that matches the schema.
+    const answer = contract.schema ? lastMatchingLine(body, contract.schema) : undefined
+    if (answer === undefined) throw new RangeError("workflow output is not valid JSON")
+    value = answer
   }
   if (contract.schema && !matches(value, contract.schema)) throw new RangeError("workflow output does not match its schema")
   return { kind: contract.kind, value: JSON.stringify(value), ...(contract.kind === "artifact" ? { artifactKind: contract.artifactKind } : {}) }
