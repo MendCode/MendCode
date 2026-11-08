@@ -6337,7 +6337,7 @@ export async function startDaemon(options: DaemonOptions) {
           // subscription that model does not use is information.
           const ai = systemReport("ai-status", reportInput).facts as { ready?: boolean | null; blockers?: string[]; roles?: { main?: { model?: string | null } } }
           const model = ai.roles?.main?.model ?? "the main model"
-          if (ai.ready === false) report.checks.push({ name: "login", ok: false, detail: redactSecrets(`${model} cannot run: ${(ai.blockers ?? []).join("; ") || "not signed in"}`).text.slice(0, 300) })
+          if (ai.ready === false || (ai.blockers ?? []).length > 0) report.checks.push({ name: "login", ok: false, detail: redactSecrets(`${model} cannot run: ${(ai.blockers ?? []).join("; ") || "not signed in"}`).text.slice(0, 300) })
           else if (login) report.checks.push(login.ok ? { name: "login", ok: true, detail: "signed in" } : { name: "login", ok: true, level: "info", detail: redactSecrets(`${login.message ?? "not signed in"} (${model} does not need it)`).text.slice(0, 300) })
           report.checks.push(...await resourceChecks(canonicalDir(command.directory)))
           report.failures = report.checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
