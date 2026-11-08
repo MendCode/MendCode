@@ -81,7 +81,8 @@ describe("a review turn is stopped on silence, not on wall time", () => {
 
   test("the hard cap stops a turn that is still streaming", async () => {
     let streaming = true
-    const { sessions, cancelled } = watched({ idleMs: 60, capMs: 200, script: async (emit) => { while (streaming) { await Bun.sleep(20); emit({ type: "item.delta", itemId: "itm_1", delta: "." }) } } })
+    // The silence window is far longer than the cap, so a slow runner that pauses between deltas still reaches the cap first.
+    const { sessions, cancelled } = watched({ idleMs: 5_000, capMs: 200, script: async (emit) => { while (streaming) { await Bun.sleep(20); emit({ type: "item.delta", itemId: "itm_1", delta: "." }) } } })
     const child = await sessions.factory({ directory: "/x" })({ purpose: "review" })
     const error = await child.send("review").catch((caught: unknown) => caught) as ReviewTurnStalled
     streaming = false

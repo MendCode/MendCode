@@ -224,6 +224,16 @@ describe("workflow formatting", () => {
     expect(workflowText(run({ plan: { ...plan, contract: undefined }, verifications: [], override: undefined }))).toContain("contract: none (unverified)")
   })
 
+  test("show prints what a script run said and returned, so a run that stopped early says why", () => {
+    const stopped = workflowText(run({ state: "completed", script: { host: "done", calls: 2, phase: "Rounds", logCount: 1, logs: ["stop blocked the proposal is missing"], result: JSON.stringify({ state: "blocked", reason: "the proposal is missing" }), starts: 1 } }))
+    expect(stopped).toContain("script: done · phase Rounds · 2 agent calls")
+    expect(stopped).toContain("  log: stop blocked the proposal is missing")
+    expect(stopped).toContain(`  returned: {"state":"blocked","reason":"the proposal is missing"}`)
+    const failed = workflowText(run({ state: "failed", script: { host: "failed", calls: 0, logCount: 0, logs: [], error: "the script failed: boom", starts: 1 } }))
+    expect(failed).toContain("  error: the script failed: boom")
+    expect(workflowText(run())).not.toContain("script:")
+  })
+
   test("waiting lines name the task and its session", () => {
     const waiting = summary({ tasks: [{ id: "ask", title: "t", kind: "agent", needs: [], state: "needs_input", attempt: 1, sessionId: SES }] })
     expect(waitingLines(waiting)).toEqual([`waiting: ask  session ${SES}\n`])

@@ -229,6 +229,31 @@ describe("B78 outputs and bounded map", () => {
     expect(() => captureOutput(parse({ kind: "json" }), JSON.stringify("x".repeat(8001)))).toThrow("8000")
   })
 
+  test("a schema is given as the shape of the answer, and an answer that echoed the schema first still reads its own line", () => {
+    const schema = { type: "object", required: ["goal"], properties: { goal: { type: "string" } } }
+    const spec = validatePlan(b78Plan({ tasks: [b78Agent("out", { output: { kind: "json", schema } })] }))
+    if (!spec.ok || spec.plan.tasks[0]?.kind !== "agent") throw new Error("invalid fixture")
+    const task = spec.plan.tasks[0]
+    const run = createRun({ workflowId: "wfl_out" as never, rootSessionId: "ses_root" as never, plan: spec.plan, permission: "edits", now: 1 } as never)
+    const prompt = taskPrompt(run, "out")
+    expect(prompt).toContain(`matches this JSON Schema; the schema describes your answer, do not repeat it: ${JSON.stringify(schema)}`)
+    expect(prompt).not.toContain('"kind":"json"')
+    // A restate step once reported `blocked` because the rest of the objective was still to do.
+    expect(prompt).toContain("`done` means this task is finished, even when the rest of the workflow objective is left to other tasks")
+    const echoed = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```\n```TASK_RESULT\nstatus: done\nsummary: ok\n```"
+    expect(captureOutput(task, echoed)?.value).toBe('{"goal":"stop non-owners"}')
+    const onlySchema = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n```"
+    expect(() => captureOutput(task, onlySchema)).toThrow("schema")
+    // An element of a pretty-printed array is not the answer: the array is read whole, and it does not match.
+    const nested = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n[\n" + JSON.stringify({ goal: "wrong outer type" }) + "\n]\n```"
+    expect(() => captureOutput(task, nested)).toThrow("not valid JSON")
+    // A pretty-printed answer after the echo, and an answer fenced with tildes that left the whole message as the block, still read.
+    const pretty = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }, null, 2) + "\n```"
+    expect(captureOutput(task, pretty)?.value).toBe('{"goal":"stop non-owners"}')
+    const tildes = "~~~WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: 'a "quoted" } brace' }) + "\n~~~TASK_RESULT\nstatus: done"
+    expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
+  })
+
   test("aggregate output storage fails closed within the durable row limit", async () => {
     const current = harness(), run = current.create(b78Plan({ maxConcurrent: 4, tasks: ["one", "two", "three", "four"].map((id) => b78Agent(id, { output: { kind: "text" } })) }))
     for (const id of ["one", "two", "three", "four"]) await current.finish(run, id, "x".repeat(7900))

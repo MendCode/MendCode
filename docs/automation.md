@@ -432,7 +432,7 @@ mendcode loops activate <id> [--reason TEXT] [--no-service]
 mendcode workflow list [--all]
 mendcode workflow preview <file.json|name>
 mendcode workflow start <file.json|name> [--permission ask|edits|full] [--yes] [--wait [--timeout S]]
-mendcode workflow show <id>
+mendcode workflow show <id>        # tasks, contract and, for a script, its last log lines and what it returned
 mendcode workflow pause|resume|stop|verify|delete <id>
 mendcode workflow retry <id> --task <taskId>
 mendcode workflow approve|reject <id> --task <taskId> [--reason TEXT]   # answer a human task or gate
