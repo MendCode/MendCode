@@ -7061,6 +7061,14 @@ export async function startDaemon(options: DaemonOptions) {
     serverEventSubscriptions: () => serverEventObservers.size,
     /** Whether the workflow service was built (P6: false on a daemon that never saw a workflow). */
     workflowsLoaded: workflows.loaded,
+    /**
+     * A workflow step whose turn ended: its writes are the run's, handed to the next step, never "another session's work"
+     * (one-tree.ts). A step still working keeps them, so steps running side by side in one checkout are still told.
+     */
+    workflowStepFinished: (sessionId: SessionId) => workflows.execution(sessionId) !== undefined && !live.has(sessionId) && (() => {
+      const actor = actors.get(sessionId)?.snapshot()
+      return actor === undefined || (actor.turnId === undefined && !BUSY.has(actor.foreground))
+    })(),
     stop,
   }
 }

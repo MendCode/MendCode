@@ -387,6 +387,8 @@ function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void 
 /** One tool-less completion (Dream, `/btw`), with the given model or the default one; a namespaced model uses its API-key provider. */
 let completionTrace: import("@mendcode/protocol").TracePort | undefined
 /** One Tree's memory of a session (set where it is built), dropped when the session is deleted. */
+/** The daemon once started; one tree asks it whether a writer was a finished workflow step. */
+let daemonReady: { workflowStepFinished(sessionId: import("@mendcode/protocol").SessionId): boolean } | undefined
 let forgetOneTree: ((sessionId: import("@mendcode/protocol").SessionId) => void) | undefined
 async function completeWithUsage(input: { system: string; prompt: string; images?: import("@mendcode/engine-native").RequestImage[]; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
   const span = completionTrace?.start("session.llm")
@@ -520,7 +522,7 @@ export const daemon = await startDaemon({
       return sandboxPolicy({ config: { ...settings.sandbox, writableRoots }, cwd: root })
     }
     // Sessions sharing one checkout (docs/one-tree.md): every engine reports what its calls wrote and read, one shared memory.
-    const oneTree = createOneTree({ now: () => clock.now(), enabled: () => featureOn(store.settings.get(), "one_tree", { safeMode }), title: (writer) => {
+    const oneTree = createOneTree({ now: () => clock.now(), enabled: () => featureOn(store.settings.get(), "one_tree", { safeMode }), handedOver: (writer) => !writer.includes("#") && daemonReady?.workflowStepFinished(writer) === true, title: (writer) => {
       // `<session>#<agent>`: one of Claude Code's sub-agents in that session.
       const [sessionId, agent] = writer.split("#") as [typeof writer, string | undefined]
       const title = store.sessionInfo(sessionId)?.title?.trim()
@@ -1072,6 +1074,7 @@ export const daemon = await startDaemon({
     void Promise.allSettled([mcp.stop(), lsp.stop(), formatter.stop()]).finally(() => hosting.active ? hosting.onStopped?.() : process.exit(0))
   },
 })
+daemonReady = daemon
 // A host owns the terminal and the signals; only a process that is the daemon prints the ready line and exits on SIGINT/SIGTERM.
 if (!hosting.active) process.stdout.write(`${JSON.stringify({ ready: true, pid: process.pid, socketPath, transport: daemon.localEndpoint ? "tcp" : "unix", engine: engineName })}\n`)
 
