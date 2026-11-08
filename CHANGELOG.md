@@ -19,6 +19,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Logo kind `both` draws the same letters as the wordmark instead of another font.
 - The big title sits a row further from the mark where the screen has room.
 - Replies stay in your language after a background task or Monitor ends in Claude Code, and after a short or mixed message; a Spanish message with English words is no longer answered in French.
+- PR watch no longer says "all checks passed" on a new commit while MendCode's own review of it has not reported yet; it waits for that review (up to 20 minutes).
+- `mendcode daemon run --listen HOST:PORT` starts a daemon other machines can connect to; before, only a source checkout could. `--connect` to an address with no daemon prints a short error.
 - An agent that sends a message to another session and waits is told at once when that session needs your approval, instead of waiting ten minutes without saying so.
 - An agent asked to change MendCode's own source code no longer refuses it as if it were a settings file.
 - GPT-6.1 Terra carries long tasks through in one turn instead of stopping at a plan or a first step.

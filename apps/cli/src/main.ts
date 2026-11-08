@@ -146,7 +146,8 @@ if (argv.includes("daemon") || argv.includes("service")) {
       foreground: async () => {
         // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
         await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })
-        process.argv = [process.execPath, "__daemon", ...host.plan.programArguments.slice(command.length)]
+        const daemonArgs = host.plan.programArguments.slice(command.length)
+        process.argv = [process.execPath, "__daemon", ...(daemonService.listener ? [...daemonArgs.filter((arg) => arg !== "--local-only"), ...daemonService.listener] : daemonArgs)]
         await import("../../../packages/daemon/src/main")
         await new Promise<void>(() => {})
       },
@@ -492,7 +493,13 @@ async function connect() {
   return { client: next, socketPath }
 }
 
-let { client, socketPath } = await connect()
+// A remote daemon that is not there (nothing listening, wrong port, TLS refused) is a plain error, never Bun's dump of the bundle.
+let { client, socketPath } = await connect().catch((error: unknown) => {
+  if (!remote) throw error
+  const code = (error as NodeJS.ErrnoException | undefined)?.code
+  process.stderr.write(`error: cannot reach the MendCode daemon at ${remote.hostname}:${remote.port}${code ? ` (${code})` : ""}: ${error instanceof Error ? error.message.replace(/^\[CLIENT\]: /, "") : String(error)}. On that machine it must run with mendcode daemon run --listen HOST:PORT.\n`)
+  process.exit(69)
+})
 let startupNotice = ""
 // This process is the new build an open terminal restarted into (relaunch.ts): said once, and not passed on to anything it starts.
 const relaunched = process.env.MENDCODE_RELAUNCHED

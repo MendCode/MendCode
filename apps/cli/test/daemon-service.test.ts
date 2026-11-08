@@ -71,6 +71,13 @@ describe("daemon lifecycle CLI", () => {
       expect(parsed(...prefix, "daemon", "--once", "--execute").execute).toBe(true)
     }
     expect(parsed("--dir=/tmp/a=b", "daemon", "status").dir).toBe("/tmp/a=b")
+    // docs/remote.md: an installed binary had no way to start a listening daemon ("Unsupported daemon service flag --listen").
+    expect(parsed("daemon", "run", "--listen", "127.0.0.1:9876").listener).toEqual(["--listen", "127.0.0.1:9876"])
+    expect(parsed("daemon", "run", "--listen", "0.0.0.0:9876", "--tls-cert", "/c.pem", "--tls-key", "/k.pem").listener).toEqual(["--listen", "0.0.0.0:9876", "--tls-cert", "/c.pem", "--tls-key", "/k.pem"])
+    expect(() => parsed("daemon", "start", "--listen", "127.0.0.1:9876")).toThrow("daemon run")
+    expect(() => parsed("daemon", "service", "install", "--listen", "127.0.0.1:9876")).toThrow("daemon run")
+    expect(() => parsed("daemon", "run", "--tls-cert", "/c.pem")).toThrow("need --listen")
+    expect(parsed("daemon", "run").listener).toBeUndefined()
     expect(parseDaemonService(["run", "hello"])).toBeUndefined()
     expect(parseDaemonService(["memory", "dream", "status"])).toBeUndefined()
     for (const args of [["daemon", "stop", "--lines", "0"], ["daemon", "service", "install", "extra"], ["loops", "daemon", "--interval-ms", "500"], ["daemon", "--execute"], ["daemon", "--bogus"], ["daemon", "--dir", "--json"]]) expect(() => parsed(...args)).toThrow()

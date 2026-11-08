@@ -25,6 +25,8 @@ export type DaemonServiceCommand = {
   help: boolean
   /** `restart --force`: how long to wait for running commands and background work before the stop kills them (seconds). */
   grace?: number
+  /** `run --listen HOST:PORT [--tls-cert F --tls-key F]`: the foreground daemon also accepts remote clients (docs/remote.md). Never the service. */
+  listener?: string[]
 }
 
 /** How long `restart --force` waits for a running command, background task or agent before the stop kills it. */
@@ -39,7 +41,7 @@ export function heldLines(held: ReadonlyArray<{ sessionId: string; title: string
 export function parseDaemonService(argv: string[]): DaemonServiceCommand | undefined {
   const words: string[] = []
   const flags: Record<string, string | boolean> = {}
-  const values = new Set(["dir", "data-dir", "cwd", "engine", "service-dir", "lines", "limit", "format", "interval-ms", "grace"])
+  const values = new Set(["dir", "data-dir", "cwd", "engine", "service-dir", "lines", "limit", "format", "interval-ms", "grace", "listen", "tls-cert", "tls-key"])
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!
     if (!token.startsWith("--")) { words.push(token); continue }
@@ -76,7 +78,11 @@ export function parseDaemonService(argv: string[]): DaemonServiceCommand | undef
   if (flags.execute && action !== "tick") throw new Error("--execute needs --once")
   const grace = flags.grace === undefined ? undefined : Number(flags.grace)
   if (grace !== undefined && (action !== "restart" || !Number.isInteger(grace) || grace < 0 || grace > 3600)) throw new Error("--grace needs restart and 0–3600 seconds")
+  const listenerFlags = ["listen", "tls-cert", "tls-key"].filter((name) => flags[name] !== undefined)
+  if (listenerFlags.length && (action !== "run" || service || scheduler)) throw new Error("--listen, --tls-cert and --tls-key go with daemon run (a foreground daemon); the background service stays local")
+  if (listenerFlags.length && !flags.listen) throw new Error("--tls-cert and --tls-key need --listen host:port")
   return {
+    ...(listenerFlags.length ? { listener: listenerFlags.flatMap((name) => [`--${name}`, String(flags[name])]) } : {}),
     action: action === "remove" ? "uninstall" : action as DaemonServiceCommand["action"], service,
     ...(scheduler ? { scheduler } : {}), ...(flags.dir || flags["data-dir"] ? { dir: String(flags["data-dir"] ?? flags.dir) } : {}),
     ...(flags.cwd ? { cwd: String(flags.cwd) } : {}), ...(flags.engine ? { engine: String(flags.engine) } : {}), ...(flags["service-dir"] ? { serviceDir: String(flags["service-dir"]) } : {}),
