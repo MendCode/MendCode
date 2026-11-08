@@ -456,15 +456,15 @@ export function createKeys(ctx: AppContext, actions: {
     }
     if (pageClick && actions.changesClick(pageClick)) return
     if (MOUSE_SGR.test(key)) return
-    if (state.page === "stash") return actions.stashKey(key)
-    if (state.page === "drafts") return actions.draftsKey(key)
     if (state.page === "queue") return actions.queueKey(key)
     if (state.page !== "chat") {
+      // Stash and drafts have their own handlers; every other page goes through pageKey.
+      const send = state.page === "stash" ? actions.stashKey : state.page === "drafts" ? actions.draftsKey : pageKey
       // Shift with an arrow: five rows at a time on any page whose arrows move a list or text (page-wheel.ts).
       const typing = state.page === "settings" ? state.settingsPageState.tui ? state.customizeState.typing !== undefined || state.customizeState.menu !== undefined : state.settingsPageState.typing !== undefined : false
       const fast = fastStep({ page: state.page, key, usageTab: state.page === "usage" ? state.usageState.tab : undefined, typing })
-      if (fast) { for (let i = 0; i < fast.times; i++) await pageKey(fast.key); return }
-      return pageKey(key)
+      if (fast) { for (let i = 0; i < fast.times; i++) await send(fast.key); return }
+      return send(key)
     }
     if (await actions.questionKey(key)) return requestFrame()
     // After alt+j / alt+shift+j the next character is where the cursor goes; anything else cancels the jump and acts as usual.

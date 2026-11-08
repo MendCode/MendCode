@@ -42,6 +42,9 @@ test("per session: a notice from the engine and an unclear message keep the user
   expect(line("s1", undefined, "Fix the failing test and tell me what changed in the session")).toBe("Reply in English.")
   expect(line("s2", undefined, "<task-notification><summary>done</summary></task-notification>")).toBe(UNSURE_LINE)
   expect(isMachineNotice("[Image #2] no se entiende")).toBe(false)
+  // A user's own request wrapped in a tag is the user's words: its language is followed and kept.
+  expect(isMachineNotice("<request>Arregla el test que falla y dime qué cambió en la sesión</request>")).toBe(false)
+  expect(line("s1", undefined, "<request>Arregla el test que falla y dime qué cambió en la sesión</request>")).toBe("Reply in Spanish.")
 })
 
 test("a Spanish message mixed with English words is never named French for its \"tu\"", () => {

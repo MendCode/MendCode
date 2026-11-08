@@ -24,7 +24,7 @@ import { parseSession, sessionDirectories, type SessionAutomation } from "./sess
 import { sessionHuman, sessionModelPrefix, sessionSelection } from "./session-output"
 import { parseGlobalOptions } from "./global-options"
 import { composeLongText } from "./long-text"
-import { COMPLETION_SHELLS, completionScript, contextText, systemText, type CompletionShell } from "./support-output"
+import { COMPLETION_SHELLS, completionScript, contextText, installChecks, systemText, type CompletionShell } from "./support-output"
 import packageJson from "../package.json"
 import { CATALOG_USAGE, parseCatalog, type CatalogAutomation } from "./catalog-args"
 import { THEME_USAGE, parseTheme, type ThemeAutomation } from "./theme-args"
@@ -1433,7 +1433,14 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const reply = await daemon({ type: "system.query", operation: command.operation, directory: dir })
       if (!reply.ok) return fail(reply.message)
       const report = reply.result as unknown as import("@mendcode/protocol").SystemReport
-      result(reply.result, systemText(report))
+      if (command.operation === "doctor") {
+        // What only this side knows: the binary that answered and whether a new terminal finds it.
+        const own = installChecks(process.execPath, process.env.PATH ?? "", process.env.SHELL ?? "")
+        report.checks.unshift(...own)
+        report.failures = report.checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
+        report.ok = report.failures.length === 0
+      }
+      result(report as never, systemText(report))
       return report.ok ? EXIT.ok : EXIT.failed
     }
     case "files": {
@@ -1578,9 +1585,10 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       timer?.cancel()
       deps.listen(undefined)
       // The turn waits on an approval nobody here may answer (`run.ts` said what and where): exit 4, as any wait on the user.
+      // Its sessionId is the one that waits: a subtask command's child, not the session the message was sent to.
       const waiting = code === RUN_EXIT.pending
       const exit = waiting ? EXIT.needsInput : code
-      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
+      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: waiting ? run.sessionId : command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
       else if (code === EXIT.timeout) err.write("error: timed out waiting for the turn\n")
       return exit
     }

@@ -204,6 +204,19 @@ test("from an agent's shell, send --wait stops at the first approval it may not 
   expect(h.commands.filter((command) => command.type === "request.resolve")).toEqual([])
 })
 
+test("a subtask command that waits on an approval reports the child session that waits, as its message does", async () => {
+  const queueId = ids("queue"), turnId = ids("turn"), requestId = ids("request"), child = ids("session")
+  const h = fake(() => ({ ok: true, result: { queueId, task: { taskId: child } } }))
+  h.deps.env = { MENDCODE_AGENT_SHELL: "/data" }
+  const running = runAutomation(parsed("session", "send", id, "/review", "--json"), h.deps)
+  await Bun.sleep(1)
+  h.push({ type: "turn.started", sessionId: child, turnId, queueId })
+  h.push({ type: "server.request", sessionId: child, turnId, requestId, kind: "approval", title: "Run", detail: "printf ok" })
+  expect(await running).toBe(4)
+  expect(JSON.parse(h.out.at(-1)!).data).toEqual({ sessionId: child, exitCode: 4, status: "waiting_approval" })
+  expect(h.err.join("")).toContain(`waiting for approval in ${child}`)
+})
+
 test.each(["--approve", "--dangerously-skip-permissions"])("send %s keeps approval and question decisions in the child", async (flag) => {
   const queueId = ids("queue"), turnId = ids("turn"), sessionId = ids("session")
   const h = fake(() => ({ ok: true, result: { queueId, task: { taskId: sessionId } } }))

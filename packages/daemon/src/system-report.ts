@@ -23,6 +23,7 @@ export function systemReport(operation: string, input: Input): SystemReport {
   const checks: SystemReport["checks"] = []
   const facts: SystemReport["facts"] = {}
   const check = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail })
+  const info = (name: string, detail: string) => checks.push({ name, ok: true, level: "info", detail })
   const tools = ["bun", "git", "rg", "codex", "claude"].map((name) => ({ name, path: which(name), required: name === "codex" && input.engine === "codex" || name === "claude" && input.engine === "claude" }))
   const paths = {
     data: input.dir, database: path.join(input.dir, "mendd.db"), socket: input.socketPath,
@@ -97,6 +98,11 @@ export function systemReport(operation: string, input: Input): SystemReport {
     }
     facts.tools = tools
     for (const tool of tools) if (tool.required) check(tool.name, tool.path !== null, tool.path ?? "not found on PATH")
+    // What else MendCode can drive on this machine: optional, so absent is information, never a failure.
+    if (operation === "doctor") for (const [name, binary] of [["Claude Code", "claude"], ["Codex", "codex"], ["Rex", "rex"]] as const) {
+      const found = binary === "rex" ? which("rex") : tools.find((tool) => tool.name === binary)?.path ?? null
+      info(name, found ?? "not installed (optional)")
+    }
   }
   const failures = checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
   return { operation, ok: failures.length === 0, checks, failures, facts }

@@ -388,7 +388,7 @@ function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void 
 let completionTrace: import("@mendcode/protocol").TracePort | undefined
 /** One Tree's memory of a session (set where it is built), dropped when the session is deleted. */
 /** The daemon once started; one tree asks it whether a writer was a finished workflow step. */
-let daemonReady: { workflowStepFinished(sessionId: import("@mendcode/protocol").SessionId): boolean } | undefined
+let daemonReady: { workflowStepFinished(writer: import("@mendcode/protocol").SessionId, reader: import("@mendcode/protocol").SessionId): boolean } | undefined
 let forgetOneTree: ((sessionId: import("@mendcode/protocol").SessionId) => void) | undefined
 async function completeWithUsage(input: { system: string; prompt: string; images?: import("@mendcode/engine-native").RequestImage[]; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
   const span = completionTrace?.start("session.llm")
@@ -522,7 +522,7 @@ export const daemon = await startDaemon({
       return sandboxPolicy({ config: { ...settings.sandbox, writableRoots }, cwd: root })
     }
     // Sessions sharing one checkout (docs/one-tree.md): every engine reports what its calls wrote and read, one shared memory.
-    const oneTree = createOneTree({ now: () => clock.now(), enabled: () => featureOn(store.settings.get(), "one_tree", { safeMode }), handedOver: (writer) => !writer.includes("#") && daemonReady?.workflowStepFinished(writer) === true, title: (writer) => {
+    const oneTree = createOneTree({ now: () => clock.now(), enabled: () => featureOn(store.settings.get(), "one_tree", { safeMode }), handedOver: (writer, reader) => !writer.includes("#") && daemonReady?.workflowStepFinished(writer, reader) === true, title: (writer) => {
       // `<session>#<agent>`: one of Claude Code's sub-agents in that session.
       const [sessionId, agent] = writer.split("#") as [typeof writer, string | undefined]
       const title = store.sessionInfo(sessionId)?.title?.trim()

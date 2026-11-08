@@ -535,6 +535,13 @@ describe("moving through the list and clearing finished reviews", () => {
     expect(reviewsPageKey(at(ids[0]!), "\x1b[1;2B", data).state.selectedId).toBe(ids[5])
     expect(reviewsPageKey(at(ids[5]!), "\x1b[1;2A", data).state.selectedId).toBe(ids[0])
   })
+  test("shift with an arrow scrolls five lines in a review's detail, its configuration and the Watches tab", () => {
+    for (const view of [{ detail: true }, { config: { jobId: ids[0]!, number: 1, scope: "global" as const, status: "loading" as const } }, { tab: 1 }]) {
+      const state = { ...at(ids[0]!), ...view, scroll: 7 } as ReviewsPageState
+      expect(reviewsPageKey(state, "\x1b[1;2B", data).state.scroll).toBe(12)
+      expect(reviewsPageKey(state, "\x1b[1;2A", data).state.scroll).toBe(2)
+    }
+  })
   test("d asks before removing a finished review and, confirmed, sends job-forget and keeps the selection on the next row", () => {
     const asked = reviewsPageKey(at("failed"), "d", data).state
     expect(asked.confirm).toEqual({ kind: "forget", jobId: "failed", number: 416 })

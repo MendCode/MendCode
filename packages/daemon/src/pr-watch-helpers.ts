@@ -1,6 +1,6 @@
 import type { PrWatchInfo } from "./pr-watch"
 
-export const FIELDS = "number,title,url,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,author,statusCheckRollup,comments,reviews"
+export const FIELDS = "number,title,url,state,isDraft,mergeable,reviewDecision,headRefName,headRefOid,baseRefName,author,statusCheckRollup,comments,reviews"
 const REF_NUMBER =/^#?(\d{1,7})$/
 const REF_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/(\d{1,7})(?:[/?#].*)?$/
 const REF_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/

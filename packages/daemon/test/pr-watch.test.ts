@@ -111,6 +111,20 @@ test("a new head is not 'all checks passed' while the MendCode review that ran o
   expect(evaluate({ snapshot: snap(check("build", "COMPLETED", "SUCCESS")), mark: again.mark, self: "me", now: at + 400_000 + REVIEW_WAIT_MS }).events.map((event) => event.kind)).toEqual(["checks_passed"])
 })
 
+test("each head commit gets its own review wait: a push late in one commit's wait does not inherit what is left of it", () => {
+  const snap = (commit: string, ...checks: ReturnType<typeof check>[]) => parseSnapshot(JSON.stringify(pull({ headRefOid: commit, statusCheckRollup: checks })))!
+  const at = 1_800_000_000_000
+  const reviewed = evaluate({ snapshot: snap("aaa", check("build", "COMPLETED", "SUCCESS"), check("MendCode review", "COMPLETED", "SUCCESS")), mark: { failed: "", passed: false, conflict: false, seen: [] }, self: "me", now: at })
+  const waitingA = evaluate({ snapshot: snap("bbb", check("build", "IN_PROGRESS", null)), mark: reviewed.mark, self: "me", now: at + 60_000 })
+  expect(waitingA.mark.reviewWaitCommit).toBe("bbb")
+  // Commit ccc lands just before bbb's wait would end, and its build passes after it: ccc's own review is still awaited.
+  const late = at + 60_000 + REVIEW_WAIT_MS - 1_000
+  const pushed = evaluate({ snapshot: snap("ccc", check("build", "IN_PROGRESS", null)), mark: waitingA.mark, self: "me", now: late })
+  const built = evaluate({ snapshot: snap("ccc", check("build", "COMPLETED", "SUCCESS")), mark: pushed.mark, self: "me", now: late + 120_000 })
+  expect(built.events).toEqual([])
+  expect(evaluate({ snapshot: snap("ccc", check("build", "COMPLETED", "SUCCESS")), mark: built.mark, self: "me", now: late + REVIEW_WAIT_MS }).events.map((event) => event.kind)).toEqual(["checks_passed"])
+})
+
 test("evaluate reports each failure set, each pass, each conflict and each foreign comment once", () => {
   const mark = { failed: "", passed: false, conflict: false, seen: [] as string[] }
   const failing = parseSnapshot(JSON.stringify(pull({ statusCheckRollup: [check("build", "COMPLETED", "FAILURE")] })))!
