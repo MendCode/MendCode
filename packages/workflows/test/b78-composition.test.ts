@@ -244,6 +244,14 @@ describe("B78 outputs and bounded map", () => {
     expect(captureOutput(task, echoed)?.value).toBe('{"goal":"stop non-owners"}')
     const onlySchema = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n```"
     expect(() => captureOutput(task, onlySchema)).toThrow("schema")
+    // An element of a pretty-printed array is not the answer: the array is read whole, and it does not match.
+    const nested = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n[\n" + JSON.stringify({ goal: "wrong outer type" }) + "\n]\n```"
+    expect(() => captureOutput(task, nested)).toThrow("not valid JSON")
+    // A pretty-printed answer after the echo, and an answer fenced with tildes that left the whole message as the block, still read.
+    const pretty = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }, null, 2) + "\n```"
+    expect(captureOutput(task, pretty)?.value).toBe('{"goal":"stop non-owners"}')
+    const tildes = "~~~WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: 'a "quoted" } brace' }) + "\n~~~TASK_RESULT\nstatus: done"
+    expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
   })
 
   test("aggregate output storage fails closed within the durable row limit", async () => {
