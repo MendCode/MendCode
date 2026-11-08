@@ -1536,6 +1536,8 @@ export const WorkflowList = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("workflow.list"),
   directory: z.string().max(4096).optional(),
+  /** The newest this many runs; a store with hundreds of runs is otherwise larger than one reply frame. */
+  limit: z.number().int().min(1).max(500).optional(),
 }))
 
 /** Read-only. Ack: `{ workflow: WorkflowRun }`. */

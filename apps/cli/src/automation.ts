@@ -58,6 +58,8 @@ export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, d
 
 export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
 const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary"])
+/** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
+const WORKFLOW_LIST_LIMIT = 50
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
 /** Flags that may be given several times; their values are collected in order. */
 const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude"])
@@ -91,7 +93,7 @@ export type Automation = Common &
     | { kind: "loop.create"; objective: string; name: string; trigger: { kind: "manual" } | { kind: "interval"; everyMs: number } | { kind: "daily"; at: string }; budget: { mode: "goal"; maxRuns?: number } | { mode: "monitor" } | { mode: "fixed"; maxRuns: number }; criteria?: string; checks?: string[]; audit?: "none"; runNow: boolean }
     | { kind: "loop.control"; id: string; action: "pause" | "resume" | "stop" | "run" | "delete" }
     | { kind: "loop.fire"; id: string; note?: string }
-    | { kind: "workflow.list"; all: boolean }
+    | { kind: "workflow.list"; all: boolean; limit: number }
     | { kind: "workflow.preview"; target: string; script?: ScriptRun }
     | { kind: "workflow.new"; name: string; out?: string }
     | { kind: "workflow.convert"; target: string; out?: string }
@@ -257,7 +259,7 @@ export const USAGE: Record<string, string> = {
   workflow: [
     `usage: ${PROGRAM_NAME} workflow <command> [--dir D] [--json]   (also: workflows)`,
     "",
-    "  list|status             --all",
+    "  list|status             --all --limit N (newest 50)",
     "  save <file.json|name>   --definition-id ID --name NAME --description TEXT",
     "                          --source manual|saved|template|profile|",
     "                          session-generated",
@@ -799,7 +801,11 @@ export function parseAutomation(argv: string[]): ParseResult {
       }
       case "list":
       case "status":
-        return ok({ kind: "workflow.list", all: flags.has("all") })
+      {
+        const limit = number(flags, "limit", { min: 1, integer: true })
+        if (isError(limit) || (limit ?? WORKFLOW_LIST_LIMIT) > 500) return bad("--limit needs an integer from 1 to 500")
+        return ok({ kind: "workflow.list", all: flags.has("all"), limit: limit ?? WORKFLOW_LIST_LIMIT })
+      }
       case "definitions": {
         const limit = number(flags, "limit", { min: 1, integer: true })
         if (isError(limit) || (limit ?? 50) > 100) return bad("--limit must be 1–100")
@@ -1752,7 +1758,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     }
 
     case "workflow.list": {
-      const reply = await daemon({ type: "workflow.list", ...(command.all ? {} : { directory: dir }) })
+      const reply = await daemon({ type: "workflow.list", limit: command.limit, ...(command.all ? {} : { directory: dir }) })
       if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
       const workflows = (reply.result.workflows ?? []) as WorkflowSummary[]
       return result({ workflows }, workflowRows(workflows))
