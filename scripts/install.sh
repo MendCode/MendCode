@@ -225,11 +225,12 @@ case ":$PATH:" in
     printf 'Run mendcode to start; mendcode doctor checks the installation. mendcode upgrade updates it; --channel beta or nightly switches channel.\n' ;;
   *)
     printf '✗ %s is not on PATH. Add it for your shell, open a new terminal, then run mendcode:\n' "$install_dir"
-    case "${SHELL##*/}" in
+    shell_name=${SHELL:-}
+    case "${shell_name##*/}" in
       zsh) printf "  echo 'export PATH=\"%s:\$PATH\"' >> ~/.zshrc\n" "$install_dir" ;;
       bash) if [ "$(uname -s)" = Darwin ]; then rc='~/.bash_profile'; else rc='~/.bashrc'; fi
         printf "  echo 'export PATH=\"%s:\$PATH\"' >> %s\n" "$install_dir" "$rc" ;;
-      fish) printf '  fish_add_path %s\n' "$install_dir" ;;
+      fish) printf "  fish_add_path '%s'\n" "$install_dir" ;;
       *) printf '  export PATH="%s:$PATH"\n' "$install_dir" ;;
     esac ;;
 esac

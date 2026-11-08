@@ -50,18 +50,22 @@ function fixture(os = "Linux", arch = "x86_64", hashing = true, version = "1.2.3
   mkdirSync(assets, { recursive: true })
   writeFileSync(path.join(assets, name), body)
   writeFileSync(path.join(assets, "SHA256SUMS"), `${hash}  ${name}\n`)
-  const run = (extra: Record<string, string> = {}, args: string[] = []) => Bun.spawnSync(["/bin/sh", script, ...args], {
+  const run = (extra: Record<string, string> = {}, args: string[] = []) => Bun.spawnSync([POSIX_SH, script, ...args], {
     env: { HOME: path.join(dir, "home"), PATH: tools, FAKE_OS: os, FAKE_ARCH: arch, MENDCODE_VERSION: version, MENDCODE_ALLOW_UNSIGNED: "1", MENDCODE_INSTALL_DIR: install, MENDCODE_DOWNLOAD_BASE: pathToFileURL(release).href, ...extra },
     stdout: "pipe", stderr: "pipe",
   })
   return { dir, tools, install, name, assets, run }
 }
 
+/** dash where it exists (Linux's sh, strict about unset variables); macOS's sh is bash in disguise and forgives them. */
+const POSIX_SH = existsSync("/bin/dash") ? "/bin/dash" : "/bin/sh"
+
 for (const [os, arch] of [["Darwin", "arm64"], ["Darwin", "x86_64"], ["Linux", "aarch64"], ["Linux", "x86_64"]] as const) {
   test(`POSIX installer installs verified ${os}-${arch} from file:// inside a temp install dir`, () => {
     const box = fixture(os, arch)
     const result = box.run()
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
+    // The fixture's environment has no SHELL (as in CI): the PATH guidance still prints.
     // The installer runs what it installed and says whether its directory is on PATH, with the line to add for the shell.
     expect(result.stdout.toString()).toMatch(/^[✓✗] mendcode (runs|did not start)/m)
     expect(result.stdout.toString()).toMatch(/^[✓✗] .+ (is on PATH|is not on PATH)/m)

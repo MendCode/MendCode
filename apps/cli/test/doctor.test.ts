@@ -9,7 +9,7 @@ describe("mendcode doctor", () => {
     ])
     const missing = installChecks("/home/ana/.local/bin/mendcode", "/usr/bin", "/usr/bin/fish")[1]!
     expect(missing).toMatchObject({ name: "PATH", ok: false })
-    expect(missing.detail).toContain("fish_add_path /home/ana/.local/bin")
+    expect(missing.detail).toContain("fish_add_path '/home/ana/.local/bin'")
     expect(installChecks("/home/ana/.local/bin/mendcode", "/usr/bin", "/bin/zsh")[1]!.detail).toContain(`>> ~/.zshrc`)
     // A source checkout runs under bun: there is no installed binary to judge.
     expect(installChecks("/opt/homebrew/bin/bun", "/usr/bin", "/bin/zsh")).toEqual([])

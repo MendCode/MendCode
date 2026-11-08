@@ -91,7 +91,7 @@ export function installChecks(execPath: string, pathVariable: string, shell: str
   const separator = process.platform === "win32" ? ";" : ":"
   const onPath = pathVariable.split(separator).some((entry) => entry.replace(/[\\/]+$/, "") === folder)
   const name = shell.split("/").pop()
-  const add = name === "fish" ? `fish_add_path ${folder}` : name === "zsh" ? `echo 'export PATH="${folder}:$PATH"' >> ~/.zshrc` : name === "bash" ? `echo 'export PATH="${folder}:$PATH"' >> ${process.platform === "darwin" ? "~/.bash_profile" : "~/.bashrc"}` : `export PATH="${folder}:$PATH"`
+  const add = name === "fish" ? `fish_add_path '${folder}'` : name === "zsh" ? `echo 'export PATH="${folder}:$PATH"' >> ~/.zshrc` : name === "bash" ? `echo 'export PATH="${folder}:$PATH"' >> ${process.platform === "darwin" ? "~/.bash_profile" : "~/.bashrc"}` : `export PATH="${folder}:$PATH"`
   return [
     { name: "binary", ok: true, detail: execPath },
     onPath ? { name: "PATH", ok: true, detail: `${folder} is on PATH` } : { name: "PATH", ok: false, detail: `${folder} is not on PATH; add it, then open a new terminal: ${add}` },

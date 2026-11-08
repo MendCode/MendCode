@@ -1101,9 +1101,13 @@ export async function startDaemon(options: DaemonOptions) {
     const all: Array<[string, ResourceDiagnostics]> = [["skills", skills.inspect(directory).diagnostics], ["commands", commandReport], ["agents", agentFindings]]
     // An override (another layer's skill of the same name) and a field warning are worth a look, not a broken install.
     const notice = (detail: string) => / is overridden by |: warning: |^warning: /.test(detail)
-    return all.flatMap(([kind, diagnostics]) => diagnosticLines(diagnostics, 12).map((detail) => notice(detail)
-      ? { name: `${kind} resources`, ok: true, level: "warn" as const, detail }
-      : { name: `${kind} resources`, ok: diagnostics.problems.length === 0 && diagnostics.dropped.length === 0, detail }))
+    // Severity comes from the findings themselves, not the lines shown: "… and N more" fails only when a real problem is among them.
+    return all.flatMap(([kind, diagnostics]) => {
+      const failing = diagnostics.dropped.length > 0 || diagnostics.problems.some((problem) => !notice(`${problem.file}: ${problem.message}`))
+      return diagnosticLines(diagnostics, 12).map((detail) => notice(detail) || (!failing && detail.startsWith("…"))
+        ? { name: `${kind} resources`, ok: true, level: "warn" as const, detail }
+        : { name: `${kind} resources`, ok: !failing, detail })
+    })
   }
   /** `/name args` of a skill: the skill's text goes in as an argument so shell markers inside it stay inert. */
   const skillInvocation = async (directory: string, command: { name: string; skill?: boolean | undefined }, args: string) => {
@@ -6321,15 +6325,20 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: true, result: { operation: "precedence", ok: true, checks: [], failures: [], facts } })
         }
         let login: { ok: boolean; message?: string } | undefined
-        if (command.operation === "ai-env" || command.operation === "ai-status") {
+        if (command.operation === "ai-env" || command.operation === "ai-status" || command.operation === "doctor") {
           const checked = options.info?.login ? await options.info.login().catch(() => ({ ok: false, message: "login check failed" })) : undefined
           login = checked ? { ok: checked.ok, ...(checked.message ? { message: redactSecrets(checked.message).text.slice(0, 300) } : {}) } : undefined
         }
-        const report = systemReport(command.operation, { entry: command.entry, page: command.page, index: command.index, dir: options.dir, directory: canonicalDir(command.directory), socketPath: options.socketPath, transport: localSecret ? "tcp" : "unix", buildId: options.buildId, engine: options.info?.engine ?? "unknown", settings: { ...store.settings.get(), ...(options.logLevel ? { logLevel: options.logLevel } : {}) }, catalog, providers: options.providers, login, ...(command.operation === "config-layers" ? { invalidSettings: store.settings.invalid() } : {}) })
+        const reportInput: Parameters<typeof systemReport>[1] = { entry: command.entry, page: command.page, index: command.index, dir: options.dir, directory: canonicalDir(command.directory), socketPath: options.socketPath, transport: localSecret ? "tcp" : "unix", buildId: options.buildId, engine: options.info?.engine ?? "unknown", settings: { ...store.settings.get(), ...(options.logLevel ? { logLevel: options.logLevel } : {}) }, catalog, providers: options.providers, login, ...(command.operation === "config-layers" ? { invalidSettings: store.settings.invalid() } : {}) }
+        const report = systemReport(command.operation, reportInput)
         if (command.operation === "ai-env" || command.operation === "ai-status") report.facts.login = login ?? null
         if (command.operation === "doctor") {
-          const signedIn = options.info?.login ? await options.info.login().catch(() => ({ ok: false, message: "login check failed" })) : undefined
-          if (signedIn) report.checks.push({ name: "login", ok: signedIn.ok, detail: signedIn.ok ? "signed in" : redactSecrets(signedIn.message ?? "not signed in: run mendcode and /connect").text.slice(0, 300) })
+          // A failure only when the main model cannot run (ai-status's readiness: its provider or the subscription it needs); a
+          // subscription that model does not use is information.
+          const ai = systemReport("ai-status", reportInput).facts as { ready?: boolean | null; blockers?: string[]; roles?: { main?: { model?: string | null } } }
+          const model = ai.roles?.main?.model ?? "the main model"
+          if (ai.ready === false) report.checks.push({ name: "login", ok: false, detail: redactSecrets(`${model} cannot run: ${(ai.blockers ?? []).join("; ") || "not signed in"}`).text.slice(0, 300) })
+          else if (login) report.checks.push(login.ok ? { name: "login", ok: true, detail: "signed in" } : { name: "login", ok: true, level: "info", detail: redactSecrets(`${login.message ?? "not signed in"} (${model} does not need it)`).text.slice(0, 300) })
           report.checks.push(...await resourceChecks(canonicalDir(command.directory)))
           report.failures = report.checks.filter((check) => !check.ok).map((check) => `${check.name}: ${check.detail}`)
           report.ok = report.failures.length === 0

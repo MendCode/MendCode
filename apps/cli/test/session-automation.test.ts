@@ -205,7 +205,7 @@ test("from an agent's shell, send --wait stops at the first approval it may not 
 })
 
 test("a subtask command that waits on an approval reports the child session that waits, as its message does", async () => {
-  const queueId = ids("queue"), turnId = ids("turn"), requestId = ids("request"), child = ids("ses")
+  const queueId = ids("queue"), turnId = ids("turn"), requestId = ids("request"), child = ids("session")
   const h = fake(() => ({ ok: true, result: { queueId, task: { taskId: child } } }))
   h.deps.env = { MENDCODE_AGENT_SHELL: "/data" }
   const running = runAutomation(parsed("session", "send", id, "/review", "--json"), h.deps)

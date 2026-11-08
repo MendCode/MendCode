@@ -92,7 +92,7 @@ function lastMatchingValue(body: string, schema: Record<string, unknown>): unkno
       // An opener after words on its line is prose (`Schema notation: {`): skip it and keep reading. Any other is a truncated
       // outer value, and what it holds is not an outermost answer.
       const lineStart = body.lastIndexOf("\n", i - 1) + 1
-      if (/[A-Za-z]/.test(body.slice(lineStart, i))) continue
+      if (/\p{L}/u.test(body.slice(lineStart, i))) continue
       break
     }
     try {
