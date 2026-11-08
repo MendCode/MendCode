@@ -91,7 +91,19 @@ export function detectLanguage(text: string): string | undefined {
   }
   const tokens = (clean.toLowerCase().match(/[\p{L}\p{M}'’]+/gu) ?? []).map((token) => token.replace(/^['’]+|['’]+$/g, "")).filter(Boolean)
   if (tokens.length < MIN_WORDS) return undefined
-  const scores = LATIN.map((entry) => {
+  const [best, second] = scoreLatin(clean, tokens) as [{ language: string; score: number }, { language: string; score: number }]
+  if (best.score < MIN_SCORE || best.score < MARGIN * second.score) return undefined
+  return best.language
+}
+
+/** Each Latin-script language's score for `text` (function words, word endings, spelling marks), best first. */
+export function latinScores(text: string): Array<{ language: string; score: number }> {
+  const clean = prose(text)
+  return scoreLatin(clean, (clean.toLowerCase().match(/[\p{L}\p{M}'’]+/gu) ?? []).map((token) => token.replace(/^['’]+|['’]+$/g, "")).filter(Boolean))
+}
+
+function scoreLatin(clean: string, tokens: readonly string[]): Array<{ language: string; score: number }> {
+  return LATIN.map((entry) => {
     let score = 0
     for (const token of tokens) {
       if (entry.words.has(token)) score += 1
@@ -100,9 +112,6 @@ export function detectLanguage(text: string): string | undefined {
     score += 2 * (clean.toLowerCase().match(entry.marks ?? /$^/gu)?.length ?? 0)
     return { language: entry.language, score }
   }).sort((a, b) => b.score - a.score)
-  const [best, second] = scores as [{ language: string; score: number }, { language: string; score: number }]
-  if (best.score < MIN_SCORE || best.score < MARGIN * second.score) return undefined
-  return best.language
 }
 
 /** The language of a pull request's author from its title and description; English when they say too little or nothing clear. */

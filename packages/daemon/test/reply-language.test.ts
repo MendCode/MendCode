@@ -31,6 +31,13 @@ test("unclear, mixed or code-only text asks for the user's own language without 
   expect(replyLanguageLine(undefined, "gracias, thanks")).toBe(UNSURE_LINE)
 })
 
+test("a Spanish message mixed with English words is never named French for its \"tu\"", () => {
+  // The full lists tie Spanish and Portuguese here; the short words may only choose among those, so the line names none.
+  expect(replyLanguageLine(undefined, "rename tu title chat para que otro agente te de instrucciones de como hacerlo")).toBe(UNSURE_LINE)
+  expect(messageLanguage("tu peux le faire?")).toBe("French")
+  expect(messageLanguage("ok pero toca probarlo no? como lo hago?")).toBe("Spanish")
+})
+
 test("a named language holds whatever the message is in", () => {
   expect(replyLanguageLine("Español", "Fix the failing test and tell me what changed")).toBe("Reply in Español.")
   expect(replyLanguageLine(" English ", "arregla el test")).toBe("Reply in English.")
