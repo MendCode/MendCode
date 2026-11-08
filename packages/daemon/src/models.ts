@@ -31,6 +31,17 @@ export function catalogId(catalog: ModelCatalog, id: string): string | undefined
   return matches.length === 1 ? matches[0]!.id : undefined
 }
 
+/**
+ * A bare Claude family name (`opus`, `Sonnet`, `haiku`, `fable`) is the user's Claude Code model of that family when exactly
+ * one is configured: someone who says "an Opus" on a Claude login means it, not another provider's copy.
+ */
+export function claudeFamilyId(catalog: ModelCatalog, id: string): string | undefined {
+  const family = id.trim().toLowerCase()
+  if (!/^(opus|sonnet|haiku|fable)$/.test(family)) return undefined
+  const matches = catalog.list().filter((model) => model.engine === "claude" && model.id.toLowerCase().includes(family))
+  return matches.length === 1 ? matches[0]!.id : undefined
+}
+
 /** Up to `limit` catalog ids that share a word with `id` (`terra`, `6.1`): what an unknown model was likely meant to be. */
 export function nearModels(catalog: ModelCatalog, id: string, limit = 8): string[] {
   const words = id.toLowerCase().split(/[^a-z0-9.]+/).filter((word) => word.length > 1 && !["gpt", "claude", "model"].includes(word))

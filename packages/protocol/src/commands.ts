@@ -668,7 +668,7 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("pr.review"),
   sessionId: SessionId,
-  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "describe", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
+  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "describe", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "job-forget", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
   /** `review` only: review the head whole even when it was already reviewed with the same config (otherwise answered at once, nothing run). */

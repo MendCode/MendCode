@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { followPage, type PageLink } from "../src/ui/app/page-back"
-import { wheelStep } from "../src/ui/app/page-wheel"
+import { FAST_STEP, fastStep, wheelStep } from "../src/ui/app/page-wheel"
 import { petPickerKey } from "../src/view/pet-picker"
 import { toolsPageKey, createToolsPageState } from "../src/view/tools-page"
 import { hooksPageKey, createHooksPageState } from "../src/view/hooks-page"
@@ -164,5 +164,17 @@ describe("path arguments complete from disk", () => {
     const [first] = slashSuggestions("/cd s", [], undefined, [], base)
     expect(first?.name).toBe("cd src/")
     expect(first?.argument).toEqual({ more: false, path: true })
+  })
+})
+
+describe("shift with an arrow moves five rows on any page", () => {
+  test("list and text pages get their own arrow five times; pages that use shift arrows, typed values and paging pages keep the key", () => {
+    expect(fastStep({ page: "sessions", key: "\x1b[1;2B" })).toEqual({ key: "\x1b[B", times: FAST_STEP })
+    expect(fastStep({ page: "help", key: "\x1b[1;2A" })).toEqual({ key: "\x1b[A", times: FAST_STEP })
+    for (const page of ["changes", "queue", "reviews", "customize", "diagram"] as const) expect(fastStep({ page, key: "\x1b[1;2B" })).toBeUndefined()
+    expect(fastStep({ page: "settings", key: "\x1b[1;2B", typing: true })).toBeUndefined()
+    expect(fastStep({ page: "context", key: "\x1b[1;2B" })).toBeUndefined()
+    expect(fastStep({ page: "chat", key: "\x1b[1;2B" })).toBeUndefined()
+    expect(fastStep({ page: "sessions", key: "\x1b[B" })).toBeUndefined()
   })
 })

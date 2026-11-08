@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { CLAUDE_MODELS, claudeAlias, createClaudeModelCatalog } from "../src/claude-models"
 import { createEngineRouter } from "../src/engine-router"
-import { catalogModel, invalidChoice, modelEngine, resolveModel, usableEffort, type ModelCatalog } from "../src/models"
+import { catalogModel, claudeFamilyId, invalidChoice, modelEngine, resolveModel, usableEffort, type ModelCatalog } from "../src/models"
 import { withAcpEngine } from "../../engine-acp/src/router"
 
 const ids = createIdFactory()
@@ -202,4 +202,13 @@ test("a sub-agent asked for a Claude Code model is told to pass engine claude, n
   const catalog = { selectable: true, list: () => [{ id: "claude-opus-5-5", name: "Opus 5.5", engine: "claude", efforts: [] }], defaults: { model: "gpt-6-luna" } } as never
   expect(invalidChoice({ model: "claude-opus-5-5" }, catalog, "subagent")).toBe(`claude-opus-5-5 runs through Claude Code on the user's Claude login; to delegate to it pass engine: "claude" with this exact model (full tier), not another provider's copy of it`)
   expect(invalidChoice({ model: "claude-opus-5-5" }, catalog, "main")).toBeUndefined()
+})
+
+test("a bare Claude family name is the one Claude Code model of that family; none or two of them stay unresolved", () => {
+  const catalog = (ids: string[]) => ({ selectable: true, list: () => ids.map((id) => ({ id, name: id, engine: id.startsWith("opencode:") ? undefined : "claude", efforts: [] })), defaults: { model: "gpt-6-luna" } }) as never
+  expect(claudeFamilyId(catalog(["claude-opus", "opencode:claude-opus-5-5", "claude-sonnet"]), "opus")).toBe("claude-opus")
+  expect(claudeFamilyId(catalog(["claude-opus", "claude-sonnet"]), "Sonnet")).toBe("claude-sonnet")
+  expect(claudeFamilyId(catalog(["claude-opus", "claude-opus-5-5"]), "opus")).toBeUndefined()
+  expect(claudeFamilyId(catalog(["opencode:claude-opus-5-5"]), "opus")).toBeUndefined()
+  expect(claudeFamilyId(catalog(["claude-opus"]), "gpt")).toBeUndefined()
 })

@@ -235,6 +235,16 @@ export function createJobLedger({ file, now = Date.now, random, retainTerminal =
       }
       return replace(index, { ...job, tokens: add(job.tokens), ...(read ? { readTokens: add(job.readTokens ?? { input: 0, output: 0 }) } : {}), updatedAt: now() })
     },
+    forget(id) {
+      const job = jobs[indexOf(id)]!
+      const group = job.coverage === "audit" ? [job] : jobs.filter((item) => item.repo === job.repo && item.number === job.number && item.coverage !== "audit")
+      const open = group.find((item) => !isTerminal(item.state))
+      if (open) throw new RangeError(`[PR_REVIEW]: ${job.repo}#${job.number} still has a ${open.state} job; cancel it before removing the pull request from the list`)
+      const gone = new Set(group)
+      jobs = jobs.filter((item) => !gone.has(item))
+      save()
+      return gone.size
+    },
     list(filter = {}) {
       return jobs.filter((job) => (filter.repo === undefined || job.repo === filter.repo) && (filter.number === undefined || job.number === filter.number) && (filter.reviewer === undefined || job.reviewer === filter.reviewer) && (!filter.states || filter.states.includes(job.state))).map(copy)
     },

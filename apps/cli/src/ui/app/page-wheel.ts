@@ -27,3 +27,21 @@ export function wheelStep(input: { page: Page; usageTab?: number | undefined; ty
   if (LISTS.has(page)) return { ...ARROWS, repeat: "one" }
   return undefined
 }
+
+/** Shift with ↑ or ↓ (xterm and kitty send these). */
+export const SHIFT_ARROWS = { up: new Set(["\x1b[1;2A", "\x1b[a"]), down: new Set(["\x1b[1;2B", "\x1b[b"]) }
+export const FAST_STEP = 5
+/** Pages where shift with an arrow already means something else (reorder, select, its own fast move). */
+const OWN_SHIFT_ARROWS: ReadonlySet<Page> = new Set<Page>(["changes", "diagram", "queue", "reviews", "customize"])
+
+/**
+ * Shift with an arrow on a page moves FAST_STEP rows or lines: the key the page already moves with, sent FAST_STEP times.
+ * Undefined where the page owns that key, takes typed text or has no rows.
+ */
+export function fastStep(input: { page: Page; key: string; usageTab?: number | undefined; typing?: boolean | undefined }): { key: string; times: number } | undefined {
+  const direction = SHIFT_ARROWS.up.has(input.key) ? "up" : SHIFT_ARROWS.down.has(input.key) ? "down" : undefined
+  if (!direction || OWN_SHIFT_ARROWS.has(input.page) || input.typing) return undefined
+  const step = wheelStep(input)
+  if (!step || step.up !== ARROWS.up) return undefined
+  return { key: step[direction], times: FAST_STEP }
+}
