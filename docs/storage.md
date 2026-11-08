@@ -283,7 +283,7 @@ Fixed schema/index pages make the small fixture's per-session cost higher than t
   The current long-session fixture grows by **104 KiB/fork**, versus 526 KiB for a physical copy (formerly about
   290 KiB with model sharing alone). The fork budget is **115 KiB/fork** and at most 25% of a copy.
   The 100-fork fixture grows by **68 KiB/fork**, with an 80 KiB budget. Address tables/indexes add fixed overhead:
-  the current non-fork fixtures measure 206,165 bytes/session (60 sessions) and 345,800,704 bytes (2,000 sessions).
+  the non-fork fixtures measured 154,283 bytes/session (60 sessions) and 235,356,160 bytes (2,000 sessions) on 2026-11-02 (README, Measurements).
 
 ## What changed
 
