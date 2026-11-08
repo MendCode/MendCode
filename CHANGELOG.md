@@ -9,6 +9,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `/customize` → Home → Logo size picks large, medium or small for any logo kind, and Home position puts the home's block in the middle or at the top.
+
+### Fixed
+
+- The home's logo keeps its size and place while the slash menu is open.
+- Logo kind `both` draws the same letters as the wordmark instead of another font.
+- The big title sits a row further from the mark where the screen has room.
+
 ## v0.0.8 - 2026-11-07
 
 Workflow scripts say why they stopped and cheap models follow their steps more reliably, and test tokens are no longer

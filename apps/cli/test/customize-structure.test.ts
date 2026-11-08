@@ -149,7 +149,8 @@ describe("/customize in the app", () => {
       // The prompt (its top rule, then the input row) sits right under the identity, past the gap, in the top half when the logo keeps to the top.
       const logoEnd = rows.findLastIndex((row, index) => index < prompt && /[█▀▄]/.test(row))
       expect(prompt - logoEnd).toBeLessThanOrEqual(4)
-      if (homeInput === "top") expect(prompt).toBeLessThanOrEqual(rows.length / 2)
+      // The logo's title sits two rows under its mark where there is room, so the prompt starts a row lower than half way.
+      if (homeInput === "top") expect(prompt).toBeLessThanOrEqual(rows.length / 2 + 1)
       await h.type("hello")
       expect(h.text()).toContain("hello")
     })

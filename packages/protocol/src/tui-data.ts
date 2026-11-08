@@ -187,6 +187,8 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "productName": "MendCode",
   "homeLayout": "centered",
   "homeInput": "bottom",
+  "homeAlign": "center",
+  "logoSize": "large",
   "homeTips": false,
   "homeFooter": false,
   "homeHeader": true,
@@ -316,6 +318,8 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "split"
   ],
   "homeInput": ["bottom", "center", "top"],
+  "homeAlign": ["center", "top"],
+  "logoSize": ["small", "medium", "large"],
   "homeRightPanel": [
     "actions",
     "agentManager"

@@ -29,6 +29,10 @@ export type HomeLayout = (typeof HOME_LAYOUTS)[number]
 /** Where the empty prompt sits on the start screen: at the bottom (v1), right under the logo with the block centered, or under the logo at the top. */
 export const HOME_INPUTS = ["bottom", "center", "top"] as const
 export type HomeInputPlace = (typeof HOME_INPUTS)[number]
+/** Where the centered home's block (identity and panel) sits when the prompt stays at the bottom: centered in the rows, or under the header. */
+export const HOME_ALIGNS = ["center", "top"] as const
+/** The largest identity the home may draw: large is the biggest that fits (the mark over the big title), medium the mark over the name, small the name alone. */
+export const LOGO_SIZES = ["small", "medium", "large"] as const
 
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
@@ -342,6 +346,8 @@ export type TuiProfile = {
   productName: string
   homeLayout: HomeLayout
   homeInput: HomeInputPlace
+  homeAlign: (typeof HOME_ALIGNS)[number]
+  logoSize: (typeof LOGO_SIZES)[number]
   homeTips: boolean
   homeFooter: boolean
   /** The home screen's first row (the project folder, the product name, the runtime version); off gives the row to the logo. */
@@ -594,6 +600,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   productName: DEFAULT_PRODUCT_NAME,
   homeLayout: "centered",
   homeInput: "bottom",
+  homeAlign: "center",
+  logoSize: "large",
   homeTips: false,
   homeFooter: false,
   homeHeader: true,
@@ -967,6 +975,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     productName: normalizeProductName(source.productName),
     homeLayout: oneOf(HOME_LAYOUTS, source.homeLayout) ?? DEFAULT_TUI_PROFILE.homeLayout,
     homeInput: oneOf(HOME_INPUTS, source.homeInput) ?? DEFAULT_TUI_PROFILE.homeInput,
+    homeAlign: oneOf(HOME_ALIGNS, source.homeAlign) ?? DEFAULT_TUI_PROFILE.homeAlign,
+    logoSize: oneOf(LOGO_SIZES, source.logoSize) ?? DEFAULT_TUI_PROFILE.logoSize,
     homeTips: typeof source.homeTips === "boolean" ? source.homeTips : DEFAULT_TUI_PROFILE.homeTips,
     homeFooter: typeof source.homeFooter === "boolean" ? source.homeFooter : DEFAULT_TUI_PROFILE.homeFooter,
     homeHeader: bool("homeHeader"),
