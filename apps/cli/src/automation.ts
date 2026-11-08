@@ -7,8 +7,8 @@ import path from "node:path"
 import { MEMORY_USAGE, parseMemoryAutomation, type MemoryAutomation } from "./memory-automation"
 import type { Client } from "@mendcode/client"
 import type { GlobalEvent, Loop, MemoryEntry, PackageInfo, Area, RecipesReport, Settings, SessionEvent, SessionId, SessionSummary, StorageCleanResult, StorageReport, StorageWorktreesReport, UsageReport, UsageWasteReport, WorkflowRun, WorkflowSummary } from "@mendcode/protocol"
-import { MODEL_ROLES, TUI_OPERATIONS, DEFAULT_AREA, AREA_NAME, areaFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
-import { createHeadlessRun } from "./run"
+import { AGENT_SHELL_ENV, MODEL_ROLES, TUI_OPERATIONS, DEFAULT_AREA, AREA_NAME, areaFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
+import { createHeadlessRun, EXIT as RUN_EXIT } from "./run"
 import { COMPAT, compatEnvelope } from "./compat"
 import { isScriptFile, parseRunArguments } from "./view/workflow-script"
 import { relativeTime } from "./view/session-list"
@@ -1535,7 +1535,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
         return result({ sessionId: task?.taskId ?? command.id, queueId: reply.result.queueId, ...(command.mode ? { steered } : {}), ...(task ? { task } : {}) }, `${steered ? "steered" : "queued"} ${reply.result.queueId}${task ? ` · ${task.taskId}` : ""}\n`)
       }
       const jsonOut = { write: (text: string) => void text.split("\n").filter(Boolean).forEach((entry) => line({ kind: "event", event: JSON.parse(entry) })) }
-      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, unapproved: "pending", ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
+      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, unapproved: "pending", ...(deps.env?.[AGENT_SHELL_ENV] ? { stopOnPending: true } : {}), ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
       let after = 0
       let observedSession = command.id as SessionId
       const consume = (event: SessionEvent) => {
@@ -1571,9 +1571,12 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       refresh?.cancel()
       timer?.cancel()
       deps.listen(undefined)
-      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: command.id, exitCode: code, status: code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
+      // The turn waits on an approval nobody here may answer (`run.ts` said what and where): exit 4, as any wait on the user.
+      const waiting = code === RUN_EXIT.pending
+      const exit = waiting ? EXIT.needsInput : code
+      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
       else if (code === EXIT.timeout) err.write("error: timed out waiting for the turn\n")
-      return code
+      return exit
     }
 
     case "session.export": case "session.import": {
