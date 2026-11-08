@@ -262,7 +262,9 @@ does not move the answers to it. The setting is `settings.language`, in every ti
 
 - unset or `auto` (the default): the language of your latest message, judged locally from the message (its script, then common words
   of Spanish, Portuguese, French, English and a few more). No model call. When the message is too short or mixed to tell, the line
-  asks for the language you write in without naming one.
+  names the language of your last message that was clear in the session, else asks for the language you write in without naming one.
+  An engine's own wake-up (Claude Code's `<task-notification>` when a background task or Monitor ends) is not your message and never
+  changes it.
 - a language name (`Español`, `English`, `Deutsch`): every reply is in it, whatever the conversation is in.
 
 Run `/language` to see it, `/language auto`, `/language <name>` or `/language next` (auto, English, Español, Português, Français) to

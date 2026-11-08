@@ -18,6 +18,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The home's logo keeps its size and place while the slash menu is open.
 - Logo kind `both` draws the same letters as the wordmark instead of another font.
 - The big title sits a row further from the mark where the screen has room.
+- Replies stay in your language after a background task or Monitor ends in Claude Code, and after a short or mixed message; a Spanish message with English words is no longer answered in French.
+- An agent asked to change MendCode's own source code no longer refuses it as if it were a settings file.
 - Claude Code sessions compact while idle, just before Claude Code's one-hour prompt cache expires, as the native engine does (full tier, `idle_compact`).
 
 ## v0.0.8 - 2026-11-07
