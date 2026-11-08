@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Workflow agents asked for JSON get the schema as the shape of their answer, and an answer that repeated the schema first is still read.
 - `mendcode workflow show` prints a script's last log lines and what it returned, so a script that stopped early says why.
 
 ## v0.0.7 - 2026-11-07
