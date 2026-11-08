@@ -138,6 +138,10 @@ describe("redactSecrets false positives", () => {
     ["a brace variable", "TOKEN=${GITHUB_TOKEN}"],
     ["a dollar variable", "SECRET_KEY=$SECRET_KEY_VALUE"],
     ["a changeme placeholder", "DB_PASSWORD=changeme"],
+    // A model that reads a test fixture as `[redacted:token]` cannot edit that line, and has written the mark into the file.
+    ["a test fixture token", "await request('DELETE', '/expenses/1', { token: 'test-reviewer-token' })"],
+    ["a mock secret", "CLIENT_SECRET=mock_client_secret_value"],
+    ["a fixture password", `{"password": "fixture-password-123"}`],
     ["a quoted placeholder", `{"password": "<your-password>"}`],
     ["a credentialed url with a placeholder", "postgres://user:password@localhost:5432/app"],
     ["a url without credentials", "https://example.com:8080/path?x=1"],
