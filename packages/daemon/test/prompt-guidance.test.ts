@@ -110,6 +110,8 @@ describe("model notes", () => {
     expect(label("codex", "gpt-5-codex")).toBe("Codex-tuned model notes")
     expect(label("codex", "gpt-6-luna")).toBe("GPT-6 Luna low-effort notes")
     expect(label("codex", "gpt-6-sol")).toBeUndefined()
+    // Terra ended long tasks with a plan or one finished step three times in a row (a context-paging feature, 2026-11-08).
+    expect(label("codex", "gpt-6.1-terra")).toBe("GPT-6.1 Terra long-task notes")
     expect(label("mistral", "devstral-latest")).toBe("Devstral notes")
     expect(label("mistral", "codestral-latest")).toBe("Codestral notes")
     expect(label("mistral", "magistral-medium")).toBe("Magistral notes")

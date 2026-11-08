@@ -21,6 +21,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Replies stay in your language after a background task or Monitor ends in Claude Code, and after a short or mixed message; a Spanish message with English words is no longer answered in French.
 - An agent that sends a message to another session and waits is told at once when that session needs your approval, instead of waiting ten minutes without saying so.
 - An agent asked to change MendCode's own source code no longer refuses it as if it were a settings file.
+- GPT-6.1 Terra carries long tasks through in one turn instead of stopping at a plan or a first step.
 - Claude Code sessions compact while idle, just before Claude Code's one-hour prompt cache expires, as the native engine does (full tier, `idle_compact`).
 
 ## v0.0.8 - 2026-11-07
