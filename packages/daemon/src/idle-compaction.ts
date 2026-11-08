@@ -25,7 +25,7 @@ export type IdleCompactionPorts = {
   settings(): Pick<Settings, "compaction" | "idleCompactAtTokens" | "cacheLifetimeMinutes">
   /** The wire format and host of a configured provider, by the id a `usage.recorded` names. */
   provider(id: string): { type?: string | undefined; baseUrl?: string | undefined } | undefined
-  /** MendCode packs this session's history itself: the native engine, not Claude Code, Codex, pi or an ACP agent. */
+  /** The session's engine compacts when told to: the native engine, Claude Code (its `/compact`) or pi; not Codex or an ACP agent. */
   packs(sessionId: SessionId): boolean
   /** A sub-agent's or a workflow's own session: it is not resumed by a person. */
   child(sessionId: SessionId): boolean
