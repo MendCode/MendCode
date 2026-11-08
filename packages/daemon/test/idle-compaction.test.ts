@@ -311,6 +311,9 @@ describe("cache lifetimes: a call written at 1h (promptCacheTtl, wait_cache)", (
     expect(cacheLifetime({ provider: "vertex", type: "google-vertex-anthropic" })).toBeUndefined()
     expect(cacheLifetime({ provider: "openai", type: "openai", baseUrl: "https://api.openai.com/v1", ttl: "1h" })).toEqual({ ms: OPENAI_CACHE_LIFETIME_MS, source: "documented" })
     expect(cacheLifetime({ provider: "chatgpt", ttl: "1h" })).toEqual({ ms: CHATGPT_CACHE_LIFETIME_MS, source: "assumed" })
+    // Claude Code reports `1h` when its calls wrote the one-hour cache (a subscription): an hour, though it is no configured provider.
+    expect(cacheLifetime({ provider: "claude", ttl: "1h" })).toEqual({ ms: ANTHROPIC_CACHE_LIFETIME_1H_MS, source: "documented" })
+    expect(cacheLifetime({ provider: "claude" })).toBeUndefined()
     // The user's own minutes still win.
     expect(cacheLifetime({ provider: "work", type: "anthropic", ttl: "1h", overrides: { work: 30 } })).toEqual({ ms: 1_800_000, source: "setting" })
   })

@@ -252,6 +252,8 @@ describe("B78 outputs and bounded map", () => {
     expect(captureOutput(task, pretty)?.value).toBe('{"goal":"stop non-owners"}')
     const tildes = "~~~WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: 'a "quoted" } brace' }) + "\n~~~TASK_RESULT\nstatus: done"
     expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
+    const unclosed = "```WORKFLOW_OUTPUT\nSchema notation: {\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```"
+    expect(captureOutput(task, unclosed)?.value).toBe('{"goal":"stop non-owners"}')
   })
 
   test("aggregate output storage fails closed within the durable row limit", async () => {

@@ -54,13 +54,16 @@ describe("the big title", () => {
     for (const row of LOGO_TITLE) expect(row).toMatch(/^[ █▀▄]+$/)
   })
   test("the lockups, largest first: the mark over the big title, then the mark over the name; ASCII or a renamed product get the second only", () => {
-    const [big, small] = logoLockups("MendCode", false)
+    const [roomy, big, small] = logoLockups("MendCode", false)
     const markLeft = big!.findIndex((row) => row.includes(LOGO_MARK[0]!))
     expect(markLeft).toBe(0)
     // The mark is centered on the title, and the title's rows share one left edge.
     expect(big![0]!.indexOf(LOGO_MARK[0]!)).toBe(Math.floor((58 - 38) / 2))
     const titleTop = LOGO_MARK.length + 1
     expect(big!.slice(titleTop)).toEqual([...LOGO_TITLE])
+    // Where the screen has the row, the title sits two rows under the mark instead of one.
+    expect(roomy!.slice(titleTop + 1)).toEqual([...LOGO_TITLE])
+    expect(roomy![titleTop]).toBe("")
     expect(small).toEqual(logoLockup("MendCode", false))
     expect(logoLockups("MendCode", true)).toEqual([logoLockup("MendCode", true)])
     expect(logoLockups("Acme", false)).toEqual([logoLockup("Acme", false)])
@@ -117,11 +120,16 @@ describe("the home's title", () => {
     expect(homeIdentity({ ascii: true }).slice(0, 8)).toEqual([...LOGO_MARK_ASCII])
     expect(homeIdentity({ ascii: true }).join("")).toMatch(/^[\x20-\x7e]*$/)
   })
-  test("a wordmark of its own text or font, and the wordmark beside a mascot, stay letters", () => {
+  test("a wordmark of its own text or font stays those letters; beside a mascot the letters are the wordmark's own", () => {
     expect(homeIdentity({ logoText: "ACME" })).toEqual(logoRows("ACME"))
     expect(homeIdentity({ logoFont: "solid" })).toEqual(logoRows(undefined, "solid"))
-    expect(homeIdentity({ logoKind: "both" }).join("\n")).toContain(logoRows()[0]!)
-    expect(homeIdentity({ logoKind: "both" }).join("\n")).not.toContain(LOGO_MARK[0]!)
+    // `both` with the shipped wordmark draws the same letters as `wordmark` (the website's title), not another font; no mark, the mascot is the picture.
+    const both = homeIdentity({ logoKind: "both" }).join("\n")
+    for (const row of LOGO_TITLE) expect(both).toContain(row)
+    expect(both).not.toContain(logoRows()[0]!)
+    expect(both).not.toContain(LOGO_MARK[0]!)
+    // A chosen font or text is used by both kinds alike.
+    expect(homeIdentity({ logoKind: "both", logoFont: "solid" }).join("\n")).toContain(logoRows(undefined, "solid")[0]!)
   })
   test("a small terminal gets the plain name instead", () => {
     const rows = renderHome({ ...base, width: 120, height: 17, screenHeight: 23 }).map(text)

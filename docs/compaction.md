@@ -427,7 +427,7 @@ It runs only when all of these hold; `mendcode context <sessionID>` names the fi
 | the feature is on | `feature-off` |
 | `compaction.auto` is not `false` | `auto-off` |
 | `compaction.strategy` is not `native` (whether the native compaction endpoint reads the prompt cache is not known) | `native-strategy` |
-| MendCode packs the session's history: the native engine, not Claude Code, Codex, pi or an ACP agent | `engine-managed` |
+| the engine can be told to compact: the native engine, Claude Code (its own `/compact`) or pi; not Codex or an ACP agent | `engine-managed` |
 | the session is not a sub-agent's or a workflow's own | `child-session` |
 | the session's latest model call was a main call made since this daemon started (a plan-mode turn schedules nothing: its request is not one the compaction can repeat) | `no-call` |
 | no compaction (automatic, manual or this one) since that call | `already-compacted` |
@@ -437,6 +437,10 @@ It runs only when all of these hold; `mendcode context <sessionID>` names the fi
 | the session is idle: no running turn, nothing queued, not paused, no pending approval or question, no running background or child task | `busy` |
 
 It applies to every session the daemon holds, with or without a terminal attached: a session resumed tomorrow gains the most.
+
+Claude Code driven by MendCode has no idle compaction of its own (that is its terminal's), so MendCode sends it `/compact`. Its calls
+report the cache they wrote: on a subscription it writes the one-hour cache, so the compaction comes about a minute before that hour
+ends, not a few minutes after the turn.
 
 ### When it runs
 

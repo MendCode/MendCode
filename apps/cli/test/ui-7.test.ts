@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createTranscript } from "../src/view/transcript"
-import { homeIdentity, logoRows } from "../src/view/home"
+import { homeIdentity } from "../src/view/home"
+import { LOGO_TITLE } from "../src/view/logo-mark"
 import { defaultHomeMascot } from "../src/view/mascot"
 import { textWidth } from "../src/view/wrap"
 import { createScreen } from "../src/ui/screen"
@@ -237,7 +238,8 @@ test("both logo remains composed in every welcome mode at 100x30", async () => {
     const text = h.text().join("\n")
     // Centered, the colored Mend stands above the wordmark's letters (working with the session at work); the split box keeps the text identity.
     if (homeLayout === "centered") {
-      for (const row of logoRows()) expect(text).toContain(row.trim())
+      // The wordmark's own letters (the website's title), the same as Logo kind wordmark draws.
+      for (const row of LOGO_TITLE) expect(text).toContain(row.trim())
       expect(mendRowIn(h.frames.at(-1)!, "running", 2)).toBeGreaterThan(0)
     } else for (const row of homeIdentity({ logoKind: "both" }).filter((row) => row.trim())) expect(text).toContain(row)
     await h.app.onKey("\x03")

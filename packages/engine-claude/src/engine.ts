@@ -918,10 +918,10 @@ export function createClaudeEngine(options: {
     needsCompaction: () => false,
     /**
      * `/compact` is Claude Code's own: the command goes to its process as a message, as typed in its terminal, and it reports the
-     * compaction (`compact_boundary`) and the summary it continues from. A compaction while idle is left to it.
+     * compaction (`compact_boundary`) and the summary it continues from. Driven through stream-json it has no idle compaction of its
+     * own (that is its terminal's), so the daemon's idle compaction sends the same `/compact` just before the cache expires.
      */
     async compact(input) {
-      if (input.idle) return { status: "ok" }
       if (!connections.get(input.sessionId) && !options.bindings?.get(input.sessionId)) return { status: "ok", note: "Nothing to compact: Claude Code has no conversation for this session yet." }
       const record: { preTokens?: number; postTokens?: number; summary?: string; done?: true } = {}
       compactions.set(input.turnId, record)
