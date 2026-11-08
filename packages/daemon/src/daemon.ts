@@ -280,7 +280,7 @@ import { searchFiles } from "./files-index"
 import { createInteractiveProcesses } from "./interactive-processes"
 import { createBackgroundTasks, type BackgroundPort, type InteractivePort, type LoopPort, type PeerPort, type ReviewPort, type WorkflowPort } from "@mendcode/tools"
 import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-notice"
-import { catalogId, catalogModel, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
+import { catalogId, catalogModel, claudeFamilyId, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
 import { createLiveTokens } from "./live-tokens"
@@ -1191,24 +1191,29 @@ export async function startDaemon(options: DaemonOptions) {
       if (shorthand && input.variant && shorthand !== input.variant) throw new Error("conflicting task variants")
       let raw = hash > 0 ? input.model!.slice(0, hash) : input.model
       // A model named without its provider (`gpt-6.1-terra`) is the one catalog id it can only mean.
-      if (raw) raw = catalogId(catalog, raw) ?? raw
-      if (input.engine) {
+      if (raw) raw = catalogId(catalog, raw) ?? claudeFamilyId(catalog, raw) ?? raw
+      // A model that only runs on another engine (Claude Code's `claude-opus`) names that engine itself: asking for it is the opt-in.
+      const engine = input.engine ?? (raw ? modelEngine({ model: raw }, catalog) : undefined)
+      const agent = agents.port().subagents(store.sessionDirectory(parent)!).find((agent) => agent.name === (input.agent ?? (input.task_id ? store.sessionAgent(input.task_id) : "general")))
+      // Everything wrong with an engine delegation in one error, so the next call is right instead of the third.
+      const restricted = !!engine && engine !== "native" && !!agent && !!(agent.tools || agent.deny?.some((tool) => tool !== "todo") || agent.permissionRules?.length)
+      const restrictedNote = restricted ? `agent "${agent!.name}" limits tools or paths, which ${engine} cannot enforce: omit agent (a general sub-agent) to use ${raw ?? "this model"}, or keep "${agent!.name}" on a native model` : undefined
+      if (engine) {
         if (store.meta.get(`session.local-tools.restricted:${parent}`) === "true") throw new Error("cross-engine delegation is local only")
-        if (options.safeMode || store.settings.get().tier !== "full" || !featureOn(store.settings.get(), "subagents")) throw new Error("cross-engine delegation needs the full tier")
+        if (options.safeMode || store.settings.get().tier !== "full" || !featureOn(store.settings.get(), "subagents")) throw new Error(`cross-engine delegation needs the full tier${raw ? ` (${raw} runs on the ${engine} engine)` : ""}`)
         const engineOf = (model: ModelChoice) => modelEngine(model, catalog) ?? (model.model.startsWith("acp:") ? acpAgentKey(model.model) : "native")
         raw ??= previous?.model
         // Another engine is never given a model it was not asked for; the error names that engine's ids so the next call can be exact.
-        const ofEngine = catalog.list(true).filter((model) => engineOf({ model: model.id }) === input.engine).map((model) => model.id)
-        if (!raw) throw new Error(ofEngine.length ? `engine delegation needs an exact model; ${input.engine} models: ${ofEngine.slice(0, 6).join(", ")}` : `no ${input.engine} model is configured: ${input.engine === "native" ? "connect a provider in /connect" : `${input.engine} must be installed and signed in`} (\`mendcode models\` lists the ids)`)
-        if (engineOf({ model: raw }) !== input.engine) throw new Error(`model ${raw} does not run on the ${input.engine} engine${ofEngine.length ? `; its models: ${ofEngine.slice(0, 6).join(", ")}` : ""}`)
+        const ofEngine = catalog.list(true).filter((model) => engineOf({ model: model.id }) === engine).map((model) => model.id)
+        if (!raw) throw new Error(ofEngine.length ? `engine delegation needs an exact model; ${engine} models: ${ofEngine.slice(0, 6).join(", ")}` : `no ${engine} model is configured: ${engine === "native" ? "connect a provider in /connect" : `${input.engine} must be installed and signed in`} (\`mendcode models\` lists the ids)`)
+        if (engineOf({ model: raw }) !== engine) throw new Error(`model ${raw} does not run on the ${engine} engine${ofEngine.length ? `; its models: ${ofEngine.slice(0, 6).join(", ")}` : ""}${restrictedNote ? `; also ${restrictedNote}` : ""}`)
       }
-      const agent = agents.port().subagents(store.sessionDirectory(parent)!).find((agent) => agent.name === (input.agent ?? (input.task_id ? store.sessionAgent(input.task_id) : "general")))
-      if (input.engine && input.engine !== "native" && agent && (agent.tools || agent.deny?.some((tool) => tool !== "todo") || agent.permissionRules?.length)) throw new Error("external child engines cannot enforce this agent's tool/path rules; choose general or native")
+      if (restrictedNote) throw new Error(restrictedNote)
       const fallback = previous ?? resolveModel({ role: "subagent", session: store.sessionModel(parent), roles: rolesFor(store.settings.get(), store.sessionDirectory(parent)), catalog, cheapSubagent: featureOn(store.settings.get(), "cheap_subagents", { safeMode: options.safeMode }) })
       const variant = input.variant ?? shorthand ?? (!raw && !previous ? agent?.model ? agent.variant : store.settings.get().subagent_variant : undefined)
       const choice = { ...(raw ? { model: raw } : !previous && agent?.model ? { model: agent.model } : fallback), ...(variant ? { variant } : {}), ...(!variant && !raw && !previous && agent?.effort ? { effort: agent.effort } : {}) }
       if (!catalog.selectable && !raw && !variant && !agent?.model && !agent?.effort) return previous
-      const problem = invalidChoice(choice, catalog, input.engine ? "main" : "subagent")
+      const problem = invalidChoice(choice, catalog, engine ? "main" : "subagent")
       // The model that asked gets the ids it probably meant, so its next call can be right.
       const near = problem?.startsWith("unknown model") ? nearModels(catalog, choice.model) : []
       if (problem) throw new Error(near.length ? `${problem}; use an exact id such as ${near.join(", ")}` : `${problem}; \`mendcode models\` lists the ids`)

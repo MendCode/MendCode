@@ -31,7 +31,7 @@ import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
 import { queuePolicy, userQueue } from "./queue-policy"
-import { wheelStep } from "./page-wheel"
+import { fastStep, wheelStep } from "./page-wheel"
 
 export function createKeys(ctx: AppContext, actions: {
   slashMenu: ReturnType<typeof import("./slash-menu").createSlashMenu>
@@ -459,7 +459,13 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "stash") return actions.stashKey(key)
     if (state.page === "drafts") return actions.draftsKey(key)
     if (state.page === "queue") return actions.queueKey(key)
-    if (state.page !== "chat") return pageKey(key)
+    if (state.page !== "chat") {
+      // Shift with an arrow: five rows at a time on any page whose arrows move a list or text (page-wheel.ts).
+      const typing = state.page === "settings" ? state.settingsPageState.tui ? state.customizeState.typing !== undefined || state.customizeState.menu !== undefined : state.settingsPageState.typing !== undefined : false
+      const fast = fastStep({ page: state.page, key, usageTab: state.page === "usage" ? state.usageState.tab : undefined, typing })
+      if (fast) { for (let i = 0; i < fast.times; i++) await pageKey(fast.key); return }
+      return pageKey(key)
+    }
     if (await actions.questionKey(key)) return requestFrame()
     // After alt+j / alt+shift+j the next character is where the cursor goes; anything else cancels the jump and acts as usual.
     if (editor.jumpPending) {

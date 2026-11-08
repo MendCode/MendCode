@@ -1,7 +1,7 @@
 import { pageSearchKey } from "./page-search"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
 import type { ReviewActivityJob } from "./review-activity"
-import { canCancel, canPause, canRelease, canResume, canRetry, canTakeOver, listedJobs, MAX_FILTER_TEXT, MAX_REASON_TEXT, reviewRepos, selectedJob, STATE_FILTERS, type ReviewsPageState } from "./reviews-page"
+import { canCancel, canForget, canPause, canRelease, canResume, canRetry, canTakeOver, listedJobs, MAX_FILTER_TEXT, MAX_REASON_TEXT, reviewRepos, selectedJob, STATE_FILTERS, type ReviewsPageState } from "./reviews-page"
 
 /**
  * Keys of the reviews page (`reviews-page.ts`). Pure: a key gives the next page state and at most one action; the app sends the
@@ -9,7 +9,7 @@ import { canCancel, canPause, canRelease, canResume, canRetry, canTakeOver, list
  * `t` take over or release); a retry needs a typed reason. `?` shows or hides every key of the jobs tab; esc hides it first.
  */
 
-export type ReviewsJobAction = "job-pause" | "job-resume" | "job-cancel" | "job-retry" | "take-over" | "release"
+export type ReviewsJobAction = "job-pause" | "job-resume" | "job-cancel" | "job-forget" | "job-retry" | "take-over" | "release"
 
 export type ReviewsPageAction =
   | { type: "none" }
@@ -33,6 +33,10 @@ export function reviewsCommand<Id extends string>(action: ReviewsPageAction, ses
 const NONE: ReviewsPageAction = { type: "none" }
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
+/** Shift with an arrow moves `FAST_STEP` rows (xterm, kitty and most terminals send these). */
+const SHIFT_UP = new Set(["\x1b[1;2A", "\x1b[a"])
+const SHIFT_DOWN = new Set(["\x1b[1;2B", "\x1b[b"])
+const FAST_STEP = 5
 const PAGE_UP = "\x1b[5~"
 const PAGE_DOWN = "\x1b[6~"
 const BACKSPACE = new Set(["\x7f", "\b"])
@@ -86,14 +90,21 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     const { search } = searched
     return keep({ ...state, typing: search.open, selected: 0, filter: { ...state.filter, text: search.query.slice(0, MAX_FILTER_TEXT) } })
   }
-  if (state.typing && !UP.has(key) && !DOWN.has(key) && key !== PAGE_UP && key !== PAGE_DOWN) return keep(state)
+  if (state.typing && !UP.has(key) && !DOWN.has(key) && !SHIFT_UP.has(key) && !SHIFT_DOWN.has(key) && key !== PAGE_UP && key !== PAGE_DOWN) return keep(state)
 
   if (state.confirm) {
     const { confirm, ...rest } = state
-    const confirmed = key === "y" || (confirm.kind === "cancel" ? key === "x" : key === "t")
+    const confirmed = key === "y" || (confirm.kind === "cancel" ? key === "x" : confirm.kind === "forget" ? key === "d" : key === "t")
     const target = dashboard?.jobs.find((entry) => entry.id === confirm.jobId)
     if (!confirmed || !target) return keep(rest)
-    const action: ReviewsJobAction = confirm.kind === "cancel" ? "job-cancel" : confirm.kind
+    const action: ReviewsJobAction = confirm.kind === "cancel" ? "job-cancel" : confirm.kind === "forget" ? "job-forget" : confirm.kind
+    // A cancelled job moves to the last group and a removed one is gone: the selection stays where it was, on the next row.
+    if (action === "job-cancel" || action === "job-forget") {
+      const at = jobs.findIndex((entry) => entry.id === confirm.jobId)
+      const next = at < 0 ? undefined : jobs[at + 1] ?? jobs[at - 1]
+      const stay = next ? { ...rest, selectedId: next.id, selected: jobs.indexOf(next) } : rest
+      return { state: stay, action: { type: "job", action, jobId: confirm.jobId } }
+    }
     return { state: rest, action: { type: "job", action, jobId: confirm.jobId } }
   }
 
@@ -143,8 +154,11 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
       return keep({ ...state, selectedId: next.id, selected: jobs.indexOf(next), scroll: 0 })
     }
     const at = job ? jobs.indexOf(job) : 0
-    if (UP.has(key)) return move(at - 1)
-    if (DOWN.has(key)) return move(at + 1)
+    // One step past either end wraps around: down on the last row goes to the first (the failed group sits above done).
+    if (UP.has(key)) return move(at === 0 ? jobs.length - 1 : at - 1)
+    if (DOWN.has(key)) return move(at === jobs.length - 1 ? 0 : at + 1)
+    if (SHIFT_UP.has(key)) return move(at - FAST_STEP)
+    if (SHIFT_DOWN.has(key)) return move(at + FAST_STEP)
     if (key === PAGE_UP) return move(at - 10)
     if (key === PAGE_DOWN) return move(at + 10)
     if (key === "g" || key === "\x1b[H") return move(0)
@@ -167,6 +181,7 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
   if (key === "S") return job.fixSessionId ? { state, action: { type: "session", sessionId: job.fixSessionId } } : keep(state)
   if (key === "p") return canPause(job) ? { state, action: { type: "job", action: "job-pause", jobId: job.id } } : keep(state)
   if (key === "u") return canResume(job) ? { state, action: { type: "job", action: "job-resume", jobId: job.id } } : keep(state)
+  if (key === "d") return canForget(job) ? keep({ ...pinned, confirm: { kind: "forget", jobId: job.id, number: job.number } }) : keep(state)
   if (key === "x") return canCancel(job) ? keep({ ...pinned, confirm: { kind: "cancel", jobId: job.id, number: job.number } }) : keep(state)
   if (key === "R") return canRetry(job) ? keep({ ...pinned, reason: { jobId: job.id, number: job.number, text: "" } }) : keep(state)
   if (key === "t") {

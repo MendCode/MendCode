@@ -19,6 +19,19 @@ function ledger({ dir = temp(), clock = { now: 1_000 }, retainTerminal, maxActiv
 const input = (number: number, head = sha(number)) => ({ provider: "github" as const, repo: "acme/app", directory: "/repo", number, sessionId: "ses_a", reviewer: "global", scope: "global" as const, trigger: "opened" as const, coverage: "full" as const, base: sha(1000), head, configKey: "cfg1" })
 
 describe("job ledger", () => {
+  test("forget removes a finished pull request with its earlier runs, refuses while one of its jobs is open, and keeps other PRs", () => {
+    const { jobs, file } = ledger()
+    const first = jobs.upsert(input(12)); jobs.transition(first.id, "running"); jobs.transition(first.id, "failed")
+    const second = jobs.upsert(input(12, sha(99))); jobs.transition(second.id, "cancelled")
+    const other = jobs.upsert(input(13))
+    expect(jobs.forget!(second.id)).toBe(2)
+    expect(jobs.list({ number: 12 })).toEqual([])
+    expect(jobs.get(other.id)).toBeDefined()
+    expect(createJobLedger({ file }).list({ number: 12 })).toEqual([])
+    const done = jobs.upsert(input(14)); jobs.transition(done.id, "running"); jobs.transition(done.id, "done")
+    jobs.upsert(input(14, sha(77)))
+    expect(() => jobs.forget!(done.id)).toThrow("still has a pending job")
+  })
   test("upsert returns the open job of the same reviewer, repo, PR, head, base and config instead of a second one; a finished one does not block a new job", () => {
     const { jobs } = ledger()
     const first = jobs.upsert(input(12))

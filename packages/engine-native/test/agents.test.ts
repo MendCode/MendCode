@@ -118,7 +118,7 @@ describe("custom agents in the native engine", () => {
     })
     await engine.runTurn(turn({ text: "find main" }).input)
     const taskSpec = requests[0]!.tools.find((t) => t.name === "task")!
-    expect(taskSpec.description).toContain("- scout: Finds things fast")
+    expect(taskSpec.description).toContain("- scout (native models only): Finds things fast")
     expect(requests[0]!.system).toBe("sys")
     // The sub-agent's call: its own prompt and tools (echo only), its own model, a fresh context.
     expect(requests[1]!.system).toBe("sys\n\n# Agent: scout\n\nYou are a scout. Answer in one line.")
@@ -199,4 +199,11 @@ describe("sub-agent names a model writes", () => {
     expect(subagentName("general-purpose", new Map())).toBeUndefined()
     expect(subagentName("general-purpose", undefined)).toBeUndefined()
   })
+})
+
+test("the task tool's agent list marks agents with tool or path rules as native-only, so a Claude Code child is not tried with them", async () => {
+  const { subagentCatalog } = await import("../src/agents")
+  const text = subagentCatalog([{ name: "general", description: "Any task" }, { name: "agy", description: "Debate", tools: ["read", "grep"] } as never])
+  expect(text).toContain("- general: Any task")
+  expect(text).toContain("- agy (native models only): Debate")
 })

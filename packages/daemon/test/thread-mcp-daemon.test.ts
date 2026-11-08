@@ -277,6 +277,22 @@ test("a delegation that fails says why to the engine that called, and names the 
   expect(h.daemon.store.tasks.list()).toHaveLength(0)
 })
 
+test("a sub-agent asked for by family name (\"sonnet\") runs on the user's Claude Code model with no engine named: the first call works", async () => {
+  // A GPT session asked for "un opus" and needed four task calls: unknown model, then engine missing, then agent rules (2026-11-08).
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
+  const parent = await h.create()
+  const results: any[] = []
+  h.run(async (turn) => {
+    results.push(await h.invoke(turn, "delegate_task", { description: "child", prompt: "check", model: "sonnet", background: false }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(results[0].result.content[0].text).toContain("state: completed")
+  const task = h.daemon.store.tasks.list().find((entry) => entry.parentId === parent)!
+  expect(h.daemon.store.sessionModel(task.taskId)?.model).toBe("claude-sonnet")
+})
+
 test("opt-in off keeps the bridge unloaded; invalid engine/model and tier rejection precede child creation", async () => {
   const h = await boot()
   const parent = await h.create()
