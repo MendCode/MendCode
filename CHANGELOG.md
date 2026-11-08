@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - Workflow agents asked for JSON get the schema as the shape of their answer, and an answer that repeated the schema first is still read.
+- A workflow agent is told that finishing its own task is `done`, so a step no longer reports blocked because later steps are still to do.
 - Test values such as `test-…`, `mock-…` or `fixture-…` tokens are no longer hidden from the model as secrets, so it can edit the tests that use them.
 - `mendcode workflow show` prints a script's last log lines and what it returned, so a script that stopped early says why.
 

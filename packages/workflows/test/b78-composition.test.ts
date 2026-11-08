@@ -238,6 +238,8 @@ describe("B78 outputs and bounded map", () => {
     const prompt = taskPrompt(run, "out")
     expect(prompt).toContain(`matches this JSON Schema; the schema describes your answer, do not repeat it: ${JSON.stringify(schema)}`)
     expect(prompt).not.toContain('"kind":"json"')
+    // A restate step once reported `blocked` because the rest of the objective was still to do.
+    expect(prompt).toContain("`done` means this task is finished, even when the rest of the workflow objective is left to other tasks")
     const echoed = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```\n```TASK_RESULT\nstatus: done\nsummary: ok\n```"
     expect(captureOutput(task, echoed)?.value).toBe('{"goal":"stop non-owners"}')
     const onlySchema = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n```"
