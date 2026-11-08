@@ -1585,9 +1585,10 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       timer?.cancel()
       deps.listen(undefined)
       // The turn waits on an approval nobody here may answer (`run.ts` said what and where): exit 4, as any wait on the user.
+      // Its sessionId is the one that waits: a subtask command's child, not the session the message was sent to.
       const waiting = code === RUN_EXIT.pending
       const exit = waiting ? EXIT.needsInput : code
-      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
+      if (command.json) line({ kind: "result", command: command.kind, data: { sessionId: waiting ? run.sessionId : command.id, exitCode: exit, status: waiting ? "waiting_approval" : code === EXIT.ok ? "completed" : code === EXIT.stopped ? "stopped" : code === EXIT.timeout ? "timeout" : code === EXIT.denied ? "denied" : "failed", ...(code === EXIT.denied ? { approvalDenied: true } : {}) } })
       else if (code === EXIT.timeout) err.write("error: timed out waiting for the turn\n")
       return exit
     }

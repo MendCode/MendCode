@@ -29,6 +29,16 @@ describe("Logo size", () => {
     expect(medium.some((line) => line.trim() === "MendCode")).toBe(true)
   })
 
+  test("a pixel mascot follows the size too: small draws no picture, medium keeps the picture with the name, not the big title", () => {
+    const sprite = (cols: number, rows: number) => Array.from({ length: rows }, () => [{ text: "▀".repeat(cols), fgHex: "#9c7ae8" }])
+    const mascot = { pixel: { boxes: [{ cols: 22, rows: 11 }], lines: sprite } }
+    const lines = (logoSize: HomeLook["logoSize"]) => renderHome({ width: 150, height: 40, screenHeight: 44, root: "~/x", look: { logoKind: "both", logoSize }, mascot })
+    const drawn = (logoSize: HomeLook["logoSize"]) => lines(logoSize).some((line) => line.some((span) => (span as { fgHex?: string }).fgHex === "#9c7ae8"))
+    expect([drawn("large"), drawn("medium"), drawn("small")]).toEqual([true, true, false])
+    expect(has(lines("large").map(plain), LOGO_TITLE[1]!)).toBe(true)
+    expect(has(lines("medium").map(plain), LOGO_TITLE[1]!)).toBe(false)
+  })
+
   test("the large title sits two rows under the mark where the screen has them, one at 80 x 24", () => {
     const gap = (rows: string[]) => rows.findIndex((line) => line.includes(LOGO_TITLE[0]!)) - rows.findIndex((line) => line.includes(LOGO_MARK.at(-1)!)) - 1
     expect(gap(rowsOf({}))).toBe(2)

@@ -254,6 +254,8 @@ describe("B78 outputs and bounded map", () => {
     expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
     const unclosed = "```WORKFLOW_OUTPUT\nSchema notation: {\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```"
     expect(captureOutput(task, unclosed)?.value).toBe('{"goal":"stop non-owners"}')
+    // A truncated outer array is not prose: the object inside it is not an outermost answer.
+    expect(() => captureOutput(task, "```WORKFLOW_OUTPUT\n[" + JSON.stringify({ goal: "wrong outer type" }) + "\n```")).toThrow("not valid JSON")
   })
 
   test("aggregate output storage fails closed within the durable row limit", async () => {

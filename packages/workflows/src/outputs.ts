@@ -88,8 +88,13 @@ function lastMatchingValue(body: string, schema: Record<string, unknown>): unkno
   for (let i = 0; i < body.length; i++) {
     if (body[i] !== "{" && body[i] !== "[") continue
     const end = closingIndex(body, i)
-    // An opener that never closes is prose (`Schema notation: {`), not the answer: skip it and keep reading.
-    if (end < 0) continue
+    if (end < 0) {
+      // An opener after words on its line is prose (`Schema notation: {`): skip it and keep reading. Any other is a truncated
+      // outer value, and what it holds is not an outermost answer.
+      const lineStart = body.lastIndexOf("\n", i - 1) + 1
+      if (/[A-Za-z]/.test(body.slice(lineStart, i))) continue
+      break
+    }
     try {
       const value: unknown = JSON.parse(body.slice(i, end + 1))
       if (matches(value, schema)) found = value

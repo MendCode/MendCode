@@ -51,8 +51,12 @@ export function replyLanguageLine(setting: string | undefined, text: string, rem
  * whatever the user writes. It says nothing about the user's language.
  */
 export function isMachineNotice(text: string): boolean {
-  return /^\s*<([a-z][\w-]*)[^>]*>[\s\S]*<\/\1>\s*$/i.test(text)
+  const tag = /^\s*<([a-z][\w-]*)[^>]*>[\s\S]*<\/\1>\s*$/i.exec(text)?.[1]?.toLowerCase()
+  return tag !== undefined && MACHINE_ENVELOPES.test(tag)
 }
+
+/** The envelopes engines wrap their own wake-ups in; a user's `<request>…</request>` is the user's words. */
+const MACHINE_ENVELOPES = /^(?:task-notification|system-reminder|local-command-[a-z-]+|command-[a-z-]+|bash-[a-z-]+|monitor-[a-z-]+|user-prompt-submit-hook|cross-session-message)$/
 
 /**
  * `replyLanguageLine` per session: the language last found in the user's own words is kept, so a notice or a message too short or

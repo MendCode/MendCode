@@ -4,6 +4,7 @@ import { createOneTree, mentionsPath, ONE_TREE_LIVE_MS } from "../src/one-tree"
 
 const PETS = "ses_pets" as SessionId
 const DOCS = "ses_docs" as SessionId
+const OTHER_READER = "ses_other" as SessionId
 const REPO = "/repo"
 
 function tree(options: { enabled?: boolean } = {}) {
@@ -90,9 +91,12 @@ describe("one tree", () => {
 test("a finished workflow step's files are handed to the next step, not named as another session's; a step still working is named", () => {
   // mend-quality: the owner of round 2 was told the proposal step's reproduction.json was another session's and stopped (2026-11-08).
   let finished = true
-  const oneTree = createOneTree({ now: () => 1_000_000, enabled: () => true, title: () => "workflow · mend-quality · proposal", handedOver: (id) => id === PETS && finished })
+  const oneTree = createOneTree({ now: () => 1_000_000, enabled: () => true, title: () => "workflow · mend-quality · proposal", handedOver: (writer, reader) => writer === PETS && reader === DOCS && finished })
   oneTree.note({ sessionId: PETS, cwd: REPO, written: ["evidence/reproduction.json"], output: "" })
   expect(oneTree.note({ sessionId: DOCS, cwd: REPO, written: [], output: "evidence/reproduction.json" })).toBeUndefined()
   finished = false
   expect(oneTree.note({ sessionId: DOCS, cwd: REPO, written: [], output: "evidence/reproduction.json" })).toContain("Other sessions are changing these files")
+  // Only a later step of the same run takes the handover: anyone else touching that file is still told.
+  finished = true
+  expect(oneTree.note({ sessionId: OTHER_READER, cwd: REPO, written: [], output: "evidence/reproduction.json" })).toContain("Other sessions are changing these files")
 })

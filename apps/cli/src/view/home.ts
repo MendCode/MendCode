@@ -366,12 +366,14 @@ function pixelIdentity(input: { look: HomeLook | undefined; mascot: HomeMascot |
   const center = (spans: Span[]): Line => centerIn(spans, width)
   const pixel = mascot?.pixel
   const kind = look?.logoKind
-  if (!pixel || (kind !== "both" && kind !== "mascot")) return []
+  // `logoSize` as for the text identity (`sized`): small is the plain name, medium keeps the smallest of the titles.
+  if (!pixel || (kind !== "both" && kind !== "mascot") || look?.logoSize === "small") return []
+  const titles = kind === "mascot" ? [[]] : look?.logoSize === "medium" ? bothTitles(look).slice(-1) : bothTitles(look)
   const tagline = (room: number): Line[] => (look?.tagline ? [[{ text: shortenMiddle(look.tagline, room), fg: "muted" }]] : [])
   const layouts: PixelLayout[] = []
   // Each size in turn, the wanted one first: above the title, then beside it, each with the largest of the text identity's letters
   // that fits (`bothTitles`, the same as without a picture). The rows are asked for only when a layout is built.
-  for (const { cols, rows } of pixel.boxes) for (const wordmark of kind === "mascot" ? [[]] : bothTitles(look)) {
+  for (const { cols, rows } of pixel.boxes) for (const wordmark of titles) {
     const wide = rowsWidth(wordmark)
     const title = (): Line[] => wordmark.map((row): Line => {
       const padded = row + " ".repeat(wide - textWidth(row))

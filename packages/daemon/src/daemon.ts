@@ -7044,6 +7044,11 @@ export async function startDaemon(options: DaemonOptions) {
     .catch((error) => logLine("warn", `[DAEMON]: releasing the queues a restart held failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
   resumeTimer.unref?.()
 
+  /** No turn running or finishing in this session. */
+  const writerIdle = (sessionId: SessionId) => {
+    const actor = actors.get(sessionId)?.snapshot()
+    return actor === undefined || (actor.turnId === undefined && !BUSY.has(actor.foreground))
+  }
   return {
     socketPath: options.socketPath,
     /** Set when the local transport is loopback TCP: where and with which secret a local client connects. */
@@ -7072,13 +7077,14 @@ export async function startDaemon(options: DaemonOptions) {
     /** Whether the workflow service was built (P6: false on a daemon that never saw a workflow). */
     workflowsLoaded: workflows.loaded,
     /**
-     * A workflow step whose turn ended: its writes are the run's, handed to the next step, never "another session's work"
-     * (one-tree.ts). A step still working keeps them, so steps running side by side in one checkout are still told.
+     * Whether `reader` is a later step of the same workflow run as `writer`, and `writer`'s turn ended: its writes are handed
+     * to that step, never "another session's work" (one-tree.ts). Any other reader (a session of the user, another run) and a
+     * step still working are still told.
      */
-    workflowStepFinished: (sessionId: SessionId) => workflows.execution(sessionId) !== undefined && !live.has(sessionId) && (() => {
-      const actor = actors.get(sessionId)?.snapshot()
-      return actor === undefined || (actor.turnId === undefined && !BUSY.has(actor.foreground))
-    })(),
+    workflowStepFinished: (sessionId: SessionId, reader: SessionId) => {
+      const run = workflows.execution(sessionId)?.workflowId
+      return run !== undefined && workflows.execution(reader)?.workflowId === run && !live.has(sessionId) && writerIdle(sessionId)
+    },
     stop,
   }
 }

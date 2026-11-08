@@ -112,6 +112,7 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     if (key === ESC || key === "q") { const { config: _closed, ...rest } = state; void _closed; return keep({ ...rest, scroll: 0 }) }
     if (UP.has(key) || DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (UP.has(key) ? -1 : 1)) })
     if (key === PAGE_UP || key === PAGE_DOWN) return keep({ ...state, scroll: Math.max(0, state.scroll + (key === PAGE_UP ? -10 : 10)) })
+    if (SHIFT_UP.has(key) || SHIFT_DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (SHIFT_UP.has(key) ? -FAST_STEP : FAST_STEP)) })
     return keep(state)
   }
 
@@ -141,12 +142,14 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
   if (state.tab === 1) {
     if (UP.has(key) || DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (UP.has(key) ? -1 : 1)) })
     if (key === PAGE_UP || key === PAGE_DOWN) return keep({ ...state, scroll: Math.max(0, state.scroll + (key === PAGE_UP ? -10 : 10)) })
+    if (SHIFT_UP.has(key) || SHIFT_DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (SHIFT_UP.has(key) ? -FAST_STEP : FAST_STEP)) })
     return keep(state)
   }
 
   if (state.detail) {
     if (UP.has(key) || DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (UP.has(key) ? -1 : 1)) })
     if (key === PAGE_UP || key === PAGE_DOWN) return keep({ ...state, scroll: Math.max(0, state.scroll + (key === PAGE_UP ? -10 : 10)) })
+    if (SHIFT_UP.has(key) || SHIFT_DOWN.has(key)) return keep({ ...state, scroll: Math.max(0, state.scroll + (SHIFT_UP.has(key) ? -FAST_STEP : FAST_STEP)) })
   } else {
     const move = (index: number) => {
       const next = jobs[Math.max(0, Math.min(index, jobs.length - 1))]
