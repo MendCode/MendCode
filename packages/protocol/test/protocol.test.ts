@@ -34,6 +34,14 @@ describe("ids", () => {
     expect(new Set(ids).size).toBe(50)
   })
 
+  test("a random part that starts at its top within one millisecond moves on to the next millisecond, still ordered, never throwing", () => {
+    // The last random value there is: the next id in the same millisecond has nowhere to go but the next one.
+    const next = createIdFactory({ now: () => 1_790_000_000_000, random: (n) => new Uint8Array(n).fill(31) })
+    const ids = Array.from({ length: 10_000 }, () => next("item"))
+    expect([...ids].sort()).toEqual(ids)
+    expect(new Set(ids).size).toBe(10_000)
+  })
+
   test("an invalid clock is rejected instead of producing a malformed id", () => {
     const next = createIdFactory({ now: () => -1 })
     expect(() => next("job")).toThrow(RangeError)
