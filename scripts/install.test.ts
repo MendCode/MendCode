@@ -62,6 +62,9 @@ for (const [os, arch] of [["Darwin", "arm64"], ["Darwin", "x86_64"], ["Linux", "
     const box = fixture(os, arch)
     const result = box.run()
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
+    // The installer runs what it installed and says whether its directory is on PATH, with the line to add for the shell.
+    expect(result.stdout.toString()).toMatch(/^[✓✗] mendcode (runs|did not start)/m)
+    expect(result.stdout.toString()).toMatch(/^[✓✗] .+ (is on PATH|is not on PATH)/m)
     expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
     expect(statSync(path.join(box.install, "mendcode")).mode & 0o777).toBe(0o755)
     expect(readdirSync(box.install).sort()).toEqual([".mendcode-install", "mendcode"])

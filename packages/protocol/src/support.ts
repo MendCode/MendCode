@@ -96,7 +96,8 @@ export type RecentContextReport = z.infer<typeof RecentContextReport>
 export const SystemReport = lazySchema(() => z.strictObject({
   operation: z.string(),
   ok: z.boolean(),
-  checks: z.array(z.strictObject({ name: z.string(), ok: z.boolean(), detail: z.string() })),
+  /** `level`: a passing check that still deserves a look (`warn`), or a fact about this machine (`info`). */
+  checks: z.array(z.strictObject({ name: z.string(), ok: z.boolean(), detail: z.string(), level: z.enum(["warn", "info"]).optional() })),
   failures: z.array(z.string()),
   facts: z.record(z.string(), z.unknown()),
 }))

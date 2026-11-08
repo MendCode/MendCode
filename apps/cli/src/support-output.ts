@@ -80,8 +80,32 @@ export function contextText(report: RecentContextReport) {
   return `${lines.join("\n")}\n`
 }
 
+/**
+ * `doctor`'s checks of the installed binary: where it is, and whether its folder is on PATH, with the line that adds it for
+ * the user's shell. A source checkout (run by bun) has no installed binary to check.
+ */
+export function installChecks(execPath: string, pathVariable: string, shell: string): SystemReport["checks"] {
+  const binary = execPath.split(/[\\/]/).pop() ?? ""
+  if (!/^mendcode/.test(binary)) return []
+  const folder = execPath.slice(0, execPath.length - binary.length - 1)
+  const separator = process.platform === "win32" ? ";" : ":"
+  const onPath = pathVariable.split(separator).some((entry) => entry.replace(/[\\/]+$/, "") === folder)
+  const name = shell.split("/").pop()
+  const add = name === "fish" ? `fish_add_path ${folder}` : name === "zsh" ? `echo 'export PATH="${folder}:$PATH"' >> ~/.zshrc` : name === "bash" ? `echo 'export PATH="${folder}:$PATH"' >> ${process.platform === "darwin" ? "~/.bash_profile" : "~/.bashrc"}` : `export PATH="${folder}:$PATH"`
+  return [
+    { name: "binary", ok: true, detail: execPath },
+    onPath ? { name: "PATH", ok: true, detail: `${folder} is on PATH` } : { name: "PATH", ok: false, detail: `${folder} is not on PATH; add it, then open a new terminal: ${add}` },
+  ]
+}
+
 export function systemText(report: SystemReport) {
-  if (report.operation === "doctor" || report.operation === "check") return `${report.checks.map((check) => `${check.ok ? "ok" : "fail"}\t${check.name}\t${check.detail}`).join("\n")}\n`
+  if (report.operation === "doctor" || report.operation === "check") {
+    const lines = report.checks.map((check) => `${check.ok ? check.level ?? "ok" : "fail"}\t${check.name}\t${check.detail}`)
+    const warnings = report.checks.filter((check) => check.ok && check.level === "warn").length
+    const failures = report.checks.filter((check) => !check.ok).length
+    if (report.operation === "doctor") lines.push(failures ? `${failures} problem${failures === 1 ? "" : "s"} to fix${warnings ? `, ${warnings} warning${warnings === 1 ? "" : "s"}` : ""}` : `MendCode is installed and working${warnings ? ` (${warnings} warning${warnings === 1 ? "" : "s"} worth a look)` : ""}`)
+    return `${lines.join("\n")}\n`
+  }
   if (report.operation === "config-layers") {
     const { layers = [], warnings = [] } = report.facts as { layers?: Array<{ label: string; source: string; present: boolean; entries: string[]; note?: string }>; warnings?: string[] }
     const lines = ["Config layers, lowest to highest precedence (secret values are never shown)"]

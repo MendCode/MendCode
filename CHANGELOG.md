@@ -29,6 +29,8 @@ for MendCode's own review, the reviews page can be cleaned up, and replies stay 
 
 ### Fixed
 
+- `mendcode doctor` tells warnings (a skill another layer overrides, a field an agent file cannot use) apart from real problems, checks the binary, PATH and login, lists Claude Code, Codex and Rex when installed, and ends with one line saying whether MendCode works.
+- The installer runs the binary it installed and says whether its folder is on PATH, with the exact line to add for your shell.
 - The home's logo keeps its size and place while the slash menu is open.
 - Logo kind `both` draws the same letters as the wordmark instead of another font.
 - The big title sits a row further from the mark where the screen has room.

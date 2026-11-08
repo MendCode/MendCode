@@ -211,9 +211,27 @@ mv -f "$stage/ownership" "$install_dir/.mendcode-install"
 # An earlier installer's receipt, under the old name; the new one replaces it.
 rm -f "$install_dir/.mendcode-v2-install"
 printf 'Installed mendcode %s to %s/mendcode (starting tier: %s)\n' "$version" "$install_dir" "$tier"
+# The installed binary runs: its own --version is the proof, not the download.
+if ran=$("$install_dir/mendcode" --version 2>&1); then
+  printf '✓ mendcode runs: %s\n' "${ran%%
+*}"
+else
+  printf '✗ mendcode did not start: %s\n' "${ran%%
+*}"
+fi
 case ":$PATH:" in
-  *":$install_dir:"*) printf 'Run mendcode to start. mendcode upgrade updates it; --channel beta or nightly switches channel.\n' ;;
-  *) printf '%s is not on PATH. Add it, then run mendcode:\n  export PATH="%s:$PATH"\n' "$install_dir" "$install_dir" ;;
+  *":$install_dir:"*)
+    printf '✓ %s is on PATH\n' "$install_dir"
+    printf 'Run mendcode to start; mendcode doctor checks the installation. mendcode upgrade updates it; --channel beta or nightly switches channel.\n' ;;
+  *)
+    printf '✗ %s is not on PATH. Add it for your shell, open a new terminal, then run mendcode:\n' "$install_dir"
+    case "${SHELL##*/}" in
+      zsh) printf "  echo 'export PATH=\"%s:\$PATH\"' >> ~/.zshrc\n" "$install_dir" ;;
+      bash) if [ "$(uname -s)" = Darwin ]; then rc='~/.bash_profile'; else rc='~/.bashrc'; fi
+        printf "  echo 'export PATH=\"%s:\$PATH\"' >> %s\n" "$install_dir" "$rc" ;;
+      fish) printf '  fish_add_path %s\n' "$install_dir" ;;
+      *) printf '  export PATH="%s:$PATH"\n' "$install_dir" ;;
+    esac ;;
 esac
 # Service installation is explicit; it does not start the daemon in this shell.
 if [ "${MENDCODE_INSTALL_SERVICE:-0}" = 1 ]; then
