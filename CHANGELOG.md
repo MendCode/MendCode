@@ -9,6 +9,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.8 - 2026-11-07
+
+Workflow scripts say why they stopped and cheap models follow their steps more reliably, and test tokens are no longer
+hidden from the model as secrets.
+
+### Upgrade notes
+
+- Same code as v0.0.8-beta.1.
+
+## v0.0.8-beta.1 - 2026-11-07
+
+Workflow scripts say why they stopped and cheap models follow their steps more reliably, and test tokens are no longer
+hidden from the model as secrets.
+
 ### Fixed
 
 - Workflow agents asked for JSON get the schema as the shape of their answer, and an answer that repeated the schema first is still read.
