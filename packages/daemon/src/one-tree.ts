@@ -23,6 +23,8 @@ type Deps = {
   /** `features.one_tree` (balanced and full). Off: nothing is recorded and nothing is said. */
   enabled(): boolean
   title(sessionId: SessionId): string | undefined
+  /** A writer whose work was handed on (a finished workflow step): its files are not named as another session's. */
+  handedOver?(sessionId: SessionId): boolean
 }
 
 export type OneTreeInput = {
@@ -76,7 +78,7 @@ export function createOneTree(deps: Deps) {
       for (const [file, at] of seen) if (now - at >= RENOTE_MS || seen.size > MAX_TRACKED) seen.delete(file)
       const hits: Array<{ shown: string; by: SessionId; at: number }> = []
       for (const [by, files] of written) {
-        if (by === sessionId) continue
+        if (by === sessionId || deps.handedOver?.(by)) continue
         // Another session's writes past the live window are nobody's work in progress any more: they go when read.
         for (const [file, at] of files) if (now - at > ONE_TREE_LIVE_MS) files.delete(file)
         if (!files.size) {

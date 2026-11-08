@@ -9,6 +9,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.9 - 2026-11-08
+
+Agents ask for Claude models by name and keep going on long tasks, Claude Code sessions compact while idle, PR watch waits
+for MendCode's own review, the reviews page can be cleaned up, and replies stay in your language.
+
+### Upgrade notes
+
+- Same code as v0.0.9-beta.1.
+
+## v0.0.9-beta.1 - 2026-11-08
+
+Agents ask for Claude models by name and keep going on long tasks, Claude Code sessions compact while idle, PR watch waits
+for MendCode's own review, the reviews page can be cleaned up, and replies stay in your language.
+
 ### New
 
 - `/customize` → Home → Logo size picks large, medium or small for any logo kind, and Home position puts the home's block in the middle or at the top.
@@ -19,6 +33,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Logo kind `both` draws the same letters as the wordmark instead of another font.
 - The big title sits a row further from the mark where the screen has room.
 - Replies stay in your language after a background task or Monitor ends in Claude Code, and after a short or mixed message; a Spanish message with English words is no longer answered in French.
+- `mendcode workflow list` shows the newest 50 runs (`--limit N` up to 500); with hundreds of runs `--all` failed.
+- A workflow step no longer reads the files an earlier, finished step of the same run wrote as another session's work, and no longer stops to leave them alone.
 - Asking for a sub-agent by a Claude family name ("opus", "sonnet") runs it on your Claude Code model the first time, without naming the engine; when a call still cannot run, one error says everything to change. Agents with tool or path rules are marked "native models only" in the task tool.
 - Reviews page: `d` removes a finished review (failed, cancelled, done) from the list; cancelling or removing keeps the selection where it was; ↓ on the last row goes back to the first, and ↑ on the first to the last.
 - Shift with ↑ or ↓ moves five rows at a time on every page with a list or text.
