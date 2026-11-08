@@ -238,10 +238,20 @@ describe("B78 outputs and bounded map", () => {
     const prompt = taskPrompt(run, "out")
     expect(prompt).toContain(`matches this JSON Schema; the schema describes your answer, do not repeat it: ${JSON.stringify(schema)}`)
     expect(prompt).not.toContain('"kind":"json"')
+    // A restate step once reported `blocked` because the rest of the objective was still to do.
+    expect(prompt).toContain("`done` means this task is finished, even when the rest of the workflow objective is left to other tasks")
     const echoed = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }) + "\n```\n```TASK_RESULT\nstatus: done\nsummary: ok\n```"
     expect(captureOutput(task, echoed)?.value).toBe('{"goal":"stop non-owners"}')
     const onlySchema = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n```"
     expect(() => captureOutput(task, onlySchema)).toThrow("schema")
+    // An element of a pretty-printed array is not the answer: the array is read whole, and it does not match.
+    const nested = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n[\n" + JSON.stringify({ goal: "wrong outer type" }) + "\n]\n```"
+    expect(() => captureOutput(task, nested)).toThrow("not valid JSON")
+    // A pretty-printed answer after the echo, and an answer fenced with tildes that left the whole message as the block, still read.
+    const pretty = "```WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: "stop non-owners" }, null, 2) + "\n```"
+    expect(captureOutput(task, pretty)?.value).toBe('{"goal":"stop non-owners"}')
+    const tildes = "~~~WORKFLOW_OUTPUT\n" + JSON.stringify({ kind: "json", schema }) + "\n" + JSON.stringify({ goal: 'a "quoted" } brace' }) + "\n~~~TASK_RESULT\nstatus: done"
+    expect(captureOutput(task, tildes)?.value).toBe(JSON.stringify({ goal: 'a "quoted" } brace' }))
   })
 
   test("aggregate output storage fails closed within the durable row limit", async () => {

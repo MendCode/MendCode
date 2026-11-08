@@ -63,16 +63,39 @@ export function matches(value: unknown, schema: unknown): boolean {
   return true
 }
 
-function lastMatchingLine(body: string, schema: Record<string, unknown>): unknown {
-  for (const line of body.split("\n").reverse()) {
-    const text = line.trim()
-    if (!text.startsWith("{") && !text.startsWith("[")) continue
+/** Where the JSON object or array opening at `start` closes (strings skipped), or -1. */
+function closingIndex(text: string, start: number): number {
+  let depth = 0
+  let inString = false
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (inString) {
+      if (char === "\\") i++
+      else if (char === '"') inString = false
+    } else if (char === '"') inString = true
+    else if (char === "{" || char === "[") depth++
+    else if (char === "}" || char === "]") if (--depth === 0) return i
+  }
+  return -1
+}
+
+/**
+ * The last outermost JSON object or array in the block that matches the schema. Values are read whole, left to right, and a value
+ * that parses is skipped past, so an element inside a pretty-printed array is never taken for the answer.
+ */
+function lastMatchingValue(body: string, schema: Record<string, unknown>): unknown {
+  let found: unknown
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] !== "{" && body[i] !== "[") continue
+    const end = closingIndex(body, i)
+    if (end < 0) break
     try {
-      const value: unknown = JSON.parse(text)
-      if (matches(value, schema)) return value
+      const value: unknown = JSON.parse(body.slice(i, end + 1))
+      if (matches(value, schema)) found = value
+      i = end
     } catch {}
   }
-  return undefined
+  return found
 }
 
 /** `limit` is the longest structured output kept: a static plan's rows are small (8000), a script's journal holds more. */
@@ -86,8 +109,8 @@ export function captureOutput(spec: WorkflowAgentTaskSpec, answer: string, limit
   let value: unknown
   try { value = JSON.parse(body) } catch {
     if (contract.kind === "artifact" && !contract.schema) return { kind: "artifact", value: body, artifactKind: contract.artifactKind }
-    // A block of several JSON lines (a model that echoed the schema before its answer): the last line that matches the schema.
-    const answer = contract.schema ? lastMatchingLine(body, contract.schema) : undefined
+    // Several JSON values in the block (a model that echoed the schema before its answer): the last whole one that matches the schema.
+    const answer = contract.schema ? lastMatchingValue(body, contract.schema) : undefined
     if (answer === undefined) throw new RangeError("workflow output is not valid JSON")
     value = answer
   }

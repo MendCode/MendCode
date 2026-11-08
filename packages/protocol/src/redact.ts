@@ -11,7 +11,7 @@ const MARK = (kind: string) => `[redacted:${kind}]`
 
 /** Values that document a secret instead of holding one. */
 const PLACEHOLDER =
-  /^(?:\[redacted:[^\]]*\]|‹secret:\d{1,6}›|<[^>]*>|\$\{[^}]*\}|\$[A-Za-z_]\w*|\{\{[^}]*\}\}|%[A-Za-z_]+%|[xX*.#_-]+|changeme|change[-_ ]?me|your\S*|(?:my|example|sample|dummy|fake|placeholder|replace|insert|todo)[-_ ].*|null|nil|none|undefined|true|false|empty|string|pass(?:word)?|secret|token|api[-_]?key)$/i
+  /^(?:\[redacted:[^\]]*\]|‹secret:\d{1,6}›|<[^>]*>|\$\{[^}]*\}|\$[A-Za-z_]\w*|\{\{[^}]*\}\}|%[A-Za-z_]+%|[xX*.#_-]+|changeme|change[-_ ]?me|your\S*|(?:my|example|sample|dummy|fake|placeholder|replace|insert|todo|test|mock|stub|fixture)[-_ ].*|null|nil|none|undefined|true|false|empty|string|pass(?:word)?|secret|token|api[-_]?key)$/i
 
 const NUMERIC = /^[0-9.,_-]+$/
 const ULID_LIKE = /^[a-z]{2,12}_[0-9][0-9A-HJKMNP-TV-Z]{15,}$/
