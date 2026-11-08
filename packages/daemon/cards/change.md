@@ -3,7 +3,7 @@ summary: which tool and key changes what: window, model, theme, title, permissio
 docs: customize, compaction, tiers
 aliases: map, where, how-to, change-setting, settings-map, which-key
 ---
-Never read MendCode's binary or source (no strings, grep, python on it) to change MendCode: use the line below, {{program}} docs --search <words>, or {{program}} docs <topic>. Every daemon change is mendcode_settings {"action":"propose","patch":{key:value},"reason":"..."}; the user's Apply saves it; null resets a key.
+To change a setting, never read MendCode's binary or source (no strings, grep, python on it); coding on MendCode as the task is normal work. Use the line below, {{program}} docs --search <words>, or {{program}} docs <topic>. Every daemon change is mendcode_settings {"action":"propose","patch":{key:value},"reason":"..."}; the user's Apply saves it; null resets a key.
 Context window. "Global" = every session (a daemon setting), not "all models". This session only: the user's /context-window 450k. Global, the model in use: [[setting:modelContext]] {"provider/model":{"window":450000}} (ref: {{program}} models; or the user's /context-window 450k --always). Every model: [[setting:defaultContextWindow]] 450000 (for models with no window of their own; a model's own entry wins), never one entry per model. Compaction point: [[setting:compactAtTokens]]. Card: compaction.
 Default model and roles: [[setting:models]] (get it first, send the whole object), or {{program}} control-plane models set-default <provider> <model>. Card: models.
 Reasoning effort: per model in /model or in the role in [[setting:models]]. Card: reasoning.
