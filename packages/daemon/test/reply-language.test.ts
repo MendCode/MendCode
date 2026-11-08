@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
-import { UNSURE_LINE, messageLanguage, replyLanguageLine } from "../src/reply-language"
+import { UNSURE_LINE, createReplyLanguage, isMachineNotice, messageLanguage, replyLanguageLine } from "../src/reply-language"
 
 test("the standalone Codex constructor receives the daemon's reply-language callback", () => {
   // Importing main starts a daemon. Check its constructor wiring without starting services;
@@ -29,6 +29,19 @@ test("unclear, mixed or code-only text asks for the user's own language without 
   expect(replyLanguageLine(undefined, "ok")).toBe(UNSURE_LINE)
   expect(replyLanguageLine(undefined, "`bun test packages/a.ts`")).toBe(UNSURE_LINE)
   expect(replyLanguageLine(undefined, "gracias, thanks")).toBe(UNSURE_LINE)
+})
+
+test("per session: a notice from the engine and an unclear message keep the user's last language", () => {
+  const line = createReplyLanguage()
+  expect(line("s1", undefined, "arregla el test que falla y dime qué cambió")).toBe("Reply in Spanish.")
+  // Claude Code's own wake-up after a Monitor ends is an English tagged block; it does not move the replies to English.
+  expect(line("s1", undefined, "<task-notification><task-id>b1</task-id><summary>Monitor stream ended</summary></task-notification>")).toBe("Reply in Spanish.")
+  expect(line("s1", undefined, "rename tu title chat para que otro agente te de instrucciones de como hacerlo")).toBe("Reply in Spanish.")
+  expect(line("s1", undefined, "ok")).toBe("Reply in Spanish.")
+  // The user switching language is followed, and another session starts with nothing kept.
+  expect(line("s1", undefined, "Fix the failing test and tell me what changed in the session")).toBe("Reply in English.")
+  expect(line("s2", undefined, "<task-notification><summary>done</summary></task-notification>")).toBe(UNSURE_LINE)
+  expect(isMachineNotice("[Image #2] no se entiende")).toBe(false)
 })
 
 test("a Spanish message mixed with English words is never named French for its \"tu\"", () => {

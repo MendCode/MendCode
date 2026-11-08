@@ -39,9 +39,36 @@ export function messageLanguage(text: string): string | undefined {
 }
 
 /** The line for one turn: `setting` is the `language` setting (or a run's fixed language), `text` the user's latest message. */
-export function replyLanguageLine(setting: string | undefined, text: string): string {
+export function replyLanguageLine(setting: string | undefined, text: string, remembered?: string): string {
   const named = setting?.trim()
   if (named && !isAutoLanguage(named)) return `Reply in ${named}.`
-  const detected = messageLanguage(text)
+  const detected = messageLanguage(text) ?? remembered
   return detected ? `Reply in ${detected}.` : UNSURE_LINE
+}
+
+/**
+ * A wake-up an engine sends in the user's place: Claude Code's `<task-notification>` and the like, a tagged block in English
+ * whatever the user writes. It says nothing about the user's language.
+ */
+export function isMachineNotice(text: string): boolean {
+  return /^\s*<([a-z][\w-]*)[^>]*>[\s\S]*<\/\1>\s*$/i.test(text)
+}
+
+/**
+ * `replyLanguageLine` per session: the language last found in the user's own words is kept, so a notice or a message too short or
+ * mixed to judge keeps the replies where the user left them instead of following the notice's English or a guess.
+ */
+export function createReplyLanguage() {
+  const last = new Map<string, string>()
+  return (sessionId: string, setting: string | undefined, text: string): string => {
+    if (isMachineNotice(text)) return replyLanguageLine(setting, "", last.get(sessionId))
+    const detected = messageLanguage(text)
+    if (detected) {
+      last.delete(sessionId)
+      last.set(sessionId, detected)
+      // Bounded: the oldest sessions are forgotten first.
+      if (last.size > 500) last.delete(last.keys().next().value!)
+    }
+    return replyLanguageLine(setting, text, last.get(sessionId))
+  }
 }

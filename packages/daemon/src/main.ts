@@ -539,10 +539,10 @@ export const daemon = await startDaemon({
     const resumeFor = createResumeSource({ store, now: Date.now, enabled: () => featureOn(store.settings.get(), "resume_context", { safeMode }) })
     // `language` (docs/prompt-modes.md): the line every engine adds to a user message, out of the transcript. A PR review's own language
     // wins over the user's. The module loads with the first message.
-    let replyLanguageModule: Promise<typeof import("./reply-language")> | undefined
+    let replyLanguageLine: Promise<ReturnType<typeof import("./reply-language").createReplyLanguage>> | undefined
     const replyLanguage = async (sessionId: import("@mendcode/protocol").SessionId, text: string) => {
-      const { replyLanguageLine } = await (replyLanguageModule ??= import("./reply-language"))
-      return replyLanguageLine(runLimits.get(sessionId)?.responseLanguage ?? store.settings.get().language, text)
+      const line = await (replyLanguageLine ??= import("./reply-language").then(({ createReplyLanguage }) => createReplyLanguage()))
+      return line(sessionId, runLimits.get(sessionId)?.responseLanguage ?? store.settings.get().language, text)
     }
     const memoryFor = (root: string, context: SystemContext | undefined) => {
       const block = memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
