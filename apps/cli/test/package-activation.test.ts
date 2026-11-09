@@ -232,6 +232,12 @@ describe("profile activation is an overlay on the user's profile", () => {
     h.app.applySettings({ onboarded: true, disabledProfiles: [], footer } as never)
     await h.app.extensionsReady
     expect(profile(h).footerQuota).toBe(false)
+    expect(footerSaves()).toEqual([])
+    // An edit made while the profile is on starts from the saved list, so the profile's hidden quota is not saved away.
+    await h.type("/footer +branch")
+    await h.key("\r")
+    expect(footerSaves().at(-1)?.patch).toEqual({ footer: ["quota", "state", "branch"] })
+    h.sent.length = 0
     h.app.applySettings({ onboarded: true, disabledProfiles: ["user:plain"], footer } as never)
     await h.app.extensionsReady
     expect(profile(h).footerQuota).toBe(true)

@@ -200,15 +200,20 @@ export function createChrome(ctx: AppContext, actions: {
    * The `/footer` list, or undefined while the view's tier places the segments. A saved list equal to the old default (what `/footer
    * reset` used to write) means the default too, so it follows the tier.
    */
+  function savedFooter(): readonly FooterSegment[] | undefined {
+    const list = state.customFooter
+    return list && !(list.length === DEFAULT_FOOTER.length && list.every((segment, at) => segment === DEFAULT_FOOTER[at])) ? list : undefined
+  }
+
+  /** The list drawn: the saved one, with a profile's footerQuota/footerToday applied on screen only. */
   function customFooter(): readonly FooterSegment[] | undefined {
-    let list = state.customFooter
-    // A profile's footerQuota/footerToday change what is shown, never the saved list.
+    let list = savedFooter()
     for (const [field, segment] of [["footerQuota", "quota"], ["footerToday", "today"]] as const) {
       if (!list || !(field in state.profileApplied)) continue
       const kept = list.filter((item) => item !== segment)
       list = state.tuiProfile[field] ? (list.includes(segment) ? list : [...kept, segment]) : kept
     }
-    return list && !(list.length === DEFAULT_FOOTER.length && list.every((segment, at) => segment === DEFAULT_FOOTER[at])) ? list : undefined
+    return list
   }
 
   /** `statusColors` as a map, parsed again only when the setting changed. */
@@ -306,7 +311,7 @@ export function createChrome(ctx: AppContext, actions: {
     const jobs = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length
     // Without a `/footer` list the view's tier places the segments (FOOTER_SEGMENT_TIER); quota and today are the profile's own opt-ins.
     const custom = customFooter()
-    const placed = custom ?? tierPlaced()
+    const placed = custom ?? tierPlaced(state.tuiProfile)
     // The full view's own segments wait until they say something: the code graph for what the daemon pushed about this folder (before
     // that it would only say `graph on`), the cache share for a second call (the first call of every session is cold: `cache 0%`).
     const waiting = (segment: FooterSegment) => !custom && ((segment === "codegraph" && !(input.directory !== undefined && codegraph.has(input.directory))) || (segment === "cache" && state.transcript.sessionUsage.calls < 2))
@@ -603,10 +608,13 @@ export function createChrome(ctx: AppContext, actions: {
     return ctx.views.draw("footer", { ...model, extraRows }, { width, height: count, extra: { ...(slots ? { ext: slots } : {}), rows: rowExt } }).lines
   }
 
-  /** The list `/footer` edits and shows: the saved one, else the segments the view's tier places with the profile's quota and today. */
-  const footerSegments = (): readonly FooterSegment[] => customFooter() ?? tierPlaced()
-  function tierPlaced(): FooterSegment[] {
-    return [...new Set<FooterSegment>([...tierFooter(state.mode), ...(state.tuiProfile.footerQuota ? ["quota"] as const : []), ...(state.tuiProfile.footerToday ? ["today"] as const : [])])]
+  /**
+   * The list `/footer` edits and shows: the saved one, else the segments the view's tier places with the user's own quota and today.
+   * A profile's flags are left out, so an edit made while one is on never saves its temporary change.
+   */
+  const footerSegments = (): readonly FooterSegment[] => savedFooter() ?? tierPlaced(state.profileBase)
+  function tierPlaced(profile: Pick<TuiProfile, "footerQuota" | "footerToday">): FooterSegment[] {
+    return [...new Set<FooterSegment>([...tierFooter(state.mode), ...(profile.footerQuota ? ["quota"] as const : []), ...(profile.footerToday ? ["today"] as const : [])])]
   }
 
   // ─── Sidebar layout ─────────────────────────────────────────────────────────────────────────────────────────────────
