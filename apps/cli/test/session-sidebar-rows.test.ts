@@ -103,7 +103,7 @@ describe("one row per session with a state symbol", () => {
 
   test("the header counts what works and what waits, and a long list keeps the selected row in view", () => {
     const busy = draw([row("a", "One", { state: "tool" }), row("b", "Two", { state: "waiting_approval" })], { spinner: "⠹" })
-    expect(plain(busy.rows[0]!)).toMatch(/Sessions +⠹1 \?1 │$/)
+    expect(plain(busy.rows[0]!)).toMatch(/Sessions +⠹ 1  \? 1 │$/)
     const many = Array.from({ length: 30 }, (_, at) => row(`s${at}`, `Session ${at}`, { updatedAt: NOW - at * MINUTE }))
     const out = draw(many, { height: 12, selected: "s25", focused: true })
     expect(out.rows).toHaveLength(12)

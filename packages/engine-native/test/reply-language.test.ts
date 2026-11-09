@@ -32,3 +32,12 @@ test("no line without the option or when it answers nothing", async () => {
     expect(userTexts(requests[0]!)).toEqual(["first task"])
   }
 })
+
+test("a notice about the session's own work is not judged for the user's language: it keeps the user's", async () => {
+  const { provider } = scriptedProvider([stop("a")])
+  const asked: string[] = []
+  const engine = createNativeEngine({ provider, history: memoryHistory(), tools: [], cwdFor: () => "/tmp", system: () => "sys", compactionPrompt: "summarize", replyLanguage: (_sessionId, text) => (asked.push(text), LINE) })
+  const wake = turn({ text: "The pull request has new commits. Check the review again." })
+  await engine.runTurn({ ...wake.input, authority: { sourceId: "item-notice", text: wake.input.text, synthetic: true } })
+  expect(asked).toEqual([""])
+})

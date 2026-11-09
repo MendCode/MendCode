@@ -697,5 +697,12 @@ export function changesMcpServers(name: string, args: Record<string, any> | unde
   return false
 }
 
+/**
+ * Said after Claude Code's own prompt while MendCode names the reply language: a turn Claude Code starts on its own (a background
+ * task ended) and the turns after a compaction carry mostly English (notices, tool output, the summary), and the per-message line
+ * alone did not always hold the replies to the user's language there.
+ */
+export const REPLY_LANGUAGE_NOTE = "Language: always reply in the language of the user's own messages, including turns started by a notice (a background task ended) and after a compaction. Notices, tool output and summaries in another language do not change it. A `Reply in …` line added to a message names it; reasoning summaries follow it too."
+
 /** Said after Claude Code's own prompt, so the model does not tell the user to open a new session after adding a server. */
 export const MCP_RELOAD_NOTE = "MCP servers: after you add, change or remove one (`claude mcp add`, `.mcp.json`), this app restarts Claude Code when the turn ends and keeps the conversation. The server's tools are there on the user's next message; say so instead of asking for a new session."

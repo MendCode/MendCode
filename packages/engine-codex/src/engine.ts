@@ -412,7 +412,7 @@ export function createCodexEngine(options: {
       // A cancel while Codex started or the thread opened: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) return { status: "ok" }
       const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
-      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined)
+      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.authority?.synthetic ? "" : input.text)).catch(() => undefined)
       const text = [input.text, planNote, language ? `(${language})` : undefined].filter(Boolean).join("\n")
       if (input.signal.aborted) return { status: "ok" }
       return new Promise<TurnOutcome>((resolve) => {

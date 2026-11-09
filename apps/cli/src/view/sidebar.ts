@@ -249,10 +249,10 @@ export function renderSessionSidebar(input: {
     const text = mark === "error" ? g.fail : mark === "unread" ? g.dot : mark === "queued" ? (input.ascii ? "~" : g.queue) : mark === "settled" ? g.collapsed : input.ascii ? "." : "·"
     return { text, fg: MARK_FG[mark] }
   }
-  // The header's right side: how many work and how many wait for you, else the focus hint.
+  // The header's right side: how many work and how many wait for you (the mark, a space, the count), else the focus hint.
   const counts = [...marks.values()].reduce((sum, mark) => ({ running: sum.running + (mark === "running" ? 1 : 0), approval: sum.approval + (mark === "approval" ? 1 : 0) }), { running: 0, approval: 0 })
   const summary: Line = input.focused ? [{ text: "→ prompt", fg: "muted" }] : counts.running || counts.approval
-    ? [...(counts.running ? [{ ...symbol("running"), text: `${symbol("running").text}${counts.running}` }] : []), ...(counts.running && counts.approval ? [{ text: " " }] : []), ...(counts.approval ? [{ text: `${g.ask}${counts.approval}`, fg: "warning" as const }] : [])]
+    ? [...(counts.running ? [{ ...symbol("running"), text: `${symbol("running").text} ${counts.running}` }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
     : [{ text: "← focus", fg: "muted" }]
   // `sidebarHeader` off gives the title row and the blank under it to the sessions.
   const head: Line[] = input.header === false ? [] : [spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner), []]
