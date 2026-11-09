@@ -46,6 +46,12 @@ export const ACTIVATION_DENIED_PROFILE_KEYS: ReadonlySet<string> = new Set([
   "usageWeatherEnabled", "usageWeatherRegion", "turnBell", "turnNotify", "fileOpener", "pathClick", "viewerFocus", "draftRetentionDays", "resumePrompts", "idleReturn",
 ])
 
+/**
+ * Denied keys a profile may still add to: it can switch off more of the user's UI modules and views while it is on (a clean look
+ * without the user's footer extensions), never switch one back on. The user's own list stays under it and returns when it is off.
+ */
+export const ACTIVATION_ADDITIVE_PROFILE_KEYS: ReadonlySet<string> = new Set(["disabledUiExtensions", "disabledViews"])
+
 const THEME_NAME = /^[A-Za-z0-9][\w .-]{0,63}$/
 const FILE_PATH = /^(?!.*\.\.)(?!\/)[A-Za-z0-9_./-]{1,100}\.json$/
 const SLOT_NAME = /^[a-z]+(\.[a-z]+)?$/
@@ -75,7 +81,7 @@ export function activationProblems(raw: unknown): string[] {
       const allowed: Record<string, unknown> = {}
       for (const [name, field] of Object.entries(value)) {
         if (FORBIDDEN.test(name)) problems.push(`activate.tuiProfile.${name}: ${ACTIVATION_FORBIDDEN_MESSAGE}`)
-        else if (ACTIVATION_DENIED_PROFILE_KEYS.has(name)) problems.push(`activate.tuiProfile.${name}: not allowed through activation (it is the user's: launch settings, clipboard, notifications, other extensions)`)
+        else if (ACTIVATION_DENIED_PROFILE_KEYS.has(name) && !ACTIVATION_ADDITIVE_PROFILE_KEYS.has(name)) problems.push(`activate.tuiProfile.${name}: not allowed through activation (it is the user's: launch settings, clipboard, notifications, other extensions)`)
         else allowed[name] = field
       }
       problems.push(...tuiProblems(allowed).map((line) => `activate.tuiProfile.${line}`))
