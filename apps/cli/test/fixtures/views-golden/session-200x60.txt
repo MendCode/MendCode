@@ -1,5 +1,5 @@
-77f545541ae9df03
-   Sessions                       ⠋1 │   git /work/app
+3557258493979f41
+   Sessions                      ⠋ 1 │   git /work/app
                                      │
    Today                             │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
    · Cache key bug                2m │

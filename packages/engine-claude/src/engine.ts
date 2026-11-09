@@ -13,6 +13,7 @@ import {
   changesMcpServers,
   createTurnMapper,
   MCP_RELOAD_NOTE,
+  REPLY_LANGUAGE_NOTE,
   MAX_TEXT,
   mergeSettingsArgs,
   resultOutcome,
@@ -434,7 +435,11 @@ export function createClaudeEngine(options: {
       return
     }
     if (message.request?.callback_id === REPLY_LANGUAGE_HOOK) {
-      const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, submittedPrompt(message.request?.input))).catch(() => undefined)
+      // A MendCode notice about the session's own work (`authority.synthetic`) is English whatever the user writes: it keeps the user's language.
+      const prompt = submittedPrompt(message.request?.input)
+      const input = connection.turn?.input
+      const notice = input?.authority?.synthetic === true && input.text.length > 0 && prompt.includes(input.text.slice(0, 200))
+      const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, notice ? "" : prompt)).catch(() => undefined)
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: line } } : {}))
       return
     }
@@ -647,7 +652,7 @@ export function createClaudeEngine(options: {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
     // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
-    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, options.replyLanguage ? REPLY_LANGUAGE_NOTE : undefined, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
@@ -943,10 +948,15 @@ export function createClaudeEngine(options: {
       const record: { preTokens?: number; postTokens?: number; summary?: string; done?: true } = {}
       compactions.set(input.turnId, record)
       const mode = modes.get(input.sessionId) ?? "ask"
+      // The summary is what the next turns read most: it is written in the user's language, so they do not drift into English.
+      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, "")).catch(() => undefined)
+      const text = `/compact ${[input.instructions?.trim(), language ? `Write the summary in the user's language. ${language}` : undefined].filter(Boolean).join("\n\n")}`.trimEnd()
       const outcome = await port.runTurn({
         sessionId: input.sessionId,
         turnId: input.turnId,
-        text: `/compact${input.instructions?.trim() ? ` ${input.instructions.trim()}` : ""}`,
+        text,
+        // Not the user's words: the added line must not be taken for the user's language.
+        authority: { sourceId: input.turnId, text, synthetic: true },
         attachments: [],
         ...(input.selection ? { selection: input.selection } : {}),
         signal: input.signal,
