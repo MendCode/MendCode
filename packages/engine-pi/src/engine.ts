@@ -614,7 +614,7 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
       const body = await content(input, connection)
       const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.message = `${body.message}\n${planNote}`
-      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined)
+      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.authority?.synthetic ? "" : input.text)).catch(() => undefined)
       if (language) body.message = `${body.message}\n(${language})`
       // A cancel while pi started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {

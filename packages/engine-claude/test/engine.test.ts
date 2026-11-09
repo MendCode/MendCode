@@ -152,6 +152,29 @@ test("the reply language reaches Claude Code once per message through a UserProm
   other.engine.stop()
 })
 
+test("the reply language holds beyond the user's own messages: a standing rule in the system text, a MendCode notice judged as no language, a /compact summary in the user's language", async () => {
+  const notice = "The pull request has new commits. Check the review again."
+  const fake = fakeClaude({ onUser(api, content) {
+    const text = content.map((part: any) => part.text ?? "").join("")
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push({ type: "control_request", request_id: `hook-${text.length}`, request: { subtype: "hook_callback", callback_id: "mendcode-reply-language", input: { hook_event_name: "UserPromptSubmit", prompt: text } } })
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const asked: string[] = []
+  const h = engineWith([fake], { replyLanguage: async (_sessionId: string, text: string) => (asked.push(text), "Reply in Spanish.") })
+  const first = turnInput({ text: "arregla el test que falla" })
+  expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+  expect(h.spawned[0]!.args.join("\n")).toContain("always reply in the language of the user's own messages")
+  const wake = turnInput({ sessionId: first.input.sessionId, text: notice })
+  expect(await h.engine.runTurn({ ...wake.input, authority: { sourceId: "item-notice", text: notice, synthetic: true } })).toEqual({ status: "ok" })
+  await h.engine.compact({ sessionId: first.input.sessionId, turnId: ids("turn"), signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {} })
+  const compactText = fake.written.filter((message) => message.type === "user").map((message) => JSON.stringify(message.message.content)).at(-1)
+  expect(compactText).toContain("/compact Write the summary in the user's language. Reply in Spanish.")
+  // The user's words are judged; the notice and the /compact line are not taken for the user's language.
+  expect(asked).toEqual(["arregla el test que falla", "", "", ""])
+  h.engine.stop()
+})
+
 test("One tree hears Bash output and file writes through a PostToolUse hook, and its line goes back as that call's context", async () => {
   const fake = fakeClaude({ onUser(api) {
     api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })

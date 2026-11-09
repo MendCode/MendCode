@@ -1867,8 +1867,9 @@ export function createNativeEngine(options: {
       : ""
     const masked = secrets ? secrets.mask(input.sessionId, orientation + mentioned.text + note) : orientation + mentioned.text + note
     // The reply language rides at the end of each message the user writes: the newest text of the request, after the cached prefix.
+    // A notice about the session's own work (`authority.synthetic`, English whatever the user writes) keeps the user's language.
     const main = !input.workflow && options.tasks?.isChild(input.sessionId) !== true && !options.compound?.(input.sessionId)
-    const language = main ? await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined) : undefined
+    const language = main ? await Promise.resolve(options.replyLanguage?.(input.sessionId, input.authority?.synthetic ? "" : input.text)).catch(() => undefined) : undefined
     const content = language ? `${masked}\n\n(${language})` : masked
     // A new user turn ends the tool loop that needed the earlier reasoning replayed; keeping it would only grow the history.
     if (newTurn) for (const message of messages) if (message.role === "assistant") delete message.reasoning

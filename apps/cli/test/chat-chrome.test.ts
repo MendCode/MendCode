@@ -61,7 +61,7 @@ describe("UI-1 chat chrome", () => {
     expect(h.sentOf("session.list")[0]).toMatchObject({ directory: "/work/app", limit: 50 })
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.next, directory: "/work/app", title: "Review reconnect", state: "waiting_approval", updatedAt: NOW } as never)
     expect(sidebar()).toContain("? Review reconnect")
-    expect(sidebar()).toMatch(/Sessions +\?1 │/)
+    expect(sidebar()).toMatch(/Sessions +\? 1 │/)
     h.app.onGlobal({ type: "session.activity", gseq: 2, at: NOW, sessionId: h.next, directory: "/work/app", title: "Review reconnect", state: "idle", queued: 2, updatedAt: NOW } as never)
     expect(sidebar()).toContain("… Review reconnect")
   })

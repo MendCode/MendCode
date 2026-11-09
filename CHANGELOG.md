@@ -9,6 +9,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- Replies stay in your language in turns a background task starts and after a compaction. Claude Code sessions also get a standing language rule and write their compaction summary in your language, and MendCode's own notices no longer move the reply language to English.
+- The sidebar's running and approval counts have a space between the mark and the number.
+
 ## v0.0.10 - 2026-11-08
 
 An undo in a Claude Code session no longer gets stuck waiting, so idle compaction keeps working.
