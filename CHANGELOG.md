@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.10 - 2026-11-08
+
+An undo in a Claude Code session no longer gets stuck waiting, so idle compaction keeps working.
+
+### Upgrade notes
+
+- Same code as v0.0.10-beta.1.
+
+## v0.0.10-beta.1 - 2026-11-08
+
+An undo in a Claude Code session no longer gets stuck waiting, so idle compaction keeps working.
+
 ### Fixed
 
 - In a Claude Code session, an undo now reaches Claude Code in turns that run with their own MCP servers too. An old undo no
