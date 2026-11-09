@@ -22,16 +22,26 @@ const temp = () => {
 }
 const host = { appVersion: "0.0.1-dev", apiVersion: EXTENSION_API_VERSION }
 
-async function scaffold(name = "ember") {
+async function scaffold(name = "ember", flags: string[] = []) {
   const parent = temp()
   const out: string[] = []
   const err: string[] = []
-  const command = parsePackageFileCommand(["package", "new", name, "--dir", parent])!
+  const command = parsePackageFileCommand(["package", "new", name, "--dir", parent, ...flags])!
   const code = await runPackageFileCommand(command, { cwd: parent, version: host.appVersion, out: { write: (text) => void out.push(text) }, err: { write: (text) => void err.push(text) } })
   return { parent, dir: path.join(parent, name), code, out: out.join(""), err: err.join("") }
 }
 
 describe("mendcode profile new", () => {
+  test("--clean writes a profile that starts from MendCode's clean look, and it passes check", async () => {
+    const { dir, code } = await scaffold("plain", ["--clean"])
+    expect(code).toBe(0)
+    const manifest = JSON.parse(readFileSync(path.join(dir, "mendcode-profile.json"), "utf8"))
+    expect(manifest.activate).toEqual({ clean: true, tuiProfile: {} })
+    expect(existsSync(path.join(dir, "README.md"))).toBe(true)
+    expect(checkPackage({ dir, host, knownSlots: VIEW_SLOT_NAMES }).ok).toBe(true)
+    expect(parsePackageFileCommand(["profile", "check", ".", "--clean"])!.error).toContain("--clean")
+  })
+
   test("writes a complete profile with one file per thing a profile can change", async () => {
     const { dir, code } = await scaffold()
     expect(code).toBe(0)

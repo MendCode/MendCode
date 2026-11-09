@@ -100,11 +100,27 @@ Extension and view code runs with the user's permissions: say what yours does he
   }
 }
 
-export function scaffoldPackage(options: { name: string; parent: string; program?: string }): ScaffoldPackageResult {
+/** A profile that starts from MendCode's clean look: nothing of the user's own look, then whatever is added to `activate`. */
+export function cleanPackageFiles(name: string, program = "mendcode"): Record<string, string> {
+  const manifest = {
+    name,
+    version: "0.1.0",
+    description: `${TITLE(name)}: MendCode's clean look`,
+    license: "MIT",
+    compatibility: { mendcode: ">=0.0.1", api: EXTENSION_API_VERSION },
+    // clean: every look setting at MendCode's default and your own UI modules off while this profile is on. Add a theme,
+    // tuiProfile keys or views here to change that start; disabling the profile puts your look back.
+    activate: { clean: true, tuiProfile: {} },
+  }
+  const readme = `# ${TITLE(name)}\n\nMendCode as it ships: the default look, without your own settings or UI modules.\n\n- \`${program} profile install .\` then enable it in \`/profiles\`.\n- Add keys under \`activate.tuiProfile\` in \`mendcode-profile.json\` to change anything from that start.\n- Disable it to get your own look back.\n`
+  return { "mendcode-profile.json": json(manifest), "README.md": readme }
+}
+
+export function scaffoldPackage(options: { name: string; parent: string; program?: string; clean?: boolean }): ScaffoldPackageResult {
   if (!PACKAGE_NAME_PATTERN.test(options.name)) return { ok: false, message: `package name must use lowercase letters, digits, . _ - (max 64), got "${options.name}"` }
   const dir = path.resolve(options.parent, options.name)
   if (existsSync(dir)) return { ok: false, message: `${dir} exists; pick another name or --dir` }
-  const files = packageFiles(options.name, options.program)
+  const files = options.clean ? cleanPackageFiles(options.name, options.program) : packageFiles(options.name, options.program)
   for (const [relative, text] of Object.entries(files)) {
     const file = path.join(dir, relative)
     mkdirSync(path.dirname(file), { recursive: true })

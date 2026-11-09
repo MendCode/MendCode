@@ -57,7 +57,7 @@ Every command below takes `--dir /tmp/mend-data` to use a throwaway data folder 
    mendcode profile new mylook
    ```
 
-   This writes `./mylook/`. `--dir PARENT` chooses its parent folder. An existing name is refused, and nothing is written outside the new folder.
+   This writes `./mylook/`. `--dir PARENT` chooses its parent folder. `--clean` writes a small profile that starts from MendCode's clean look instead of your own settings. An existing name is refused, and nothing is written outside the new folder.
 
 2. Edit the colors in `themes/mylook.json`, keys in `keybindings.json` and values under `activate.tuiProfile`. These are the same keys and values `/customize` shows.
 3. Check the folder without running any of it:
@@ -139,6 +139,7 @@ It does not read your data directory. To move your own setup between machines, u
 | Views | `activate.views` maps one of the 22 view slots to a module in `extensions/` (transcript messages, tool cards, the slash menu, headers, footers, welcome and so on) |
 | Keybindings | `activate.keybindings`: a file in the format of `keybindings.json` |
 | Clean look | `activate.tuiProfile.disabledUiExtensions` and `disabledViews` switch off more of your terminal modules and views while the profile is on (your own footer extensions, for a demo); they join your own list and never switch one back on. Together with `footerRows`, `logoKind`, `sidebar` and `panelPreset` a profile gives a bare look; turned off, everything is as you had it |
+| From zero | `activate.clean: true` starts from MendCode's own look: every look setting at its default, the `mendcode` theme, and only the profile's own UI modules load (yours wait until it is off). How you type (vim mode, keys, scrolling) and your name stay yours. The rest of `activate` changes that start. `mendcode profile new <name> --clean` writes one |
 | Prompt files | `SYSTEM.md`, `APPEND_SYSTEM.md`, `COMPACTION.md` in the profile; `activate.promptFiles` lists the ones it expects |
 | Things it adds | skills, commands, agents, tools, hooks, MCP servers, themes, recipes, workflows, contracts, extensions, status line |
 

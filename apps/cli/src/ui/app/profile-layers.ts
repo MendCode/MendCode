@@ -43,7 +43,8 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
     const base = stored()
     // A list a profile's activation may only add to: the user's own entries stay and the profile's join them. An extension's
     // run-time request (`api.settings.set`) replaces the value as before.
-    const joined = (key: string, value: unknown) => ACTIVATION_ADDITIVE_PROFILE_KEYS.has(key) && Array.isArray(value) ? [...new Set([...(Array.isArray(base[key]) ? base[key] as unknown[] : []), ...value])] : value
+    const clean = state.activation?.result.clean === true
+    const joined = (key: string, value: unknown) => !clean && ACTIVATION_ADDITIVE_PROFILE_KEYS.has(key) && Array.isArray(value) ? [...new Set([...(Array.isArray(base[key]) ? base[key] as unknown[] : []), ...value])] : value
     const layered = { ...Object.fromEntries(Object.entries(overlay()).map(([key, value]) => [key, joined(key, value)])), ...state.profileRuntime }
     for (const [key, value] of Object.entries(layered)) if (!state.keptKeys.has(key)) out[key] = normalized(key, value)
     for (const [key, value] of Object.entries(state.keptValues)) if (state.keptKeys.has(key) && packageHeld(key)) out[key] = normalized(key, value)
