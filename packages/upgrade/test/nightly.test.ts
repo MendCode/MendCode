@@ -39,7 +39,7 @@ describe("command line", () => {
   })
 
   test("the install text names what vouched for the binary, and warns when only the SHA256 did", () => {
-    const base = { status: "installed", channel: "nightly", current: "0.0.1-dev", latest: NIGHTLY, downgrade: false, installedTo: "/d/bin/mendcode-next", asset: "a", rollbackAvailable: false } as const
+    const base = { status: "installed", channel: "nightly", current: "0.0.1-dev", latest: NIGHTLY, downgrade: false, installedTo: "/d/bin/mendcode", asset: "a", rollbackAvailable: false } as const
     expect(upgradeText({ ...base, verification: "cosign" }, { check: false })).toContain("verified: SHA256 and the cosign signature")
     expect(upgradeText({ ...base, verification: "checksum-only" }, { check: false })).toContain("WARNING: verified by SHA256 only")
   })

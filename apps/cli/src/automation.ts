@@ -52,7 +52,7 @@ import { GITHUB_USAGE, PR_USAGE, parseGithub, type GithubAutomation } from "./gi
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /** Every JSON line carries this so scripts can pin the contract. */
-export const SCHEMA = "mendcode-next.cli.v1"
+export const SCHEMA = "mendcode.cli"
 /** `denied` is retained for compatibility; `session send` now leaves unapproved requests pending. */
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 

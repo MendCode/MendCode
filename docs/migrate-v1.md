@@ -135,7 +135,7 @@ Blob files written for a session that then failed stay in the store as orphans u
 
 ## Report
 
-`MigrationReport` uses `schema: "mendcode-next.migrate-v1@1"`. It contains:
+`MigrationReport` uses `schema: "mendcode.migrate"`. It contains:
 
 | Field group | Details |
 | --- | --- |

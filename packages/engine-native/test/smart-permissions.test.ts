@@ -184,13 +184,13 @@ describe("smart mode: the decision table", () => {
 
 describe("smart mode: the program's own reference cards", () => {
   test("`mendcode docs` and `mendcode docs <topic>` alone are read-only and run", () => {
-    for (const command of ["mendcode docs", "mendcode docs theme", "mendcode docs prompt-modes", "mendcode-next docs keys", "mendcode 'docs' 'theme'", "mendcode docs theme 2>&1"]) {
+    for (const command of ["mendcode docs", "mendcode docs theme", "mendcode docs prompt-modes", "mendcode-dev docs keys", "mendcode 'docs' 'theme'", "mendcode docs theme 2>&1"]) {
       expect(shell(command)).toMatchObject({ decision: "allow", risk: "low", rule: "allow-listed-command" })
     }
   })
 
   test("`mendcode docs --search <words>` runs too: the one option, first, then up to eight plain lowercase words", () => {
-    for (const command of ["mendcode docs --search pause agent", "mendcode docs --search worktree", "mendcode-next docs --search one two three four five six seven eight"]) expect(shell(command)).toMatchObject({ decision: "allow", risk: "low", rule: "allow-listed-command" })
+    for (const command of ["mendcode docs --search pause agent", "mendcode docs --search worktree", "mendcode-dev docs --search one two three four five six seven eight"]) expect(shell(command)).toMatchObject({ decision: "allow", risk: "low", rule: "allow-listed-command" })
     for (const command of ["mendcode docs --search", "mendcode docs --search one two three four five six seven eight nine", "mendcode docs pause --search agent", "mendcode docs --search Pause", "mendcode docs --search --dir x", "mendcode docs --search /etc/passwd", "mendcode docs --search a b c; rm x", "mendcode docs --search $(whoami)", "mendcode docs --search pause > out.txt"]) expect([command, shell(command).decision]).toEqual([command, "ask"])
     expect(shell("mendcode docs --search pause | sh").decision).toBe("ask")
   })

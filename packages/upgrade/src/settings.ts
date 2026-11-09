@@ -21,7 +21,7 @@ export const SIGSTORE_SUFFIX = ".sigstore.json"
 export const OIDC_ISSUER = "https://token.actions.githubusercontent.com"
 export const BINARY_PREFIX = "mendcode"
 /** Installed names inside `<dataDir>/bin`; an on-disk name that stays what it was (see docs/design/rename-inventory.md). */
-export const BIN_NAME = "mendcode-next"
+export const BIN_NAME = "mendcode"
 export const STATE_FILE = "upgrade.json"
 export const CHANNELS = ["stable", "beta", "dev", "nightly"] as const
 export const DEFAULT_CHANNEL = "stable"
@@ -42,4 +42,4 @@ export const PRIVATE_REPO_HINT = "if the release repository is private, sign in 
 /** Exit codes, the same numbers as the rest of the CLI (`EXIT` in automation.ts). */
 export const UPGRADE_EXIT = { ok: 0, failed: 1, usage: 64 } as const
 /** Every JSON line carries this so scripts can pin the contract (same as automation.ts). It keeps the name it shipped under in development. */
-export const UPGRADE_SCHEMA = "mendcode-next.cli.v1"
+export const UPGRADE_SCHEMA = "mendcode.cli"

@@ -159,7 +159,7 @@ test("generate --httpapi emits the HTTP adapter OpenAPI offline without a daemon
   expect(await runAutomation(parsed("generate", "--httpapi"), deps)).toBe(0)
   expect(JSON.parse(h.out.join(""))).toEqual(spec)
   expect(await runAutomation(parsed("generate", "--httpapi", "--json"), deps)).toBe(0)
-  expect(JSON.parse(h.out[1]!)).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", command: "generate", data: spec })
+  expect(JSON.parse(h.out[1]!)).toMatchObject({ schema: "mendcode.cli", kind: "result", command: "generate", data: spec })
   expect(h.sent).toHaveLength(0)
   expect(parseAutomation(["generate", "--httpapi", "--hono"]).ok).toBe(false)
   const dir = path.join(tempDir(), "uncreated")

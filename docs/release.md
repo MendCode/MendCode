@@ -271,7 +271,7 @@ never runs the binary or touches the data directory. The first launch reads the 
 `MENDCODE_INSTALL_DIR`, then the installer's default directory; a source run reads only `MENDCODE_INSTALL_DIR`) and applies it only when
 setup was never completed (`onboarded`) and no `tier` is saved: `minimalist` configures itself with no setup page, `balanced` and `full`
 open the setup page with that tier on its Tier row ([setup](setup.md#first-run)). After that first launch the receipt is not read again, so
-`mendcode upgrade` (which replaces `<data dir>/bin/mendcode-next` and never touches the receipt), a reinstall with another `--tier` and
+`mendcode upgrade` (which replaces `<data dir>/bin/mendcode` and never touches the receipt), a reinstall with another `--tier` and
 `/tier off` all leave the user's choice alone. Change the tier later with `/tier <name>` or the Tier row of `/setup`, globally or per
 project profile.
 

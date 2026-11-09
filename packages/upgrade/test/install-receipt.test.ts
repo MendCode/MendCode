@@ -46,7 +46,7 @@ describe("readInstallPreset", () => {
     const root = temp()
     receipt(path.join(root, "home", ".local", "bin"), `schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${SUM}\ntier=full\n`)
     expect(readInstallPreset({ env: {}, home: path.join(root, "home"), platform: "linux" })).toBeUndefined()
-    expect(readInstallPreset({ runningBinary: path.join(root, "data", "bin", "mendcode-next"), env: {}, home: path.join(root, "home"), platform: "linux" })).toBe("full")
+    expect(readInstallPreset({ runningBinary: path.join(root, "data", "bin", "mendcode"), env: {}, home: path.join(root, "home"), platform: "linux" })).toBe("full")
   })
   test("Windows looks in LOCALAPPDATA\\Programs\\mendcode", () => {
     const root = temp()

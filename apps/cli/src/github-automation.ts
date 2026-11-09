@@ -18,8 +18,8 @@ export function githubFinishText(report: GithubFinishReport) {
 export function createGithubAutomation(deps: AutomationDeps) {
   return async (command: Extract<Automation, { kind: "github.install" | "github.run" | "pr" }>) => {
     const env = deps.env ?? process.env, directory = command.projectDir ? path.resolve(deps.cwd, command.projectDir) : deps.cwd
-    const fail = (message: string, code = 1) => { if (command.json) deps.out.write(`${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "error", command: command.kind, error: { code: "failed", message } })}\n`); else deps.err.write(`error: ${message}\n`); return code }
-    const result = (data: GithubInstallReport | PrCheckoutReport | GithubFinishReport, human: string) => { deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: command.kind, data })}\n` : human) }
+    const fail = (message: string, code = 1) => { if (command.json) deps.out.write(`${JSON.stringify({ schema: "mendcode.cli", kind: "error", command: command.kind, error: { code: "failed", message } })}\n`); else deps.err.write(`error: ${message}\n`); return code }
+    const result = (data: GithubInstallReport | PrCheckoutReport | GithubFinishReport, human: string) => { deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode.cli", kind: "result", command: command.kind, data })}\n` : human) }
     if (deps.allowFiles === false) return fail("GitHub and PR commands require a local daemon", 64)
     if (command.kind === "github.install") {
       const model = command.model ?? env.MODEL
@@ -61,7 +61,7 @@ export function createGithubAutomation(deps: AutomationDeps) {
       const reviewed = await deps.client.send({ type: "github.run", directory, input: { event, token, publish: command.publish, review: true, ...(mentions ? { mentions } : {}) }, ...(selected.model ? { choice: selected.model } : {}) })
       if (!reviewed.ok) return fail(reviewed.error.message)
       const report = reviewed.result as unknown as GithubReviewReport
-      if (command.json) deps.out.write(`${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: command.kind, data: report })}\n`)
+      if (command.json) deps.out.write(`${JSON.stringify({ schema: "mendcode.cli", kind: "result", command: command.kind, data: report })}\n`)
       else deps.out.write(`${report.text}\n`)
       return report.status === "failed" ? 1 : 0
     }

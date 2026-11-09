@@ -45,7 +45,7 @@ describe("B66 agent automation factories", () => {
     expect(await h.run(["agent", "create", "--path", "./config", "--description", "Review", "--mode", "subagent", "--permissions", "read", "--model", "openrouter/google/gemini-3-pro", "--json"])).toBe(0)
     expect(h.prompts).toEqual([])
     expect(h.sent.at(-1)).toMatchObject({ type: "agent.create", path: "/work/catalog/config", model: "openrouter:google/gemini-3-pro", mode: "subagent", permissions: ["read"] })
-    expect(JSON.parse(h.out[0]!)).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", command: "agent.create" })
+    expect(JSON.parse(h.out[0]!)).toMatchObject({ schema: "mendcode.cli", kind: "result", command: "agent.create" })
   })
   test("--generate leaves the identifier to the model, keeps an explicit --name, and warns on fallback", async () => {
     expect(parseAutomation(["agent", "create", "--generate"])).toMatchObject({ ok: true, command: { kind: "agent.create", generate: true } })

@@ -6,7 +6,7 @@ export const DEV_VERSION = "0.0.1-dev"
 /** What help, usage lines and hints call the command; `mendcode` unless the process was started under another allowed name. */
 export const DEFAULT_PROGRAM_NAME = "mendcode"
 
-/** `mendcode` or a lowercase suffix of it (`mendcode-next` for a developer's wrapper); a versioned asset name never matches. */
+/** `mendcode` or a lowercase suffix of it (`mendcode-beta`, say, for a renamed copy); a versioned asset name never matches. */
 const PROGRAM_NAME_PATTERN = /^mendcode(?:-[a-z]+)?$/
 
 /**
