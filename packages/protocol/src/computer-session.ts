@@ -23,7 +23,7 @@ export const ComputerNode = lazySchema(() => z.strictObject({
 export type ComputerNode = z.infer<typeof ComputerNode>
 
 export const ComputerSessionInput = lazySchema(() => z.discriminatedUnion("action", [
-  z.strictObject({ action: z.literal("start"), mode: z.enum(["observe", "control"]), bootstrapCaptureID: z.string().uuid().optional(), bundleID: z.string().min(1).max(256).optional() }).refine((input) => Boolean(input.bootstrapCaptureID) !== Boolean(input.bundleID), "Supply exactly one bootstrapCaptureID or bundleID"),
+  z.strictObject({ action: z.literal("start"), mode: z.enum(["observe", "control"]), bootstrapCaptureID: z.string().uuid().optional(), bundleID: z.string().min(1).max(256).optional(), appName: z.string().min(1).max(256).optional() }).refine((input) => [input.bootstrapCaptureID, input.bundleID, input.appName].filter(Boolean).length === 1, "Supply exactly one bootstrapCaptureID, bundleID or appName"),
   z.strictObject({ action: z.literal("stop"), computerSessionID: z.string().uuid() }),
   z.strictObject({ action: z.literal("apps") }),
 ]))

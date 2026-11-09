@@ -78,7 +78,8 @@ test("semantic code uses data selection, host revisions and a visible indicator;
   const f = fixture(), session = await f.start("control")
   const code = "const o = await tools.observe({}); const save = o.nodes.find(n => n.name === 'Save'); await tools.press({revision:o.revision,nodeID:save.id}); const next = await tools.observe({}); return next.revision"
   const report = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code }, signal()))
-  expect(report).toMatchObject({ ok: true, value: 3, toolCalls: [{ name: "observe" }, { name: "press" }, { name: "observe" }] })
+  // Observation 1, the press (2), its two settle observations (3, 4), then the program's own observation (5).
+  expect(report).toMatchObject({ ok: true, value: 5, toolCalls: [{ name: "observe" }, { name: "press" }, { name: "observe" }] })
   expect(f.ax.calls).toContain("indicator")
   const old = await f.observe(session.computerSessionID)
   const action = (nodeID: string, revision = old.revision) => f.port.code!({ computerSessionID: session.computerSessionID, code: `return await tools.setValue({revision:${revision},nodeID:'${nodeID}',value:'query'})` }, signal())
