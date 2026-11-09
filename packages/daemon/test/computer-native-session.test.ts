@@ -70,6 +70,34 @@ test("explicit app targeting approves before activation and preserves the runnin
   expect(ComputerSessionInput.safeParse({ action: "start", mode: "control" }).success).toBe(false)
 })
 
+test("a running app can be started by the name the user gives it, and a name that runs nowhere lists what does", async () => {
+  const f = fixture(), calls: string[] = []
+  f.ax.os.apps = async () => [{ ...f.ax.state.target }]
+  f.ax.os.resolve = async (bundleID) => { calls.push(`resolve ${bundleID}`); return { ...f.ax.state.target } }
+  f.ax.os.activate = async (target) => target
+  const started = data<ComputerSessionReport>(await f.port.session!({ action: "start", mode: "control", appName: "local editor" }, signal(), activation))
+  expect(calls).toEqual(["resolve local.editor"])
+  expect(started.target?.bundleID).toBe("local.editor")
+  // The user's language may name the app otherwise: a shared start of five letters picks the one running app that matches.
+  f.ax.os.apps = async () => [{ ...f.ax.state.target, appName: "Calculator", bundleID: "com.apple.calculator" }, { ...f.ax.state.target, appName: "Finder", bundleID: "com.apple.finder" }]
+  calls.length = 0
+  await f.port.session!({ action: "start", mode: "control", appName: "Calculadora" }, signal(), activation)
+  expect(calls).toEqual(["resolve com.apple.calculator"])
+  f.ax.os.apps = async () => [{ ...f.ax.state.target }]
+  const missing = await f.port.session!({ action: "start", mode: "control", appName: "Nowhere" }, signal(), activation)
+  expect(missing.output).toContain('No running app is named "Nowhere"; running: "Local Editor"')
+  expect(ComputerSessionInput.safeParse({ action: "start", mode: "control", appName: "A", bundleID: "b" }).success).toBe(false)
+})
+
+test("right after start, an app showing no control yet is observed again until one appears", async () => {
+  const f = fixture(), loaded = f.ax.state.nodes.slice()
+  f.ax.state.nodes.splice(1)
+  setTimeout(() => f.ax.state.nodes.splice(1, 0, ...loaded.slice(1)), 300)
+  const session = await f.start("control")
+  const observed = await f.observe(session.computerSessionID)
+  expect(observed.nodes.some((node) => node.name === "Save")).toBe(true)
+})
+
 test("native actions are advertised, revisioned, audited without values and not claimed verified", async () => {
   const f = fixture()
   f.ax.state.nodes[1]!.actions = ["press", "click", "key", "scroll", "drag"]
@@ -97,6 +125,30 @@ test("window selection and exact postcondition waiting stay within the approved 
   const code = "const windows = await tools.windows({}); await tools.selectWindow({windowID:windows[0].id}); const o = await tools.observe({}); await tools.setValue({revision:o.revision,nodeID:'0.2',value:'verified'}); const check = await tools.waitFor({name:'Search',value:'verified',timeoutMs:0}); return {matched:check.matched,window:check.observation.target.windowID}"
   const report = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code }, signal()))
   expect(report.value).toEqual({ matched: true, window: "demo-window" })
+})
+
+test("a number past its limit is brought into range instead of failing the program, and a wrong argument is named in plain words", async () => {
+  const f = fixture(), session = await f.start("control")
+  // A wait past 10 s waits at most 10 s; a match ends it at once. Reads ignore arguments they do not take.
+  const wait = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "const o = await tools.observe({revision:1}); const check = await tools.waitFor({name:'Search',timeoutMs:60000}); return {matched:check.matched,nodes:o.nodes.length > 0}" }, signal()))
+  expect(wait.ok).toBe(true)
+  expect(wait.value).toEqual({ matched: true, nodes: true })
+  f.ax.state.nodes[1]!.actions = ["press", "scroll"]
+  const scrolled = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "const o = await tools.observe({}); return await tools.scroll({revision:o.revision,nodeID:'0.1',direction:'down',amount:5000})" }, signal()))
+  expect(scrolled.ok).toBe(true)
+  expect(f.ax.actions.at(-1)).toMatchObject({ action: "scroll", amount: 1000 })
+  const wrong = await f.port.code!({ computerSessionID: session.computerSessionID, code: "const o = await tools.observe({}); await tools.scroll({revision:o.revision,nodeID:'0.1',direction:'sideways'})" }, signal())
+  expect(wrong.output).toContain("scroll: direction:")
+  expect(wrong.output).not.toContain('"origin"')
+})
+
+test("steps can name their node, need no observation first, and the result says what changed once the app settled", async () => {
+  const f = fixture(), session = await f.start("control")
+  const report = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "const r = await tools.batch({ steps: [{ action: 'setValue', name: 'search', value: 'found it' }] }); return { ok: r.ok, changed: r.after.changed.map(n => n.value), next: typeof r.after.revision }" }, signal()))
+  expect(report.ok).toBe(true)
+  expect(report.value).toEqual({ ok: true, changed: ["found it"], next: "number" })
+  const missing = await f.port.code!({ computerSessionID: session.computerSessionID, code: "await tools.press({ name: 'Nowhere' })" }, signal())
+  expect(missing.output).toContain('press: no node named \\"Nowhere\\" offers press; nodes that do:')
 })
 
 test("expired evidence and unknown action outcomes cannot be replayed or redirected to secure nodes", async () => {

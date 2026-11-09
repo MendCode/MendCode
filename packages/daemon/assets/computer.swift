@@ -198,110 +198,139 @@ func selected(_ target: Object, foreground: Bool = true) throws -> (NSRunningApp
     if let id = target["windowID"] as? String {
         guard let window = windowHandles[id], windowPIDs[id] == running.processIdentifier, CFEqual(window, focused) else { try fail("Selected window changed: the session's window closed or another window of the app has focus. In computer_code call tools.windows({}) then tools.selectWindow({windowID}) and observe, or start a new session") }
     }
+    if badge != nil { anchor(focused) }
     return (running, ax, focused)
 }
-// The agent cursor and its effects are ported from agent-desktop (https://github.com/vercel-labs/agent-desktop, Apache License 2.0;
-// see THIRD_PARTY.md): the dart, label pill, ripple, outline and trail from crates/macos/src/system/cursor_overlay/
-// cursor_overlay_bridge.m and cursor_overlay_chrome_bridge.m, and the travel from crates/core/src/cursor_overlay/hand_path.rs.
-// Changed for MendCode: Swift instead of Objective-C and Rust, one stage window that carries the dart and the pill, MendCode's
-// action labels in the pill, the default style only (no custom images, colours or seeds), effects timed by the helper's idle loop.
-let cursorFill = (1.0, 1.0, 1.0), cursorRim = (0.07, 0.07, 0.09), cursorAccent = (0.26, 0.60, 1.0)
+// MendCode's agent cursor: a violet dot in a white ring, a dark tag naming the action, a tap ring, corner marks around the element
+// acted on and a dashed drag line. Everything is a layer of one transparent canvas window kept directly above the controlled app's
+// window, so a window that covers the app covers its cursor too, and moving the cursor never moves a window.
+/** Black and white, with one accent: colours that read on light and dark windows. */
+let cursorAccents: [(Double, Double, Double)] = [
+    (1.0, 0.42, 0.42), (0.96, 0.65, 0.14), (0.64, 0.90, 0.21), (0.18, 0.83, 0.75),
+    (0.22, 0.74, 0.97), (0.51, 0.55, 0.97), (0.96, 0.45, 0.71), (0.98, 0.57, 0.24),
+]
+/**
+ * Each helper takes an accent when it starts, at random among those no other running helper holds: two MendCode installs
+ * controlling apps at once show different colours. Who holds which is a small shared file of `pid index` lines, under a lock;
+ * lines of helpers that exited are dropped.
+ */
+func pickAccent(registry: String = (NSTemporaryDirectory() as NSString).appendingPathComponent("mendcode-cursor-accents")) -> Int {
+    let fd = open(registry, O_RDWR | O_CREAT, 0o600)
+    guard fd >= 0 else { return Int.random(in: 0..<cursorAccents.count) }
+    defer { flock(fd, LOCK_UN); close(fd) }
+    flock(fd, LOCK_EX)
+    let current = (try? String(contentsOfFile: registry, encoding: .utf8)) ?? ""
+    var held: [(pid: Int32, index: Int)] = current.split(separator: "\n").compactMap { line in
+        let parts = line.split(separator: " ")
+        guard parts.count == 2, let pid = Int32(parts[0]), let index = Int(parts[1]), pid != getpid(), kill(pid, 0) == 0 else { return nil }
+        return (pid, index)
+    }
+    let taken = Set(held.map(\.index)), free = cursorAccents.indices.filter { !taken.contains($0) }
+    let index = free.randomElement() ?? Int.random(in: 0..<cursorAccents.count)
+    held.append((getpid(), index))
+    let text = held.map { "\($0.pid) \($0.index)" }.joined(separator: "\n") + "\n"
+    ftruncate(fd, 0); lseek(fd, 0, SEEK_SET)
+    _ = text.withCString { write(fd, $0, strlen($0)) }
+    return index
+}
+/** `--cursor-render` draws with the first accent, so its pixels can be checked; a helper that controls apps picks one. */
+var pickedAccent: (Double, Double, Double)?
+/** Picked the first time the cursor is drawn, not at start: the helper's decision-only modes never touch the shared file. */
+var cursorAccent: (Double, Double, Double) {
+    if let picked = pickedAccent { return picked }
+    let picked = CommandLine.arguments.contains("--cursor-render") ? cursorAccents[0] : cursorAccents[pickAccent()]
+    pickedAccent = picked
+    return picked
+}
+let cursorInk = (0.04, 0.04, 0.05), cursorTag = (0.06, 0.06, 0.07)
 func color(_ rgb: (Double, Double, Double), _ alpha: CGFloat = 1) -> CGColor { NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: alpha).cgColor }
 /** Layers move and change only when told to: no implicit animation lags behind the cursor. */
-func frozen(_ layer: CALayer) { layer.actions = ["transform": NSNull(), "opacity": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "path": NSNull(), "string": NSNull(), "contents": NSNull()] }
-let effectLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1)
-/** A transparent, non-activating, click-through panel that screenshots and the accessibility tree do not see. */
-func overlayPanel(_ frame: NSRect, level: NSWindow.Level) -> NSPanel {
+func frozen(_ layer: CALayer) { layer.actions = ["transform": NSNull(), "opacity": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "path": NSNull(), "string": NSNull(), "contents": NSNull(), "frame": NSNull()] }
+/** A transparent, non-activating, click-through panel at the normal window level that screenshots and the accessibility tree do not see. */
+func overlayPanel(_ frame: NSRect) -> NSPanel {
     let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-    panel.isFloatingPanel = true; panel.level = level; panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    panel.isFloatingPanel = false; panel.level = .normal; panel.ignoresMouseEvents = true
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
     panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false; panel.hidesOnDeactivate = false
-    panel.isReleasedWhenClosed = false; panel.sharingType = .none
-    // No window fade: the effects are Core Animation layers.
-    panel.animationBehavior = .none
+    panel.isReleasedWhenClosed = false; panel.sharingType = .none; panel.animationBehavior = .none
     let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
     view.wantsLayer = true; frozen(view.layer!)
     view.setAccessibilityElement(false); panel.setAccessibilityElement(false)
     panel.contentView = view
     return panel
 }
-/** The dart: tip at (1, 35) of a 32 × 40 box, drawn twice, a wide dark rim under a white body. */
-func dart() -> CAShapeLayer {
-    let layer = CAShapeLayer(), path = CGMutablePath()
-    path.move(to: CGPoint(x: 1, y: 35))
-    for point in [CGPoint(x: 29.6, y: 17.5), CGPoint(x: 12.7, y: 16.3), CGPoint(x: 4.2, y: 1.6)] { path.addLine(to: point) }
-    path.closeSubpath()
-    layer.path = path; layer.lineWidth = 3; layer.lineJoin = .round
-    layer.shadowColor = NSColor.black.cgColor; layer.shadowOpacity = 0.32; layer.shadowRadius = 5; layer.shadowOffset = CGSize(width: 2.5, height: -3)
-    frozen(layer)
-    return layer
-}
-let labelFont = NSFont.systemFont(ofSize: 12.5, weight: .medium)
-/** The stage moves with the cursor: its tip sits at `stageTip` (view coordinates, y up) and the pill beside it. */
-let stageSize = CGSize(width: 320, height: 240), stageTip = CGPoint(x: 160, y: 172)
+let labelFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+/** The cursor's own layer: the dot's center sits at `stageTip` and the tag beside it. */
+let stageSize = CGSize(width: 260, height: 120), stageTip = CGPoint(x: 130, y: 60), dotSize: CGFloat = 18
 final class CursorStage {
-    let panel = overlayPanel(NSRect(origin: .zero, size: stageSize), level: .statusBar)
-    let pointer = CALayer(), pill = CALayer(), caption = CATextLayer()
+    let root = CALayer(), dot = CALayer(), core = CALayer(), tag = CALayer(), mark = CALayer(), caption = CATextLayer()
     var label = ""
     init() {
-        let root = panel.contentView!.layer!
-        pointer.bounds = CGRect(x: 0, y: 0, width: 32, height: 40)
-        pointer.anchorPoint = CGPoint(x: 1.0 / 32, y: 35.0 / 40)
-        pointer.position = stageTip
-        frozen(pointer)
-        // The dart is the size of the user's own pointer, tip on the point: the system arrow is 40 pt tall by default (about 17 pt of it
-        // visible, against the dart's 33 pt) and grows with the Accessibility cursor size, so the dart's scale follows it.
-        let arrow = NSCursor.arrow.image.size.height
-        let scale = min(3, max(0.4, 0.52 * (arrow > 0 ? arrow / 40 : 1)))
-        pointer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
-        let rim = dart(), body = dart()
-        rim.lineWidth = 6.5; rim.shadowOpacity = 0.34
-        rim.fillColor = color(cursorRim); rim.strokeColor = color(cursorRim)
-        body.fillColor = color(cursorFill); body.strokeColor = color(cursorFill)
-        pointer.addSublayer(rim); pointer.addSublayer(body)
-        pill.backgroundColor = NSColor.black.cgColor
-        pill.shadowColor = NSColor.black.cgColor; pill.shadowOpacity = 0.31; pill.shadowRadius = 2.5; pill.shadowOffset = CGSize(width: 0, height: -2)
-        pill.isHidden = true
-        frozen(pill)
+        root.bounds = CGRect(origin: .zero, size: stageSize); root.anchorPoint = CGPoint(x: stageTip.x / stageSize.width, y: stageTip.y / stageSize.height)
+        frozen(root)
+        // The dot follows the Accessibility cursor size, as the user's own pointer does.
+        let arrow = NSCursor.arrow.image.size.height, scale = min(3, max(0.6, arrow > 0 ? arrow / 40 : 1))
+        let size = dotSize * scale
+        dot.bounds = CGRect(x: 0, y: 0, width: size, height: size); dot.position = stageTip; dot.cornerRadius = size / 2
+        dot.backgroundColor = NSColor.white.cgColor; dot.borderColor = color(cursorInk); dot.borderWidth = 1.5 * scale
+        dot.shadowColor = NSColor.black.cgColor; dot.shadowOpacity = 0.35; dot.shadowRadius = 4; dot.shadowOffset = CGSize(width: 0, height: -1.5)
+        frozen(dot)
+        let inner = size * 0.56
+        core.bounds = CGRect(x: 0, y: 0, width: inner, height: inner); core.position = CGPoint(x: size / 2, y: size / 2); core.cornerRadius = inner / 2
+        core.backgroundColor = color(cursorAccent)
+        frozen(core)
+        dot.addSublayer(core)
+        tag.backgroundColor = color(cursorTag, 0.96); tag.borderColor = color(cursorAccent, 0.85); tag.borderWidth = 1; tag.cornerRadius = 6
+        tag.shadowColor = NSColor.black.cgColor; tag.shadowOpacity = 0.3; tag.shadowRadius = 3; tag.shadowOffset = CGSize(width: 0, height: -1.5)
+        tag.isHidden = true
+        frozen(tag)
+        mark.bounds = CGRect(x: 0, y: 0, width: 6, height: 6); mark.cornerRadius = 3; mark.backgroundColor = color(cursorAccent)
+        frozen(mark)
         caption.font = labelFont; caption.fontSize = labelFont.pointSize; caption.foregroundColor = NSColor.white.cgColor
-        caption.alignmentMode = .center; caption.truncationMode = .end
+        caption.alignmentMode = .left; caption.truncationMode = .end
         caption.contentsScale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
         frozen(caption)
-        pill.addSublayer(caption)
-        root.addSublayer(pill); root.addSublayer(pointer)
+        tag.addSublayer(mark); tag.addSublayer(caption)
+        root.addSublayer(tag); root.addSublayer(dot)
     }
-    /** Shows `text` in the pill; a new text fades in with a small pop. */
+    /** Shows `text` in the tag; a new text slides in. */
     func show(_ text: String) {
         guard text != label else { return }
         label = text
         let width = min(120, ceil(NSAttributedString(string: text, attributes: [.font: labelFont]).size().width))
-        pill.bounds = CGRect(x: 0, y: 0, width: width + 20, height: 24); pill.cornerRadius = 12
-        pill.shadowPath = CGPath(roundedRect: pill.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        tag.bounds = CGRect(x: 0, y: 0, width: width + 26, height: 22)
+        mark.position = CGPoint(x: 10, y: 11)
         let line = ceil(labelFont.ascender - labelFont.descender + labelFont.leading)
-        caption.frame = CGRect(x: 10, y: (24 - line) / 2, width: width, height: line)
+        caption.frame = CGRect(x: 18, y: (22 - line) / 2, width: width, height: line)
         caption.string = text
-        pill.isHidden = text.isEmpty
-        pill.removeAllAnimations()
-        guard !text.isEmpty, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        tag.isHidden = text.isEmpty
+        tag.removeAllAnimations()
+        guard !text.isEmpty, !reduceMotion() else { return }
         let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
-        let pop = CABasicAnimation(keyPath: "transform.scale"); pop.fromValue = 0.94; pop.toValue = 1
-        let reveal = CAAnimationGroup(); reveal.animations = [fade, pop]; reveal.duration = 0.18; reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        pill.add(reveal, forKey: "reveal")
+        let slide = CABasicAnimation(keyPath: "transform.translation.x"); slide.fromValue = -6; slide.toValue = 0
+        let reveal = CAAnimationGroup(); reveal.animations = [fade, slide]; reveal.duration = 0.14; reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        tag.add(reveal, forKey: "reveal")
     }
-    /** The pill sits right of and below the tip, or on the other side where the screen ends. */
+    /** The tag sits right of the dot, or left of it where the screen ends. */
     func place(_ cocoa: CGPoint) {
         let screen = (NSScreen.screens.first(where: { $0.frame.contains(cocoa) }) ?? NSScreen.screens.first)?.frame ?? .infinite
-        let size = pill.bounds.size
-        let x = cocoa.x + 20 + size.width <= screen.maxX ? stageTip.x + 20 : stageTip.x - 20 - size.width
-        let y = cocoa.y - 30 - size.height >= screen.minY ? stageTip.y - 30 - size.height : stageTip.y + 30
-        pill.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
+        let size = tag.bounds.size, gap = dot.bounds.width / 2 + 8
+        let x = cocoa.x + gap + size.width <= screen.maxX ? stageTip.x + gap : stageTip.x - gap - size.width
+        tag.frame = CGRect(origin: CGPoint(x: x, y: stageTip.y - size.height / 2), size: size)
     }
 }
 var cursorStage: CursorStage?
-var ripplePanel: NSPanel?, highlightPanel: NSPanel?, trailPanel: NSPanel?
-var trailLayer: CAShapeLayer?, trailPath = CGMutablePath(), trailFrame = NSRect.zero
+/** The one canvas window and its effect layers; created once, ordered out while no program shows the cursor. */
+var canvas: NSPanel?, rippleLayer: CAShapeLayer?, bracketLayer: CAShapeLayer?, trailLayer: CAShapeLayer?, trailPath = CGMutablePath()
 /** When the click effects may go, and when the cursor last moved: after six idle seconds it rests (fades out) until the next move. */
 var effectsUntil: TimeInterval = 0, cursorActiveAt: TimeInterval = 0, cursorResting = false
+/** The controlled app's window the canvas sits above (0 before the first operation names one), and when it was last ordered there. */
+var anchorWindow: CGWindowID = 0, anchoredAt: TimeInterval = 0
+/** When the cursor's current travel ends (Core Animation time): effects of the action it travels to start then. */
+var travelEndsAt: CFTimeInterval = 0
+/** Set while a batch runs: the cursor jumps to each node, so a batch's speed is the app's own, not the cursor's. */
+var instantTravel = false
+@_silgen_name("_AXUIElementGetWindow") func axWindowNumber(_ element: AXUIElement, _ id: UnsafeMutablePointer<CGWindowID>) -> AXError
 func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 func reduceMotion() -> Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 func cocoaPoint(_ point: CGPoint) -> CGPoint {
@@ -310,200 +339,180 @@ func cocoaPoint(_ point: CGPoint) -> CGPoint {
 func cocoaRect(_ rect: CGRect) -> NSRect {
     NSRect(x: rect.minX, y: (NSScreen.screens.first?.frame.maxY ?? 0) - rect.maxY, width: rect.width, height: rect.height)
 }
-func presentCursor(_ point: CGPoint, label: String? = nil) {
-    guard let stage = cursorStage else { return }
-    let cocoa = cocoaPoint(point)
-    if let label = label { stage.show(label) }
-    stage.place(cocoa)
-    stage.panel.setFrameOrigin(NSPoint(x: cocoa.x - stageTip.x, y: cocoa.y - stageTip.y))
-    if cursorResting { stage.panel.alphaValue = 1; cursorResting = false }
-    cursorLocation = point; cursorActiveAt = uptime()
-    stage.panel.displayIfNeeded()
-    CATransaction.flush()
+/** A point of the screen (AX coordinates, y down) in the canvas's layer space. */
+func canvasPoint(_ point: CGPoint) -> CGPoint {
+    let cocoa = cocoaPoint(point), origin = canvas?.frame.origin ?? .zero
+    return CGPoint(x: cocoa.x - origin.x, y: cocoa.y - origin.y)
+}
+func canvasRect(_ rect: CGRect) -> CGRect {
+    let cocoa = cocoaRect(rect), origin = canvas?.frame.origin ?? .zero
+    return cocoa.offsetBy(dx: -origin.x, dy: -origin.y)
+}
+func canvasLayer() -> CALayer? { canvas?.contentView?.layer }
+/** The canvas covers every display, so the cursor can go wherever the controlled window is. */
+func makeCanvas() -> NSPanel {
+    let frame = NSScreen.screens.reduce(NSRect.null) { $0.union($1.frame) }
+    let panel = overlayPanel(frame.isNull ? NSRect(x: 0, y: 0, width: 1, height: 1) : frame), root = panel.contentView!.layer!
+    let ripple = CAShapeLayer(), brackets = CAShapeLayer(), trail = CAShapeLayer()
+    for layer in [ripple, brackets, trail] { layer.fillColor = NSColor.clear.cgColor; layer.strokeColor = color(cursorAccent); layer.opacity = 0; frozen(layer); root.addSublayer(layer) }
+    ripple.lineWidth = 2.5
+    brackets.lineWidth = 2.5; brackets.lineCap = .round; brackets.lineJoin = .round
+    brackets.shadowColor = color(cursorAccent); brackets.shadowOpacity = 0.45; brackets.shadowRadius = 6; brackets.shadowOffset = .zero
+    trail.lineWidth = 2.5; trail.lineCap = .round; trail.lineDashPattern = [7, 5]; trail.strokeColor = color(cursorAccent, 0.9)
+    rippleLayer = ripple; bracketLayer = brackets; trailLayer = trail
+    return panel
 }
 /**
- * How the cursor travels, as agent-desktop models a hand (hand_path.rs): a minimum-jerk primary movement that overshoots by 3.5 %
- * and a correction back onto the target, bowed sideways by 5.5 % of the distance (at most 38 points) with a 1.1-point tremor that
- * settles at both ends. Its duration follows Fitts's law, 40 + 70 × log2(distance / 40 + 1) ms, between 90 and 320 ms.
+ * Keeps the canvas directly above the controlled window: another window in front of that window covers the cursor, and the cursor
+ * is hidden while the window is off screen (minimized, another Space). Rate limited unless `force`, as the window order is asked
+ * of the window server.
  */
-struct HandPath {
-    let start: CGPoint, end: CGPoint, bow: Double, seed: UInt64
-    static let reach = 1.035, tremor = 1.1
-    init(from start: CGPoint, to end: CGPoint) {
-        self.start = start; self.end = end
-        let distance = Double(hypot(end.x - start.x, end.y - start.y))
-        bow = min(0.055 * distance, 38)
-        let mixed = Double(start.x).bitPattern ^ Double(end.y).bitPattern
-        seed = ((mixed << 17) | (mixed >> 47)) ^ Double(end.x).bitPattern
-    }
-    var durationMs: Double {
-        let distance = Double(hypot(end.x - start.x, end.y - start.y))
-        return distance < 1.5 ? 0 : min(320, max(90, 40 + 70 * log2(distance / 40 + 1)))
-    }
-    static func minimumJerk(_ t: Double) -> Double { t * t * t * (10 + t * (-15 + 6 * t)) }
-    static func mix(_ seed: UInt64, _ index: UInt64) -> UInt64 {
-        var hash = seed ^ (index &* 0x9E37_79B9_7F4A_7C15)
-        hash ^= hash >> 33
-        hash = hash &* 0xFF51_AFD7_ED55_8CCD
-        return hash ^ (hash >> 33)
-    }
-    static func unit(_ seed: UInt64, _ index: UInt64) -> Double { Double(mix(seed, index) >> 11) / Double(UInt64(1) << 53) }
-    func shake(_ t: Double) -> Double {
-        let x = t * 7, step = floor(x), fraction = x - step
-        let low = HandPath.unit(seed, UInt64(step)), high = HandPath.unit(seed, UInt64(step) + 1)
-        return (low + (high - low) * fraction * fraction * (3 - 2 * fraction)) * 2 - 1
-    }
-    func at(_ t: Double) -> CGPoint {
-        if t >= 1 { return end }
-        let dx = Double(end.x - start.x), dy = Double(end.y - start.y), distance = hypot(dx, dy)
-        let primary = HandPath.minimumJerk(min(1, max(0, t / 0.74))), correction = HandPath.minimumJerk(min(1, max(0, (t - 0.62) / 0.38)))
-        let travelled = HandPath.reach * primary + (1 - HandPath.reach) * correction
-        let (nx, ny) = distance > .ulpOfOne ? (-dy / distance, dx / distance) : (0, 0)
-        let sideways = bow * sin(Double.pi * pow(t, 0.8)) + HandPath.tremor * shake(t) * sin(Double.pi * t)
-        return CGPoint(x: Double(start.x) + dx * travelled + nx * sideways, y: Double(start.y) + dy * travelled + ny * sideways)
-    }
+func keepAbove(force: Bool = false) {
+    guard let panel = canvas, badge != nil else { return }
+    let now = uptime()
+    if !force && now - anchoredAt < 0.2 { return }
+    anchoredAt = now
+    guard anchorWindow != 0 else { if !panel.isVisible { panel.orderFrontRegardless() }; return }
+    let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, anchorWindow) as? [[String: Any]]
+    let onScreen = info?.first?[kCGWindowIsOnscreen as String] as? Bool ?? false
+    panel.contentView?.layer?.isHidden = !onScreen
+    if onScreen { panel.order(.above, relativeTo: Int(anchorWindow)) }
+    // The canvas itself is always in the window list while a program runs (that is the visible indicator), its drawing hidden
+    // when the controlled window is not on screen; a window number the server no longer orders against falls back to the front.
+    if !panel.isVisible { panel.orderFrontRegardless() }
 }
+/** The window an operation acts in becomes the canvas's anchor. */
+func anchor(_ window: AXUIElement) {
+    var id: CGWindowID = 0
+    guard axWindowNumber(window, &id) == .success, id != 0 else { return }
+    if id != anchorWindow { anchorWindow = id; keepAbove(force: true) } else { keepAbove() }
+}
+/** Puts the cursor at `point`; with `from` it travels there over `seconds` on its own, while the action goes ahead. */
+func presentCursor(_ point: CGPoint, label: String? = nil, from: CGPoint? = nil, seconds: Double = 0) {
+    guard let stage = cursorStage else { return }
+    if let label = label { stage.show(label) }
+    stage.place(cocoaPoint(point))
+    stage.root.removeAnimation(forKey: "travel")
+    let end = canvasPoint(point)
+    if let from = from, seconds > 0 {
+        let travel = CABasicAnimation(keyPath: "position"); travel.fromValue = NSValue(point: canvasPoint(from)); travel.toValue = NSValue(point: end)
+        travel.duration = seconds; travel.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.8, 0.2, 1)
+        stage.root.add(travel, forKey: "travel")
+        travelEndsAt = CACurrentMediaTime() + seconds
+    } else { travelEndsAt = 0 }
+    stage.root.position = end
+    if cursorResting { stage.root.removeAnimation(forKey: "rest"); stage.root.opacity = 1; cursorResting = false }
+    cursorLocation = point; cursorActiveAt = uptime()
+    keepAbove()
+    CATransaction.flush()
+}
+/** How long the cursor takes to reach a point `distance` away: 40 to 120 ms, growing with the square root of the distance. */
+func travelSeconds(_ distance: Double) -> Double { distance < 1.5 ? 0 : min(120, max(40, 4 * distance.squareRoot())) / 1000 }
 func animateCursor(to end: CGPoint, label: String) throws {
     guard badge?.isVisible == true else { try fail("Virtual cursor is not visible") }
-    let path = HandPath(from: cursorLocation ?? end, to: end), duration = path.durationMs / 1000
-    if reduceMotion() || duration == 0 { presentCursor(end, label: label); return }
-    let began = uptime()
-    presentCursor(path.start, label: label)
-    repeat {
-        if cancelled { try fail("Cursor movement cancelled; no input sent") }
-        let elapsed = uptime() - began
-        if elapsed >= duration { break }
-        presentCursor(path.at(elapsed / duration))
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 120))
-    } while true
-    presentCursor(end)
+    let start = cursorLocation ?? end, seconds = reduceMotion() || instantTravel ? 0 : travelSeconds(Double(hypot(end.x - start.x, end.y - start.y)))
+    presentCursor(end, label: label, from: seconds > 0 ? start : nil, seconds: seconds)
 }
-/** A click's ripple at the cursor: a filled core and two rings that spread and fade in 0.3 s. */
-func ripple(at point: CGPoint) {
-    let size: CGFloat = 108, cocoa = cocoaPoint(point)
-    if ripplePanel == nil {
-        let panel = overlayPanel(NSRect(x: 0, y: 0, width: size, height: size), level: effectLevel)
-        for (index, radius) in [19, size / 2 - 4, size / 2 - 4].enumerated() {
-            let ring = CAShapeLayer()
-            ring.bounds = CGRect(x: 0, y: 0, width: size, height: size); ring.position = CGPoint(x: size / 2, y: size / 2)
-            ring.path = CGPath(ellipseIn: CGRect(x: size / 2 - radius, y: size / 2 - radius, width: radius * 2, height: radius * 2), transform: nil)
-            ring.fillColor = index == 0 ? color(cursorAccent) : NSColor.clear.cgColor; ring.strokeColor = color(cursorAccent)
-            if index == 0 { ring.shadowColor = color(cursorAccent); ring.shadowOffset = .zero; ring.shadowRadius = 14; ring.shadowOpacity = 1 }
-            ring.opacity = 0
-            frozen(ring)
-            panel.contentView!.layer!.addSublayer(ring)
-        }
-        ripplePanel = panel
-    }
-    guard let panel = ripplePanel else { return }
-    panel.setFrameOrigin(NSPoint(x: cocoa.x - size / 2, y: cocoa.y - size / 2))
-    panel.orderFrontRegardless()
-    for (index, layer) in (panel.contentView!.layer!.sublayers ?? []).enumerated() {
-        layer.removeAllAnimations()
-        let opacity = CAKeyframeAnimation(keyPath: "opacity"); opacity.values = index == 0 ? [0, 0.42, 0] : [0, 0.9, 0]; opacity.keyTimes = [0, 0.18, 1]
-        let spread = CABasicAnimation(keyPath: "transform.scale"); spread.fromValue = index == 0 ? 0.22 : 0.04; spread.toValue = index == 0 ? 1.12 : 1
-        let effect = CAAnimationGroup(); effect.animations = [opacity, spread]; effect.duration = 0.3; effect.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        layer.add(effect, forKey: "ripple")
-    }
-    effectsUntil = max(effectsUntil, uptime() + 0.35)
-}
-func held(_ path: String, _ values: [Any], _ times: [NSNumber], _ seconds: Double) -> CAKeyframeAnimation {
-    let animation = CAKeyframeAnimation(keyPath: path)
-    animation.values = values; animation.keyTimes = times; animation.duration = seconds
-    animation.isRemovedOnCompletion = false; animation.fillMode = .forwards
-    animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+/** An animation that starts when the cursor arrives and holds its last frame. */
+func arriving<T: CAAnimation>(_ animation: T, _ seconds: Double) -> T {
+    animation.duration = seconds; animation.beginTime = max(CACurrentMediaTime(), travelEndsAt)
+    animation.fillMode = .both; animation.isRemovedOnCompletion = false
     return animation
 }
-/** An outline around the element acted on: it pops in, holds and fades within 0.9 s. */
-func highlight(_ rect: CGRect) {
-    let bleed: CGFloat = 24, frame = cocoaRect(rect).insetBy(dx: -5, dy: -5)
-    if highlightPanel == nil {
-        let panel = overlayPanel(frame, level: effectLevel), border = CALayer()
-        border.borderWidth = 2.5; border.cornerRadius = 8; border.opacity = 0
-        border.borderColor = color(cursorAccent); border.backgroundColor = color(cursorAccent, 0.10)
-        border.shadowColor = color(cursorAccent); border.shadowOpacity = 0.5; border.shadowRadius = 10; border.shadowOffset = .zero
-        frozen(border)
-        panel.contentView!.layer!.addSublayer(border)
-        highlightPanel = panel
-    }
-    guard let panel = highlightPanel, let border = panel.contentView!.layer!.sublayers?.first else { return }
-    panel.setFrame(frame.insetBy(dx: -bleed, dy: -bleed), display: false)
-    border.frame = CGRect(x: bleed, y: bleed, width: frame.width, height: frame.height)
-    border.removeAllAnimations()
-    border.add(held("opacity", [0, 1, 1, 0], [0, 0.04, 0.55, 1], 0.9), forKey: "fade")
-    border.add(held("transform.scale", [1.08, 0.99, 1, 1], [0, 0.12, 0.22, 1], 0.9), forKey: "pop")
-    panel.orderFrontRegardless()
-    effectsUntil = max(effectsUntil, uptime() + 0.95)
+/** A tap: one ring spreads from the dot and fades in 0.28 s. */
+func ripple(at point: CGPoint) {
+    guard let layer = rippleLayer else { return }
+    let center = canvasPoint(point), radius: CGFloat = 22
+    layer.removeAllAnimations()
+    layer.bounds = CGRect(x: 0, y: 0, width: radius * 2, height: radius * 2); layer.position = center
+    layer.path = CGPath(ellipseIn: layer.bounds.insetBy(dx: 2, dy: 2), transform: nil)
+    let spread = CABasicAnimation(keyPath: "transform.scale"); spread.fromValue = 0.35; spread.toValue = 1.25
+    let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0.95; fade.toValue = 0
+    let group = CAAnimationGroup(); group.animations = [spread, fade]; group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    layer.add(arriving(group, 0.28), forKey: "ripple")
+    effectsUntil = max(effectsUntil, uptime() + 0.5)
 }
-/** What an action shows once it is dispatched: a ripple for a click, press or drop, and an outline around the element. */
+/** Corner marks around the element acted on: they close in and fade within 0.6 s. */
+func highlight(_ rect: CGRect) {
+    guard let layer = bracketLayer else { return }
+    let frame = canvasRect(rect).insetBy(dx: -5, dy: -5), arm = max(6, min(14, min(frame.width, frame.height) / 3))
+    layer.removeAllAnimations()
+    layer.bounds = CGRect(origin: .zero, size: frame.size); layer.position = CGPoint(x: frame.midX, y: frame.midY)
+    let path = CGMutablePath(), w = frame.width, h = frame.height
+    for (x, y, dx, dy) in [(0, 0, 1, 1), (w, 0, -1, 1), (0, h, 1, -1), (w, h, -1, -1)] as [(CGFloat, CGFloat, CGFloat, CGFloat)] {
+        path.move(to: CGPoint(x: x + dx * arm, y: y)); path.addLine(to: CGPoint(x: x, y: y)); path.addLine(to: CGPoint(x: x, y: y + dy * arm))
+    }
+    layer.path = path
+    let fade = CAKeyframeAnimation(keyPath: "opacity"); fade.values = [0, 1, 1, 0]; fade.keyTimes = [0, 0.15, 0.6, 1]
+    let close = CABasicAnimation(keyPath: "transform.scale"); close.fromValue = 1.12; close.toValue = 1
+    close.timingFunction = CAMediaTimingFunction(name: .easeOut)
+    let group = CAAnimationGroup(); group.animations = [fade, close]
+    layer.add(arriving(group, 0.6), forKey: "brackets")
+    effectsUntil = max(effectsUntil, uptime() + 0.8)
+}
+/** What an action shows once it is dispatched: a tap ring for a click, press or drop, and corner marks around the element. */
 func cursorEffect(click: Bool, around rect: CGRect?) {
     guard !reduceMotion(), cursorStage != nil else { return }
     if click, let point = cursorLocation { ripple(at: point) }
     if let rect = rect { highlight(rect) }
     CATransaction.flush()
 }
-/** A drag draws its path in the accent colour: a dot where it starts, the line it follows, and a fade once it is dropped. */
+/** A drag draws its path as a dashed line in the accent colour, and fades it once it is dropped. */
 func trailBegin(_ from: CGPoint, to: CGPoint) {
-    trailEnd(fade: false)
-    trailFrame = cocoaRect(CGRect(x: min(from.x, to.x), y: min(from.y, to.y), width: abs(to.x - from.x), height: abs(to.y - from.y))).insetBy(dx: -12, dy: -12)
-    let panel = overlayPanel(trailFrame, level: effectLevel), layer = CAShapeLayer()
-    layer.frame = panel.contentView!.bounds
-    layer.fillColor = color(cursorAccent, 0.9); layer.strokeColor = color(cursorAccent, 0.9); layer.lineWidth = 4; layer.lineCap = .round; layer.lineJoin = .round
-    layer.shadowColor = color(cursorAccent); layer.shadowOpacity = 0.45; layer.shadowRadius = 6
-    frozen(layer)
-    panel.contentView!.layer!.addSublayer(layer)
-    trailPanel = panel; trailLayer = layer; trailPath = CGMutablePath()
-    let local = trailPoint(from)
-    trailPath.addEllipse(in: CGRect(x: local.x - 4, y: local.y - 4, width: 8, height: 8)); trailPath.move(to: local)
-    layer.path = trailPath
-    panel.orderFrontRegardless()
+    guard let layer = trailLayer else { return }
+    layer.removeAllAnimations()
+    trailPath = CGMutablePath(); trailPath.move(to: canvasPoint(from))
+    layer.path = trailPath; layer.opacity = 1
 }
-func trailPoint(_ point: CGPoint) -> CGPoint { let cocoa = cocoaPoint(point); return CGPoint(x: cocoa.x - trailFrame.minX, y: cocoa.y - trailFrame.minY) }
 func trailAppend(_ point: CGPoint) {
     guard let layer = trailLayer else { return }
-    trailPath.addLine(to: trailPoint(point)); layer.path = trailPath
+    trailPath.addLine(to: canvasPoint(point)); layer.path = trailPath
 }
 func trailEnd(fade: Bool) {
-    guard let layer = trailLayer else { return }
+    guard let layer = trailLayer, layer.opacity > 0 else { return }
     if fade && !reduceMotion() {
-        let end = trailPath.currentPoint
-        trailPath.addEllipse(in: CGRect(x: end.x - 4, y: end.y - 4, width: 8, height: 8)); layer.path = trailPath
-        layer.add(held("opacity", [1, 1, 0], [0, 0.55, 1], 0.9), forKey: "fade")
-        CATransaction.flush()
-        effectsUntil = max(effectsUntil, uptime() + 0.95)
-        return
+        let out = CABasicAnimation(keyPath: "opacity"); out.fromValue = 1; out.toValue = 0; out.duration = 0.5
+        layer.add(out, forKey: "fade")
+        effectsUntil = max(effectsUntil, uptime() + 0.6)
     }
-    trailPanel?.orderOut(nil); trailPanel = nil; trailLayer = nil
+    layer.opacity = 0
 }
 /** Ends what the effects still show: before a hit test, so nothing of ours is under the point, and when they have played. */
 func stopEffects() {
-    ripplePanel?.orderOut(nil); highlightPanel?.orderOut(nil)
-    trailPanel?.orderOut(nil); trailPanel = nil; trailLayer = nil
+    for layer in [rippleLayer, bracketLayer, trailLayer] { layer?.removeAllAnimations(); layer?.opacity = 0 }
     effectsUntil = 0
 }
-/** Between requests: end played effects, and let an idle cursor rest after six seconds (13 steps of 12 ms, as agent-desktop fades it). */
+/** Between requests: end played effects, keep the canvas above the controlled window, and let an idle cursor rest after six seconds. */
 func idle() {
     if effectsUntil > 0 && uptime() >= effectsUntil { stopEffects() }
-    guard let stage = cursorStage, stage.panel.isVisible, !cursorResting, uptime() - cursorActiveAt >= 6 else { return }
-    for step in stride(from: 1.0, to: 0.0, by: -0.08) { stage.panel.alphaValue = step; CATransaction.flush(); usleep(12_000) }
-    stage.panel.alphaValue = 0; cursorResting = true
+    keepAbove()
+    guard let stage = cursorStage, badge != nil, !cursorResting, uptime() - cursorActiveAt >= 6 else { return }
+    let rest = CABasicAnimation(keyPath: "opacity"); rest.fromValue = 1; rest.toValue = 0; rest.duration = 0.16
+    stage.root.add(rest, forKey: "rest"); stage.root.opacity = 0; cursorResting = true
+    CATransaction.flush()
 }
 func showBadge(_ show: Bool) throws {
     if show && badge?.isVisible == true { return }
     if !show && cursorProgram { return }
-    // The main thread sits in readLine() between requests, so the window server only learns the panel is gone if the run loop turns
-    // once here: without it the helper answered "hidden" and the cursor stayed on screen (measured: 1 on-screen window after hide).
-    if let panel = badge { panel.orderOut(nil); panel.close(); stopEffects(); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
+    if let panel = badge {
+        // The main thread sits in readLine() between requests, so the window server only learns the canvas is gone if the run loop
+        // turns once here: without it the helper answered "hidden" and the cursor stayed on screen.
+        panel.orderOut(nil); stopEffects(); cursorStage?.root.removeFromSuperlayer(); CATransaction.flush()
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
+    }
     badge = nil; cursorStage = nil; cursorResting = false
     guard show else { releaseLease(); return }
     try acquireLease()
+    if canvas == nil { canvas = makeCanvas() }
     let stage = CursorStage()
-    cursorStage = stage; badge = stage.panel
+    canvasLayer()?.addSublayer(stage.root)
+    cursorStage = stage; badge = canvas
     let mouse = NSEvent.mouseLocation
     let initial = cursorLocation ?? CGPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - mouse.y)
     presentCursor(initial, label: "MendCode")
-    stage.panel.orderFrontRegardless(); stage.panel.displayIfNeeded()
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+    keepAbove(force: true)
+    canvas?.displayIfNeeded()
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.01))
 }
 // Chromium (Chrome, Brave, Edge, Electron apps) offers a page's own actions only once an assistive app asks for them, and a
 // click posted to its process never reaches the page (measured in Chrome, in front and behind: links offered no AXPress,
@@ -688,7 +697,7 @@ func hit(_ point: CGPoint, ref: Reference, click: Bool = false) throws -> AXUIEl
     // The visual overlay is never accepted as input evidence or an AX hit target.
     let overlay = badge, visible = overlay?.isVisible == true
     overlay?.orderOut(nil); stopEffects()
-    defer { if visible && !cancelled { overlay?.orderFrontRegardless(); overlay?.displayIfNeeded() } }
+    defer { if visible && !cancelled { keepAbove(force: true) } }
     // In front, the screen decides what the pointer would hit; in the background, the app's own window does (what covers it is
     // another app's, and the event goes to this process only).
     let inFront = frontmost()?.processIdentifier == ref.pid
@@ -784,6 +793,8 @@ func batch(_ target: Object, steps: [Object]) throws -> [Object] {
     guard (1...batchLimit).contains(steps.count) else { try fail("A batch holds 1 to \(batchLimit) steps") }
     let resolved = try steps.map { try resolve($0, target: target) }
     references.removeAll()
+    instantTravel = true
+    defer { instantTravel = false }
     var results: [Object] = [], acted = Set<String>(), posted = false
     for (index, var step) in resolved.enumerated() {
         effectStarted = false
@@ -1061,14 +1072,19 @@ func runCursorDemo() throws {
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
     cursorLocation = points[0]
     try showBadge(true)
+    anchorWindow = CGWindowID(window.windowNumber); keepAbove(force: true)
     defer { try? showBadge(false); window.close() }
     for (index, point) in points.enumerated() {
         try animateCursor(to: point, label: index == 1 ? "Click" : "Press"); cursorEffect(click: true, around: frames[index])
         RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.9))
     }
     trailBegin(points[2], to: points[0])
-    let drag = HandPath(from: points[2], to: points[0]), began = uptime()
-    while uptime() - began < 0.6 { let point = drag.at((uptime() - began) / 0.6); presentCursor(point, label: "Dragging"); trailAppend(point); RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 60)) }
+    let began = uptime()
+    while uptime() - began < 0.6 {
+        let t = (uptime() - began) / 0.6, eased = t * t * (3 - 2 * t)
+        let point = CGPoint(x: points[2].x + (points[0].x - points[2].x) * eased, y: points[2].y + (points[0].y - points[2].y) * eased)
+        presentCursor(point, label: "Dragging"); trailAppend(point); RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 60))
+    }
     presentCursor(points[0], label: "Dropped"); trailEnd(fade: true); cursorEffect(click: true, around: nil)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
     if let stage = cursorStage, let png = stagePNG(stage) {
@@ -1083,20 +1099,25 @@ func stageBitmap(_ stage: CursorStage) -> CGContext? {
     let scale: CGFloat = 2
     guard let context = CGContext(data: nil, width: Int(stageSize.width * scale), height: Int(stageSize.height * scale), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
     context.scaleBy(x: scale, y: scale)
-    stage.panel.contentView!.layer!.render(in: context)
+    stage.root.render(in: context)
     return context
 }
 func stagePNG(_ stage: CursorStage) -> Data? {
     guard let image = stageBitmap(stage)?.makeImage() else { return nil }
     return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
 }
-// Decision-only: the cursor's travel for each stdin line {from, to, samples}, as its duration and sampled points. No window or event.
+// Decision-only, `--cursor-accent <registry>`: the accent this process takes in that registry, then held until stdin ends.
+if let flag = CommandLine.arguments.firstIndex(of: "--cursor-accent"), flag + 1 < CommandLine.arguments.count {
+    print(pickAccent(registry: CommandLine.arguments[flag + 1])); fflush(stdout)
+    while readLine() != nil {}
+    exit(0)
+}
+// Decision-only: the cursor's travel time for each stdin line {from, to}. No window or event.
 if CommandLine.arguments.contains("--cursor-path") {
     while let line = readLine() {
-        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object, let from = input["from"] as? [Double], let to = input["to"] as? [Double], from.count == 2, to.count == 2, let samples = input["samples"] as? Int, samples >= 2 else { print("{\"error\":\"invalid\"}"); continue }
-        let path = HandPath(from: CGPoint(x: from[0], y: from[1]), to: CGPoint(x: to[0], y: to[1]))
-        let points = (0..<samples).map { index -> [Double] in let point = path.at(Double(index) / Double(samples - 1)); return [Double(point.x), Double(point.y)] }
-        print(String(data: try! JSONSerialization.data(withJSONObject: ["durationMs": path.durationMs, "points": points]), encoding: .utf8)!)
+        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object, let from = input["from"] as? [Double], let to = input["to"] as? [Double], from.count == 2, to.count == 2 else { print("{\"error\":\"invalid\"}"); continue }
+        let distance = hypot(to[0] - from[0], to[1] - from[1])
+        print(String(data: try! JSONSerialization.data(withJSONObject: ["durationMs": (travelSeconds(distance) * 1000).rounded()]), encoding: .utf8)!)
     }
     exit(0)
 }
