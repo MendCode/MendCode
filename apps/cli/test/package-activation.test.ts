@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { normalizeTuiProfile, tuiProfilePath } from "../src/view/tui-profile"
+import { DEFAULT_FOOTER } from "@mendcode/protocol/wire"
 import { appHarness, extension, scratch } from "./extensions-harness"
+import { quotaScene } from "./footer-rows-fixture"
 
 const made: Array<ReturnType<typeof scratch>> = []
 const layout = () => {
@@ -242,6 +244,23 @@ describe("profile activation is an overlay on the user's profile", () => {
     await h.app.extensionsReady
     expect(profile(h).footerQuota).toBe(true)
     expect(footerSaves()).toEqual([])
+  })
+
+  test("a profile hiding the quota hides it under a saved list equal to the old default footer, too", async () => {
+    const dir = layout()
+    dir.write("data/tui/profile.json", JSON.stringify({ sidebar: "hidden", footerPack: "off", footerDefaultRows: false }))
+    installPackage(dir, "plain", { tuiProfile: { footerQuota: false } })
+    const h = await appHarness({ dataDir: dir.dataDir, directory: dir.project, width: 160, height: 30, mode: "full" })
+    const settings = (disabled: string[]) => ({ onboarded: true, tier: "full", view: "full", disabledProfiles: disabled, footer: [...DEFAULT_FOOTER] }) as never
+    await h.start(settings(["user:plain"]))
+    for (const event of quotaScene("fresh")) h.app.onGlobal(event as never)
+    h.message("hello", "hi")
+    h.app.render()
+    expect(h.text()).toContain("resets")
+    h.app.applySettings(settings([]))
+    await h.app.extensionsReady
+    h.app.render()
+    expect(h.text()).not.toContain("resets")
   })
 
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {

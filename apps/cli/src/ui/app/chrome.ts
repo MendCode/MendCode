@@ -207,13 +207,19 @@ export function createChrome(ctx: AppContext, actions: {
 
   /** The list drawn: the saved one, with a profile's footerQuota/footerToday applied on screen only. */
   function customFooter(): readonly FooterSegment[] | undefined {
-    let list = savedFooter()
+    const saved = savedFooter()
+    return saved && withProfileFlags(saved)
+  }
+
+  /** `list` with the quota and today a profile holds turned on or off; the tier's own list gets them too. */
+  function withProfileFlags(list: readonly FooterSegment[]): readonly FooterSegment[] {
+    let shown = list
     for (const [field, segment] of [["footerQuota", "quota"], ["footerToday", "today"]] as const) {
-      if (!list || !(field in state.profileApplied)) continue
-      const kept = list.filter((item) => item !== segment)
-      list = state.tuiProfile[field] ? (list.includes(segment) ? list : [...kept, segment]) : kept
+      if (!(field in state.profileApplied)) continue
+      const kept = shown.filter((item) => item !== segment)
+      shown = state.tuiProfile[field] ? (shown.includes(segment) ? shown : [...kept, segment]) : kept
     }
-    return list
+    return shown
   }
 
   /** `statusColors` as a map, parsed again only when the setting changed. */
@@ -311,7 +317,7 @@ export function createChrome(ctx: AppContext, actions: {
     const jobs = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length
     // Without a `/footer` list the view's tier places the segments (FOOTER_SEGMENT_TIER); quota and today are the profile's own opt-ins.
     const custom = customFooter()
-    const placed = custom ?? tierPlaced(state.tuiProfile)
+    const placed = custom ?? withProfileFlags(tierPlaced(state.tuiProfile))
     // The full view's own segments wait until they say something: the code graph for what the daemon pushed about this folder (before
     // that it would only say `graph on`), the cache share for a second call (the first call of every session is cold: `cache 0%`).
     const waiting = (segment: FooterSegment) => !custom && ((segment === "codegraph" && !(input.directory !== undefined && codegraph.has(input.directory))) || (segment === "cache" && state.transcript.sessionUsage.calls < 2))
