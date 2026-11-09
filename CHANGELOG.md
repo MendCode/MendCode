@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Dream no longer stays on "running…" while a session waits for your approval, even one you archived; background work only waits for sessions that are really working.
+
 - Mermaid diagrams read better in a narrow transcript: a sequence gives its spare room to its long messages instead of splitting them, and a state diagram writes a state's transition to itself beside its box and never lets two labels land on the same row.
 - The name `mendcode-next` is gone: `--json` lines carry `"schema": "mendcode.cli"`, the migration report `mendcode.migrate`, `mendcode upgrade` keeps its binary as `<data dir>/bin/mendcode`, and the development wrapper is `mendcode` (`MENDCODE_BIN_DIR`).
 - `mendcode profile new <name> --clean` makes a profile that starts from MendCode's clean look: while it is on, your own look settings and UI modules are set aside, and disabling it brings them back.
