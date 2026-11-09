@@ -55,42 +55,41 @@ Restart, shutdown or cancellation cannot replay an action.
 
 ## Virtual cursor
 
-The native helper draws the agent cursor of [agent-desktop](https://github.com/vercel-labs/agent-desktop) (Apache-2.0, ported to Swift; see [THIRD_PARTY.md](../THIRD_PARTY.md)).
+The helper draws MendCode's own agent cursor: a **coloured dot in a white ring** with a black rim, the size of your own pointer
+and following the Accessibility cursor size. It rests where it last acted.
 
-It is a **white dart with a dark rim** and a soft shadow, the size of your own pointer, following the Accessibility cursor size. It rests where it last acted.
+The colour is picked when the helper starts, at random among eight. Helpers of different MendCode installs that run at the same
+time never share one, so you can tell their cursors apart.
 
-A black pill names what it does: `MendCode` when it appears, then `Click`, `Press`, `Typing`, `Text`, `Key`, `Scroll`, `Dragging`. A new label fades in with a small pop.
+A black tag with a mark in the same colour names what it does: `MendCode` when it appears, then `Click`, `Press`, `Typing`, `Text`, `Key`,
+`Scroll`, `Dragging`. A new label slides in. The tag sits right of the dot, or left of it at a screen edge.
 
-The pill sits right of and below the tip, or on the other side at a screen edge. Transparent, non-activating, click-through panels keep the overlay out of screenshots and the accessibility tree.
+The cursor and its effects are layers of **one transparent, click-through canvas window kept directly above the controlled
+app's window**. A window that covers the app covers its cursor too, and the cursor shows again when the app comes back in front.
+While the app's window is off screen (minimized, another Space) the cursor is hidden. The canvas stays out of screenshots and
+the accessibility tree.
 
 ### Movement and feedback
 
-The cursor moves like a hand, with minimum-jerk movement:
-
 | Movement detail | Value |
 |---|---|
-| Overshoot, then correction onto the target | 3.5 % |
-| Sideways bow | 5.5 % of the distance, at most 38 points |
-| Tremor | One point |
-| Fitts's law duration | 40 + 70 × log2(distance / 40 + 1) ms |
-| Duration bounds | **90 and 320 ms** (it was 280–750 ms) |
-
-Most of an action's time is no longer the cursor's travel. Once an action is dispatched the cursor shows it:
+| Travel | Straight, easing out, **40 to 120 ms** (4 × √distance ms) |
+| Inside a `batch` | No travel: the cursor jumps to each node |
+| Blocking | None: the action is sent at once while the cursor travels on its own |
 
 | Feedback | When and duration |
 |---|---|
-| Ripple | Click, press or drop (0.3 s) |
-| Outline | Around the element acted on; pops in, holds and fades (0.9 s) |
-| Trail | Along a drag's dispatched path; fades after the drop |
+| Tap ring | Click, press or drop (0.28 s), starting when the cursor arrives |
+| Corner marks | Around the element acted on; they close in and fade (0.6 s) |
+| Drag line | Dashed, along a drag's dispatched path; fades after the drop |
 
-After six seconds without a move the cursor rests (fades out) and comes back with the next one. The real system pointer is not warped or hidden; placement accounts for macOS/AX coordinate differences.
+Moving the cursor never moves or resizes a window, so it costs a few milliseconds per action. After six seconds without a move
+the cursor rests (fades out) and comes back with the next one. The real system pointer is not warped or hidden; placement
+accounts for macOS/AX coordinate differences.
 
-Reduce Motion disables the travel animation, the ripple, the outline and the trail.
+Reduce Motion disables the travel, the tap ring, the corner marks and the drag line.
 
 ### Authority and lifetime
-
-agent-desktop is the only source of this code; in the public Codex checkout inspected (`44984d208`) desktop Computer Use
-is integrated through MCP plugins and no implementation of its desktop cursor overlay was found.
 
 Control programs retain the cursor and exclusive input lease across their steps, so
 observation/action calls do not blink the cursor off and on. The cursor disappears at
@@ -107,7 +106,7 @@ xcrun swiftc -O packages/daemon/assets/computer.swift -o /tmp/mendcode-cursor-de
 /tmp/mendcode-cursor-demo --cursor-demo
 ```
 
-It exercises the actual cursor, its travel, ripple, outline and trail, and writes a cursor-only PNG render
+It exercises the actual cursor, its travel, tap ring, corner marks and drag line, and writes a cursor-only PNG render
 (drawn offscreen) to a temporary file. It does not screenshot the desktop or exercise control of real apps.
 `/tmp/mendcode-cursor-demo --cursor-render Click /tmp/cursor.png < /dev/null` draws only the cursor with that label into
 the PNG, without opening any window.
@@ -335,6 +334,28 @@ Every failed action says whether its input can have reached the app, in agent-de
 | After the helper began an effect (an AX action or value, a posted event, a window raise, a launch), or cancellation, timeout or helper exit during one | `(delivery unknown: …)` | `unknown` |
 
 **Warning:** Never automatically retry an unknown action.
+
+### Fast path: one call per task
+
+A task is one `computer_code` call. Steps can name their node, so no observation or revision is needed first, and the result
+already says what changed. Calculator's 60 × 6 = this way, session already started:
+
+```js
+const result = await tools.batch({ steps: ["6", "0", "Multiply", "6", "Equals"].map(name => ({ action: "press", name })) })
+return result.after.changed.map(n => n.value ?? n.name) // ["60 × 6", "360"]
+```
+
+| Smart behaviour | What it does |
+|---|---|
+| Name instead of ID | `{ name: "Equals" }` finds the node that offers the action: exact name first, then ignoring case; `role` tells two apart, `toName` names a drag's destination. One observation serves every step. No match lists the names that do offer the action. |
+| Settled result | An action or batch that went through waits for the app to settle (two equal observations in a row, at most about a second) and returns `after: { revision, changed }`: the nodes whose role, name or value are new. Continue with `after.revision`; no observation needed. |
+| Numbers in range | A `timeoutMs`, `amount` or `count` past its limit is brought to the limit instead of failing the program. |
+| Plain errors | A wrong argument is named as `operation: field: what it must be`. |
+
+Measured on this Mac with the helper running: 60 × 6 = in 0.43–0.78 s including the settle wait; a batch alone in about 0.2 s.
+
+- Prefer `press` and `setValue`: they act on the element and need no pointer, focus or hit test.
+- Do not observe between the steps of a fixed sequence, and do not take a screenshot to check: read `after.changed`.
 
 ### Batches
 

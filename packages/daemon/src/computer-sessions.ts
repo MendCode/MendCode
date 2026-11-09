@@ -13,6 +13,38 @@ const MUTATIONS = ["press", "setValue", "click", "typeText", "key", "scroll", "d
 const mutations = new Set<string>(MUTATIONS)
 const fields: Record<string, string[]> = { press: [], setValue: ["value"], click: ["button", "count"], typeText: ["value"], key: ["key", "modifiers"], scroll: ["direction", "amount"], drag: ["toNodeID"] }
 /** A batch: up to 16 steps, each an action name and that action's fields, all on the observation `revision` names. */
+/**
+ * Numbers a model may overshoot are brought into their range instead of failing the whole program: a wait longer than allowed
+ * waits the longest allowed, a scroll past 1000 pixels scrolls 1000. The limits themselves do not change.
+ */
+const RANGES: Record<string, [number, number]> = { timeoutMs: [0, 10000], amount: [1, 1000], count: [1, 2] }
+export function withinRange(args: unknown): unknown {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return args
+  const record = { ...(args as Record<string, unknown>) }
+  for (const [key, [min, max]] of Object.entries(RANGES)) {
+    const value = record[key]
+    if (typeof value === "number" && Number.isFinite(value)) record[key] = Math.min(max, Math.max(min, Math.round(value)))
+  }
+  if (Array.isArray(record.steps)) record.steps = record.steps.map(withinRange)
+  return record
+}
+const OBSERVE_ONLY = "This ComputerSession is observe-only: start a new one with mode \"control\" on the same app to press, type or click"
+/**
+ * The one running app whose name, or the last part of its bundle ID, starts like the name asked for (five letters or more in
+ * common, ignoring case and accents): the user's language may name the app differently from the system, "Calculadora" for Calculator.
+ */
+export function alike<T extends { appName: string; bundleID: string }>(apps: T[], wanted: string): T | undefined {
+  const plain = (text: string) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase()
+  const asked = plain(wanted)
+  const shared = (a: string, b: string) => { let n = 0; while (n < a.length && n < b.length && a[n] === b[n]) n++; return n }
+  const matches = apps.filter((app) => [app.appName, app.bundleID.split(".").at(-1) ?? ""].some((name) => shared(plain(name), asked) >= Math.min(5, asked.length)))
+  return matches.length === 1 ? matches[0] : undefined
+}
+/** A validation failure in words a model can act on: the operation, the field and what it must be. */
+export function readableIssue(name: string, error: unknown): unknown {
+  if (!(error instanceof z.ZodError)) return error
+  return new Error(`${name}: ${error.issues.map((issue) => `${issue.path.length ? issue.path.join(".") : "arguments"}: ${issue.message}`).join("; ")}`)
+}
 const BatchInput = z.strictObject({ revision: z.number().int().positive(), steps: z.array(z.object({ action: z.enum(MUTATIONS) }).catchall(z.unknown())).min(1).max(16) })
 /** The helper's request line is bounded at 128 KiB; a batch leaves room for its envelope. */
 const BATCH_BYTES = 120_000
@@ -68,6 +100,20 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
     actionInFlight = true
     try { signal.throwIfAborted(); return await action() } finally { actionInFlight = false }
   }
+  /**
+   * An app that has just been opened may show its window before any control: right after the session starts, an observation with
+   * no actionable node is retried for up to two seconds instead of handing the model an empty screen to wait on.
+   */
+  async function observeReady(id: string, sessionId: SessionId, signal: AbortSignal): Promise<ComputerObservation> {
+    const started = sessions.get(id)?.createdAt ?? 0, until = Date.now() + 2000
+    let observation = await observe(id, sessionId, signal)
+    while (now() - started < 5000 && Date.now() < until && !observation.nodes.some((node) => node.actions.length > 0 && !node.secure)) {
+      await Bun.sleep(150)
+      signal.throwIfAborted()
+      observation = await observe(id, sessionId, signal)
+    }
+    return observation
+  }
   async function observe(id: string, sessionId: SessionId, signal: AbortSignal): Promise<ComputerObservation> {
     const state = active(id, sessionId, signal)
     signal = AbortSignal.any([signal, state.abort.signal])
@@ -98,7 +144,9 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
   }
   /** The action's own fields, checked before anything else. */
   function parsed(raw: unknown, action: SemanticAction["action"]) {
-    const input = ComputerActionInput.parse(raw)
+    const checked = ComputerActionInput.safeParse(raw)
+    if (!checked.success) throw readableIssue(action, checked.error)
+    const input = checked.data
     for (const key of Object.keys(input)) if (!["revision", "nodeID", ...fields[action]!].includes(key)) throw new Error(`Unexpected ${key} for ${action}`)
     if ((action === "setValue" || action === "typeText") && typeof input.value !== "string" || action === "key" && !input.key || action === "drag" && !input.toNodeID) throw new Error("Invalid native action input")
     return input
@@ -123,7 +171,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
       const input = parsed(raw, action)
       const state = active(id, sessionId, signal)
       signal = AbortSignal.any([signal, state.abort.signal])
-      if (state.mode !== "control") throw new Error("This ComputerSession is observe-only")
+      if (state.mode !== "control") throw new Error(OBSERVE_ONLY)
       if (state.busy || actionInFlight || capturing) throw new Error("Another ComputerSession operation is running")
       const semantic = located(state, input, action)
       // Every action reaches the bound app where it is: AXPress and AXSetValue go to the element, keys, text, pointer events and drags
@@ -165,11 +213,13 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
   async function batch(id: string, sessionId: SessionId, raw: unknown, signal: AbortSignal) {
     let dispatched = false
     try {
-      const request = BatchInput.parse(raw)
+      const checked = BatchInput.safeParse(raw)
+      if (!checked.success) throw readableIssue("batch", checked.error)
+      const request = checked.data
       const fieldsOf = request.steps.map(({ action, ...rest }) => ({ action, input: parsed({ ...rest, revision: request.revision }, action) }))
       const state = active(id, sessionId, signal)
       signal = AbortSignal.any([signal, state.abort.signal])
-      if (state.mode !== "control") throw new Error("This ComputerSession is observe-only")
+      if (state.mode !== "control") throw new Error(OBSERVE_ONLY)
       if (state.busy || actionInFlight || capturing) throw new Error("Another ComputerSession operation is running")
       const steps = fieldsOf.map((step) => located(state, step.input, step.action))
       if (Buffer.byteLength(JSON.stringify(steps)) > BATCH_BYTES) throw new Error("Batch input exceeds 120 KB; send long text in its own typeText or setValue")
@@ -260,6 +310,14 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
               return result("MendCode Computer", { computerSessionID: input.computerSessionID, stopped: true, target: null, mode: null } satisfies ComputerSessionReport)
             }
             if (!activation || activation.synthetic || !activation.sourceId || !activation.text.trim()) throw new Error("Computer Use requires the current real user request; synthetic or detached activation is blocked")
+            if (input.appName !== undefined) {
+              // An app named as the user names it: the running app with that name, exact first, then ignoring case.
+              if (!os.apps) throw new Error("Application discovery is unavailable")
+              const apps = await os.apps(signal), wanted = input.appName.trim()
+              const app = apps.find((one) => one.appName === wanted) ?? apps.find((one) => one.appName.toLowerCase() === wanted.toLowerCase()) ?? alike(apps, wanted)
+              if (!app) throw new Error(`No running app is named "${wanted}"; running: ${apps.map((one) => JSON.stringify(one.appName)).slice(0, 40).join(", ")}. For an app that is not running, start with its bundleID (it opens in the background).`)
+              input.bundleID = app.bundleID
+            }
             const capture = input.bootstrapCaptureID ? bootstrap(input.bootstrapCaptureID, sessionId) : undefined
             let selected = capture?.target
             if (capture) {
@@ -300,7 +358,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
           const signal = AbortSignal.any([abort, stopping])
           return guarded("Computer semantic observation", async () => {
             const input = ComputerObserveInput.parse(raw)
-            const observation = await observe(input.computerSessionID, sessionId, signal)
+            const observation = await observeReady(input.computerSessionID, sessionId, signal)
             return result("Computer semantic observation", { ...observation, ...(poorObservation(observation.nodes) ? { hint: POOR_TREE_HINT } : {}), ...(input.screenshot ? { screenshotFallback: "Call computer_capture for visual evidence: no arguments for the main display, or region set to the first node's bounds for this window (windowID there is a macOS number, not this session's handle); preview pixels are not control coordinates." } : {}) }, { computerSessionID: input.computerSessionID, revision: observation.revision, nodeCount: observation.nodes.length, truncated: observation.truncated })
           })
         },
@@ -312,16 +370,79 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
             if (state.program) throw new Error("Another computer program is running in this session")
             state.program = true
             const bounded = AbortSignal.any([signal, state.abort.signal, AbortSignal.timeout(30000)])
+            /**
+             * Steps may name their node instead of giving its ID: `{ name: "Equals" }`, with `role` to tell two apart, and `toName` for a
+             * drag. One observation then serves every step, made here when the program has none fresh. A name matches exactly first,
+             * then ignoring case; the node must offer the step's action. No match names what is there instead.
+             */
+            const named = async (state: State, steps: Record<string, unknown>[], revision?: unknown) => {
+              const needs = steps.some((step) => step.nodeID === undefined || step.toNodeID === undefined && step.toName !== undefined)
+              const fresh = state.observation && now() - state.observation.observedAt < 15000 && (revision === undefined || revision === state.observation.revision) ? state.observation : undefined
+              const observation = needs || revision === undefined ? fresh ?? await observeReady(state.id, sessionId, bounded) : fresh
+              const find = (name: unknown, role: unknown, action: string) => {
+                if (typeof name !== "string") throw new Error(`${action}: give nodeID, or name (and role) of the node`)
+                const usable = (observation?.nodes ?? []).filter((node) => !node.secure && (node.actions as string[]).includes(action) && (role === undefined || node.role === role))
+                const node = usable.find((node) => node.name === name) ?? usable.find((node) => node.name.toLowerCase() === name.toLowerCase())
+                if (node) return node.id
+                const offered = [...new Set(usable.map((node) => node.name).filter(Boolean))].slice(0, 30)
+                throw new Error(`${action}: no node named "${name}"${role ? ` with role ${role}` : ""} offers ${action}${offered.length ? `; nodes that do: ${offered.map((one) => JSON.stringify(one)).join(", ")}` : ""}`)
+              }
+              const resolved = steps.map(({ name, role, toName, ...step }) => ({
+                ...step,
+                ...(step.nodeID === undefined ? { nodeID: find(name, role, String(step.action)) } : {}),
+                ...(step.toNodeID === undefined && toName !== undefined ? { toNodeID: find(toName, undefined, "drag") } : {}),
+              }))
+              return { observation, revision: observation?.revision ?? revision, steps: resolved }
+            }
+            /**
+             * After an action that went through, the app is given a moment to settle (two equal observations in a row, at most about a
+             * second) and the result carries what changed: the nodes whose role, name or value were not there before, with the new
+             * observation's revision, so the next step needs no observation of its own.
+             */
+            const settled = async <T extends object>(state: State, before: ComputerObservation | undefined, result: T): Promise<T | (T & { after: unknown })> => {
+              if ((result as { ok?: boolean }).ok === false || !before) return result
+              // The action already reached the app: a failed look afterwards (the window closed, another took focus) keeps its report.
+              try { return await settle(state, before, result) }
+              catch (error) { return { ...result, after: { error: `Observation after the action failed: ${error instanceof Error ? error.message : String(error)}`, verified: false, next: "Do not repeat the action; observe again or select the window it opened." } } }
+            }
+            const settle = async <T extends object>(state: State, before: ComputerObservation, result: T): Promise<T & { after: unknown }> => {
+              const key = (node: ComputerObservation["nodes"][number]) => `${node.role}\u0000${node.name}\u0000${node.value ?? ""}`
+              const signature = (observation: ComputerObservation) => observation.nodes.map(key).join("\u0001")
+              const deadline = Date.now() + 1000
+              let latest = await observe(state.id, sessionId, bounded)
+              while (Date.now() < deadline) {
+                await Bun.sleep(60)
+                const next = await observe(state.id, sessionId, bounded)
+                const same = signature(next) === signature(latest)
+                latest = next
+                if (same) break
+              }
+              const had = new Map<string, number>()
+              for (const node of before.nodes) had.set(key(node), (had.get(key(node)) ?? 0) + 1)
+              const changed = latest.nodes.filter((node) => { const count = had.get(key(node)) ?? 0; if (count > 0) { had.set(key(node), count - 1); return false } return true })
+              return { ...result, after: { revision: latest.revision, changed: changed.slice(0, 20).map(({ id, role, name, value }) => ({ id, role, name, ...(value !== undefined ? { value } : {}) })), ...(changed.length > 20 ? { more: changed.length - 20 } : {}) } }
+            }
             try {
-              const execute = () => runComputerProgram(input.code, bounded, async (name, args) => {
+              const execute = () => runComputerProgram(input.code, bounded, (name, raw) => operation(name, withinRange(raw)).catch((error) => { throw readableIssue(name, error) }))
+              const operation = async (name: string, args: unknown) => {
                 active(state.id, sessionId, bounded)
-                if (name === "observe") { z.strictObject({}).parse(args); return observe(state.id, sessionId, bounded) }
-                if (mutations.has(name)) return act(state.id, sessionId, args, name as SemanticAction["action"], bounded)
-                if (name === "batch") return batch(state.id, sessionId, args, bounded)
+                // Reads take no arguments; extra ones (a revision, a screenshot flag) are ignored rather than refused.
+                if (name === "observe") return observeReady(state.id, sessionId, bounded)
+                if (mutations.has(name)) {
+                  const action = name as SemanticAction["action"], before = await named(state, [{ ...(args as Record<string, unknown>), action }], (args as { revision?: unknown } | undefined)?.revision)
+                  // The resolved step: its node, without name, role or toName, on the observation it was resolved against.
+                  const { action: _action, ...input } = { ...before.steps[0], ...(before.revision !== undefined ? { revision: before.revision } : {}) } as Record<string, unknown>
+                  return settled(state, before.observation, await act(state.id, sessionId, input, action, bounded))
+                }
+                if (name === "batch") {
+                  const request = args as { revision?: unknown; steps?: unknown }
+                  if (!Array.isArray(request?.steps)) return batch(state.id, sessionId, args, bounded)
+                  const before = await named(state, request.steps as Record<string, unknown>[], request.revision)
+                  return settled(state, before.observation, await batch(state.id, sessionId, { ...request, revision: before.revision, steps: before.steps }, bounded))
+                }
                 if (name === "selectWindow") return selectWindow(state.id, sessionId, args, bounded)
-                if (name === "status") { z.strictObject({}).parse(args); return { target: structuredClone(state.target), mode: state.mode, expiresAt: state.expiresAt, revision: state.revision, audit: structuredClone(state.audit) } }
+                if (name === "status") { return { target: structuredClone(state.target), mode: state.mode, expiresAt: state.expiresAt, revision: state.revision, audit: structuredClone(state.audit) } }
                 if (name === "windows") {
-                  z.strictObject({}).parse(args)
                   if (!os.windows) throw new Error("Window discovery is unavailable")
                   await target(state, bounded)
                   return os.windows(state.target, bounded)
@@ -339,7 +460,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
                   } while (true)
                 }
                 throw new Error("Unknown computer operation")
-              })
+              }
               const report = state.mode === "control" && os.program ? await os.program(state.target, bounded, execute) : await execute()
               return { ...result("Computer code", report, { computerSessionID: state.id, ok: report.ok, toolCalls: report.toolCalls.length }), isError: !report.ok }
             } finally { state.program = false }

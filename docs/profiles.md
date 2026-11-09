@@ -138,6 +138,7 @@ It does not read your data directory. To move your own setup between machines, u
 | Right panel | `activate.panelPreset` (`pulse`, `crew`, `ledger`, `focus`, `full`, `galaxy`). Cards in `activate.tuiProfile.sidebarWidgets` that start with a preset's cards are that preset in your version: `/panel galaxy` in a session shows them ([sidebar](sidebar.md#your-version-of-a-preset)) |
 | Views | `activate.views` maps one of the 22 view slots to a module in `extensions/` (transcript messages, tool cards, the slash menu, headers, footers, welcome and so on) |
 | Keybindings | `activate.keybindings`: a file in the format of `keybindings.json` |
+| Clean look | `activate.tuiProfile.disabledUiExtensions` and `disabledViews` switch off more of your terminal modules and views while the profile is on (your own footer extensions, for a demo); they join your own list and never switch one back on. Together with `footerRows`, `logoKind`, `sidebar` and `panelPreset` a profile gives a bare look; turned off, everything is as you had it |
 | Prompt files | `SYSTEM.md`, `APPEND_SYSTEM.md`, `COMPACTION.md` in the profile; `activate.promptFiles` lists the ones it expects |
 | Things it adds | skills, commands, agents, tools, hooks, MCP servers, themes, recipes, workflows, contracts, extensions, status line |
 

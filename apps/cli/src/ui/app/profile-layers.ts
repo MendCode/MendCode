@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { ACTIVATION_STATE_FILE, activationStateJson, parseActivationState, saveLook } from "@mendcode/protocol/wire"
+import { ACTIVATION_ADDITIVE_PROFILE_KEYS, ACTIVATION_STATE_FILE, activationStateJson, parseActivationState, saveLook } from "@mendcode/protocol/wire"
 import { normalizeTuiProfile, readTuiProfile, type TuiProfile } from "../../view/tui-profile"
 import type { AppContext } from "./context"
 
@@ -40,7 +40,12 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
   /** The keys the layers want right now: the user's kept value where they kept one under a profile, else what the layers ask. */
   function desired(): Record<string, unknown> {
     const out: Record<string, unknown> = {}
-    for (const [key, value] of Object.entries({ ...overlay(), ...state.profileRuntime })) if (!state.keptKeys.has(key)) out[key] = normalized(key, value)
+    const base = stored()
+    // A list a profile's activation may only add to: the user's own entries stay and the profile's join them. An extension's
+    // run-time request (`api.settings.set`) replaces the value as before.
+    const joined = (key: string, value: unknown) => ACTIVATION_ADDITIVE_PROFILE_KEYS.has(key) && Array.isArray(value) ? [...new Set([...(Array.isArray(base[key]) ? base[key] as unknown[] : []), ...value])] : value
+    const layered = { ...Object.fromEntries(Object.entries(overlay()).map(([key, value]) => [key, joined(key, value)])), ...state.profileRuntime }
+    for (const [key, value] of Object.entries(layered)) if (!state.keptKeys.has(key)) out[key] = normalized(key, value)
     for (const [key, value] of Object.entries(state.keptValues)) if (state.keptKeys.has(key) && packageHeld(key)) out[key] = normalized(key, value)
     return out
   }

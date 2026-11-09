@@ -40,13 +40,9 @@ Tokyo Night, Vercel and Zenburn.
 
 Parts of the native computer helper in `packages/daemon/assets/computer.swift` are ported from
 [agent-desktop](https://github.com/vercel-labs/agent-desktop) by Vercel Labs (commit `9eb9b296`), which is distributed under
-the Apache License 2.0 and ships no NOTICE file. MendCode changed them: they are rewritten in Swift for one helper process,
-use the default style only, and show MendCode's action labels. The ported parts, each marked at its place in the source:
+the Apache License 2.0 and ships no NOTICE file. MendCode changed them: they are rewritten in Swift for one helper process.
+The ported parts, each marked at its place in the source:
 
-- the agent cursor (a white dart with a dark rim, the black label pill, the click ripple, the outline around the target and the
-  drag trail) from `crates/macos/src/system/cursor_overlay/cursor_overlay_bridge.m` and `cursor_overlay_chrome_bridge.m`;
-- the cursor's travel (minimum-jerk movement with overshoot and correction, bow, tremor, Fitts's-law duration) from
-  `crates/core/src/cursor_overlay/hand_path.rs`;
 - reading a node's attributes in one batched accessibility call from
   `crates/macos/src/tree/properties/node_attribute_fetch.rs`;
 - running several actions on refs from one snapshot, checked before the first one runs, from `src/batch/execution.rs`.

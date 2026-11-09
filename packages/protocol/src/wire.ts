@@ -80,7 +80,7 @@ export { PACKAGE_SELECTIONS, type PackageSelection } from "./package-authoring-d
 export { PACKAGE_KINDS, PACKAGE_META_ENTRIES, PACKAGE_READ_PATHS, EXECUTABLE_PACKAGE_PATHS, SWITCHABLE_KINDS, exportPathsFor, unknownPackageEntries, type PackageKindId, type PackageKindSpec } from "./package-kinds"
 export { versionSatisfies, versionRangeProblem, compatibilityProblem, parseVersion } from "./version-range"
 export {
-  ACTIVATION_KEYS, ACTIVATION_PROMPT_FILES, ACTIVATION_PANEL_PRESETS, ACTIVATION_DENIED_PROFILE_KEYS, ACTIVATION_FORBIDDEN_MESSAGE, ACTIVATION_STATE_FILE, ACTIVATION_MAX_BYTES, EMPTY_ACTIVATION_STATE,
+  ACTIVATION_KEYS, ACTIVATION_PROMPT_FILES, ACTIVATION_PANEL_PRESETS, ACTIVATION_DENIED_PROFILE_KEYS, ACTIVATION_ADDITIVE_PROFILE_KEYS, ACTIVATION_FORBIDDEN_MESSAGE, ACTIVATION_STATE_FILE, ACTIVATION_MAX_BYTES, EMPTY_ACTIVATION_STATE,
   activationProblems, activationProfile, activationStateJson, describeChanges, hasLook, keptKey, lookOwner, moduleStem, parseActivationState, resolveActivation, saveLook,
   type Activation, type ActivationPackage, type ActivationResult, type ActivationScope, type ActivationState, type OverrideRow, type ProfileOrigin, type SavedLook, type WaitingLook,
 } from "./activation-data"

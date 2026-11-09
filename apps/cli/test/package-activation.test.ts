@@ -149,6 +149,34 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(profile(h).homeLayout).toBe("centered")
   })
 
+  test("a clean-look profile switches off the user's UI modules and views and clears their footer and mascot; turned off, all of it is back as it was", async () => {
+    const dir = layout()
+    dir.write("data/tui/profile.json", JSON.stringify({ disabledUiExtensions: ["old-clock"], disabledViews: ["home.tips"], footerRows: [["branch", "model", "quota"]], logoKind: "mascot" }))
+    installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"], disabledViews: ["footer.extra"], footerRows: [["branch", "model"]], logoKind: "wordmark" } })
+    const profileFile = tuiProfilePath(dir.dataDir), snapshot = read(profileFile)
+    const h = await start(dir, ["user:demo"])
+    const before = { ...profile(h) }
+    await toggle(h, [])
+    // The user's own switched-off entries stay off; the profile's join them. Nothing is written.
+    expect(profile(h).disabledUiExtensions).toEqual(["old-clock", "quota-footer"])
+    expect(profile(h).disabledViews).toEqual(["home.tips", "footer.extra"])
+    expect(profile(h).footerRows).toEqual([["branch", "model"]])
+    expect(profile(h).logoKind).toBe("wordmark")
+    expect(read(profileFile)).toBe(snapshot)
+    await toggle(h, ["user:demo"])
+    expect(profile(h)).toEqual(before)
+    expect(read(profileFile)).toBe(snapshot)
+  })
+
+  test("a clean-look profile's entries join even a full list of the user's, and nothing is pushed out", async () => {
+    const dir = layout()
+    const mine = Array.from({ length: 128 }, (_, index) => `mine-${index}`)
+    dir.write("data/tui/profile.json", JSON.stringify({ disabledUiExtensions: mine }))
+    installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"] } })
+    const h = await start(dir, [])
+    expect(profile(h).disabledUiExtensions).toEqual([...mine, "quota-footer"])
+  })
+
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {
     const dir = layout()
     installPackage(dir, "sneaky", { tuiProfile: { homeLayout: "split", permissionMode: "bypass" } })

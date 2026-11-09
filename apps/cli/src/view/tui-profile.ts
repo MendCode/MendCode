@@ -827,8 +827,9 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     slashMenu: oneOf(SLASH_LAYOUTS, source.slashMenu) ?? "tabs",
     slashGroups: slashProfileProblems("slashGroups", source.slashGroups).length ? [] : source.slashGroups as SlashGroup[],
     slashCommands: slashProfileProblems("slashCommands", source.slashCommands).length ? [] : source.slashCommands as SlashPreference[],
-    disabledUiExtensions: Array.isArray(source.disabledUiExtensions) ? source.disabledUiExtensions.filter((name): name is string => typeof name === "string").slice(0, 128) : [],
-    disabledViews: Array.isArray(source.disabledViews) ? source.disabledViews.filter((name): name is string => typeof name === "string" && /^[a-z]+(\.[a-z]+)?$/.test(name)).slice(0, 32) : [],
+    // Twice a stored list's own limit (128 modules, 32 views): a profile's entries join the user's without pushing any out.
+    disabledUiExtensions: Array.isArray(source.disabledUiExtensions) ? source.disabledUiExtensions.filter((name): name is string => typeof name === "string").slice(0, 256) : [],
+    disabledViews: Array.isArray(source.disabledViews) ? source.disabledViews.filter((name): name is string => typeof name === "string" && /^[a-z]+(\.[a-z]+)?$/.test(name)).slice(0, 64) : [],
     compactionStyle: oneOf(["auto", "minimal", "cockpit", "quiet"] as const, source.compactionStyle) ?? "auto",
     compactionPanel: oneOf(COMPACTION_PANELS, source.compactionPanel) ?? "panel",
     compactionProgress: bool("compactionProgress"),

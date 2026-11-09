@@ -9,6 +9,25 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.12 - 2026-11-08
+
+Computer use is much faster and smarter, with its own cursor, and a profile can give a clean look by switching off your own terminal modules.
+
+### Upgrade notes
+
+- Same code as v0.0.12-beta.1.
+
+## v0.0.12-beta.1 - 2026-11-08
+
+Computer use is much faster and smarter, with its own cursor, and a profile can give a clean look by switching off your own terminal modules.
+
+### Changed
+
+- Computer use is much faster: a batch of actions no longer waits for the cursor, and a single action no longer waits for its animation. A task like 12 + 34 in Calculator runs in a fraction of a second, and the model is taught to do a task in one call.
+- Computer use tools are smarter: steps can name the button instead of its ID, an action waits for the app to settle and returns what changed, a session starts by the app's name (also in your language), an app that is still opening is waited for, and an argument past its limit is brought to the limit instead of failing.
+- The computer use cursor has its own look, a coloured dot with a black action tag. Each MendCode picks its colour when it starts, and two running at once never share one. The cursor stays with the controlled app: a window covering the app covers the cursor too.
+- A profile can switch off your own terminal modules and views while it is on (for a clean demo look without your footer extensions), together with your footer, mascot and panel; turning it off brings everything back exactly as you had it.
+
 ## v0.0.11 - 2026-11-08
 
 Replies stay in your language after background tasks and compactions, and the sidebar counts read more clearly.
