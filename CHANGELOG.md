@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - Computer use is much faster: a batch of actions no longer waits for the cursor, and a single action no longer waits for its animation. A task like 12 + 34 in Calculator runs in a fraction of a second, and the model is taught to do a task in one call.
+- A profile can switch off your own terminal modules and views while it is on (for a clean demo look without your footer extensions), together with your footer, mascot and panel; turning it off brings everything back exactly as you had it.
 - Computer use tools are smarter: steps can name the button instead of its ID, an action waits for the app to settle and returns what changed, a session starts by the app's name (also in your language), an app that is still opening is waited for, and an argument past its limit is brought to the limit instead of failing.
 - The computer use cursor has its own look, a coloured dot with a black action tag. Each MendCode picks its colour when it starts, and two running at once never share one. The cursor stays with the controlled app: a window covering the app covers the cursor too.
 
