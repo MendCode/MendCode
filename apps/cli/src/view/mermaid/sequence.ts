@@ -162,7 +162,13 @@ export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true 
     selfRoom = selfRoom ? 6 : 0
     const extra = available - selfRoom - minimum.reduce((total, gap) => total + gap, 0)
     if (extra < 0) return { note: MERMAID_NOTES.tooWide }
-    minimum.forEach((gap, position) => { gaps[position] = gap + Math.floor(extra / Math.max(1, gaps.length)) })
+    // The room left goes where the messages wanted it, so a long label keeps its line beside a short one.
+    const wants = gaps.map((gap, position) => Math.max(0, gap - minimum[position]!))
+    const wanted = wants.reduce((total, want) => total + want, 0)
+    const share = wants.map((want) => wanted ? Math.floor((extra * want) / wanted) : Math.floor(extra / Math.max(1, gaps.length)))
+    let spare = extra - share.reduce((total, part) => total + part, 0)
+    for (const position of wants.map((_, i) => i).sort((p, q) => wants[q]! - wants[p]!)) if (spare-- > 0) share[position]!++
+    minimum.forEach((gap, position) => { gaps[position] = gap + share[position]! })
   }
   const centers: number[] = []
   let x = margin + left[0]!
