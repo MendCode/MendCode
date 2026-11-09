@@ -101,15 +101,15 @@ describe("terminal mode on the screen", () => {
 
 describe("the theme's background", () => {
   const paper = THEMES.find((theme) => theme.name === "paper")!
-  const ink = THEMES.find((theme) => theme.name === "ink")!
+  const ink = THEMES.find((theme) => theme.name === "mendcode")!
   const terminal = THEMES.find((theme) => theme.name === "terminal")!
 
   test("is painted only when the terminal answered with a background of the other lightness", () => {
     expect(backgroundPaint({ theme: paper, mode: "dark", answered: true })).toEqual({ background: "#faf8f2", text: "#1f2a24", cursor: "#1f2a24" })
     expect(backgroundPaint({ theme: ink, mode: "light", answered: true })?.background).toBe("#0a0a0a")
     expect(backgroundPaint({ theme: paper, mode: "light", answered: true })).toBeUndefined()
-    // Ink is MendCode's own default: its black is painted on a dark terminal too (the theme says `always`).
-    expect(backgroundPaint({ theme: { ...ink, paintBackground: undefined }, mode: "dark", answered: true })).toBeUndefined()
+    // The default keeps the terminal's own background (transparency and blur show through).
+    expect(backgroundPaint({ theme: ink, mode: "dark", answered: true })).toBeUndefined()
     // COLORFGBG alone (no OSC 11 answer) is a guess: the terminal's colours stay.
     expect(backgroundPaint({ theme: paper, mode: "dark", answered: false })).toBeUndefined()
     expect(backgroundPaint({ theme: paper, mode: undefined, answered: false })).toBeUndefined()
@@ -187,7 +187,7 @@ describe("the theme's background", () => {
     screen.draw(rows)
     expect(writes.join("")).toContain(PAINT_RESET)
     writes.length = 0
-    setTheme("ink")
+    setTheme("mendcode")
     screen.draw(rows)
     expect(writes.join("")).toContain("\x1b]11;rgb:0a/0a/0a\x07")
     writes.length = 0
@@ -219,7 +219,7 @@ describe("the theme's background", () => {
     screen.consumeTerminalInput("\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]11;rgb:1212/1414/1818\x07")
     screen.draw(rows)
     writes.length = 0
-    setTheme("mono")
+    setTheme("mendcode")
     screen.draw(rows)
     expect(writes.join("")).toContain(restored)
   }))
@@ -240,10 +240,3 @@ describe("the theme's background", () => {
   }))
 })
 
-test("MendCode's own default themes paint their black on a dark terminal too; another dark theme keeps the terminal's", async () => {
-  const { default: ink } = await import("../src/themes/ink")
-  const { default: mendcode } = await import("../src/themes/v1/mendcode")
-  for (const theme of [ink, mendcode]) expect(backgroundPaint({ theme, mode: "dark", answered: true })).toMatchObject({ background: "#0a0a0a" })
-  const other = { ...ink, paintBackground: undefined }
-  expect(backgroundPaint({ theme: other, mode: "dark", answered: true })).toBeUndefined()
-})

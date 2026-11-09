@@ -60,7 +60,7 @@ const folder = (kind: string): Provider => (context) => folders(context, kind)
 function currentTheme(context: LiveContext) {
   const own = word(readTuiProfile(context.dataDir).theme) ?? word(context.settings?.theme)
   if (own) return own
-  return context.settings ? "mend (the default: none chosen)" : "none saved in the terminal profile (the daemon's theme setting, else mend, applies)"
+  return context.settings ? "mendcode (the default: none chosen)" : "none saved in the terminal profile (the daemon's theme setting, else mendcode, applies)"
 }
 
 const THEME_FILE = /\.json$/

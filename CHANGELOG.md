@@ -13,7 +13,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Image generation with a ChatGPT login works again: when the image model refuses the reasoning effort, the request is sent again at once without it, quietly and in the same image card.
 - A look change saved while a profile is on (for example the theme, from chat) keeps only that change; the profile's other keys stay the profile's.
-- MendCode's default themes paint their own black background on a dark terminal too, instead of showing the terminal's; other themes keep the terminal's as before.
+- The default theme is now called MendCode (`mendcode`, formerly Ink: mendcode.dev's black and white); like before it keeps the terminal's own background, so transparency and blur show through. The green Mend theme is gone: a saved `ink` or `mend` opens MendCode, and v1's orange theme is `mendcode-v1`.
 - graft's tally line no longer ends the answer; the turn's closing line shows it as `graft ~70k`.
 - The home's Completed list no longer shows sessions that were never written in, and an untitled session reads "Untitled session" instead of its id.
 

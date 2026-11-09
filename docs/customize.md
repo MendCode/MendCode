@@ -311,7 +311,7 @@ In chat a bitmap pet waves once when the mouse arrives over it.
 
 `/pet` always includes **MendAscii**, the built-in mascot drawn in colored half blocks (the little robot MendGirl holds: a round head with an antenna, happy eyes, pink cheeks, ear discs and a body with a cross), even without installed bitmap pets.
 
-Its colors follow the theme: under Ink, the default, it is black and white (a white head, a graphite body with a light cross, pink cheeks); every other theme draws it in shades of its own primary color, and the Mend theme keeps the original mint head and teal body with a mint cross.
+Its colors follow the theme: under MendCode, the default, it is black and white (a white head, a graphite body with a light cross, pink cheeks); every other theme draws it in shades of its own primary color.
 
 Where the terminal draws pictures (the image protocol the pets use) it is a picture of its own pixels, at the size every pet gets: beside the prompt by Pet size, on the start screen by Mascot size, in `/pet` the same cells as the others.
 
@@ -327,7 +327,7 @@ Phase text maps accept strings or v1 arrays (the first text is used); art is bou
 
 Blank restores defaults.
 
-`/pet` also lists **MendGirl** (`builtin:mendgirl`), MendGirl with neko ears holding her little robot, drawn by MendCode's author and shipped inside MendCode, right after MendAscii. She is drawn in Ink's black and white: silver hair, a black hoodie with white patches and a white robot.
+`/pet` also lists **MendGirl** (`builtin:mendgirl`), MendGirl with neko ears holding her little robot, drawn by MendCode's author and shipped inside MendCode, right after MendAscii. She is drawn in the MendCode theme's black and white: silver hair, a black hoodie with white patches and a white robot.
 
 She is never the default: choose her in `/pet`, with `/pet builtin:mendgirl`, or as the start screen's mascot with `/mascot mendgirl`.
 
