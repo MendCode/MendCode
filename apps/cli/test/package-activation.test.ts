@@ -221,6 +221,23 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(h.text()).toContain("rows from mine")
   })
 
+  test("a clean profile hides the footer's quota without saving a changed footer list, and turned off the list is as it was", async () => {
+    const dir = layout()
+    dir.write("data/tui/profile.json", JSON.stringify({ footerQuota: true }))
+    installPackage(dir, "plain", { clean: true, tuiProfile: {} })
+    const footer = ["quota", "state"]
+    const h = await appHarness({ dataDir: dir.dataDir, directory: dir.project, width: 120, height: 36 })
+    await h.start({ onboarded: true, disabledProfiles: ["user:plain"], footer } as never)
+    const footerSaves = () => h.sent.filter((command) => command.type === "settings.set" && "footer" in (command.patch as object))
+    h.app.applySettings({ onboarded: true, disabledProfiles: [], footer } as never)
+    await h.app.extensionsReady
+    expect(profile(h).footerQuota).toBe(false)
+    h.app.applySettings({ onboarded: true, disabledProfiles: ["user:plain"], footer } as never)
+    await h.app.extensionsReady
+    expect(profile(h).footerQuota).toBe(true)
+    expect(footerSaves()).toEqual([])
+  })
+
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {
     const dir = layout()
     installPackage(dir, "sneaky", { tuiProfile: { homeLayout: "split", permissionMode: "bypass" } })

@@ -7,6 +7,9 @@ import { UNINSTALL_USAGE, type UninstallCommand } from "./uninstall-args"
 import { dataDirFromEnv } from "@mendcode/program/data-dir"
 import { parseInstallReceipt, receiptIn } from "./install-receipt"
 
+/** Executables an install keeps in `<dataDir>/bin`, under the current name and the one it had before (mendcode-next). */
+const MANAGED_BIN_NAMES = new Set(["mendcode", "mendcode-next"].flatMap((name) => [name, `${name}.exe`].flatMap((file) => [file, `${file}.prev`, `${file}.new`])))
+
 export type UninstallTarget = { path: string; kind: "config" | "data" | "cache" | "state" | "binary" | "unknown"; action: "trash" | "keep" | "split" | "blocked"; bytes: number; reason?: string; fingerprint: string }
 export type UninstallPlan = { dataDir: string; owned: boolean; daemon: "inactive" | "active" | "unverified"; pid?: number; targets: UninstallTarget[]; blockers: string[]; fatal: boolean }
 export type UninstallDeps = {
@@ -169,7 +172,7 @@ export function collectUninstallPlan(command: UninstallCommand, deps: UninstallD
   const bin = path.join(dataDir, "bin")
   if (existsSync(bin)) {
     if (lstatSync(bin).isSymbolicLink() || !plan.owned) add(bin, "binary", "blocked", "Managed binary ownership unverified")
-    else for (const name of readdirSync(bin).sort()) add(path.join(bin, name), "binary", ["mendcode", "mendcode.exe", "mendcode.prev", "mendcode.new", "mendcode.exe.prev", "mendcode.exe.new"].includes(name) ? "trash" : "keep", "Managed bin directory")
+    else for (const name of readdirSync(bin).sort()) add(path.join(bin, name), "binary", MANAGED_BIN_NAMES.has(name) ? "trash" : "keep", "Managed bin directory")
   }
   const installDir = guardPath(path.resolve(deps.env.MENDCODE_INSTALL_DIR ?? (deps.platform === "win32" ? path.join(deps.env.LOCALAPPDATA ?? path.join(deps.home, "AppData", "Local"), "Programs", "mendcode") : path.join(deps.home, ".local", "bin"))), deps.home)
   const installedBinary = (binary: string) => {
@@ -188,6 +191,9 @@ export function collectUninstallPlan(command: UninstallCommand, deps: UninstallD
   const wrapper = path.join(guardPath(path.resolve(deps.env.MENDCODE_BIN_DIR ?? path.join(deps.home, ".local", "bin")), deps.home), "mendcode")
   // Anything else by that name is a release (or a stranger), judged by its receipt below.
   if (existsSync(wrapper) && lstatSync(wrapper).isFile() && /^#!\/bin\/sh\n# mendcode dev wrapper\nexec bun "[^"\n]+\/apps\/cli\/src\/entry\.ts" "\$@"\n$/.test(readFileSync(wrapper, "utf8"))) add(wrapper, "binary", "trash", "Development wrapper")
+  // The wrapper an older checkout installed as mendcode-next: only its exact text counts as ours.
+  const legacyWrapper = path.join(guardPath(path.resolve(deps.env.MENDCODE_NEXT_BIN_DIR ?? path.join(deps.home, ".local", "bin")), deps.home), "mendcode-next")
+  if (existsSync(legacyWrapper) && lstatSync(legacyWrapper).isFile() && /^#!\/bin\/sh\n# mendcode-next dev wrapper\nexec (?:env MENDCODE_PROGRAM=mendcode-next )?bun "[^"\n]+\/apps\/cli\/src\/entry\.ts" "\$@"\n$/.test(readFileSync(legacyWrapper, "utf8"))) add(legacyWrapper, "binary", "trash", "Development wrapper")
   installedBinary(path.join(installDir, deps.platform === "win32" ? "mendcode.exe" : "mendcode"))
   if (deps.runningBinary) installedBinary(canonical(path.resolve(deps.runningBinary)))
   for (const target of plan.targets) if (target.action === "blocked") plan.blockers.push(`Left alone: ${target.path} (${target.reason})`)

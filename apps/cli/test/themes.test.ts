@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { readdirSync } from "node:fs"
 import path from "node:path"
-import { COLOR_NAMES, DEFAULT_THEME, THEMES, defineTheme } from "../src/themes"
+import { COLOR_NAMES, DEFAULT_THEME, THEMES, defineTheme, resolveThemeName } from "../src/themes"
 import { activeTheme, setTheme, sgr, themeNames } from "../src/ui/theme"
 import { BORDER_ROLES } from "../src/themes/contrast"
 
@@ -140,6 +140,14 @@ describe("active theme", () => {
     // The names it had: Ink and the green Mend theme open MendCode's.
     expect(run("ink")).toBe("mendcode")
     expect(run("mend")).toBe("mendcode")
+    expect(run("constructor")).toBe("mendcode")
+  })
+  test("an old name is not a theme of its own, and a theme a user named ink is theirs", () => {
+    expect(setTheme("constructor")).toBe(false)
+    expect(setTheme("__proto__")).toBe(false)
+    expect(resolveThemeName("ink", ["mendcode"])).toBe("mendcode")
+    expect(resolveThemeName("Ink", ["mendcode", "ink"])).toBe("Ink")
+    setTheme(DEFAULT_THEME)
   })
 })
 

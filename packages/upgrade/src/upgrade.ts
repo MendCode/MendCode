@@ -1,6 +1,6 @@
 import { expectedSum, parseSums, verifyChecksum, sha256Hex } from "./checksum"
 import { UpgradeError } from "./errors"
-import { binPaths, installBinary, resolveDataDir, rollbackBinary } from "./install"
+import { adoptLegacyBin, binPaths, installBinary, resolveDataDir, rollbackBinary } from "./install"
 import { readRecovery, verifyRecovery, writeRecovery } from "./recovery"
 import { validateReleaseIndex } from "./release-index"
 import type { UpgradePorts } from "./ports"
@@ -77,7 +77,10 @@ export async function runUpgrade(request: UpgradeRequest, ports: UpgradePorts): 
   const dataDir = resolveDataDir({ dataDir: request.dataDir, home: request.home })
   if (request.check) return performUpgrade(request, ports)
   const release = await ports.fs.lock(dataDir)
-  try { return await performUpgrade(request, ports) } finally { await release() }
+  try {
+    await adoptLegacyBin(ports.fs, dataDir)
+    return await performUpgrade(request, ports)
+  } finally { await release() }
 }
 
 async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Promise<UpgradeResult> {

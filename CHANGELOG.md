@@ -33,6 +33,7 @@ Image generation with a ChatGPT login works again, the default theme is called M
 
 ### Fixed
 
+- An install whose executables were still called `mendcode-next` moves them to the new name on its next upgrade and keeps its rollback; uninstall removes them too.
 - A sequence diagram's messages from the last participant to itself get the room beside it, so they no longer break one word per line; none of their words is cut.
 - A generated picture's path shows your home folder as `~`; copy path still copies the full path.
 - Dream no longer stays on "running…" while a session waits for your approval, even one you archived; background work only waits for sessions that are really working.

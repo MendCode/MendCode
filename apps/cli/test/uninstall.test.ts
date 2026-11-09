@@ -171,6 +171,19 @@ test("v1/Codex paths, their parents, and directory aliases are rejected before r
   expect(readFileSync(path.join(v1, "history"), "utf8")).toBe("v1 untouched")
 })
 
+test("an install from when the name was mendcode-next is recognized: its managed executables and exact dev wrapper are removed", () => {
+  const h = fixture()
+  for (const name of ["mendcode-next", "mendcode-next.prev"]) writeFileSync(path.join(h.dir, "bin", name), "old managed binary")
+  const oldBin = path.join(h.home, "old-bin")
+  mkdirSync(oldBin, { recursive: true })
+  writeFileSync(path.join(oldBin, "mendcode-next"), '#!/bin/sh\n# mendcode-next dev wrapper\nexec bun "/work/v2/apps/cli/src/entry.ts" "$@"\n')
+  const plan = collectUninstallPlan(h.command("--force"), { ...h.deps, env: { ...h.deps.env, MENDCODE_NEXT_BIN_DIR: oldBin } })
+  const action = (file: string) => plan.targets.find((target) => target.path === file)?.action
+  expect(action(path.join(h.dir, "bin", "mendcode-next"))).toBe("trash")
+  expect(action(path.join(h.dir, "bin", "mendcode-next.prev"))).toBe("trash")
+  expect(action(path.join(oldBin, "mendcode-next"))).toBe("trash")
+})
+
 test("foreign database, unowned binary and mismatched receipt are kept and reported", async () => {
   const h = fixture()
   writeFileSync(h.binary, "v1 executable")

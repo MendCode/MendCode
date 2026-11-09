@@ -344,6 +344,14 @@ describe("diagrams in a narrow transcript", () => {
     }
   })
 
+  test("two states side by side that each return to themselves keep both notes whole, beside their own box", () => {
+    const result = renderMermaid("stateDiagram-v2\nA --> A: retry\nB --> B: again", 80)
+    expect("lines" in result).toBe(true)
+    const row = text((result as { lines: Line[] }).lines).split("\n").find((line) => line.includes("↻ retry"))!
+    expect(row).toContain("↻ again")
+    expect(row.indexOf("↻ retry")).toBeLessThan(row.indexOf("│     B"))
+  })
+
   test("a state that returns to itself is written beside its box, and two routed labels never share a row", () => {
     const source = "stateDiagram-v2\n  [*] --> Empty\n  Empty --> Active: add item\n  Active --> Active: add/remove item\n  Active --> Discounted: apply coupon\n  Discounted --> Active: remove coupon\n  Active --> CheckedOut: checkout\n  Discounted --> CheckedOut: checkout\n  CheckedOut --> [*]"
     for (const width of [60, 90]) {

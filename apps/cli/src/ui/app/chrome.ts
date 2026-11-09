@@ -201,7 +201,13 @@ export function createChrome(ctx: AppContext, actions: {
    * reset` used to write) means the default too, so it follows the tier.
    */
   function customFooter(): readonly FooterSegment[] | undefined {
-    const list = state.customFooter
+    let list = state.customFooter
+    // A profile's footerQuota/footerToday change what is shown, never the saved list.
+    for (const [field, segment] of [["footerQuota", "quota"], ["footerToday", "today"]] as const) {
+      if (!list || !(field in state.profileApplied)) continue
+      const kept = list.filter((item) => item !== segment)
+      list = state.tuiProfile[field] ? (list.includes(segment) ? list : [...kept, segment]) : kept
+    }
     return list && !(list.length === DEFAULT_FOOTER.length && list.every((segment, at) => segment === DEFAULT_FOOTER[at])) ? list : undefined
   }
 

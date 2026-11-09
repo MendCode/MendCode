@@ -11,4 +11,7 @@ test("a reply that only mentions graft, or is nothing but the tally, is left as 
   expect(splitGraftTally("graft saved ~5k tokens this turn")).toEqual({ text: "graft saved ~5k tokens this turn" })
   expect(splitGraftTally("I used graft saved queries earlier, then fixed it.")).toEqual({ text: "I used graft saved queries earlier, then fixed it." })
   expect(splitGraftTally("The graft saved ~3k tokens line is from graft.\n\nMore text after it.")).toEqual({ text: "The graft saved ~3k tokens line is from graft.\n\nMore text after it." })
+  const sentence = "The report says graft saved ~3k tokens but that estimate is wrong."
+  expect(splitGraftTally(sentence)).toEqual({ text: sentence })
+  expect(splitGraftTally(`First line.\n${sentence}`)).toEqual({ text: `First line.\n${sentence}` })
 })

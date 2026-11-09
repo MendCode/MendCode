@@ -937,6 +937,24 @@ describe("native engine loop", () => {
     expect(run.events.filter((e) => e.type === "item.completed" && "itemId" in e && e.itemId === (cards[0] as { itemId: string }).itemId).map((e) => "status" in e && e.status)).toEqual(["ok"])
   })
 
+  test("a forked task whose image tool refuses the effort is asked again without it, though the fork repeats the parent's effort", async () => {
+    async function* refused(): AsyncIterable<ModelEvent> {
+      yield { type: "hosted_tool", id: "ig_1", tool: "image_generation", status: "started" }
+      throw new RetryableProviderError("[PROVIDER]: chatgpt Complexity 'medium' is not supported for this image model.")
+    }
+    const { provider, requests } = scriptedProvider([
+      callTool("task", { description: "draw", prompt: "Draw it.", fork: true }),
+      refused,
+      stop("drawn"),
+      stop("done"),
+    ])
+    const engine = createNativeEngine({ provider, tools: [echoTool], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "s", subagents: true, hostedTools: () => ["image_generation"], sleep: noSleep, modelFor: () => ({ model: "gpt-6-luna", effort: "medium" as const }), permissionPolicy: () => ({ features: { task_fork: true } }) })
+    await engine.runTurn(turn({ text: "draw a cart icon", mode: () => "full" }).input)
+    const [, child, retry] = requests as [ModelRequest, ModelRequest, ModelRequest]
+    expect(child.hostedTools).toEqual(["image_generation"])
+    expect([child.effort, retry.effort]).toEqual(["medium", undefined])
+  })
+
   test("a hosted search still running when the stream breaks is closed as cancelled", async () => {
     async function* broken(): AsyncIterable<ModelEvent> {
       yield { type: "hosted_tool", id: "ws_1", tool: "web_search", status: "started" }

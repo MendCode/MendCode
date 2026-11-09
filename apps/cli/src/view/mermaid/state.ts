@@ -78,6 +78,10 @@ function renderRankedVerticalFlowchart(input: {
   // A transition to itself is written beside its box (↻ label), not routed.
   const selfEdges = allEdges.filter((edge) => edge.from === edge.to)
   const orientedEdges = allEdges.filter((edge) => edge.from !== edge.to)
+  const selfText = new Map<string, string>()
+  for (const edge of selfEdges) selfText.set(edge.from, [selfText.get(edge.from), cleanConnectorLabel(edge.label) || "self"].filter(Boolean).join(", "))
+  // Columns kept right of a box for its ↻ note, so a neighbor or a lane never sits on it.
+  const selfRoom = (node: string) => selfText.has(node) ? Bun.stringWidth(`↻ ${selfText.get(node)}`) + 2 : 0
   const nodes = [...new Set([...(input.nodes ?? []), ...allEdges.flatMap((edge) => [edge.from, edge.to])])]
   if (nodes.length === 0 || nodes.length > FLOWCHART_MAX_LAYOUT_NODES) return undefined
 
@@ -123,15 +127,13 @@ function renderRankedVerticalFlowchart(input: {
     const rankWidth = rankNodes.reduce((sum, node, index) => {
       const box = renderNode(node)
       boxes.set(node, box)
-      return sum + Math.max(...box.map((line) => Bun.stringWidth(line))) + (index === 0 ? 0 : FLOWCHART_NODE_GAP)
+      return sum + Math.max(...box.map((line) => Bun.stringWidth(line))) + selfRoom(node) + (index === 0 ? 0 : FLOWCHART_NODE_GAP)
     }, 0)
     canvasWidth = Math.max(canvasWidth, rankWidth)
   }
 
   const availableWidth = Math.max(40, Math.min(FLOWCHART_MAX_CANVAS_WIDTH, input.width - 4))
   canvasWidth = Math.max(40, canvasWidth)
-  const selfText = new Map<string, string>()
-  for (const edge of selfEdges) selfText.set(edge.from, [selfText.get(edge.from), cleanConnectorLabel(edge.label) || "self"].filter(Boolean).join(", "))
   for (const [node, text] of selfText) {
     const boxWidth = Math.max(...(boxes.get(node) ?? [""]).map((line) => Bun.stringWidth(line)))
     canvasWidth = Math.max(canvasWidth, boxWidth + 2 * (Bun.stringWidth(text) + 4))
@@ -188,7 +190,7 @@ function renderRankedVerticalFlowchart(input: {
   for (let rank = 0; rank <= maxRank; rank++) {
     const rankNodes = byRank.get(rank) ?? []
     const rankWidth = rankNodes.reduce(
-      (sum, node, index) => sum + (boxes.get(node)?.[0]! ? Bun.stringWidth(boxes.get(node)![0]!) : 0) + (index === 0 ? 0 : FLOWCHART_NODE_GAP),
+      (sum, node, index) => sum + (boxes.get(node)?.[0]! ? Bun.stringWidth(boxes.get(node)![0]!) : 0) + selfRoom(node) + (index === 0 ? 0 : FLOWCHART_NODE_GAP),
       0,
     )
     let column =
@@ -212,9 +214,9 @@ function renderRankedVerticalFlowchart(input: {
       const currentBounds = rankBounds.get(rank)
       rankBounds.set(rank, {
         left: Math.min(currentBounds?.left ?? column, column),
-        right: Math.max(currentBounds?.right ?? column + nodeWidth - 1, column + nodeWidth - 1),
+        right: Math.max(currentBounds?.right ?? column + nodeWidth - 1 + selfRoom(node), column + nodeWidth - 1 + selfRoom(node)),
       })
-      column += nodeWidth + FLOWCHART_NODE_GAP
+      column += nodeWidth + selfRoom(node) + FLOWCHART_NODE_GAP
     }
   }
 
