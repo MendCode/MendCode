@@ -201,7 +201,12 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "tui.changed") {
-      state.tuiProfile = normalizeTuiProfile(event.profile)
+      // The stored profile changed (customize_ui): only the keys that differ from the stored copy are new, so a profile's layer
+      // keeps every other key it holds instead of seeing them all as the user's.
+      const stored = normalizeTuiProfile(event.profile), before = state.profileBase as Record<string, unknown>
+      const changed = Object.fromEntries(Object.entries(stored).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])))
+      state.profileBase = stored
+      state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...changed })
       configureKeyLabels({ setting: state.tuiProfile.altLabel })
       input.screen.setKeyboard?.(keyboardWanted(state.tuiProfile.keyProtocol, input.platform))
       applySettings(state.settingsNow)

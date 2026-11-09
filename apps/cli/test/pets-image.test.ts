@@ -266,7 +266,8 @@ describe("screen with an image layer", () => {
     expect(commands(writes[0]!).map((c) => c.control)).toEqual(["a=t,f=32,s=64,v=32,i=1,o=z,q=2,m=0"])
     const blank = Array.from({ length: 5 }, (_, i) => `\x1b[${i + 2};1H\x1b[K`).join("")
     expect(writes[1]).toBe(
-      `\x1b[?2026h\x1b[1;1Hab\x1b[K${blank}\x1b[2;5H\x1b_Ga=p,i=1,p=1,c=8,r=2,C=1,q=2${ST}\x1b[1;3H\x1b[?25h\x1b[?2026l`,
+      // The default theme paints its own black first (OSC 10/11/12).
+      `\x1b[?2026h\x1b]10;rgb:fa/fa/fa\x07\x1b]11;rgb:0a/0a/0a\x07\x1b]12;rgb:fa/fa/fa\x07\x1b[1;1Hab\x1b[K${blank}\x1b[2;5H\x1b_Ga=p,i=1,p=1,c=8,r=2,C=1,q=2${ST}\x1b[1;3H\x1b[?25h\x1b[?2026l`,
     )
     // Unchanged image and text: the frame carries only the cursor.
     s.draw([[{ text: "ab" }]], { row: 0, col: 2 }, [{ slot: "pet", key: "k", image, row: 1, col: 4, cols: 8, rows: 2 }])

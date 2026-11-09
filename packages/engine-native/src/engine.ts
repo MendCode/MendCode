@@ -1032,6 +1032,8 @@ export function createNativeEngine(options: {
     const hostedOff = new Set<HostedTool>()
     /** Set when the image tool refused the effort: the rest of this turn's calls that offer it go without one. */
     let effortlessImages = false
+    /** The image card of the refused call, kept open for the call sent again so the chat shows one card, not a failed one above it. */
+    let carriedImage: ItemId | undefined
     /** A provider deadline (`RetryableProviderError.immediate`) skips the backoff once per call; if it fires again the usual waits apply. */
     let retriedAtOnce = false
     for (let attempt = 0; ; attempt++) {
@@ -1045,6 +1047,7 @@ export function createNativeEngine(options: {
       let handedOver = false
       /** Hosted tool calls still running, by the provider's id; any left open when the call ends are closed as cancelled. */
       const hosted = new Map<string, ItemId>()
+      let carrying = false
       const hostedUsed = new Set<HostedTool>()
       const continuation =carried ? continuationStream(carried.text) : undefined
       // Each attempt has its own signal, so a wake from sleep can drop a stream whose connection died silently.
@@ -1225,7 +1228,11 @@ export function createNativeEngine(options: {
             step.emitted = true
             hostedUsed.add(event.tool)
             let itemId = hosted.get(event.id)
-            if (!itemId) {
+            if (!itemId && event.tool === "image_generation" && carriedImage) {
+              itemId = carriedImage
+              carriedImage = undefined
+              hosted.set(event.id, itemId)
+            } else if (!itemId) {
               itemId = input.newItemId()
               hosted.set(event.id, itemId)
               input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: event.tool } })
@@ -1271,8 +1278,10 @@ export function createNativeEngine(options: {
         }
         const dropped: HostedTool[] = []
         if (!effortlessImages && IMAGE_EFFORT_REFUSED.test(failure.message)) {
+          // Sent again at once and quietly: a known refusal, not a provider failure the user needs to see.
           effortlessImages = true
-          input.emit({ type: "retrying", attempt: attempt + 1, delayMs: 0, message: "image generation: trying again without the reasoning effort the image model refuses" })
+          const open = [...hosted].find(([, itemId]) => itemId)
+          if (open) { carriedImage = open[1]; hosted.delete(open[0]); carrying = true }
           continue
         }
         if (failure.kind !== "network") {
@@ -1301,6 +1310,8 @@ export function createNativeEngine(options: {
         stopWatching()
         input.signal.removeEventListener("abort", abortCall)
         for (const itemId of hosted.values()) input.emit({ type: "item.completed", itemId, status: "cancelled" })
+        // A carried card the call sent again never took up is closed with it.
+        if (carriedImage && !carrying) { input.emit({ type: "item.completed", itemId: carriedImage, status: "cancelled" }); carriedImage = undefined }
         // A card whose input never became whole (the stream stopped or the request failed) has no call to run.
         for (const card of step.cards.values()) {
           if (!card.itemId || (handedOver && card.whole)) continue
