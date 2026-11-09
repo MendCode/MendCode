@@ -30,6 +30,7 @@ import { claudePlanFile } from "./plan-file"
 export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 /** Records of a turn Claude Code runs on its own that are kept until its notice is shown; a runaway one is cut there. */
 const MAX_UNSOLICITED = 2_000
+const UNDO_NOT_APPLIED = "[CLAUDE]: Claude Code did not apply the earlier undo, so this message was not sent; send it again to continue on the conversation as Claude Code has it"
 /** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
 const MAX_AGENT_TASKS = 256
 /** Command lines of the last calls that can become background tasks (Bash, Monitor, Agent), kept so a task can be listed by what it runs. */
@@ -273,8 +274,18 @@ export function createClaudeEngine(options: {
     isolated.stop("its bridged turn ended")
     isolatedEngines.delete(isolated)
   }
-  /** Undos waiting for the session's next process: the uuid of the message its conversation is cut before. */
-  const pendingRewinds = new Map<SessionId, string>()
+  /** Undos waiting for the session's next process: the turn whose message its conversation is cut before. */
+  const pendingRewinds = new Map<SessionId, TurnId>()
+  /**
+   * A bridged turn runs in its own engine, so an undo waiting here goes to that engine before the turn: it is cut there, before
+   * the turn's message, and never stays behind to cut a later conversation. False when Claude Code did not apply it.
+   */
+  async function handRewind(sessionId: SessionId, engine: ReturnType<typeof createClaudeEngine>): Promise<boolean> {
+    const turnId = pendingRewinds.get(sessionId)
+    if (!turnId) return true
+    pendingRewinds.delete(sessionId)
+    return (await engine.rewind?.({ sessionId, turnId }).catch(() => false)) === true
+  }
   /** The permission mode of each session's last turn, for a `/compact` that has to start the process again. */
   const modes = new Map<SessionId, PermissionMode>()
   /** A `/compact` sent to Claude Code, by its turn: what Claude Code reported of it (`compact_boundary`, then the summary it continues from). */
@@ -719,10 +730,10 @@ export function createClaudeEngine(options: {
       // A prompt sent on an uncut conversation would answer what was undone: when Claude Code does not confirm the cut, this message
       // is not sent and the user is told. The undo is asked once; sending again continues on the conversation as Claude Code has it.
       pendingRewinds.delete(input.sessionId)
-      const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: cut, interrupt_if_running: true }).catch(() => undefined)
+      const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(cut), interrupt_if_running: true }).catch(() => undefined)
       if (response?.rewound !== true) {
         keepIdle(connection)
-        throw new Error("[CLAUDE]: Claude Code did not apply the earlier undo, so this message was not sent; send it again to continue on the conversation as Claude Code has it")
+        throw new Error(UNDO_NOT_APPLIED)
       }
     }
     const wanted = claudePermissionMode(mode)
@@ -765,6 +776,7 @@ export function createClaudeEngine(options: {
         const running = kept.get(input.sessionId)
         const joined = running && bridges.get(running)
         if (running?.busy() && joined) {
+          if (!(await handRewind(input.sessionId, running))) return { status: "error", code: "claude_start", message: UNDO_NOT_APPLIED }
           joined.current = input.externalMcp
           inTurn.add(running)
           const turn = processMcpTurn(input)
@@ -780,6 +792,7 @@ export function createClaudeEngine(options: {
           onBackground: (id, tasks, stop) => { options.onBackground?.(id, tasks, stop); if (!tasks.length) queueMicrotask(() => settle(sessionId, isolated)) } })
         isolatedEngines.add(isolated)
         bridges.set(isolated, bridge)
+        await handRewind(sessionId, isolated)
         inTurn.add(isolated)
         const turn = processMcpTurn(input)
         // The process lives for the bridge lease, and on while the background agents it started run. Saved bindings resume the same conversation next turn.
@@ -904,14 +917,16 @@ export function createClaudeEngine(options: {
       })
     },
     async rewind({ sessionId, turnId }) {
-      const target = messageUuid(turnId)
       const connection = connections.get(sessionId)
       if (!connection || connection.closed) {
+        // A bridged turn's process kept for its background agents holds the conversation: the cut is made there.
+        const running = kept.get(sessionId)
+        if (running) return (await running.rewind?.({ sessionId, turnId }).catch(() => false)) === true
         if (!options.bindings?.get(sessionId)) return false
-        pendingRewinds.set(sessionId, target)
+        pendingRewinds.set(sessionId, turnId)
         return true
       }
-      const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: target, interrupt_if_running: true }).catch(() => undefined)
+      const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(turnId), interrupt_if_running: true }).catch(() => undefined)
       return response?.rewound === true
     },
     // Claude Code compacts its own context when it fills up (`claude_compact` sets where).
@@ -923,6 +938,8 @@ export function createClaudeEngine(options: {
      */
     async compact(input) {
       if (!connections.get(input.sessionId) && !options.bindings?.get(input.sessionId)) return { status: "ok", note: "Nothing to compact: Claude Code has no conversation for this session yet." }
+      // After an undo the next request no longer repeats the cached one, so an idle compaction would not save the cache: the undo waits for the next message.
+      if (input.idle && pendingRewinds.has(input.sessionId)) return { status: "ok", note: "Not compacted while idle: an undo waits for the next message." }
       const record: { preTokens?: number; postTokens?: number; summary?: string; done?: true } = {}
       compactions.set(input.turnId, record)
       const mode = modes.get(input.sessionId) ?? "ask"
