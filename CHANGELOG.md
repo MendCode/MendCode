@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- The home's Completed list no longer shows sessions that were never written in, and an untitled session reads "Untitled session" instead of its id.
+
 ## v0.0.12 - 2026-11-08
 
 Computer use is much faster and smarter, with its own cursor, and a profile can give a clean look by switching off your own terminal modules.
