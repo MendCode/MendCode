@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A sequence diagram's messages from the last participant to itself get the room beside it, so they no longer break one word per line; none of their words is cut.
+- A generated picture's path shows your home folder as `~`; copy path still copies the full path.
 - Dream no longer stays on "running…" while a session waits for your approval, even one you archived; background work only waits for sessions that are really working.
 
 - Mermaid diagrams read better in a narrow transcript: a sequence gives its spare room to its long messages instead of splitting them, and a state diagram writes a state's transition to itself beside its box and never lets two labels land on the same row.

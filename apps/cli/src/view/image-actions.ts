@@ -1,3 +1,4 @@
+import { homedir } from "node:os"
 import type { Line } from "../ui/theme"
 import { markCopy, markGutter, type CopyRegion } from "./line-meta"
 import { formatBytes } from "./tool-data"
@@ -13,6 +14,12 @@ export function generatedImagePath(input: { meta?: Record<string, unknown>; text
   if (typeof input.meta?.path === "string" && input.meta.path.startsWith("/")) return input.meta.path
   const last = input.text.trimEnd().split("\n").at(-1)?.trim() ?? ""
   return last.startsWith("/") && !/\s/.test(last) ? last : undefined
+}
+
+/** A saved picture's path as shown: the home folder as `~`, so a screen share does not show the user's name. Copying keeps the full path. */
+export function shownImagePath(text: string, home = homedir()): string {
+  const base = home.replace(/\/+$/, "")
+  return base ? text.split(`${base}/`).join("~/") : text
 }
 
 /**

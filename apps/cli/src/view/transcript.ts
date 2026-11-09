@@ -30,7 +30,7 @@ import type { AssistantMessageModel, CompactionCardModel, ReasoningModel, ToolCa
 import { plainViewHost, type ViewHost } from "./views"
 import { assistantBody } from "./message-views"
 import { textWidth } from "./wrap"
-import { generatedImagePath, imageActionRow } from "./image-actions"
+import { generatedImagePath, imageActionRow, shownImagePath } from "./image-actions"
 import { carryMeta, copyOf, foldOf, gutterOf, markFold, pictureOf, softWrapOf, type CopyRegion } from "./line-meta"
 import { createUsageNotes, type CompactNoticeConfig, type UsageNote } from "./usage-notes"
 import { modelLabel } from "./model-label"
@@ -623,7 +623,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   /** The file path an image tool's card text ends in, as ` · /path`. */
   function imageWhere(block: Block) {
     const last = block.text.trimEnd().split("\n").at(-1) ?? ""
-    return last.startsWith("/") ? ` · ${last}` : ""
+    return last.startsWith("/") ? ` · ${shownImagePath(last)}` : ""
   }
 
   function roleStyle(role: "user" | "assistant"): MessageStyle {
@@ -724,7 +724,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       return { slot, model }
     }
     if (slot === "tool.card") {
-      const output = block.text.replace(/\s+$/, "").split("\n").filter((l) => l.length > 0)
+      const text = generatedPicture(block) ? shownImagePath(block.text) : block.text
+      const output = text.replace(/\s+$/, "").split("\n").filter((l) => l.length > 0)
       // A tool's own spec wins; graft's trace tool (MCP, no spec) is read back from its text into a call map.
       const spec = renderer === "full" ? (block.render ?? (block.status === "ok" ? graftTraceRender(parseToolTitle(block.title).name, block.text) : undefined)) : undefined
       const level = levelOf(block)
@@ -736,7 +737,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         detail,
         ...(block.title !== undefined ? { title: block.title } : {}),
         status: block.status,
-        text: block.text,
+        text,
         ...(summary !== undefined ? { summary } : {}),
         level,
         expanded: level !== "summary",

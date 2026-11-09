@@ -333,6 +333,17 @@ describe("diagrams in a narrow transcript", () => {
     expect(text((result as { lines: Line[] }).lines)).toContain("total = subtotal - discount")
   })
 
+  test("the last participant's messages to itself get room beside a wide note, and none of their words is cut", () => {
+    const source = "sequenceDiagram\n  actor C as Checkout page\n  participant P as preview\n  participant T as totals\n  Note over C,P: Checkout page interaction is conceptual;<br/>preview is the indexed caller of totals.\n  C->>P: preview(items, coupon)\n  P->>T: totals(items, coupon)\n  T->>T: Sum line totals\n  T->>T: Apply percentage discount and optional cap\n  T->>T: Round subtotal minus discount\n  T-->>P: { subtotal, discount, total }"
+    for (const width of [100, 120]) {
+      const result = renderMermaid(source, width)
+      expect("lines" in result).toBe(true)
+      const drawn = text((result as { lines: Line[] }).lines)
+      expect(drawn).toContain("Sum line totals")
+      for (const word of ["percentage", "discount", "optional", "cap", "subtotal", "minus"]) expect(drawn).toMatch(new RegExp(`┆ [^┆]*\\b${word}\\b`))
+    }
+  })
+
   test("a state that returns to itself is written beside its box, and two routed labels never share a row", () => {
     const source = "stateDiagram-v2\n  [*] --> Empty\n  Empty --> Active: add item\n  Active --> Active: add/remove item\n  Active --> Discounted: apply coupon\n  Discounted --> Active: remove coupon\n  Active --> CheckedOut: checkout\n  Discounted --> CheckedOut: checkout\n  CheckedOut --> [*]"
     for (const width of [60, 90]) {
