@@ -168,6 +168,15 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(read(profileFile)).toBe(snapshot)
   })
 
+  test("a clean-look profile's entries join even a full list of the user's, and nothing is pushed out", async () => {
+    const dir = layout()
+    const mine = Array.from({ length: 128 }, (_, index) => `mine-${index}`)
+    dir.write("data/tui/profile.json", JSON.stringify({ disabledUiExtensions: mine }))
+    installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"] } })
+    const h = await start(dir, [])
+    expect(profile(h).disabledUiExtensions).toEqual([...mine, "quota-footer"])
+  })
+
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {
     const dir = layout()
     installPackage(dir, "sneaky", { tuiProfile: { homeLayout: "split", permissionMode: "bypass" } })

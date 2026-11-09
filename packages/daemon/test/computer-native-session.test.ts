@@ -147,6 +147,19 @@ test("steps can name their node, need no observation first, and the result says 
   const report = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "const r = await tools.batch({ steps: [{ action: 'setValue', name: 'search', value: 'found it' }] }); return { ok: r.ok, changed: r.after.changed.map(n => n.value), next: typeof r.after.revision }" }, signal()))
   expect(report.ok).toBe(true)
   expect(report.value).toEqual({ ok: true, changed: ["found it"], next: "number" })
+  // A single action by name, with no observation first: resolved, sent and settled.
+  const pressed = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "const r = await tools.press({ name: 'save' }); return { outcome: r.outcome ?? r.effect?.outcome, after: typeof r.after?.revision }" }, signal()))
+  expect(pressed.ok).toBe(true)
+  expect(pressed.value).toMatchObject({ after: "number" })
+  expect(f.ax.actions.at(-1)).toMatchObject({ action: "press", nodeID: "0.1" })
+  // A look after the action that fails keeps the action's report and says not to repeat it.
+  let looks = 0
+  f.ax.state.onObserve = async () => { if (++looks > 1) throw new Error("Selected window closed") }
+  const closed = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "return await tools.press({ name: 'Save' })" }, signal()))
+  expect(closed.ok).toBe(true)
+  expect(JSON.stringify(closed.value)).toContain("Do not repeat the action")
+  expect(f.ax.actions.filter((action) => action.action === "press")).toHaveLength(2)
+  f.ax.state.onObserve = undefined
   const missing = await f.port.code!({ computerSessionID: session.computerSessionID, code: "await tools.press({ name: 'Nowhere' })" }, signal())
   expect(missing.output).toContain('press: no node named \\"Nowhere\\" offers press; nodes that do:')
 })

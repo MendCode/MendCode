@@ -401,6 +401,11 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
              */
             const settled = async <T extends object>(state: State, before: ComputerObservation | undefined, result: T): Promise<T | (T & { after: unknown })> => {
               if ((result as { ok?: boolean }).ok === false || !before) return result
+              // The action already reached the app: a failed look afterwards (the window closed, another took focus) keeps its report.
+              try { return await settle(state, before, result) }
+              catch (error) { return { ...result, after: { error: `Observation after the action failed: ${error instanceof Error ? error.message : String(error)}`, verified: false, next: "Do not repeat the action; observe again or select the window it opened." } } }
+            }
+            const settle = async <T extends object>(state: State, before: ComputerObservation, result: T): Promise<T & { after: unknown }> => {
               const key = (node: ComputerObservation["nodes"][number]) => `${node.role}\u0000${node.name}\u0000${node.value ?? ""}`
               const signature = (observation: ComputerObservation) => observation.nodes.map(key).join("\u0001")
               const deadline = Date.now() + 1000
@@ -424,8 +429,9 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
                 // Reads take no arguments; extra ones (a revision, a screenshot flag) are ignored rather than refused.
                 if (name === "observe") return observeReady(state.id, sessionId, bounded)
                 if (mutations.has(name)) {
-                  const action = name as SemanticAction["action"], before = await named(state, [{ ...(args as Record<string, unknown>), action }])
-                  const { action: _action, ...input } = { ...(args as Record<string, unknown>), ...before.steps[0] } as Record<string, unknown>
+                  const action = name as SemanticAction["action"], before = await named(state, [{ ...(args as Record<string, unknown>), action }], (args as { revision?: unknown } | undefined)?.revision)
+                  // The resolved step: its node, without name, role or toName, on the observation it was resolved against.
+                  const { action: _action, ...input } = { ...before.steps[0], ...(before.revision !== undefined ? { revision: before.revision } : {}) } as Record<string, unknown>
                   return settled(state, before.observation, await act(state.id, sessionId, input, action, bounded))
                 }
                 if (name === "batch") {
