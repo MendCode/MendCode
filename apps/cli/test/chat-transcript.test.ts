@@ -578,3 +578,17 @@ describe("theme roles and formatting", () => {
     expect(card[0]!.map((s) => s.text).join("")).toBe("   ✎ Edit a.ts")
   })
 })
+
+describe("graft's tally", () => {
+  test("the reply does not show graft's tally line; the turn's closing line says graft and the amount", () => {
+    const { emit, item, turn, events } = stream()
+    const turnId = turn()
+    item(turnId, "agent_message", { text: "Tests pass.\n\n🌱 graft saved ~70k tokens this turn" })
+    emit({ type: "turn.completed", turnId })
+    const screen = view(events, { timestamps: "bottom" }).text.join("\n")
+    expect(screen).toContain("Tests pass.")
+    expect(screen).not.toContain("🌱")
+    expect(screen).not.toContain("graft saved")
+    expect(screen).toMatch(/ · graft ~70k/)
+  })
+})

@@ -179,6 +179,8 @@ const SHELL_TOOL = "shell"
 const INLINE_SHELL_TIMEOUT_MS = 30_000
 /** Provider failures in a row, in steps that used a hosted tool, before the step goes on without that tool. */
 const HOSTED_FAILURE_LIMIT = 2
+/** ChatGPT's image tool takes the request's reasoning effort as its own complexity and refuses every value; it works with none. */
+const IMAGE_EFFORT_REFUSED = /Complexity '[^']*' is not supported for this image model/i
 const hostedLabel = (tool: HostedTool) => (tool === "web_search" ? "web search" : "image generation")
 /** What the model is told once a hosted tool was taken out of the step. */
 const hostedOffNote = (tools: readonly HostedTool[]) => `The provider's ${tools.map(hostedLabel).join(" and ")} is failing right now and is off for this step. Do not wait for it: answer with what you have, say that it failed, and use another tool if one can do the job.`
@@ -1028,6 +1030,8 @@ export function createNativeEngine(options: {
      */
     const hostedFailures = new Map<HostedTool, number>()
     const hostedOff = new Set<HostedTool>()
+    /** Set when the image tool refused the effort: the rest of this turn's calls that offer it go without one. */
+    let effortlessImages = false
     /** A provider deadline (`RetryableProviderError.immediate`) skips the backoff once per call; if it fires again the usual waits apply. */
     let retriedAtOnce = false
     for (let attempt = 0; ; attempt++) {
@@ -1168,6 +1172,7 @@ export function createNativeEngine(options: {
         providerStarted = true
         const maxOutputTokens = compact?.maxOutputTokens ?? shaped?.maxOutputTokens
         const modelRequest: ModelRequest = { system, messages: request, tools: requestTools, ...(role === "subagent" || options.tasks?.isChild(input.sessionId) || textKind !== "agent_message" || carried ? { initiator: "agent" as const } : {}), ...(projection.nativeContext ? { nativeContext: projection.nativeContext } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}), ...(hostedTools.length ? { hostedTools } : {}), ...(choice ? { model: choice.model, effort: choice.effort, parameters: choice.parameters, ...(choice.fast !== undefined ? { fast: choice.fast } : {}) } : {}), ...(reasoning ? { effort: reasoning.effort } : {}), ...(parameters ? { parameters } : {}), ...transport, ...(traceBody ?? transformBody ? { transformBody: (traceBody ?? transformBody)! } : {}), ...(cacheKey ? { cacheKey } : {}), ...(cacheKeyForBody ? { cacheKeyForBody } : {}), cacheMode, signal: call.signal }
+        if (effortlessImages && hostedTools.includes("image_generation")) delete modelRequest.effort
         const cacheTtl = cacheMode === "off" ? undefined : options.cacheTtl?.({ sessionId: input.sessionId, role: hookRole, provider })
         if (cacheTtl) modelRequest.cacheTtl = cacheTtl
         const repeated = share?.last ?? fork
@@ -1265,6 +1270,11 @@ export function createNativeEngine(options: {
           keepText = true
         }
         const dropped: HostedTool[] = []
+        if (!effortlessImages && IMAGE_EFFORT_REFUSED.test(failure.message)) {
+          effortlessImages = true
+          input.emit({ type: "retrying", attempt: attempt + 1, delayMs: 0, message: "image generation: trying again without the reasoning effort the image model refuses" })
+          continue
+        }
         if (failure.kind !== "network") {
           for (const tool of hostedUsed) {
             const failures = (hostedFailures.get(tool) ?? 0) + 1

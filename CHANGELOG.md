@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Image generation with a ChatGPT login works again: when the image model refuses the reasoning effort, the request is sent again at once without it.
+- graft's tally line no longer ends the answer; the turn's closing line shows it as `graft ~70k`.
 - The home's Completed list no longer shows sessions that were never written in, and an untitled session reads "Untitled session" instead of its id.
 
 ## v0.0.12 - 2026-11-08
