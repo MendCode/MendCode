@@ -1956,6 +1956,41 @@ describe("claude engine background tasks", () => {
     later.engine.stop()
   })
 
+  test("an undo waiting for the next process is made by a bridged turn's own process, and never stays behind to cut a later conversation", async () => {
+    const answer = (api: any) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      streamText(api, 0, "ok")
+      api.push(result())
+    }
+    const rewinds: any[] = []
+    const fakes = [0, 1].map(() => fakeClaude({ onUser: answer, onControl: (_api, request) => request.subtype === "rewind_conversation" ? (rewinds.push(request), { rewound: true }) : undefined }))
+    const h = engineWith(fakes)
+    const undone = turnInput()
+    h.bound.set(undone.input.sessionId, "cc-session-1")
+    expect(await h.engine.rewind!({ sessionId: undone.input.sessionId, turnId: undone.input.turnId })).toBe(true)
+    const mcp = { args: ["--mcp-config", "/tmp/test-mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+    expect(await h.engine.runTurn({ ...turnInput({ sessionId: undone.input.sessionId }).input, externalMcp: mcp })).toEqual({ status: "ok" })
+    expect(rewinds).toEqual([{ subtype: "rewind_conversation", target_message_uuid: messageUuid(undone.input.turnId), interrupt_if_running: true }])
+    const order = fakes[0]!.written.map((written) => written.request?.subtype ?? written.type)
+    expect(order.indexOf("rewind_conversation")).toBeLessThan(order.indexOf("user"))
+    // The next plain turn finds no undo left to make.
+    expect(await h.engine.runTurn(turnInput({ sessionId: undone.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(rewinds).toHaveLength(1)
+    h.engine.stop()
+  })
+
+  test("an idle compaction leaves an undo waiting for the next message alone and starts no process", async () => {
+    const fake = fakeClaude({ onUser: () => {}, onControl: () => ({ rewound: false }) })
+    const h = engineWith([fake])
+    const undone = turnInput()
+    h.bound.set(undone.input.sessionId, "cc-session-1")
+    expect(await h.engine.rewind!({ sessionId: undone.input.sessionId, turnId: undone.input.turnId })).toBe(true)
+    const outcome = await h.engine.compact({ sessionId: undone.input.sessionId, turnId: ids("turn"), signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, idle: true })
+    expect(outcome).toEqual({ status: "ok", note: "Not compacted while idle: an undo waits for the next message." })
+    expect(h.spawned).toHaveLength(0)
+    h.engine.stop()
+  })
+
   test("/compact is sent to Claude Code as its own command; its compact_boundary packs the session and the summary becomes the card", async () => {
     const sent: string[] = []
     const fake = fakeClaude({

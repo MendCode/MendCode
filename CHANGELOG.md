@@ -9,6 +9,23 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.10 - 2026-11-08
+
+An undo in a Claude Code session no longer gets stuck waiting, so idle compaction keeps working.
+
+### Upgrade notes
+
+- Same code as v0.0.10-beta.1.
+
+## v0.0.10-beta.1 - 2026-11-08
+
+An undo in a Claude Code session no longer gets stuck waiting, so idle compaction keeps working.
+
+### Fixed
+
+- In a Claude Code session, an undo now reaches Claude Code in turns that run with their own MCP servers too. An old undo no
+  longer stays waiting, so idle compaction can't fail on it or cut the conversation back to that point.
+
 ## v0.0.9 - 2026-11-08
 
 Agents ask for Claude models by name and keep going on long tasks, Claude Code sessions compact while idle, PR watch waits
