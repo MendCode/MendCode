@@ -16,11 +16,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Computer Use sends Chrome, Brave, Edge, Arc and Chromium to the MendCode browser extension, and tells you how to install it.
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
 - The whole memory graph groups each category with a dotted line in its color, so memories without links no longer sit apart in a list.
 
 ### Fixed
 
+- Computer Use no longer leaves an app slowed after it ends: a session that goes quiet ends on its own and turns the app's accessibility mode off again.
+- The Computer Use cursor stays where it last went, dimmed, instead of vanishing between steps.
+- Waiting for something on screen in Computer Use checks less often the longer it waits, so the app stays responsive.
 - Claude Code's own automatic compaction writes its summary in your language, so a long session no longer drifts into English after it.
 - A PR review no longer picks up the `AGENTS.md` of a folder when it reads a file there.
 - The code graph now covers a project's own git repository inside a folder that ignores it (a workspace holding the app's repo), so graph searches find that code instead of answering that nothing matches.

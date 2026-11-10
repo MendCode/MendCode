@@ -84,7 +84,7 @@ the accessibility tree.
 | Drag line | Dashed, along a drag's dispatched path; fades after the drop |
 
 Moving the cursor never moves or resizes a window, so it costs a few milliseconds per action. After six seconds without a move
-the cursor rests (fades out) and comes back with the next one. The real system pointer is not warped or hidden; placement
+the cursor rests: it dims where it last went and brightens with the next move. The real system pointer is not warped or hidden; placement
 accounts for macOS/AX coordinate differences.
 
 Reduce Motion disables the travel, the tap ring, the corner marks and the drag line.
@@ -92,8 +92,8 @@ Reduce Motion disables the travel, the tap ring, the corner marks and the drag l
 ### Authority and lifetime
 
 Control programs retain the cursor and exclusive input lease across their steps, so
-observation/action calls do not blink the cursor off and on. The cursor disappears at
-program completion, release or shutdown and
+observation/action calls do not blink the cursor off and on. Between programs it stays where it last went, dimmed and without the input lease, and disappears
+when the session ends (stop, or a minute without a call), at release or at shutdown. It
 cannot intercept clicks or authorize actions. AX targets are revalidated after cursor
 travel and the overlay is excluded from hit-testing. Cursor movement is visual feedback,
 not proof that an operation's intended effect was verified.

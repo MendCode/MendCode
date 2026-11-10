@@ -63,6 +63,20 @@ function disposed(error: unknown, maybeDelivered: boolean) {
   return new Error(`${message} (${maybeDelivered ? "delivery unknown: the input may have reached the app; observe and check before repeating it" : "not delivered: nothing reached the app; observe again before retrying"})`)
 }
 
+/**
+ * Browsers the MendCode extension works in. Computer Use does not drive them: reading their pages switches the whole browser into
+ * its assistive accessibility mode, which slows every tab, while the extension works in background tabs at no such cost.
+ */
+export const CHROMIUM_BROWSERS = new Set([
+  "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
+  "com.brave.Browser", "com.brave.Browser.beta", "com.brave.Browser.nightly",
+  "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev", "com.microsoft.edgemac.Canary",
+  "company.thebrowser.Browser", "org.chromium.Chromium",
+])
+export function browserRedirect(app: string) {
+  return `${app} is a web browser: Computer Use does not drive browsers (reading their pages slows the whole browser). Use the MendCode browser extension instead. If your tools include user_browser, call it with action "status", and "install" if it is not installed. Otherwise tell the user, in plain words: it is on in the full tier, and elsewhere /tier browser_extension on turns it on; then you install it and they load it once in the browser's extensions page (Developer mode, Load unpacked). Nothing was opened or approved.`
+}
+
 /** Authority and live snapshots are memory-only; transcripts cannot resume them. */
 export function createComputerSessions(os: ComputerAccessibility, now: () => number, available: (id: SessionId, signal: AbortSignal) => void, stopping: AbortSignal, consumed: (id: string) => void) {
   const captures = new Map<string, { sessionId: SessionId; target: ComputerTarget; at: number }>()
@@ -73,6 +87,27 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
     state.stopped = true; state.observation = undefined; state.abort.abort()
     // The broker keeps window handles per application: releasing them under another live session of the same app ends that session too.
     if (![...sessions.values()].some((other) => other !== state && !other.stopped && now() < other.expiresAt && now() - other.lastActiveAt < 60000 && other.target.pid === state.target.pid)) os.release?.(state.target)
+  }
+  let sweepTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * Ends sessions that expired or went idle with no further call. Their release turns off what observing a web app switched on
+   * (Chromium's and Electron's accessibility mode, which slows that app for as long as it stays on). One timer, only while a session lives.
+   */
+  function sweep() {
+    if (sweepTimer) clearTimeout(sweepTimer)
+    sweepTimer = undefined
+    if (stopping.aborted) return
+    let next = Infinity
+    for (const state of sessions.values()) {
+      if (state.stopped) continue
+      const ends = Math.min(state.expiresAt, state.lastActiveAt + 60000)
+      // A running operation keeps its session; the next sweep looks again.
+      if (now() >= ends && !state.busy && !state.program && !actionInFlight) clear(state)
+      else next = Math.min(next, Math.max(ends, now() + 1000))
+    }
+    if (next === Infinity) return
+    sweepTimer = setTimeout(sweep, Math.max(1000, next - now() + 50))
+    sweepTimer.unref?.()
   }
   function bootstrap(id: string, sessionId: SessionId) {
     const capture = captures.get(id)
@@ -328,6 +363,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
               selected = await os.resolve(input.bundleID, signal)
               if (selected.bundleID !== input.bundleID) throw new Error("Application identity did not match")
             }
+            if (selected && CHROMIUM_BROWSERS.has(selected.bundleID)) throw new Error(browserRedirect(selected.appName || "This browser"))
             if (!selected || !await activation.approve(structuredClone(selected), input.mode)) throw new Error("Computer activation denied")
             available(sessionId, signal)
             if (capture) {
@@ -350,7 +386,10 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
             const at = now(), id = randomUUID()
             const state: State = { id, sessionId, sourceId: activation.sourceId, target: selected, mode: input.mode, createdAt: at, expiresAt: at + 600000, lastActiveAt: at, revision: 0, stopped: false, busy: false, program: false, abort: new AbortController(), audit: [] }
             while (sessions.size >= 64) { const oldest = sessions.keys().next().value!; clear(sessions.get(oldest)!); sessions.delete(oldest) }
+            // Idle sessions end before this one counts as live for their app, so their release still happens; then the timer covers this one.
+            sweep()
             sessions.set(id, state)
+            sweep()
             return result("MendCode Computer", { computerSessionID: id, stopped: false, target: state.target, mode: state.mode, expiresAt: state.expiresAt, idleExpirySeconds: 60 } satisfies ComputerSessionReport, { computerSessionID: id })
           })
         },
@@ -450,12 +489,15 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
                 if (name === "waitFor") {
                   const match = z.strictObject({ name: z.string().max(256).optional(), role: z.string().max(256).optional(), value: z.string().max(256).optional(), timeoutMs: z.number().int().min(0).max(10000).default(3000) }).refine((q) => q.name !== undefined || q.role !== undefined || q.value !== undefined, "Specify a name, role or value").parse(args)
                   const deadline = Date.now() + match.timeoutMs
+                  // Each look walks the whole window tree: the wait between looks grows (100 ms up to 500 ms) so a long wait does not load the app.
+                  let pause = 100
                   do {
                     const observation = await observe(state.id, sessionId, bounded)
                     const node = observation.nodes.find((node) => !node.secure && (match.name === undefined || node.name === match.name) && (match.role === undefined || node.role === match.role) && (match.value === undefined || node.value === match.value))
                     if (node) return { matched: true, node, observation }
                     if (Date.now() >= deadline) return { matched: false, observation }
-                    await Bun.sleep(100)
+                    await Bun.sleep(Math.min(pause, Math.max(1, deadline - Date.now())))
+                    pause = Math.min(500, pause * 2)
                     bounded.throwIfAborted()
                   } while (true)
                 }
