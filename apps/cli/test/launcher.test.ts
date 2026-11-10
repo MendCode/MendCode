@@ -74,6 +74,10 @@ describe("terminateDaemon signals only a real daemon pid", () => {
   test("a lock naming a live process that is not a daemon (a recycled pid) is never signalled, and says what it found", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mendd-foreign-"))
     const stranger = Bun.spawn(["sleep", "30"])
+    // On Linux a process just spawned has an empty /proc cmdline until it has exec'd; the check reads the command, so wait for it.
+    for (let end = Date.now() + 5_000; process.platform === "linux" && Date.now() < end; await Bun.sleep(5)) {
+      try { if (readFileSync(`/proc/${stranger.pid}/cmdline`, "utf8").includes("sleep")) break } catch {}
+    }
     const sent: Array<[number, unknown]> = []
     const real = process.kill
     const said: string[] = []

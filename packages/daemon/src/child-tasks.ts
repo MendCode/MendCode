@@ -45,6 +45,8 @@ export function createChildTasks(options: {
   permission(parent: SessionId): PermissionMode
   /** Leaves a `bare` child's instruction files, memories and skills out of its system prompt, on every engine. */
   bare(session: SessionId): void
+  /** Why a bare child cannot run on `model`'s engine (one that takes no run limits), or undefined. */
+  bareRefused?(parent: SessionId, model: ModelChoice | undefined): string | undefined
   submit(session: SessionId, text: string, mode: PermissionMode, command?: { displayText: string; attachments: BlobRef[]; model?: ModelChoice }): Promise<void>
   cancel(session: SessionId): Promise<void>
 }) {
@@ -144,7 +146,10 @@ export function createChildTasks(options: {
       if (previous && input.bare && !previous.bare) throw new Error("bare applies to a new task only: this one already ran with its context")
       const agent = input.agent ?? previous?.agent ?? "general"
       if (!options.agent(parentId, agent, command !== undefined)) throw new Error(`unknown subagent ${agent}`)
+      if (input.bare && input.agent) throw new Error("bare runs no agent profile: omit agent, the prompt is all the child gets")
       const model = command?.model ?? options.model(parentId, input)
+      const bareRefusal = (input.bare || previous?.bare) ? options.bareRefused?.(parentId, model ?? (previous ? store.sessionModel(previous.taskId) : undefined)) : undefined
+      if (bareRefusal) throw new Error(bareRefusal)
       // Logical admissions, not active concurrency. Deleting old task rows cannot reset this tree's budget.
       const taskId = previous?.taskId ?? options.id()
       // A resumed child stays where it is; only a new one gets a worktree, made before it counts against the budget.

@@ -1194,7 +1194,14 @@ export async function startDaemon(options: DaemonOptions) {
     permission: (parent) => capPermission(livePermission(parent), agents.port().primary(parent)?.permission),
     // The PR reviewer's limits: no AGENTS.md/CLAUDE.md of any level, no memory, no skills; a Claude Code child loads only the user's
     // settings and, unlike a review, runs none of the user's hooks.
-    bare: (child) => void runLimits.configure(child, { noContextFiles: true, noMemory: true, noHooks: true, excludeTools: ["skill"] }),
+    bare: (child) => void runLimits.configure(child, { noContextFiles: true, noMemory: true, noHooks: true, noAgentPrompt: true, excludeTools: ["skill"] }),
+    // Only these engines take the limits above; pi, OpenCode, Cursor and ACP agents would load their own instructions and skills.
+    bareRefused: (parent, model) => {
+      const settings = store.settings.get()
+      const choice = model ?? resolveModel({ role: "subagent", session: store.sessionModel(parent), roles: rolesFor(settings, store.sessionDirectory(parent)), catalog, cheapSubagent: featureOn(settings, "cheap_subagents", { safeMode: options.safeMode }) })
+      const engine = catalogModel(catalog, choice.model)?.engine ?? (choice.model.startsWith("acp:") ? "acp" : "native")
+      return engine === "native" || engine === "claude" || engine === "codex" ? undefined : `bare runs on MendCode's own engine, Claude Code or Codex; ${choice.model} would still load its own instructions and skills`
+    },
     model: (parent, input) => {
       const previous = input.task_id ? store.sessionModel(input.task_id) : undefined
       const hash = input.model?.lastIndexOf("#") ?? -1

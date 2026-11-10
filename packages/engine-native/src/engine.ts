@@ -200,7 +200,7 @@ type ProjectTool = Tool & { jsonSchema?: Record<string, unknown>; override?: boo
  * `task` may name; `extras` are the turn's project tools before any agent filtered them (a sub-agent starts from those).
  */
 /** Narrowing limits a scripted run sets on a session; see `session.run.configure`. */
-export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean }
+export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean; noAgentPrompt?: boolean }
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
 
@@ -1088,7 +1088,7 @@ export function createNativeEngine(options: {
         const systemContext: SystemContext = { sessionId: input.sessionId, prompt: turnStarts.get(input.sessionId)?.prompt ?? lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
         let system = share ? share.last.system : fork ? fork.system : options.system(cwd, systemContext)
         if (!share && !fork) {
-          const agentText = agent ? agentSection(agent) : ""
+          const agentText = agentPrompt(input.sessionId, agent)
           if (agentText) system = `${system}\n\n${agentText}`
           if (role === "plan") system = `${system}\n\n${(input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId)) ? REPORT_ONLY_NOTE : PLAN_MODE_NOTE}`
           const known = secrets?.list(input.sessionId) ?? []
@@ -1515,6 +1515,10 @@ export function createNativeEngine(options: {
   function instructionContext(sessionId: SessionId): { instructions?: import("@mendcode/tools").InstructionOptions } {
     if (options.runLimits?.(sessionId)?.noContextFiles) return { instructions: { ...options.instructions, off: true } }
     return options.instructions ? { instructions: options.instructions } : {}
+  }
+  /** The agent profile's prompt section, none for a session whose run limits keep it out (a bare sub-agent: a user or project profile carries conventions). */
+  function agentPrompt(sessionId: SessionId, agent: AgentProfile | undefined): string {
+    return agent && !options.runLimits?.(sessionId)?.noAgentPrompt ? agentSection(agent) : ""
   }
   async function runCall(input: TurnInput, call: ToolCall, toolset: Toolset, userInitiated = false, loadedInstructions?: Set<string>, repeated = false, explicitApproval = false, parentItemId?: ItemId, messages: ModelMessage[] = []): Promise<{ result: ToolResult; stop: boolean }> {
     const early = parentItemId ? undefined : takeEarlyCard(input.sessionId, call.callId)
@@ -2432,7 +2436,7 @@ export function createNativeEngine(options: {
       const cwd = options.cwdFor(sessionId)
       const section = (id: string, label: string, chars: number, count?: number): ContextSection => ({ id, label, chars, tokens: estimateTokens(chars), ...(count === undefined ? {} : { count }) })
       const agent = lastAgent.has(sessionId) ? lastAgent.get(sessionId) : options.agents?.primary(sessionId)
-      const agentText = agent ? agentSection(agent) : ""
+      const agentText = agentPrompt(sessionId, agent)
       const subagents = lastSubagents.get(sessionId) ?? options.agents?.subagents(cwd) ?? []
       const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages, false, sessionId)
       const toolSpecs = lastSpecs.get(sessionId) ?? fresh!.specs
@@ -2599,7 +2603,8 @@ export function createNativeEngine(options: {
           const catalog = lastCatalog.get(input.sessionId) ?? fallback?.catalog
           let system = options.system(cwd, { sessionId: input.sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) })
           const agent = lastAgent.get(input.sessionId)
-          if (agent) system += `\n\n${agentSection(agent)}`
+          const agentText = agentPrompt(input.sessionId, agent)
+          if (agentText) system += `\n\n${agentText}`
           const known = secrets?.list(input.sessionId) ?? []
           if (known.length) system += `\n\n${secretsNote(known)}`
           if (hooks?.has("prompt.system", cwd)) system = (await hooks.system?.({ sessionId: input.sessionId, cwd, role: "main", system })) ?? system
