@@ -81,7 +81,7 @@ export function browserRedirect(app: string) {
 export function createComputerSessions(os: ComputerAccessibility, now: () => number, available: (id: SessionId, signal: AbortSignal) => void, stopping: AbortSignal, consumed: (id: string) => void) {
   const captures = new Map<string, { sessionId: SessionId; target: ComputerTarget; at: number }>()
   const sessions = new Map<string, State>()
-  let actionInFlight = false, capturing = 0
+  let actionInFlight = false, capturing = 0, starting = 0
   const trim = <T>(map: Map<string, T>) => { while (map.size >= 64) map.delete(map.keys().next().value!) }
   const clear = (state: State) => {
     state.stopped = true; state.observation = undefined; state.abort.abort()
@@ -97,15 +97,15 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
     if (sweepTimer) clearTimeout(sweepTimer)
     sweepTimer = undefined
     if (stopping.aborted) return
-    let next = Infinity
-    for (const state of sessions.values()) {
-      if (state.stopped) continue
-      const ends = Math.min(state.expiresAt, state.lastActiveAt + 60000)
-      // A running operation keeps its session; the next sweep looks again.
-      if (now() >= ends && !state.busy && !state.program && !actionInFlight) clear(state)
-      else next = Math.min(next, Math.max(ends, now() + 1000))
-    }
-    if (next === Infinity) return
+    const ends = (state: State) => Math.min(state.expiresAt, state.lastActiveAt + 60000)
+    const live = [...sessions.values()].filter((state) => !state.stopped)
+    if (!live.length) return
+    // The helper's release drops every semantic reference and the app's window handles, so it waits until nothing else could hold
+    // one: no other live or running session, no start or capture under way, no capture young enough to start from.
+    const holding = live.filter((state) => now() < ends(state) || state.busy || state.program)
+    const quiet = !holding.length && !actionInFlight && !starting && !capturing && ![...captures.values()].some((capture) => now() - capture.at <= 30000)
+    if (quiet) { for (const state of live) clear(state); return }
+    const next = holding.length ? Math.min(...holding.map(ends)) : now()
     sweepTimer = setTimeout(sweep, Math.max(1000, next - now() + 50))
     sweepTimer.unref?.()
   }
@@ -345,6 +345,8 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
               return result("MendCode Computer", { computerSessionID: input.computerSessionID, stopped: true, target: null, mode: null } satisfies ComputerSessionReport)
             }
             if (!activation || activation.synthetic || !activation.sourceId || !activation.text.trim()) throw new Error("Computer Use requires the current real user request; synthetic or detached activation is blocked")
+            starting++
+            try {
             if (input.appName !== undefined) {
               // An app named as the user names it: the running app with that name, exact first, then ignoring case.
               if (!os.apps) throw new Error("Application discovery is unavailable")
@@ -386,11 +388,9 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
             const at = now(), id = randomUUID()
             const state: State = { id, sessionId, sourceId: activation.sourceId, target: selected, mode: input.mode, createdAt: at, expiresAt: at + 600000, lastActiveAt: at, revision: 0, stopped: false, busy: false, program: false, abort: new AbortController(), audit: [] }
             while (sessions.size >= 64) { const oldest = sessions.keys().next().value!; clear(sessions.get(oldest)!); sessions.delete(oldest) }
-            // Idle sessions end before this one counts as live for their app, so their release still happens; then the timer covers this one.
-            sweep()
             sessions.set(id, state)
-            sweep()
             return result("MendCode Computer", { computerSessionID: id, stopped: false, target: state.target, mode: state.mode, expiresAt: state.expiresAt, idleExpirySeconds: 60 } satisfies ComputerSessionReport, { computerSessionID: id })
+            } finally { starting--; sweep() }
           })
         },
         observe(raw: ComputerObserveInput, abort: AbortSignal) {
