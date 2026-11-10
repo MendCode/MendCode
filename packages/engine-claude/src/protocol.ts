@@ -14,6 +14,31 @@ const WEEK_MINUTES = 7 * 24 * 60
 export type QuotaDraft = Extract<GlobalEventDraft, { type: "quota.snapshot" }>
 export type ClaudeMessage = Record<string, any>
 
+/** Token figures summed over a Claude Code process: its `result.modelUsage` is cumulative, `result.usage` is the turn's. */
+export type ClaudeSpend = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+const spendCount = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0)
+
+/** The process's spend so far, from a `result`'s `modelUsage` (every model it called), or undefined when the result has none. */
+export function processSpend(result: ClaudeMessage): ClaudeSpend | undefined {
+  const models = result.modelUsage
+  if (!models || typeof models !== "object") return undefined
+  const spend = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+  for (const entry of Object.values(models) as Array<Record<string, unknown>>) {
+    spend.input += spendCount(entry?.inputTokens)
+    spend.output += spendCount(entry?.outputTokens)
+    spend.cacheRead += spendCount(entry?.cacheReadInputTokens)
+    spend.cacheWrite += spendCount(entry?.cacheCreationInputTokens)
+  }
+  return spend
+}
+
+/** Moves a process's spend mark to a `result` no turn counts (drained, queued, unsolicited), so the next turn's gap is its own. */
+export function markProcessSpend(mark: { spend?: ClaudeSpend | undefined }, result: ClaudeMessage) {
+  const spend = processSpend(result)
+  if (spend) mark.spend = spend
+}
+
 /** Claude Code's own permission modes; `bypassPermissions` also needs `--allow-dangerously-skip-permissions`. */
 export type ClaudePermissionMode = "default" | "acceptEdits" | "bypassPermissions" | "plan"
 
@@ -281,7 +306,7 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined } }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   const plan = input.plan ?? createClaudePlan()
   /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
@@ -305,6 +330,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   /** The last text each sub-agent wrote, by its call's item: the report it ends with repeats it, and is then not drawn twice. */
   const agentLastText = new Map<ItemId, string>()
   let model = input.model
+  /** Whether Claude Code compacted in this turn (`compact_boundary`): its `result.usage` leaves that call out. */
+  let compacted = false
   /** The latest main-thread model call: Claude Code's `result` sums every call and sub-agent, so only this one says how full the context is. */
   let lastCall: { id: string; prompt: number; output: number } | undefined
 
@@ -599,15 +626,21 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     const contextWindow = typeof reported === "number" && Number.isFinite(reported) && reported > 0 ? Math.floor(reported) : undefined
     const measured = lastCall ? lastCall.prompt + lastCall.output : undefined
     const clamped = measured !== undefined && contextWindow !== undefined && measured > contextWindow
+    const turn = { input: Number(raw.input_tokens ?? 0), output: Number(raw.output_tokens ?? 0), cacheRead: Number(raw.cache_read_input_tokens ?? 0), cacheWrite: Number(raw.cache_creation_input_tokens ?? 0) }
+    // A compaction's calls are missing from `result.usage`; the gap in the process's running total since the last result holds them.
+    const now = processSpend(result)
+    const before = input.processMark?.spend
+    if (input.processMark && now) input.processMark.spend = now
+    const extra = (field: keyof ClaudeSpend) => (compacted && now && before ? Math.max(0, now[field] - before[field] - turn[field]) : 0)
     return {
       type: "usage",
       provider: "claude",
       model: modelName,
-      input: Number(raw.input_tokens ?? 0),
-      output: Number(raw.output_tokens ?? 0),
+      input: turn.input + extra("input"),
+      output: turn.output + extra("output"),
       reasoning: Number(raw.output_tokens_details?.thinking_tokens ?? 0),
-      cacheRead: Number(raw.cache_read_input_tokens ?? 0),
-      cacheWrite: Number(raw.cache_creation_input_tokens ?? 0),
+      cacheRead: turn.cacheRead + extra("cacheRead"),
+      cacheWrite: turn.cacheWrite + extra("cacheWrite"),
       ...(measured !== undefined ? { context: clamped ? contextWindow! : Math.round(measured) } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(input.compactAt ? { compactAt: input.compactAt } : {}),
@@ -655,6 +688,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       }
       if (message.type === "stream_event") onStreamEvent(message.event)
       else if (message.type === "system" && message.subtype === "thinking_tokens") onThinkingTokens(message)
+      else if (message.type === "system" && message.subtype === "compact_boundary") compacted = true
       else if (message.type === "assistant") noteCall(message.message?.id, message.message?.usage, message.message?.model)
       else if (message.type === "user") onToolResults(message.message?.content, message.tool_use_result)
       else if (message.type === "result") {

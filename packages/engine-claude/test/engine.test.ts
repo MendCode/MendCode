@@ -1310,6 +1310,34 @@ describe("MCP servers changed during a turn", () => {
   })
 })
 
+describe("claude compaction spend", () => {
+  // What Claude Code 2.1.321 reported for "Say hello in five words." then "/compact" in one process (haiku): the compact turn's
+  // `result.usage` is all zero, while `modelUsage` keeps the process's running total.
+  const hello = { type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 23, cache_read_input_tokens: 0, cache_creation_input_tokens: 37_283 }, modelUsage: { "claude-haiku-5-5": { inputTokens: 2, outputTokens: 23, cacheReadInputTokens: 0, cacheCreationInputTokens: 37_283 } } }
+  const compactResult = { type: "result", subtype: "success", usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, modelUsage: { "claude-haiku-5-5": { inputTokens: 2_000, outputTokens: 858, cacheReadInputTokens: 24_863, cacheCreationInputTokens: 49_725 } } }
+  const turnUsage = (mark: { spend?: unknown }, messages: Array<Record<string, unknown>>) => {
+    const events: EngineEvent[] = []
+    const mapper = createTurnMapper({ newItemId: () => ids("item"), emit: (event) => void events.push(event), model: "claude-haiku-5-5", processMark: mark as never })
+    for (const message of messages) mapper.accept(message)
+    return events.find((event) => event.type === "usage") as Extract<EngineEvent, { type: "usage" }>
+  }
+
+  test("a turn that compacted counts the compaction's calls, which only the process's running total shows", () => {
+    const mark = {}
+    expect(turnUsage(mark, [hello])).toMatchObject({ input: 2, output: 23, cacheRead: 0, cacheWrite: 37_283 })
+    const compacted = turnUsage(mark, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 37_308, post_tokens: 10_828 } }, compactResult])
+    expect(compacted).toMatchObject({ input: 1_998, output: 835, cacheRead: 24_863, cacheWrite: 12_442 })
+  })
+
+  test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
+    expect(turnUsage({}, [{ type: "system", subtype: "compact_boundary" }, hello])).toMatchObject({ input: 2, output: 23, cacheWrite: 37_283 })
+    const mark = {}
+    turnUsage(mark, [hello])
+    const later = { ...compactResult, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    expect(turnUsage(mark, [later])).toMatchObject({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0 })
+  })
+})
+
 describe("claude protocol helpers", () => {
   test("arguments follow the session's model, effort, permission and resume id", () => {
     expect(claudeArgs({ permission: "full", model: "sonnet", effort: "minimal", resume: "abc" })).toEqual([
