@@ -43,6 +43,8 @@ export function createChildTasks(options: {
   /** What a child launched with `model` (or with none of its own) will run on, for its record. */
   describe?(parent: SessionId, model: ModelChoice | undefined): TaskRecord["run"]
   permission(parent: SessionId): PermissionMode
+  /** Leaves a `bare` child's instruction files, memories and skills out of its system prompt, on every engine. */
+  bare(session: SessionId): void
   submit(session: SessionId, text: string, mode: PermissionMode, command?: { displayText: string; attachments: BlobRef[]; model?: ModelChoice }): Promise<void>
   cancel(session: SessionId): Promise<void>
 }) {
@@ -137,6 +139,9 @@ export function createChildTasks(options: {
       const tree = settings.subagentMaxDescendants ?? 16
       if (active.filter((task) => task.rootId === rootId).length >= tree) throw new Error(`subagent descendant limit reached: ${tree} sub-agents run at once in this conversation; launch the next when one ends (the user raises it in /settings, Subagents · whole tree)`)
       if (input.fork && !featureOn(settings, "task_fork")) throw new Error("fork needs the task_fork feature (/tier task_fork on)")
+      if (input.bare && !featureOn(settings, "task_bare")) throw new Error("bare needs the task_bare feature (/tier task_bare on)")
+      if (input.fork && input.bare) throw new Error("fork and bare exclude each other: a fork starts from the parent's conversation, a bare child from nothing but its prompt")
+      if (previous && input.bare && !previous.bare) throw new Error("bare applies to a new task only: this one already ran with its context")
       const agent = input.agent ?? previous?.agent ?? "general"
       if (!options.agent(parentId, agent, command !== undefined)) throw new Error(`unknown subagent ${agent}`)
       const model = command?.model ?? options.model(parentId, input)
@@ -164,7 +169,10 @@ export function createChildTasks(options: {
         ...(isolated ? { worktree: isolated.worktree } : previous?.worktree ? { worktree: { path: previous.worktree.path, base: previous.worktree.base } } : {}),
         // Only a new child that works where its parent does can start from the parent's context.
         ...(previous?.fork || (!previous && input.fork && !isolated) ? { fork: true as const } : {}),
+        ...(previous?.bare || (!previous && input.bare) ? { bare: true as const } : {}),
       }
+      // Run limits live in daemon memory: a resumed bare child gets them again, after a restart too.
+      if (task.bare) options.bare(taskId)
       const run = options.describe?.(parentId, model ?? store.sessionModel(taskId))
       if (run) task.run = run
       store.tasks.put(task)

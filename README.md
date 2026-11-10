@@ -482,6 +482,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Project backlog](docs/sidebar.md) (`backlog`) | — | — | Included | /tier backlog off · /backlog · /panel widget backlog |
 | [Sub-agent worktrees](docs/agents.md) (`task_worktree`) | — | — | Included | /tier task_worktree off · task isolation: "worktree" |
 | [Sub-agent forks (parent's cached context)](docs/agents.md) (`task_fork`) | — | — | Opt-in | /tier task_fork on · task fork: true |
+| [Bare sub-agents (no instructions, memories or skills)](docs/agents.md) (`task_bare`) | — | Opt-in | Opt-in | /tier task_bare on · task bare: true |
 | [Sub-agents on a cheaper model](docs/agents.md) (`cheap_subagents`) | — | Included | Included | /tier cheap_subagents off · /model roles · subagent |
 | [Claude Code compacts at MendCode's point](docs/claude-code.md) (`claude_compact`) | — | Included | Included | /tier claude_compact off · compactAtTokens |
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |

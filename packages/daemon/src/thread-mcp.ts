@@ -34,6 +34,7 @@ const schemas = {
     model: z.string().min(1).max(200).optional(), variant: z.string().min(1).max(80).optional(),
     agent: z.string().min(1).max(64).optional(), background: z.boolean().optional(),
     task_id: z.string().min(1).max(80).optional(),
+    bare: z.boolean().optional(),
     ...retry,
   }),
   orchestrator_capabilities: z.strictObject({}),
@@ -47,7 +48,7 @@ const descriptions: Record<Name, string> = {
   thread_read: "Read a bounded, redacted page of another project thread. Reasoning is excluded.",
   thread_search: "Search a bounded page of another project thread. Follow the before cursor for older history.",
   thread_interrupt: "Interrupt the running turn of another project thread.",
-  delegate_task: "Start a child agent on any configured engine/model with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one).",
+  delegate_task: "Start a child agent on any configured engine/model with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
   orchestrator_capabilities: "Describe this process's project-scoped thread tools and limits.",
 }
 const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "orchestrator_capabilities"].includes(name) } }))
