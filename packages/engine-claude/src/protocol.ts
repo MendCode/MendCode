@@ -100,7 +100,7 @@ export function claudeArgs(input: { model?: string | undefined; effort?: Reasoni
  * (in `claude --help`) also keeps that checkout's `.claude/settings*.json` (hooks, permission rules) from configuring its reviewer,
  * while the user's own settings and login stay as they are. Nothing is added without a limit.
  */
-export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; noMemory?: boolean | undefined; untrustedCheckout?: boolean | undefined; responseLanguage?: string | undefined } | undefined): { args: string[]; env?: Record<string, string> } {
+export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; noMemory?: boolean | undefined; untrustedCheckout?: boolean | undefined; noHooks?: boolean | undefined; responseLanguage?: string | undefined } | undefined): { args: string[]; env?: Record<string, string> } {
   const env = {
     ...(limits?.noContextFiles ? { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } : {}),
     ...(limits?.noMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}),
@@ -111,8 +111,11 @@ export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; 
   // `--settings` is the flag layer: 2.1.314 always loads it, whatever `--setting-sources` says, and above the user's settings
   // (sources low to high: user, project, local, flag, policy; both read in its binary), so the user's own `language` does not reach
   // a PR review child, which writes in the repository's review language instead. Nothing is saved to any settings file.
-  const language = limits?.responseLanguage ? ["--settings", JSON.stringify({ language: limits.responseLanguage })] : []
-  return { args: [...(userSettingsOnly ? ["--setting-sources", "user"] : []), ...language], ...(Object.keys(env).length ? { env } : {}) }
+  // A bare sub-agent also runs none of the user's hooks (the flag layer's `disableAllHooks`, as the `isolated` context level sets it):
+  // a hook that adds context (a prompt router, a design gate) would steer the answer the child was started without.
+  const flags = { ...(limits?.responseLanguage ? { language: limits.responseLanguage } : {}), ...(limits?.noHooks ? { disableAllHooks: true } : {}) }
+  const settings = Object.keys(flags).length ? ["--settings", JSON.stringify(flags)] : []
+  return { args: [...(userSettingsOnly ? ["--setting-sources", "user"] : []), ...settings], ...(Object.keys(env).length ? { env } : {}) }
 }
 
 /**

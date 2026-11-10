@@ -1192,8 +1192,9 @@ export async function startDaemon(options: DaemonOptions) {
     background: (task) => { sessionBackground.register(task.taskId, { state: task.state === "running" ? "working" : task.state === "cancelled" || task.state === "interrupted" ? "stopped" : task.state, summary: task.result.slice(0, 4000) }) },
     agent: (parent, name, command) => command ? !agents.selectable(store.sessionDirectory(parent)!, name, true) : agents.port().subagents(store.sessionDirectory(parent)!).some((agent) => agent.name === name),
     permission: (parent) => capPermission(livePermission(parent), agents.port().primary(parent)?.permission),
-    // The PR reviewer's limits: no AGENTS.md/CLAUDE.md of any level, no memory, no skills; a Claude Code child loads only the user's settings.
-    bare: (child) => void runLimits.configure(child, { noContextFiles: true, noMemory: true, excludeTools: ["skill"] }),
+    // The PR reviewer's limits: no AGENTS.md/CLAUDE.md of any level, no memory, no skills; a Claude Code child loads only the user's
+    // settings and, unlike a review, runs none of the user's hooks.
+    bare: (child) => void runLimits.configure(child, { noContextFiles: true, noMemory: true, noHooks: true, excludeTools: ["skill"] }),
     model: (parent, input) => {
       const previous = input.task_id ? store.sessionModel(input.task_id) : undefined
       const hash = input.model?.lastIndexOf("#") ?? -1

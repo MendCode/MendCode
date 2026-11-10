@@ -15,6 +15,8 @@ export type RunLimits = {
    * settings (Claude Code's `.claude/settings*.json` hooks and permission rules), so a pull request cannot run commands through them.
    */
   untrustedCheckout?: boolean
+  /** A bare sub-agent: an external harness runs none of the user's hooks either (Claude Code's `disableAllHooks`), so none adds context. */
+  noHooks?: boolean
   /**
    * The language an external harness answers in, over the user's own setting for it (Claude Code's `language`): a PR review child
    * writes in the repository's `template.language`, never in the language of whoever runs the daemon.
