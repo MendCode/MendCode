@@ -138,7 +138,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
     const name = `daemon.${command.service ? "service." : ""}${command.action}`
     /** Set when `--force` stops a daemon with turns running: they are reported, and the next start resumes them. */
     let interrupted: (Working & { count: number }) | undefined
-    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data: interrupted ? { ...(data as object), interrupted: { turns: interrupted.count, sessions: interrupted } } : data }) + "\n" : (interrupted ? `Interrupted ${workText({ activeTurns: interrupted.count, work: interrupted })}. They resume when the daemon starts again (resumeAfterRestart in the settings).\n` : "") + text)
+    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode.cli", kind: "result", command: name, data: interrupted ? { ...(data as object), interrupted: { turns: interrupted.count, sessions: interrupted } } : data }) + "\n" : (interrupted ? `Interrupted ${workText({ activeTurns: interrupted.count, work: interrupted })}. They resume when the daemon starts again (resumeAfterRestart in the settings).\n` : "") + text)
     try {
       if (command.help) { deps.out.write(DAEMON_USAGE); return 0 }
       const readStatus = async (): Promise<DaemonStatusReport | NotAnswering> => {
@@ -319,7 +319,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
       return 0
     } catch (error) {
       const message = redactSecrets(error instanceof Error ? error.message : String(error)).text
-      if (command.json) deps.out.write(JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "error", command: name, error: { code: "failed", message } }) + "\n")
+      if (command.json) deps.out.write(JSON.stringify({ schema: "mendcode.cli", kind: "error", command: name, error: { code: "failed", message } }) + "\n")
       else deps.err.write(`error: ${message}\n`)
       return 1
     } finally { peer?.close() }

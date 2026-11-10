@@ -135,7 +135,7 @@ test.skipIf(!available || process.platform === "win32")("one standalone binary s
     daemon = undefined
     // Empty PATH and a cwd with no sources prove the launcher uses its own executable.
     const auto = path.join(dir, "automatic")
-    expect(await command(auto, "session", "list", "--json")).toMatchObject([{ schema: "mendcode-next.cli.v1", kind: "result", data: { sessions: [] } }])
+    expect(await command(auto, "session", "list", "--json")).toMatchObject([{ schema: "mendcode.cli", kind: "result", data: { sessions: [] } }])
     await stop(auto)
     // Native startup reads all three embedded prompts; no turn or real provider is invoked.
     const native = path.join(dir, "native")

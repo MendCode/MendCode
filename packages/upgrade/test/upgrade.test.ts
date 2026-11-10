@@ -55,7 +55,7 @@ describe("install", () => {
     expect(statSync(box.paths.prev).mode & 0o777).toBe(0o755)
     expect(readdirSync(box.temp.dir).sort()).toEqual(["data"])
     expect(readdirSync(box.dataDir).sort()).toEqual(["bin", "upgrade-recovery.json", "upgrade.json"])
-    expect(readdirSync(box.paths.dir).sort()).toEqual(["mendcode-next", "mendcode-next.prev"])
+    expect(readdirSync(box.paths.dir).sort()).toEqual(["mendcode", "mendcode.prev"])
   })
 
   test("a failed rename leaves the installed binary untouched and removes the staged file", async () => {

@@ -142,8 +142,8 @@ export function loopSnapshotText(snapshot: LoopSnapshot) {
 
 export async function runLoopAutomation(command: LoopAutomation & Common, deps: AutomationDeps): Promise<number> {
   const dir = command.projectDir ? path.resolve(deps.cwd, command.projectDir) : deps.cwd
-  const result = (data: Record<string, unknown>, text: string) => { deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: command.kind, data })}\n` : text); return 0 }
-  const fail = (message: string, code = "failed") => { (command.json ? deps.out : deps.err).write(command.json ? `${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "error", command: command.kind, error: { code, message } })}\n` : `error: ${message}\n`); return 1 }
+  const result = (data: Record<string, unknown>, text: string) => { deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode.cli", kind: "result", command: command.kind, data })}\n` : text); return 0 }
+  const fail = (message: string, code = "failed") => { (command.json ? deps.out : deps.err).write(command.json ? `${JSON.stringify({ schema: "mendcode.cli", kind: "error", command: command.kind, error: { code, message } })}\n` : `error: ${message}\n`); return 1 }
   const send = async (input: Parameters<typeof deps.client.send>[0]) => deps.client.send(input)
   if (command.kind === "loop.status") {
     const reply = await send({ type: "loop.list", ...(command.all ? {} : { directory: dir }) })

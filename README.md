@@ -352,7 +352,7 @@ bun apps/cli/src/entry.ts --dir "$(mktemp -d)"   # disposable data; reuse a --di
 bun run build                                    # dist/mendcode for this machine (--target, --outfile)
 ```
 
-`sh scripts/install-dev.sh` installs a `mendcode-next` wrapper in `~/.local/bin` that runs the checkout. Releases: pushing a `v*`
+`sh scripts/install-dev.sh` installs a `mendcode` wrapper in `~/.local/bin` that runs the checkout. Releases: pushing a `v*`
 tag runs [release.yml](.github/workflows/release.yml), which runs the whole test gate, builds the five binaries (macOS and Linux
 x64/arm64, Windows x64), signs them with keyless cosign, attests them and attaches an SBOM; [nightly.yml](.github/workflows/nightly.yml)
 tags `main` once a day when it changed. There is no Apple notarization or Windows code signing yet ([releases](docs/release.md)).

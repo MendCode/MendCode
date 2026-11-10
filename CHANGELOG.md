@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The name `mendcode-next` is gone: `--json` lines carry `"schema": "mendcode.cli"`, the migration report `mendcode.migrate`, `mendcode upgrade` keeps its binary as `<data dir>/bin/mendcode`, and the development wrapper is `mendcode` (`MENDCODE_BIN_DIR`).
 - `mendcode profile new <name> --clean` makes a profile that starts from MendCode's clean look: while it is on, your own look settings and UI modules are set aside, and disabling it brings them back.
 - Image generation with a ChatGPT login works again: when the image model refuses the reasoning effort, the request is sent again at once without it, quietly and in the same image card.
 - A look change saved while a profile is on (for example the theme, from chat) keeps only that change; the profile's other keys stay the profile's.

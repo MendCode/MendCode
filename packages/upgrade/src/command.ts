@@ -29,7 +29,7 @@ export const UPGRADE_USAGE = [
   "  --method, -m    direct/curl use the verified binary installer; package-manager releases are unavailable",
   "  --force         install even when up to date or when the release is older than the running version",
   "  --rollback      go back to the previous binary (run it again to return to the newer one)",
-  "  --dir D         data directory (default: MENDCODE_DIR or ~/.mendcode); the binary goes to <D>/bin/mendcode-next",
+  "  --dir D         data directory (default: MENDCODE_DIR or ~/.mendcode); the binary goes to <D>/bin/mendcode",
   "  release source: MendCode/MendCode, or MENDCODE_UPGRADE_REPO=owner/name; a private repository is read with GH_TOKEN, GITHUB_TOKEN or `gh auth login`",
 ].join("\n")
 

@@ -27,7 +27,7 @@ test("B49 CLI delegates scoped mutations, resolves project paths and emits the n
   const h = harness()
   expect(await h.run(["cache", "enable", "--global", "--project-path", "../other", "--scope", "project", "--json"])).toBe(0)
   expect(h.sent).toEqual([{ type: "cache.set", input: { directory: "/work/repo", action: "enable", global: true, projectPath: "/work/other", scope: "project" } }])
-  expect(JSON.parse(h.out[0]!)).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", command: "cache", data: report })
+  expect(JSON.parse(h.out[0]!)).toMatchObject({ schema: "mendcode.cli", kind: "result", command: "cache", data: report })
   expect(h.err).toEqual([])
 })
 test("B49 status is text or JSON without mutations; daemon errors remain failures", async () => {

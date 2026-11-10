@@ -169,7 +169,7 @@ export function collectUninstallPlan(command: UninstallCommand, deps: UninstallD
   const bin = path.join(dataDir, "bin")
   if (existsSync(bin)) {
     if (lstatSync(bin).isSymbolicLink() || !plan.owned) add(bin, "binary", "blocked", "Managed binary ownership unverified")
-    else for (const name of readdirSync(bin).sort()) add(path.join(bin, name), "binary", ["mendcode-next", "mendcode-next.exe", "mendcode-next.prev", "mendcode-next.new", "mendcode-next.exe.prev", "mendcode-next.exe.new"].includes(name) ? "trash" : "keep", "Managed bin directory")
+    else for (const name of readdirSync(bin).sort()) add(path.join(bin, name), "binary", ["mendcode", "mendcode.exe", "mendcode.prev", "mendcode.new", "mendcode.exe.prev", "mendcode.exe.new"].includes(name) ? "trash" : "keep", "Managed bin directory")
   }
   const installDir = guardPath(path.resolve(deps.env.MENDCODE_INSTALL_DIR ?? (deps.platform === "win32" ? path.join(deps.env.LOCALAPPDATA ?? path.join(deps.home, "AppData", "Local"), "Programs", "mendcode") : path.join(deps.home, ".local", "bin"))), deps.home)
   const installedBinary = (binary: string) => {
@@ -184,13 +184,12 @@ export function collectUninstallPlan(command: UninstallCommand, deps: UninstallD
     add(binary, "binary", owned ? "trash" : "blocked", owned ? "Verified installation receipt" : "No matching installation receipt")
     if (owned) add(receipt, "binary", "trash")
   }
+  // The development wrapper has the release's name; checked first so it is not taken for a release without a receipt.
+  const wrapper = path.join(guardPath(path.resolve(deps.env.MENDCODE_BIN_DIR ?? path.join(deps.home, ".local", "bin")), deps.home), "mendcode")
+  // Anything else by that name is a release (or a stranger), judged by its receipt below.
+  if (existsSync(wrapper) && lstatSync(wrapper).isFile() && /^#!\/bin\/sh\n# mendcode dev wrapper\nexec bun "[^"\n]+\/apps\/cli\/src\/entry\.ts" "\$@"\n$/.test(readFileSync(wrapper, "utf8"))) add(wrapper, "binary", "trash", "Development wrapper")
   installedBinary(path.join(installDir, deps.platform === "win32" ? "mendcode.exe" : "mendcode"))
   if (deps.runningBinary) installedBinary(canonical(path.resolve(deps.runningBinary)))
-  const wrapper = path.join(guardPath(path.resolve(deps.env.MENDCODE_NEXT_BIN_DIR ?? path.join(deps.home, ".local", "bin")), deps.home), "mendcode-next")
-  if (existsSync(wrapper)) {
-    const owned = lstatSync(wrapper).isFile() && /^#!\/bin\/sh\n# mendcode-next dev wrapper\nexec (?:env MENDCODE_PROGRAM=mendcode-next )?bun "[^"\n]+\/apps\/cli\/src\/entry\.ts" "\$@"\n$/.test(readFileSync(wrapper, "utf8"))
-    add(wrapper, "binary", owned ? "trash" : "blocked", owned ? "Development wrapper" : "Development wrapper ownership unverified")
-  }
   for (const target of plan.targets) if (target.action === "blocked") plan.blockers.push(`Left alone: ${target.path} (${target.reason})`)
   if (deps.platform === "win32" && plan.targets.some((target) => target.kind === "binary" && target.action === "trash" && target.path.endsWith(".exe"))) plan.blockers.push("Windows user PATH ownership is unrecorded; review it manually")
   return plan
@@ -256,7 +255,7 @@ export function uninstallText(plan: UninstallPlan) {
 
 export async function runUninstallCommand(command: UninstallCommand, deps: UninstallDeps) {
   if (command.help) { deps.out.write(`${UNINSTALL_USAGE}\n`); return 0 }
-  const emit = (kind: string, data: object) => deps.out.write(`${JSON.stringify({ schema: "mendcode-next.cli.v1", kind, command: "uninstall", ...data })}\n`)
+  const emit = (kind: string, data: object) => deps.out.write(`${JSON.stringify({ schema: "mendcode.cli", kind, command: "uninstall", ...data })}\n`)
   try {
     const plan = collectUninstallPlan(command, deps)
     if (command.json) emit("plan", { data: plan })

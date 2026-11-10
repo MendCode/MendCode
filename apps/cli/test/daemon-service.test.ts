@@ -89,7 +89,7 @@ describe("daemon lifecycle CLI", () => {
       expect(await h.run(...args)).toBe(0)
       expect(h.calls).not.toContain("launch")
       expect(h.calls).not.toContain("host.install")
-      if (args.includes("--json")) expect(JSON.parse(h.output())).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", data: { running: false } })
+      if (args.includes("--json")) expect(JSON.parse(h.output())).toMatchObject({ schema: "mendcode.cli", kind: "result", data: { running: false } })
     }
   })
 

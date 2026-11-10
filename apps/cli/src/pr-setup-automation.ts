@@ -3,7 +3,7 @@ import type { AutomationDeps, Common } from "./automation"
 import type { PrSetupAutomation } from "./github-args"
 
 export async function runPrSetup(command: PrSetupAutomation & Common, deps: AutomationDeps): Promise<number> {
-  const emit = (data: Record<string, unknown>, text: string) => deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: command.kind, data })}\n` : `${text}\n`)
+  const emit = (data: Record<string, unknown>, text: string) => deps.out.write(command.json ? `${JSON.stringify({ schema: "mendcode.cli", kind: "result", command: command.kind, data })}\n` : `${text}\n`)
   if (deps.allowFiles === false) { emit({ error: "local only" }, "PR setup requires a local daemon."); return 64 }
   const base = { type: "pr.review" as const, sessionId: command.session as SessionId, ...(command.role ? { role: command.role } : {}) }
   const preview = await deps.client.send({ ...base, action: "setup-preview" })

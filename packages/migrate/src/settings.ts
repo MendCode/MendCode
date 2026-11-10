@@ -52,6 +52,6 @@ export const PROGRESS_EVERY = 50
 /** Entries one directory measurement visits before it reports a lower bound instead of an exact size. */
 export const MAX_WALK_ENTRIES = 500_000
 
-export const REPORT_SCHEMA = "mendcode-next.migrate-v1@1"
+export const REPORT_SCHEMA = "mendcode.migrate"
 export const REPORT_DIR = "migrations"
 export const MIGRATE_EXIT = { ok: 0, errors: 1, usage: 64, refused: 65 } as const

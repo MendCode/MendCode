@@ -750,12 +750,12 @@ A closed pipe (`| head`) ends the command quietly with exit 0.
 
 ## JSON output
 
-With `--json` every line of stdout is one object carrying `"schema": "mendcode-next.cli.v1"`:
+With `--json` every line of stdout is one object carrying `"schema": "mendcode.cli"`:
 
 ```json
-{"schema":"mendcode-next.cli.v1","kind":"result","command":"session.create","data":{"sessionId":"ses_…"}}
-{"schema":"mendcode-next.cli.v1","kind":"event","event":{"sessionId":"ses_…","seq":12,"type":"turn.completed",…}}
-{"schema":"mendcode-next.cli.v1","kind":"error","command":"session.list","error":{"code":"failed","message":"…"}}
+{"schema":"mendcode.cli","kind":"result","command":"session.create","data":{"sessionId":"ses_…"}}
+{"schema":"mendcode.cli","kind":"event","event":{"sessionId":"ses_…","seq":12,"type":"turn.completed",…}}
+{"schema":"mendcode.cli","kind":"error","command":"session.list","error":{"code":"failed","message":"…"}}
 ```
 
 ### Results
@@ -799,7 +799,7 @@ Build accepts `--mode`, `--focus`, `--model`, `--role`, `--workflow`, `--show-fu
 Common JSON/data-directory flags apply.
 
 See [prompt-modes.md](prompt-modes.md) for boundaries, defaults and custom sources.
-Without the selector, the existing `mendcode-next.cli.v1` schema and raw `run --json` output remain unchanged.
+Without the selector, the existing `mendcode.cli` schema and raw `run --json` output remain unchanged.
 
 The v2 plan names the alias without specifying how to select it. This implements the narrow envelope alias using v1's
 documented JSON shape: payloads remain v2 and `--timeout` remains seconds (`--timeout-ms` is explicit milliseconds).

@@ -54,7 +54,7 @@ test("all project automation commands use the daemon and preserve v1 human outpu
   expect(await run("focus-list")).toContain("codex\tCodex optimized")
   for (const operation of ["config-show", "context-status", "focus-status", "focus-show", "package-show"]) {
     const result = JSON.parse(await run(operation, "--json"))
-    expect(result).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", command: "project" })
+    expect(result).toMatchObject({ schema: "mendcode.cli", kind: "result", command: "project" })
     expect(result.data).toBeDefined()
   }
   expect(JSON.parse(await run("package-set", "--title", "Fixture", "--version", "2.0", "--json")).data).toMatchObject({ title: "Fixture", version: "2.0" })

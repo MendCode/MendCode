@@ -94,7 +94,7 @@ export const nodeFs: UpgradeFs = {
   readBytes: (file) => readFile(file),
   lock: async (dir) => {
     await mkdir(dir, { recursive: true })
-    for (const relative of ["bin", "bin/mendcode-next", "bin/mendcode-next.prev", "bin/mendcode-next.new", "upgrade.json", "upgrade.json.tmp", "upgrade-recovery.json", "upgrade-recovery.json.tmp"]) {
+    for (const relative of ["bin", "bin/mendcode", "bin/mendcode.prev", "bin/mendcode.new", "upgrade.json", "upgrade.json.tmp", "upgrade-recovery.json", "upgrade-recovery.json.tmp"]) {
       const entry = await lstat(path.join(dir, relative)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; return undefined })
       if (entry?.isSymbolicLink()) throw new UpgradeError("bad-data-dir", "updater paths cannot be symbolic links")
     }

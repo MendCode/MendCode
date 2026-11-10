@@ -77,9 +77,9 @@ Only verified ownership permits removal:
 
 | Installation | Ownership check |
 |---|---|
-| Managed binary | When the database is verified, `<data dir>/bin/mendcode-next[.exe]`, `.prev` and `.new` belong to the upgrade contract. The managed binary keeps its name `mendcode-next` inside the data directory. |
+| Managed binary | When the database is verified, `<data dir>/bin/mendcode[.exe]`, `.prev` and `.new` belong to the upgrade contract. |
 | POSIX/PowerShell installer | Installers now write `.mendcode-install` beside `mendcode[.exe]`, containing its exact basename and SHA256. Only a matching receipt permits removing that binary. |
-| Development wrapper | Must match `scripts/install-dev.sh`'s exact marker/shape. `MENDCODE_NEXT_BIN_DIR` selects its directory. |
+| Development wrapper | `~/.local/bin/mendcode` written by `scripts/install-dev.sh`: removed only when it matches that script's exact marker and shape. `MENDCODE_BIN_DIR` selects its directory. |
 
 Since `--tier`, the install receipt also contains the starting tier as a fourth `tier=` line. Uninstall accepts it but does not need it; see [releases](release.md#starting-tier).
 
@@ -104,7 +104,7 @@ Ownership is never inferred from the name `mendcode`, which v1 also uses. No pac
 | 4 | Needs confirmation |
 | 64 | Usage |
 
-`--json`/`--format json` emits the existing `mendcode-next.cli.v1` envelope with `plan`, then `result` or `error`. No credential values are included.
+`--json`/`--format json` emits the existing `mendcode.cli` envelope with `plan`, then `result` or `error`. No credential values are included.
 
 ## How review works
 

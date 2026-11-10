@@ -159,7 +159,7 @@ describe("terminateDaemon signals only a real daemon pid", () => {
 })
 
 test("compiled launchers re-exec themselves; source launchers retain the Bun daemon entry", () => {
-  expect(daemonCommand("/$bunfs/root/entry.ts", "/tmp/mendcode-next")).toEqual(["/tmp/mendcode-next", "__daemon"])
+  expect(daemonCommand("/$bunfs/root/entry.ts", "/tmp/mendcode")).toEqual(["/tmp/mendcode", "__daemon"])
   expect(daemonCommand("B:/~BUN/root/entry.ts", "C:/bin/mendcode.exe")).toEqual(["C:/bin/mendcode.exe", "__daemon"])
   expect(daemonCommand("B:\\~BUN\\root\\entry.ts", "C:\\bin\\mendcode.exe")).toEqual(["C:\\bin\\mendcode.exe", "__daemon"])
   const source = daemonCommand(path.join(import.meta.dir, "../src/entry.ts"), "/tmp/bun")
