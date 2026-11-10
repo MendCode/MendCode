@@ -168,6 +168,23 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(read(profileFile)).toBe(snapshot)
   })
 
+  test("a stored change made while a clean-look profile is on (customize_ui) touches only the key it changed", async () => {
+    const dir = layout()
+    const mine = { disabledUiExtensions: ["old-clock"], footerRows: [["branch", "model", "quota"]], logoKind: "mascot", theme: "ink" }
+    dir.write("data/tui/profile.json", JSON.stringify(mine))
+    installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"], footerRows: [["branch", "model"]], logoKind: "wordmark" } })
+    const h = await start(dir, [])
+    // The daemon wrote the user's profile with one key changed and sent it whole.
+    h.app.onGlobal({ type: "tui.changed", gseq: 1, at: Date.now(), profile: { ...normalizeTuiProfile(mine), theme: "mono" } as never })
+    h.app.render()
+    expect(profile(h).theme).toBe("mono")
+    expect(profile(h).footerRows).toEqual([["branch", "model"]])
+    expect(profile(h).logoKind).toBe("wordmark")
+    expect(profile(h).disabledUiExtensions).toEqual(["old-clock", "quota-footer"])
+    const state = read(path.join(dir.dataDir, "activation.json"))
+    expect(state ? Object.values(JSON.parse(state).saved ?? {}).flatMap((slot) => (slot as { kept: string[] }).kept) : []).toEqual([])
+  })
+
   test("a clean-look profile's entries join even a full list of the user's, and nothing is pushed out", async () => {
     const dir = layout()
     const mine = Array.from({ length: 128 }, (_, index) => `mine-${index}`)

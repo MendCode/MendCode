@@ -10,6 +10,8 @@ export default defineTheme({
   label: "Ink",
   dark: true,
   background: "#0a0a0a",
+  // MendCode's own black, also on a dark terminal with another one.
+  paintBackground: "always",
   colors: {
     primary: "#fafafa",
     text: "#fafafa",

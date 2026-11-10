@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- Image generation with a ChatGPT login works again: when the image model refuses the reasoning effort, the request is sent again at once without it, quietly and in the same image card.
+- A look change saved while a profile is on (for example the theme, from chat) keeps only that change; the profile's other keys stay the profile's.
+- MendCode's default themes paint their own black background on a dark terminal too, instead of showing the terminal's; other themes keep the terminal's as before.
+- graft's tally line no longer ends the answer; the turn's closing line shows it as `graft ~70k`.
+- The home's Completed list no longer shows sessions that were never written in, and an untitled session reads "Untitled session" instead of its id.
+
 ## v0.0.12 - 2026-11-08
 
 Computer use is much faster and smarter, with its own cursor, and a profile can give a clean look by switching off your own terminal modules.

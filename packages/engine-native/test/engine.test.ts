@@ -914,6 +914,29 @@ describe("native engine loop", () => {
     expect(retries).toEqual(["chatgpt An error occurred while processing your request.", "web search failed at the provider 2 times; continuing without it"])
   })
 
+  test("an image tool that refuses the reasoning effort is asked again at once without one, and the next call keeps it off", async () => {
+    async function* refused(): AsyncIterable<ModelEvent> {
+      yield { type: "hosted_tool", id: "ig_1", tool: "image_generation", status: "started" }
+      throw new RetryableProviderError("[PROVIDER]: chatgpt Complexity 'medium' is not supported for this image model.")
+    }
+    async function* drawn(): AsyncIterable<ModelEvent> {
+      yield { type: "hosted_tool", id: "ig_2", tool: "image_generation", status: "started" }
+      yield { type: "hosted_tool", id: "ig_2", tool: "image_generation", status: "completed", detail: "a cart icon" }
+      yield* stop("Here is the icon.")
+    }
+    const { provider, requests } = scriptedProvider([refused, drawn])
+    const engine = createNativeEngine({ provider, tools: [], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", hostedTools: () => ["image_generation"], sleep: noSleep, modelFor: () => ({ model: "gpt-6-luna", effort: "medium" as const }) })
+    const run = turn({ text: "draw a cart icon" })
+    expect(await engine.runTurn(run.input)).toEqual({ status: "ok" })
+    expect(requests.map((request) => request.effort)).toEqual(["medium", undefined])
+    expect(requests[1]!.hostedTools).toEqual(["image_generation"])
+    // Quiet: no retry notice, and one image card that ends with the image, not a failed one above it.
+    expect(run.events.filter((e) => e.type === "retrying")).toEqual([])
+    const cards = run.events.filter((e) => e.type === "item.started" && "kind" in e && e.kind === "tool_call")
+    expect(cards).toHaveLength(1)
+    expect(run.events.filter((e) => e.type === "item.completed" && "itemId" in e && e.itemId === (cards[0] as { itemId: string }).itemId).map((e) => "status" in e && e.status)).toEqual(["ok"])
+  })
+
   test("a hosted search still running when the stream breaks is closed as cancelled", async () => {
     async function* broken(): AsyncIterable<ModelEvent> {
       yield { type: "hosted_tool", id: "ws_1", tool: "web_search", status: "started" }

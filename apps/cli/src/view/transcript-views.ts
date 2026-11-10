@@ -42,7 +42,7 @@ export function turnStatusRows(m: Sized<TurnStatusModel>, g: Glyphs): Line[] {
   const ended = m.end as unknown as TurnEnd | undefined
   if (!ended) return []
   const running = runningText(m.running)
-  const end = { ...ended, ...(m.time ? { doneAt: m.time } : {}), ...(running ? { stillRunning: running } : {}) }
+  const end = { ...ended, ...(m.time ? { doneAt: m.time } : {}), ...(running ? { stillRunning: running } : {}), ...(m.saved ? { saved: m.saved } : {}) }
   const glyphs = { ...g, done: m.done }
   // `timestamps: bottom` closes a turn with one dim line under the answer even when the message meta is off; the minimal view stays without it.
   if (m.meta === "off" && m.timestamps === "bottom" && m.mode !== "minimal") return [...(end.error ? errorBox(end.error, width, g) : []), ...closingLine(end, m, width)]
@@ -76,6 +76,7 @@ function closingLine(end: TurnEnd, m: Sized<TurnStatusModel>, width: number): Li
   if (aborted) parts.push({ text: `${end.outcome === "paused" ? "paused · usage limit" : end.outcome === "interrupted" && end.reason ? `interrupted (${interruptReason(end.reason)})` : end.outcome}${took ? ` after ${took}` : ""}`, fg: "warning", dim: true })
   else if (took) parts.push({ text: `took ${took}`, fg: "muted", dim: true })
   if (end.doneAt) parts.push({ text: `ended ${end.doneAt}`, fg: "muted", dim: true })
+  if (end.saved) parts.push({ text: `graft ${end.saved}`, fg: "muted", dim: true })
   if (end.stillRunning) parts.push({ text: end.stillRunning, fg: "muted", dim: true })
   if (!parts.length) return []
   const column = Math.max(0, Math.min(m.textColumn ?? INDENT.length, width - 10))

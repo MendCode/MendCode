@@ -455,6 +455,8 @@ export type TurnStatusModel = Readonly<{
   undone?: number
   /** Where the chat says the time (the profile's `timestamps`): `bottom` closes a turn with one line even when `meta` is `off`. */
   timestamps?: "bottom" | "top" | "off"
+  /** `end`: what graft says the turn saved (`~70k`). */
+  saved?: string
   /** The latest turn's end only: the session's shells and sub-agents still running now (the line says so while they do). */
   running?: Readonly<{ shells: number; agents: number }>
   /** The column the assistant's text starts at in this block's width, so the closing line lines up with the answer above it. */
