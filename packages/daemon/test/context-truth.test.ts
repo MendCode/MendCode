@@ -37,7 +37,7 @@ describe("/context says one true number", () => {
 
   test("2: Claude Code's compaction point is the window it is handed, before and after the first message", () => {
     const settings = { compactAtTokens: 475_000 }
-    expect(claudeCompactEnv({ model: "claude-sonnet", settings, on: true, environment: {} })).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "475000" })
+    expect(claudeCompactEnv({ model: "claude-sonnet", settings: { compactAtTokens: 150_000 }, on: true, environment: {} })).toEqual({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: "150000" })
     const claude: ModelInfo = { id: "claude-test", name: "Claude test", efforts: [], contextWindow: 200_000, engine: "claude" }
     expect(claude.contextWindow).toBe(200_000)
     const unmeasured = harnessContextReport({ harness: "Claude Code", model: "claude-sonnet", turns: [], contextWindow: 1_000_000, compactAtTokens: 475_000 })
