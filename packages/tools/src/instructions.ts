@@ -23,6 +23,8 @@ const MAX_INCLUDE_DEPTH = 8
 const MAX_CACHED = 500
 
 export type InstructionOptions = {
+  /** A session without instruction files (run limit `noContextFiles`: a PR review or a bare child) gets none on a read either. */
+  off?: boolean
   maxChars?: number
   /** Whether `@relative/path` lines pull in other files (the `instruction_includes` feature). */
   includes?(): boolean
