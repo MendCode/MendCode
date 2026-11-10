@@ -74,7 +74,9 @@ export function claudeCompactEnv(input: { model: string | undefined; settings: P
   if (!input.on || environment.CLAUDE_CODE_AUTO_COMPACT_WINDOW) return undefined
   const info = CLAUDE_MODELS.find((model) => model.id === input.model || model.id === `claude-${input.model}`)
   const fromEnvironment = Number(environment.MENDCODE_COMPACT_AT_TOKENS)
-  const tokens = (fromEnvironment > 0 ? fromEnvironment : undefined) ?? modelContextOf(input.settings, info)?.compactAt ?? input.settings.compactAtTokens ?? input.settings.compaction?.token_limit ?? CLAUDE_COMPACT_WINDOW
+  // A global point set for long-window models only lowers Claude Code's window; a per-model point or the environment can raise it.
+  const global = input.settings.compactAtTokens ?? input.settings.compaction?.token_limit
+  const tokens = (fromEnvironment > 0 ? fromEnvironment : undefined) ?? modelContextOf(input.settings, info)?.compactAt ?? Math.min(global ?? CLAUDE_COMPACT_WINDOW, CLAUDE_COMPACT_WINDOW)
   return { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(Math.round(tokens)) }
 }
 
