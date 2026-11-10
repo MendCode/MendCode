@@ -7,7 +7,6 @@ import { glyphs } from "../src/ui/theme"
 import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
 import { renderToolCard } from "../src/view/tool-card"
 import { jsonShape } from "../src/view/tool-data"
-import { foldLabel } from "../src/view/tool-summary"
 import { createTranscript, type PresentationMode, type ViewLine } from "../src/view/transcript"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, TOOL_DENSITIES, type TuiProfile } from "../src/view/tui-profile"
 import { DENSITY_NOW, densitySession } from "./density-session"
@@ -178,18 +177,13 @@ describe("calm keeps one row for a finished call that is no longer news", () => 
     expect(of("packages: inspect")).toEqual(["     ✗ packages inspect acme-theme  failed", "     │ [PACKAGES]: Package tree exceeds approval budget"])
   })
 
-  test("a run of finished looking calls folds into one row with the counts spelled, and opens on a click", () => {
+  test("calm keeps every finished looking call as its own row: nothing folds into a count", () => {
     const t = build({ density: "calm" })
-    const folded = text(t).filter((row) => row.includes("◇ Read") || row.includes("◇ Glob"))
-    expect(folded).toContain("     ◇ Read 1 file · Glob 1 pattern · Grep 1 pattern")
-    expect(folded).toContain("     ◇ Read 1 file · Grep 2 patterns")
-    expect(foldLabel(["read", "grep", "grep", "glob", "ls", "ls"], true)).toBe("Read 1 file · List 2 folders · Glob 1 pattern · Grep 2 patterns")
-    expect(foldLabel(["read", "grep", "read"])).toBe("Read 2 files · Grep 1")
-    const leader = lines(t).find((row) => row.text.includes("◇ Read 1 file · Grep 2 patterns"))!
-    t.toggleDetails(leader.itemId!, leader.fold)
-    const opened = text(t).join("\n")
-    expect(opened).toContain("Read docs/extensions.md")
-    expect(opened).toContain('Grep "docsTopic"')
+    const rows = text(t)
+    expect(rows.some((row) => row.includes("◇ Read") || /Read \d+ files?|Grep \d+ patterns?/.test(row))).toBe(false)
+    const all = rows.join("\n")
+    expect(all).toContain("Read docs/extensions.md")
+    expect(all).toContain('Grep "docsTopic"')
   })
 
   test("a card the reader opened by hand stays open as the session goes on", () => {

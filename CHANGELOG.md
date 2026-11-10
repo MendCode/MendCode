@@ -23,6 +23,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Every tool call keeps its own row in the transcript: reads, searches and commands no longer fold into `Read 5 files` or `N tools more`.
 - Computer Use no longer leaves an app slowed after it ends: a session that goes quiet ends on its own and turns the app's accessibility mode off again.
 - The Computer Use cursor stays where it last went, dimmed, instead of vanishing between steps.
 - Waiting for something on screen in Computer Use checks less often the longer it waits, so the app stays responsive.
