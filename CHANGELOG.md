@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The browser extension is on in the full tier: ask the model to use your browser and it offers to install it. Elsewhere `/tier browser_extension on` turns it on.
 - Computer Use sends Chrome, Brave, Edge, Arc and Chromium to the MendCode browser extension, and tells you how to install it.
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
 - The whole memory graph groups each category with a dotted line in its color, so memories without links no longer sit apart in a list.

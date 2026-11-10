@@ -117,8 +117,9 @@ describe("featureState", () => {
       for (const tier of [undefined, "minimalist", "balanced", "full"] as const) expect(featureOn({ tier }, id)).toBe(tier === undefined && FEATURES[id].legacy)
       expect(featureState({ tier: "minimalist", features: { [id]: true } }, id)).toEqual({ on: true, why: "override" })
     }
-    expect(effectiveSettings(settings)).toEqual({ tools: { "computer_*": false } })
-    expect(effectiveSettings({ features: { computer: true } } as TierSettings).tools).toBeUndefined()
+    // The browser extension's tool rides only behind tool discovery, which is off here.
+    expect(effectiveSettings(settings)).toEqual({ tools: { "computer_*": false, user_browser: false } })
+    expect(effectiveSettings({ features: { computer: true }, experimental: { tool_discovery: true } } as TierSettings).tools).toBeUndefined()
     expect(tierIncludes(undefined, "full")).toBe(true)
   })
 
@@ -152,7 +153,11 @@ describe("effectiveSettings", () => {
     expect(balanced.tools?.["graph_*"]).toBeUndefined()
     expect(balanced.tools?.["mcp__*"]).toBe(false)
     const full = effectiveSettings({ tier: "full" } as TierSettings)
+    // Full turns tool discovery on with MCP, so the browser extension's tool is offered: it costs a name until it is looked for.
     expect(full.tools).toEqual({ "computer_*": false })
+    // With discovery off it waits for the user's own switch.
+    expect(effectiveSettings({ tier: "full", experimental: { tool_discovery: false } } as TierSettings).tools).toEqual({ "computer_*": false, user_browser: false })
+    expect(effectiveSettings({ tier: "full", experimental: { tool_discovery: false }, features: { browser_extension: true } } as TierSettings).tools).toEqual({ "computer_*": false })
   })
 
   test("flags follow the feature: JEV on in full, opt-in flags off below their tier, nothing is written back", () => {
@@ -212,7 +217,7 @@ describe("effectiveSettings", () => {
   test("safe mode alone turns MCP off without a tier", () => {
     const safe = effectiveSettings({} as TierSettings, { safeMode: true })
     // Safe mode keeps the chat-side package manager off too: it installs and enables code the session would then load.
-    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false })
+    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false, user_browser: false })
   })
 })
 
