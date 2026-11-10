@@ -12,6 +12,7 @@ import {
   controlResponse,
   changesMcpServers,
   createTurnMapper,
+  markProcessSpend,
   MCP_RELOAD_NOTE,
   REPLY_LANGUAGE_NOTE,
   MAX_TEXT,
@@ -21,6 +22,7 @@ import {
   userMessage,
   type ClaudeMessage,
   type ClaudePermissionMode,
+  type ClaudeSpend,
   type QuotaDraft,
 } from "./protocol"
 import { spawnClaude, type ClaudeTransport } from "./transport"
@@ -158,6 +160,8 @@ type Connection = {
   launches?: Map<string, string>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
+  /** The process's token total at its last `result`: a compaction's calls are the gap `result.usage` leaves. */
+  spendMark: { spend?: ClaudeSpend | undefined }
 }
 
 /** The uuid a turn's message carries into Claude Code, the same for the same turn in every process: an undo names it to `rewind_conversation`. */
@@ -526,11 +530,14 @@ export function createClaudeEngine(options: {
     }
     // The rest of a turn already ended by esc: nothing of it belongs to the next one.
     if (connection.draining) {
-      if (message.type === "result") connection.draining = false
+      if (message.type === "result") { connection.draining = false; markProcessSpend(connection.spendMark, message) }
       return
     }
     const turn = connection.turn
-    if (!turn) return void between(connection, message)
+    if (!turn) {
+      if (message.type === "result" && !connection.unsolicited) markProcessSpend(connection.spendMark, message)
+      return void between(connection, message)
+    }
     const compaction = compactions.get(turn.input.turnId)
     if (compaction && message.type === "system" && message.subtype === "compact_boundary") {
       const facts = message.compact_metadata ?? {}
@@ -538,7 +545,7 @@ export function createClaudeEngine(options: {
       if (typeof facts.pre_tokens === "number") compaction.preTokens = facts.pre_tokens
       if (typeof facts.post_tokens === "number") compaction.postTokens = facts.post_tokens
     } else if (compaction?.done && compaction.summary === undefined && message.type === "user" && message.isSynthetic && typeof message.message?.content === "string") compaction.summary = message.message.content
-    if (message.type === "result" && turn.ownQueued) return
+    if (message.type === "result" && turn.ownQueued) return void markProcessSpend(connection.spendMark, message)
     accept(turn, message)
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
@@ -656,7 +663,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan(), spendMark: {} }
     connections.set(sessionId, connection)
     if (options.onProcess && transport.pid) {
       const ended = options.onProcess(sessionId, transport.pid)
@@ -830,7 +837,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

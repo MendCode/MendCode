@@ -448,13 +448,11 @@ MendCode never compacts Claude Code sessions on its own; Claude Code manages its
 
 The transcript gets a compaction card with the summary Claude Code continues from. If there is no Claude Code conversation yet, or the model switched to one without session history, `/compact` does nothing and says why.
 
-With `claude_compact` (balanced and full; `/tier claude_compact off`), Claude Code compacts at MendCode's point. Each new `claude` process gets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` set to the absolute point MendCode's models use:
+With `claude_compact` (balanced and full; `/tier claude_compact off`), Claude Code compacts at MendCode's point. Each new `claude` process gets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` set to the first of:
 
 - `MENDCODE_COMPACT_AT_TOKENS`;
 - the model's `modelContext` `compactAt`;
-- `compactAtTokens`;
-- `compaction.token_limit`;
-- otherwise 200,000 tokens.
+- 200,000 tokens, or `compactAtTokens` / `compaction.token_limit` when lower. A global point set for long-window models does not raise it.
 
 Claude Code compacts a summary's room before that point. A value already in the daemon's environment is kept.
 

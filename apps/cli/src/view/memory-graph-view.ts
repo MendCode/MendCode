@@ -134,13 +134,42 @@ export function memoryGraphMetrics(input: { width: number; height: number }) {
   return { frame: "bare" as const, legend: 0, summary: false, panels: { graph: { width, height }, detail: { width: 0, height: 0 } }, canvas: { width, height: height - head }, detail: { width: 0, height: 0 } }
 }
 
+/**
+ * The whole-graph view's category threads: each memory joined, in its category's color, to the first memory of that category
+ * when no link already reaches it, so a category reads as one group instead of loose dots. Never saved, never in the ego view.
+ */
+export function categoryThreads(report: MemoryGraphReport, tones: ReadonlyMap<string, ColorName>): GraphEdge[] {
+  const parent = new Map<string, string>(report.nodes.map((node) => [node.memoryId, node.memoryId]))
+  const root = (id: string): string => {
+    let at = id
+    while (parent.get(at) !== at) at = parent.get(at)!
+    return at
+  }
+  for (const link of report.links) if (parent.has(link.from) && parent.has(link.to)) parent.set(root(link.from), root(link.to))
+  const hubs = new Map<string, string>()
+  const threads: GraphEdge[] = []
+  for (const node of report.nodes) {
+    const category = node.category || UNCATEGORIZED
+    const hub = hubs.get(category)
+    if (hub === undefined) {
+      hubs.set(category, node.memoryId)
+      continue
+    }
+    if (category === UNCATEGORIZED || root(node.memoryId) === root(hub)) continue
+    parent.set(root(node.memoryId), root(hub))
+    threads.push({ from: hub, to: node.memoryId, tone: tones.get(category) ?? "muted", style: "dotted" })
+  }
+  return threads
+}
+
 /** The layout both keys and render use, so a move always lands on a node that is on screen. */
 export function memoryGraphLayout(report: MemoryGraphReport, state: MemoryGraphState, size: { width: number; height: number }): Layout {
   const tones = new Map(memoryGraphCategories(report).map((entry) => [entry.category, entry.tone]))
   const nodes: GraphNode[] = report.nodes.map((memory) => ({ id: memory.memoryId, label: oneLine(memory.text), tone: tones.get(memory.category || UNCATEGORIZED) ?? "text" }))
   const edges: GraphEdge[] = report.links.map((link) => ({ from: link.from, to: link.to, directed: KIND_DIRECTED[link.kind], tone: KIND_TONE[link.kind], style: KIND_STYLE[link.kind] }))
   const focus = state.mode === "ego" ? selectedMemoryId(report, state) : undefined
-  return layoutGraph({ nodes, edges, width: size.width, height: size.height, focus, firstRing: "cross" })
+  const threads = state.mode === "all" ? categoryThreads(report, tones) : []
+  return layoutGraph({ nodes, edges: [...edges, ...threads], width: size.width, height: size.height, focus, firstRing: "cross" })
 }
 
 /**
@@ -207,7 +236,7 @@ function healthLine(health: MemoryGraphHealth, shown: { visible: number; total: 
 }
 
 /** The legend under the canvas: what each dot color and each edge style stands for (only what the graph has). */
-function legend({ report, width, rows, ascii }: { report: MemoryGraphReport; width: number; rows: number; ascii: boolean }): Line[] {
+function legend({ report, width, rows, ascii, threads }: { report: MemoryGraphReport; width: number; rows: number; ascii: boolean; threads: boolean }): Line[] {
   if (rows <= 0) return []
   const dot = ascii ? "o" : "●"
   const categories: Line = []
@@ -221,6 +250,10 @@ function legend({ report, width, rows, ascii }: { report: MemoryGraphReport; wid
     if (!present.has(kind)) continue
     if (kinds.length) kinds.push({ text: "  " })
     kinds.push({ text: ascii ? KIND_SAMPLE[kind].ascii : KIND_SAMPLE[kind].braille, fg: KIND_TONE[kind] }, { text: ` ${kind}`, fg: "muted" })
+  }
+  if (threads) {
+    if (kinds.length) kinds.push({ text: "  " })
+    kinds.push({ text: ascii ? KIND_SAMPLE.related.ascii : KIND_SAMPLE.related.braille, fg: memoryGraphCategories(report)[0]?.tone ?? "muted" }, { text: " same category", fg: "muted" })
   }
   const out = rows >= 2 ? [categories, kinds] : [categories.length ? categories : kinds]
   return out.map((line) => clip(line, width))
@@ -338,7 +371,7 @@ export function renderMemoryGraph(input: {
       body: (inner: number): Line[] => [
         healthLine(report.health, shown, inner),
         ...canvas,
-        ...legend({ report, width: inner, rows: metrics.legend, ascii: plainText }),
+        ...legend({ report, width: inner, rows: metrics.legend, ascii: plainText, threads: state.mode === "all" && categoryThreads(report, new Map()).length > 0 }),
         ...(metrics.summary ? [summaryRow(report, selected, inner)] : []),
       ],
     }

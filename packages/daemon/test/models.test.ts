@@ -94,11 +94,14 @@ describe("resolveModel", () => {
     expect(claudeSubagentEnv({ model: "opus", subagent: { model: "claude-haiku" }, cheap: true, inherited: "opus" })).toBeUndefined()
   })
 
-  test("claude_compact: Claude Code compacts at MendCode's absolute point, else 200k; off, or a window the daemon already has, passes nothing", () => {
+  test("claude_compact: Claude Code compacts at 200k, lower when a global point is lower, higher only per model or by environment; off, or a window the daemon already has, passes nothing", () => {
     const window = (input: Partial<Parameters<typeof claudeCompactEnv>[0]>) => claudeCompactEnv({ model: "opus", settings: {}, on: true, environment: {}, ...input })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW
     expect(window({})).toBe(String(CLAUDE_COMPACT_WINDOW))
-    expect(window({ settings: { compactAtTokens: 450_000 } })).toBe("450000")
-    expect(window({ settings: { compaction: { token_limit: 300_000 } } })).toBe("300000")
+    expect(window({ settings: { compactAtTokens: 450_000 } })).toBe(String(CLAUDE_COMPACT_WINDOW))
+    expect(window({ settings: { compaction: { token_limit: 300_000 } } })).toBe(String(CLAUDE_COMPACT_WINDOW))
+    expect(window({ settings: { compactAtTokens: 150_000 } })).toBe("150000")
+    expect(window({ settings: { compactAtTokens: 450_000, modelContext: { "claude/claude-opus": { compactAt: 400_000 } } } })).toBe("400000")
+    expect(window({ settings: { compactAtTokens: 100_000 }, environment: { MENDCODE_COMPACT_AT_TOKENS: "500000" } })).toBe("500000")
     expect(window({ settings: { compactAtTokens: 450_000 }, environment: { MENDCODE_COMPACT_AT_TOKENS: "120000" } })).toBe("120000")
     expect(window({ on: false })).toBeUndefined()
     expect(window({ environment: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "500000" } })).toBeUndefined()
