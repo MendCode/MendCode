@@ -81,8 +81,6 @@ const COLORS: Record<Key, Rgb> = {
   O: [29, 63, 57], M: [212, 249, 217], H: [254, 253, 240], S: [160, 214, 186], D: [32, 98, 84], A: [190, 240, 212],
   B: [56, 143, 114], C: [213, 249, 219], P: [240, 168, 172], E: [11, 52, 47], V: [212, 249, 217],
 }
-/** An error turns the body red; the head and the eyes stay. */
-const ERROR_COLORS: Partial<Record<Key, Rgb>> = { B: [239, 68, 68], D: [153, 27, 27], C: [254, 202, 202] }
 
 /**
  * Every theme but Mend draws the robot from its own primary color: each part keeps a fixed lightness (0-255) and takes the
@@ -129,16 +127,11 @@ function themeColors(theme: Theme): Record<Key, Rgb> {
   return { ...tones, P: CHEEKS } as Record<Key, Rgb>
 }
 
-/** The theme that keeps the robot as it was first drawn, mint and teal: the green Mend theme. */
-const ORIGINAL_THEME = "mend"
-
 type MendPalette = { key: string; colors: Record<Key, Rgb>; error: Record<Key, Rgb> }
-const ORIGINAL_PALETTE: MendPalette = { key: "mend", colors: COLORS, error: { ...COLORS, ...ERROR_COLORS } }
 let themed: { theme: Theme; palette: MendPalette } | undefined
 
 /** Mend's colors under the active theme, with the key every frame cache adds so a theme switch draws it again. */
 export function mendPalette(theme = activeTheme()): MendPalette {
-  if (theme.name === ORIGINAL_THEME) return ORIGINAL_PALETTE
   if (themed?.theme !== theme) {
     const colors = themeColors(theme)
     themed = { theme, palette: { key: `${theme.name}${theme.colors.primary}${theme.colors.error}`, colors, error: { ...colors, ...themeErrorColors(theme) } } }

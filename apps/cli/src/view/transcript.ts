@@ -1,5 +1,6 @@
 import type { ForegroundState, Goal, ItemId, ItemKind, PermissionMode, QueueId, RenderNode, RequestId, SessionEvent, TurnId } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type Glyphs, type Line, type Span } from "../ui/theme"
+import { splitGraftTally } from "./graft-tally"
 import type { ToolView, TranscriptHooks } from "../extensions/hooks"
 import { toolArgs, type ToolArgs } from "../extensions/tool-args"
 import { errorBox, statusLine, FULL_REASONING_ROWS, type Attachment, type TurnEnd } from "./chat-blocks"
@@ -29,7 +30,7 @@ import type { AssistantMessageModel, CompactionCardModel, ReasoningModel, ToolCa
 import { plainViewHost, type ViewHost } from "./views"
 import { assistantBody } from "./message-views"
 import { textWidth } from "./wrap"
-import { generatedImagePath, imageActionRow } from "./image-actions"
+import { generatedImagePath, imageActionRow, shownImagePath } from "./image-actions"
 import { carryMeta, copyOf, foldOf, gutterOf, markFold, pictureOf, softWrapOf, type CopyRegion } from "./line-meta"
 import { createUsageNotes, type CompactNoticeConfig, type UsageNote } from "./usage-notes"
 import { modelLabel } from "./model-label"
@@ -622,7 +623,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   /** The file path an image tool's card text ends in, as ` · /path`. */
   function imageWhere(block: Block) {
     const last = block.text.trimEnd().split("\n").at(-1) ?? ""
-    return last.startsWith("/") ? ` · ${last}` : ""
+    return last.startsWith("/") ? ` · ${shownImagePath(last)}` : ""
   }
 
   function roleStyle(role: "user" | "assistant"): MessageStyle {
@@ -703,7 +704,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       const prefix = `${block.itemId}#`
       const details: Record<number, boolean> = {}
       for (const [key, open] of detailsState) if (key.startsWith(prefix)) details[Number(key.slice(prefix.length))] = open
-      const model: AssistantMessageModel = { ...common, style: styleOf("assistant"), renderer: conceal ? renderer : "plain", details, detailsAll: detailsAllOpen(), markdown: markdownStyle() }
+      const model: AssistantMessageModel = { ...common, text: splitGraftTally(block.text).text, style: styleOf("assistant"), renderer: conceal ? renderer : "plain", details, detailsAll: detailsAllOpen(), markdown: markdownStyle() }
       // A custom view may restyle the built-in's Markdown: it gets those rows too, 4 cells narrower than `width` (room for a rail or indent).
       const prepare = (shown: AssistantMessageModel): AssistantMessageModel => ({ ...shown, body: assistantBody(shown, Math.max(1, width - 4)) })
       return { slot, model, prepare }
@@ -723,7 +724,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       return { slot, model }
     }
     if (slot === "tool.card") {
-      const output = block.text.replace(/\s+$/, "").split("\n").filter((l) => l.length > 0)
+      const text = generatedPicture(block) ? shownImagePath(block.text) : block.text
+      const output = text.replace(/\s+$/, "").split("\n").filter((l) => l.length > 0)
       // A tool's own spec wins; graft's trace tool (MCP, no spec) is read back from its text into a call map.
       const spec = renderer === "full" ? (block.render ?? (block.status === "ok" ? graftTraceRender(parseToolTitle(block.title).name, block.text) : undefined)) : undefined
       const level = levelOf(block)
@@ -735,7 +737,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         detail,
         ...(block.title !== undefined ? { title: block.title } : {}),
         status: block.status,
-        text: block.text,
+        text,
         ...(summary !== undefined ? { summary } : {}),
         level,
         expanded: level !== "summary",
@@ -793,7 +795,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         ...(variant === "limit" ? { limit: block.limit as unknown as Record<string, unknown> } : {}),
         ...(variant === "note" ? { note: block.note!.text } : {}),
         ...(variant === "undone" ? { undone: block.undone! } : {}),
-        ...(variant === "end" ? { timestamps, textColumn: assistantTextColumn(), ...(timestamps === "bottom" && block.itemId === lastEndId() ? { running: stillRunning() } : {}) } : {}),
+        ...(variant === "end" ? { timestamps, textColumn: assistantTextColumn(), ...savedOf(block),  ...(timestamps === "bottom" && block.itemId === lastEndId() ? { running: stillRunning() } : {}) } : {}),
       }
       return { slot, model }
     }
@@ -812,6 +814,13 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** The session's shells and sub-agents running now, for the latest turn's closing line; none without the app's report. */
   const stillRunning = () => options.background?.() ?? { shells: 0, agents: 0 }
+
+  /** What graft says the turn saved. */
+  function savedOf(end: Block): { saved?: string } {
+    const reply = blocks.findLast((block) => block.kind === "agent_message" && block.turnId === end.turnId)
+    const saved = reply ? splitGraftTally(reply.text).saved : undefined
+    return saved ? { saved } : {}
+  }
 
   /** The latest turn end's item: only its closing line says what still runs (an older one would be stale). */
   function lastEndId() {

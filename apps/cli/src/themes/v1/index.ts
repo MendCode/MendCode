@@ -17,7 +17,7 @@ import t_github from "./github"
 import t_gruvbox from "./gruvbox"
 import t_kanagawa from "./kanagawa"
 import t_material from "./material"
-import t_mendcode from "./mendcode"
+import t_mendcode from "./mendcode-v1"
 import t_monokai from "./monokai"
 import t_nightowl from "./nightowl"
 import t_nord from "./nord"
@@ -32,5 +32,5 @@ import t_tokyonight from "./tokyonight"
 import t_vercel from "./vercel"
 import t_zenburn from "./zenburn"
 
-/** The built-in themes of MendCode v1 (its default is `mendcode`), with readable roles raised to 4.5:1. */
+/** The built-in themes of MendCode v1 (its default is `mendcode-v1` here), with readable roles raised to 4.5:1. */
 export const V1_THEMES = [t_cursor, t_lucent_orng, t_mercury, t_vesper, t_aura, t_ayu, t_carbonfox, t_catppuccin_frappe, t_catppuccin_macchiato, t_catppuccin, t_cobalt2, t_dracula, t_everforest, t_flexoki, t_github, t_gruvbox, t_kanagawa, t_material, t_mendcode, t_monokai, t_nightowl, t_nord, t_one_dark, t_orng, t_osaka_jade, t_palenight, t_rosepine, t_solarized, t_synthwave84, t_tokyonight, t_vercel, t_zenburn].map(withReadableContrast)

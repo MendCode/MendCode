@@ -135,7 +135,7 @@ describe("upgrade execution", () => {
     const box = harness()
     const dataDir = path.join(box.dir, "explicit")
     expect(await box.run("--dir", dataDir)).toBe(0)
-    expect(readFileSync(path.join(dataDir, "bin", "mendcode-next"), "utf8")).toBe("binary of v1.1.0")
+    expect(readFileSync(path.join(dataDir, "bin", "mendcode"), "utf8")).toBe("binary of v1.1.0")
     expect(box.out()).toContain("installed v1.1.0 (stable)")
     expect(box.out()).toContain("restart mendcode")
     expect(box.out()).toContain("--rollback")
@@ -146,10 +146,10 @@ describe("upgrade execution", () => {
     const viaEnv = harness()
     viaEnv.deps.env.MENDCODE_V2_DIR = path.join(viaEnv.dir, "from-env")
     await viaEnv.run()
-    expect(existsSync(path.join(viaEnv.dir, "from-env", "bin", "mendcode-next"))).toBe(true)
+    expect(existsSync(path.join(viaEnv.dir, "from-env", "bin", "mendcode"))).toBe(true)
     const byDefault = harness()
     await byDefault.run()
-    expect(existsSync(path.join(byDefault.deps.defaultDir, "bin", "mendcode-next"))).toBe(true)
+    expect(existsSync(path.join(byDefault.deps.defaultDir, "bin", "mendcode"))).toBe(true)
   })
 
   test("--rollback goes back to the previous binary", async () => {

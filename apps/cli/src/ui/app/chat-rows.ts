@@ -58,6 +58,10 @@ import { BUSY, DOUBLE_ESC_MS, MAX_EDITOR_ROWS } from "./constants"
 import { internalQueued, queuePolicy } from "./queue-policy"
 import { readableText } from "../../view/reply-comments"
 import { waitingNotice } from "./daemon"
+import { sessionLabel } from "../../view/session-label"
+
+/** What the home lists a session without a title as, never its raw id. */
+const UNTITLED = "Untitled session"
 
 /** Below this many transcript rows the pinned prompt would crowd the conversation out. */
 const STICKY_MIN_BODY = 6
@@ -537,7 +541,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // This folder's sessions only (another folder's belong to its own home), the user's home included.
     const scope = input.directory
     const sessions: HomeSession[] = [...state.agentSessions.values()].filter((s) => HOME_WORKING.has(s.state) && inProject(s.directory, scope)).map((s) => ({
-      id: s.sessionId, title: s.title || s.sessionId, state: s.state === "waiting_approval" ? "needs_input" : "working", updatedAt: s.updatedAt,
+      id: s.sessionId, title: s.title.trim() || UNTITLED, state: s.state === "waiting_approval" ? "needs_input" : "working", updatedAt: s.updatedAt,
       ...(s.since !== undefined ? { startedAt: s.since } : {}), ...(s.tool || s.pending ? { detail: s.tool ?? s.pending! } : {}),
     }))
     for (const loop of state.loops.filter((loop) => state.liveLoops.has(loop.loopId) && inProject(loop.directory, scope))) {
@@ -553,7 +557,9 @@ export function createChatRows(ctx: AppContext, actions: {
     for (const s of known.values()) {
       if (!inProject(s.directory, scope) || s.parentId || s.archivedAt !== undefined || s.sessionId === state.sessionId || s.updatedAt < since || sessions.some((session) => session.id === s.sessionId)) continue
       if (state.agentSessions.has(s.sessionId) || HOME_WORKING.has(s.state)) continue
-      sessions.push({ id: s.sessionId, title: s.title || s.sessionId, state: "completed", updatedAt: s.updatedAt, ...(s.state === "error" ? { detail: "failed" } : {}) })
+      // A session never written in (no title from a first message, no draft, no summary) finished nothing: it is not listed.
+      if (!s.title.trim() && !s.draft && !s.summary) continue
+      sessions.push({ id: s.sessionId, title: sessionLabel(s, { untitled: UNTITLED, marker: "Draft" }).text, state: "completed", updatedAt: s.updatedAt, ...(s.state === "error" ? { detail: "failed" } : {}) })
     }
     return sessions
   }

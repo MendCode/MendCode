@@ -6,7 +6,7 @@ Run the command with the target or options you need:
 
 `mendcode upgrade` never starts, stops or signals a process, and never touches the legacy MendCode data (`~/.mendcode`, `~/.local/share/mendcode`).
 
-The program name in help is the one you typed: `mendcode`, or the name of a wrapper such as `mendcode-next`.
+The program name in help is the one you typed: `mendcode`, or the name of a renamed copy such as `mendcode-beta`.
 
 ```
 mendcode upgrade [target] [--channel stable|beta|dev|nightly] [--method direct|curl] [--inspect|--set] [--check] [--force] [--require-signature] [--rollback] [--json] [--dir D]
@@ -25,7 +25,7 @@ mendcode upgrade [target] [--channel stable|beta|dev|nightly] [--method direct|c
 | `--check` | only report; nothing is downloaded or written (the channel is not remembered either) |
 | `--force` | install even when already up to date, or when the release is older than the running version |
 | `--rollback` | go back to the previous binary; running it again returns to the newer one |
-| `--json` | one line `{"schema":"mendcode-next.cli.v1","kind":"result"\|"error","command":"upgrade",...}` |
+| `--json` | one line `{"schema":"mendcode.cli","kind":"result"\|"error","command":"upgrade",...}` |
 | `--dir D` | data directory, like the rest of the CLI (`--dir`, else `MENDCODE_DIR`, else `~/.mendcode`) |
 
 | Exit code | Meaning |
@@ -109,9 +109,9 @@ The initial install scripts use the same asset names and checksum contract. Thei
 The managed binary keeps the file name it has always had inside the data directory. Renaming on-disk names is a separate, planned migration.
 
 ```
-<data dir>/bin/mendcode-next        the installed binary (mode 755)
-<data dir>/bin/mendcode-next.prev   the binary it replaced (for --rollback)
-<data dir>/bin/mendcode-next.new    staging only, removed on failure
+<data dir>/bin/mendcode        the installed binary (mode 755)
+<data dir>/bin/mendcode.prev   the binary it replaced (for --rollback)
+<data dir>/bin/mendcode.new    staging only, removed on failure
 <data dir>/upgrade.json             {"channel","lastCheckAt","lastVersion"}
 ```
 
@@ -119,7 +119,7 @@ Installation proceeds in order:
 
 1. Stage the new binary as `.new`.
 2. Copy the current one to `.prev`.
-3. Rename `.new` over `mendcode-next`.
+3. Rename `.new` over `mendcode`.
 
 The rename is atomic, so the command always exists with complete content. Nothing outside the data directory is written, and a data directory inside a legacy MendCode location is refused.
 

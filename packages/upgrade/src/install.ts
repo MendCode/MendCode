@@ -10,6 +10,17 @@ export function binPaths(dataDir: string) {
   return { dir, current: path.join(dir, BIN_NAME), next: path.join(dir, `${BIN_NAME}.new`), prev: path.join(dir, `${BIN_NAME}.prev`) }
 }
 
+/** The name the managed executables had before (`bin/mendcode-next`, `.prev`); an install from then is moved to the new names. */
+export const LEGACY_BIN_NAME = "mendcode-next"
+
+/** Moves an install's old executables to the new names, once, unless a file already has the new name. Runs under the upgrade lock. */
+export async function adoptLegacyBin(fs: UpgradeFs, dataDir: string) {
+  const paths = binPaths(dataDir)
+  for (const [from, to] of [[path.join(paths.dir, LEGACY_BIN_NAME), paths.current], [path.join(paths.dir, `${LEGACY_BIN_NAME}.prev`), paths.prev]] as const) {
+    if (await fs.exists(from) && !await fs.exists(to)) await fs.rename(from, to)
+  }
+}
+
 const within = (parent: string, child: string) => {
   const relative = path.relative(parent, child)
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
@@ -41,8 +52,8 @@ async function guarded<T>(step: string, run: () => Promise<T>) {
 }
 
 /**
- * Stages the binary as `mendcode-next.new`, keeps the running one as `.prev` and renames the new one over
- * `mendcode-next`. The command exists with complete content at every moment; a failure leaves it untouched.
+ * Stages the binary as `mendcode.new`, keeps the running one as `.prev` and renames the new one over
+ * `mendcode`. The command exists with complete content at every moment; a failure leaves it untouched.
  */
 export async function installBinary({ fs, dataDir, bytes }: { fs: UpgradeFs; dataDir: string; bytes: Uint8Array }) {
   const paths = binPaths(dataDir)
@@ -65,7 +76,7 @@ export async function installBinary({ fs, dataDir, bytes }: { fs: UpgradeFs; dat
   return paths.current
 }
 
-/** Swaps `mendcode-next` and `.prev`, so a second rollback goes forward again. */
+/** Swaps `mendcode` and `.prev`, so a second rollback goes forward again. */
 export async function rollbackBinary({ fs, dataDir }: { fs: UpgradeFs; dataDir: string }) {
   const paths = binPaths(dataDir)
   if (!(await fs.exists(paths.prev))) throw new UpgradeError("no-previous", `nothing to roll back: ${paths.prev} does not exist`)

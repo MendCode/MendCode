@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { readdirSync } from "node:fs"
 import path from "node:path"
-import { COLOR_NAMES, DEFAULT_THEME, THEMES, defineTheme } from "../src/themes"
+import { COLOR_NAMES, DEFAULT_THEME, THEMES, defineTheme, resolveThemeName } from "../src/themes"
 import { activeTheme, setTheme, sgr, themeNames } from "../src/ui/theme"
 import { BORDER_ROLES } from "../src/themes/contrast"
 
@@ -61,23 +61,15 @@ describe("theme definitions", () => {
     expect(() => defineTheme({ ...base, colors: { ...base.colors, error: "red" } })).toThrow("[THEME]")
     expect(() => defineTheme({ ...base, name: "Bad Name" })).toThrow("[THEME]")
   })
-  test("the default theme is ink (the website's black and white) and is the active theme at startup", () => {
-    expect(DEFAULT_THEME).toBe("ink")
-    expect(THEMES[0]!.name).toBe("ink")
-    expect(activeTheme().name).toBe("ink")
-    expect(activeTheme().label).toBe("Ink")
-    expect(themeNames()).toContain("mend")
+  test("the default theme is mendcode (the website's black and white) and is the active theme at startup", () => {
+    expect(DEFAULT_THEME).toBe("mendcode")
+    expect(THEMES[0]!.name).toBe("mendcode")
+    expect(activeTheme().name).toBe("mendcode")
+    expect(activeTheme().label).toBe("MendCode")
+    // The green Mend theme is gone; v1's orange one keeps its own name.
+    expect(themeNames()).not.toContain("mend")
+    expect(themeNames()).toContain("mendcode-v1")
     expect(themeNames()).toContain("matrix")
-  })
-  test("mend carries v1's profile tokens and its fixed roles", () => {
-    const mend = THEMES.find((theme) => theme.name === "mend")!
-    expect(mend.background).toBe("#08110d")
-    expect(mend.colors).toMatchObject({
-      primary: "#22c55e", accent: "#22c55e", text: "#ffffff", body: "#ffffff", muted: "#a3a3a3", secondary: "#a3a3a3", border: "#636363", borderActive: "#22c55e",
-      panel: "#0b1f16", element: "#0b1f16", error: "#ef4444", warning: "#f59e0b", success: "#22c55e", info: "#38bdf8", link: "#38bdf8", heading: "#22c55e", code: "#22c55e",
-      diffAddedBg: "#052e16", diffRemovedBg: "#450a0a", background: "#08110d",
-    })
-    expect(contrast(mend.colors.muted, mend.colors.panel)).toBeGreaterThanOrEqual(4.5)
   })
   test("text drawn on a primary bar (the palette's selected row) reads at 3:1 in every theme", () => {
     for (const theme of RGB_THEMES) expect(contrast(theme.colors.background, theme.colors.primary)).toBeGreaterThanOrEqual(3)
@@ -144,7 +136,18 @@ describe("active theme", () => {
     const run = (theme: string) =>
       Bun.spawnSync(["bun", "-e", script], { cwd: path.join(import.meta.dir, "../../.."), env: { ...process.env, MENDCODE_THEME: theme } }).stdout.toString().trim()
     expect(run("mint")).toBe("mint")
-    expect(run("does-not-exist")).toBe("ink")
+    expect(run("does-not-exist")).toBe("mendcode")
+    // The names it had: Ink and the green Mend theme open MendCode's.
+    expect(run("ink")).toBe("mendcode")
+    expect(run("mend")).toBe("mendcode")
+    expect(run("constructor")).toBe("mendcode")
+  })
+  test("an old name is not a theme of its own, and a theme a user named ink is theirs", () => {
+    expect(setTheme("constructor")).toBe(false)
+    expect(setTheme("__proto__")).toBe(false)
+    expect(resolveThemeName("ink", ["mendcode"])).toBe("mendcode")
+    expect(resolveThemeName("Ink", ["mendcode", "ink"])).toBe("Ink")
+    setTheme(DEFAULT_THEME)
   })
 })
 

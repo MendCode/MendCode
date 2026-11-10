@@ -6,8 +6,8 @@ import { defineTheme } from "./define"
  * something (state, diff, syntax, callouts), soft and at one lightness, as pi's and OpenCode's defaults keep theirs.
  */
 export default defineTheme({
-  name: "ink",
-  label: "Ink",
+  name: "mendcode",
+  label: "MendCode",
   dark: true,
   background: "#0a0a0a",
   colors: {

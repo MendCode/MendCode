@@ -10,7 +10,7 @@ import { legacyTheme, nativeTheme } from "../../../packages/protocol/test/theme-
 import type { ThemeFile } from "@mendcode/protocol"
 
 const file: ThemeFile = { name: "Forest_Mode", file: "/tmp/themes/Forest_Mode.json", source: "project", json: legacyTheme }
-afterEach(() => { cleanTemps(); registerThemes([]); setTheme("mend") })
+afterEach(() => { cleanTemps(); registerThemes([]); setTheme("mendcode") })
 
 describe("B65 theme CLI", () => {
   test("validate/install/select parse scoped names and data-dir aliases without affecting other commands", () => {
@@ -65,14 +65,14 @@ describe("B65 themes in the app harness", () => {
     const dataDir = tempDir()
     writeTuiProfile(dataDir, { theme: "matrix" })
     const fixture = appHarness({ dataDir, directory: "/work/project", reply: (command) => command.type === "themes.list" ? { ok: true, result: { themes: [file] } } : undefined })
-    fixture.app.applySettings({ theme: "mend", projectThemes: { "/work/project": "Forest_Mode", "/work/other": "paper" } })
+    fixture.app.applySettings({ theme: "mendcode", projectThemes: { "/work/project": "Forest_Mode", "/work/other": "paper" } })
     expect(activeTheme().name).toBe("Forest_Mode")
     await fixture.type("/theme amber\r")
     expect(fixture.sent).toContainEqual({ type: "settings.set", patch: { projectThemes: { "/work/project": "amber", "/work/other": "paper" } } })
     expect(fixture.sent.some((command) => command.type === "settings.set" && command.patch.theme === "amber")).toBe(false)
     expect(readTuiProfile(dataDir).theme).toBe("matrix")
     const other = appHarness({ dataDir, directory: "/work/elsewhere" })
-    other.app.applySettings({ theme: "mend", projectThemes: { "/work/project": "Forest_Mode" } })
+    other.app.applySettings({ theme: "mendcode", projectThemes: { "/work/project": "Forest_Mode" } })
     expect(activeTheme().name).toBe("matrix")
   })
   test("selecting an installed name again refreshes its edited palette", async () => {
@@ -101,7 +101,7 @@ describe("B65 themes in the app harness", () => {
     const dataDir = tempDir()
     writeTuiProfile(dataDir, { theme: "matrix" })
     const fixture = appHarness({ dataDir, directory: "/work/project", reply: (command) => command.type === "themes.list" ? { ok: true, result: { themes: [file] } } : undefined })
-    fixture.app.applySettings({ theme: "mend", projectThemes: { "/work/project": "Forest_Mode", "/work/other": "paper" } })
+    fixture.app.applySettings({ theme: "mendcode", projectThemes: { "/work/project": "Forest_Mode", "/work/other": "paper" } })
     await fixture.type("/customize\r")
     for (let row = 0; row < customizeSteps("theme", fixture.app.tuiProfile, { mode: fixture.app.viewMode }); row++) await fixture.app.onKey("\x1b[B")
     fixture.app.render()

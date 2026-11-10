@@ -25,7 +25,7 @@ export function uninstallHarness() {
     "blobs/attachment": "file contents", "keys/secrets.key": "fixture encryption key",
     "scratchpads/project.txt": "project notes", "goals/goal.md": "goal", "reviews/session.json": "review",
     "builtin/build/prompt.md": "cached prompt", "pets-cache/preview": "cached pet",
-    "bin/mendcode-next": "v2 managed binary", "bin/mendcode-next.prev": "v2 previous binary",
+    "bin/mendcode": "v2 managed binary", "bin/mendcode.prev": "v2 previous binary",
     "personal.txt": "unrelated file", "notes-link-target": "unrelated file",
   }
   for (const [name, contents] of Object.entries(files)) {
@@ -38,9 +38,12 @@ export function uninstallHarness() {
   const payload = "fixture v2 release binary"
   writeFileSync(binary, payload)
   writeFileSync(path.join(bin, ".mendcode-v2-install"), `schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${createHash("sha256").update(payload).digest("hex")}\ntier=minimalist\n`)
-  writeFileSync(path.join(bin, "mendcode-next"), '#!/bin/sh\n# mendcode-next dev wrapper\nexec bun "/work/v2/apps/cli/src/entry.ts" "$@"\n')
+  // A development wrapper in its own folder: it has the release's name.
+  const devBin = path.join(home, "dev-bin")
+  mkdirSync(devBin, { recursive: true })
+  writeFileSync(path.join(devBin, "mendcode"), '#!/bin/sh\n# mendcode dev wrapper\nexec bun "/work/v2/apps/cli/src/entry.ts" "$@"\n')
   let out = "", err = ""
-  const deps: UninstallDeps = { home, env: {}, platform: "darwin", defaultDir: dir, out: { write: (text) => { out += text } }, err: { write: (text) => { err += text } } }
+  const deps: UninstallDeps = { home, env: { MENDCODE_BIN_DIR: devBin }, platform: "darwin", defaultDir: dir, out: { write: (text) => { out += text } }, err: { write: (text) => { err += text } } }
   const command = (...args: string[]) => {
     const parsed = parseUninstallArgs(["uninstall", "--dir", dir, ...args])
     if (!parsed.ok) throw new Error(parsed.message)

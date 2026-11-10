@@ -108,7 +108,7 @@ describe("/settings page", () => {
     expect(fromSettings.every((command) => Object.keys(command).sort().join() === "patch,type")).toBe(true)
     expect(merged(fromSettings)).toEqual(merged(fromSetup))
     expect(fromSettings).toHaveLength(fromSetup.length)
-    expect(merged(fromSettings)).toEqual({ theme: "mend", view: "full", reducedMotion: true, defaultPermission: "edits", dreamAt: "04:15", retentionDays: 30 })
+    expect(merged(fromSettings)).toEqual({ theme: "matrix", view: "full", reducedMotion: true, defaultPermission: "edits", dreamAt: "04:15", retentionDays: 30 })
   })
 
   test("each row cycles like the setup page: theme previews, permission, dream and retention presets, onboarded toggles", async () => {

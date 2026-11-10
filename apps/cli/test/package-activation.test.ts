@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { normalizeTuiProfile, tuiProfilePath } from "../src/view/tui-profile"
-import { appHarness, scratch } from "./extensions-harness"
+import { DEFAULT_FOOTER } from "@mendcode/protocol/wire"
+import { appHarness, extension, scratch } from "./extensions-harness"
+import { quotaScene } from "./footer-rows-fixture"
 
 const made: Array<ReturnType<typeof scratch>> = []
 const layout = () => {
@@ -168,6 +170,23 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(read(profileFile)).toBe(snapshot)
   })
 
+  test("a stored change made while a clean-look profile is on (customize_ui) touches only the key it changed", async () => {
+    const dir = layout()
+    const mine = { disabledUiExtensions: ["old-clock"], footerRows: [["branch", "model", "quota"]], logoKind: "mascot", theme: "ink" }
+    dir.write("data/tui/profile.json", JSON.stringify(mine))
+    installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"], footerRows: [["branch", "model"]], logoKind: "wordmark" } })
+    const h = await start(dir, [])
+    // The daemon wrote the user's profile with one key changed and sent it whole.
+    h.app.onGlobal({ type: "tui.changed", gseq: 1, at: Date.now(), profile: { ...normalizeTuiProfile(mine), theme: "mono" } as never })
+    h.app.render()
+    expect(profile(h).theme).toBe("mono")
+    expect(profile(h).footerRows).toEqual([["branch", "model"]])
+    expect(profile(h).logoKind).toBe("wordmark")
+    expect(profile(h).disabledUiExtensions).toEqual(["old-clock", "quota-footer"])
+    const state = read(path.join(dir.dataDir, "activation.json"))
+    expect(state ? Object.values(JSON.parse(state).saved ?? {}).flatMap((slot) => (slot as { kept: string[] }).kept) : []).toEqual([])
+  })
+
   test("a clean-look profile's entries join even a full list of the user's, and nothing is pushed out", async () => {
     const dir = layout()
     const mine = Array.from({ length: 128 }, (_, index) => `mine-${index}`)
@@ -175,6 +194,73 @@ describe("profile activation is an overlay on the user's profile", () => {
     installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"] } })
     const h = await start(dir, [])
     expect(profile(h).disabledUiExtensions).toEqual([...mine, "quota-footer"])
+  })
+
+  test("a clean profile starts from MendCode's own look: the user's settings and UI modules are off until it is disabled", async () => {
+    const dir = layout()
+    const mine = { disabledUiExtensions: ["old-clock"], footerRows: [["branch", "model", "quota"]], logoKind: "mascot", theme: "amber", homeLayout: "split", vimMode: true }
+    dir.write("data/tui/profile.json", JSON.stringify(mine))
+    dir.write("data/extensions/mine.ts", extension("mine", `api.slot("welcome.below", () => [[{ text: "rows from mine" }]])`))
+    installPackage(dir, "plain", { clean: true, tuiProfile: { logoKind: "wordmark" } })
+    const profileFile = tuiProfilePath(dir.dataDir), snapshot = read(profileFile)
+    const h = await start(dir, ["user:plain"])
+    const before = { ...profile(h) }
+    expect(h.text()).toContain("rows from mine")
+    await toggle(h, [])
+    const { TUI_DEFAULTS } = await import("@mendcode/protocol/wire")
+    expect(profile(h).theme).toBe("mendcode")
+    expect(profile(h).footerRows).toEqual(TUI_DEFAULTS.footerRows)
+    expect(profile(h).homeLayout).toBe(TUI_DEFAULTS.homeLayout)
+    // The user's own list is replaced, not joined; the profile's own keys still win over the defaults.
+    expect(profile(h).disabledUiExtensions).toEqual([])
+    expect(profile(h).logoKind).toBe("wordmark")
+    // How they type stays theirs.
+    expect(profile(h).vimMode).toBe(true)
+    expect(h.text()).not.toContain("rows from mine")
+    expect(read(profileFile)).toBe(snapshot)
+    await toggle(h, ["user:plain"])
+    expect(profile(h)).toEqual(before)
+    expect(h.text()).toContain("rows from mine")
+  })
+
+  test("a clean profile hides the footer's quota without saving a changed footer list, and turned off the list is as it was", async () => {
+    const dir = layout()
+    dir.write("data/tui/profile.json", JSON.stringify({ footerQuota: true }))
+    installPackage(dir, "plain", { clean: true, tuiProfile: {} })
+    const footer = ["quota", "state"]
+    const h = await appHarness({ dataDir: dir.dataDir, directory: dir.project, width: 120, height: 36 })
+    await h.start({ onboarded: true, disabledProfiles: ["user:plain"], footer } as never)
+    const footerSaves = () => h.sent.filter((command) => command.type === "settings.set" && "footer" in (command.patch as object))
+    h.app.applySettings({ onboarded: true, disabledProfiles: [], footer } as never)
+    await h.app.extensionsReady
+    expect(profile(h).footerQuota).toBe(false)
+    expect(footerSaves()).toEqual([])
+    // An edit made while the profile is on starts from the saved list, so the profile's hidden quota is not saved away.
+    await h.type("/footer +branch")
+    await h.key("\r")
+    expect(footerSaves().at(-1)?.patch).toEqual({ footer: ["quota", "state", "branch"] })
+    h.sent.length = 0
+    h.app.applySettings({ onboarded: true, disabledProfiles: ["user:plain"], footer } as never)
+    await h.app.extensionsReady
+    expect(profile(h).footerQuota).toBe(true)
+    expect(footerSaves()).toEqual([])
+  })
+
+  test("a profile hiding the quota hides it under a saved list equal to the old default footer, too", async () => {
+    const dir = layout()
+    dir.write("data/tui/profile.json", JSON.stringify({ sidebar: "hidden", footerPack: "off", footerDefaultRows: false }))
+    installPackage(dir, "plain", { tuiProfile: { footerQuota: false } })
+    const h = await appHarness({ dataDir: dir.dataDir, directory: dir.project, width: 160, height: 30, mode: "full" })
+    const settings = (disabled: string[]) => ({ onboarded: true, tier: "full", view: "full", disabledProfiles: disabled, footer: [...DEFAULT_FOOTER] }) as never
+    await h.start(settings(["user:plain"]))
+    for (const event of quotaScene("fresh")) h.app.onGlobal(event as never)
+    h.message("hello", "hi")
+    h.app.render()
+    expect(h.text()).toContain("resets")
+    h.app.applySettings(settings([]))
+    await h.app.extensionsReady
+    h.app.render()
+    expect(h.text()).not.toContain("resets")
   })
 
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {

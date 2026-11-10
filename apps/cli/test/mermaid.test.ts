@@ -322,3 +322,45 @@ describe("markdown integration", () => {
     }
   })
 })
+
+describe("diagrams in a narrow transcript", () => {
+  const text = (lines: Line[]) => lines.map((row) => row.map((span) => span.text).join("")).join("\n")
+
+  test("a sequence gives its spare room to the long messages, so one keeps its line beside short ones", () => {
+    const source = "sequenceDiagram\n  participant U as User\n  participant C as Cart\n  participant P as Pricing\n  participant D as Discounts\n  U->>C: checkout()\n  C->>P: Sum item prices\n  P-->>C: subtotal\n  C->>D: apply coupon\n  C-->>U: total = subtotal - discount"
+    const result = renderMermaid(source, 75)
+    expect("lines" in result).toBe(true)
+    expect(text((result as { lines: Line[] }).lines)).toContain("total = subtotal - discount")
+  })
+
+  test("the last participant's messages to itself get room beside a wide note, and none of their words is cut", () => {
+    const source = "sequenceDiagram\n  actor C as Checkout page\n  participant P as preview\n  participant T as totals\n  Note over C,P: Checkout page interaction is conceptual;<br/>preview is the indexed caller of totals.\n  C->>P: preview(items, coupon)\n  P->>T: totals(items, coupon)\n  T->>T: Sum line totals\n  T->>T: Apply percentage discount and optional cap\n  T->>T: Round subtotal minus discount\n  T-->>P: { subtotal, discount, total }"
+    for (const width of [100, 120]) {
+      const result = renderMermaid(source, width)
+      expect("lines" in result).toBe(true)
+      const drawn = text((result as { lines: Line[] }).lines)
+      expect(drawn).toContain("Sum line totals")
+      for (const word of ["percentage", "discount", "optional", "cap", "subtotal", "minus"]) expect(drawn).toMatch(new RegExp(`┆ [^┆]*\\b${word}\\b`))
+    }
+  })
+
+  test("two states side by side that each return to themselves keep both notes whole, beside their own box", () => {
+    const result = renderMermaid("stateDiagram-v2\nA --> A: retry\nB --> B: again", 80)
+    expect("lines" in result).toBe(true)
+    const row = text((result as { lines: Line[] }).lines).split("\n").find((line) => line.includes("↻ retry"))!
+    expect(row).toContain("↻ again")
+    expect(row.indexOf("↻ retry")).toBeLessThan(row.indexOf("│     B"))
+  })
+
+  test("a state that returns to itself is written beside its box, and two routed labels never share a row", () => {
+    const source = "stateDiagram-v2\n  [*] --> Empty\n  Empty --> Active: add item\n  Active --> Active: add/remove item\n  Active --> Discounted: apply coupon\n  Discounted --> Active: remove coupon\n  Active --> CheckedOut: checkout\n  Discounted --> CheckedOut: checkout\n  CheckedOut --> [*]"
+    for (const width of [60, 90]) {
+      const result = renderMermaid(source, width)
+      expect("lines" in result).toBe(true)
+      const drawn = text((result as { lines: Line[] }).lines)
+      expect(drawn).toContain("↻ add/remove item")
+      for (const label of ["apply coupon", "remove coupon", "add item"]) expect(drawn).toContain(label)
+      expect(drawn.split("\n").filter((row) => row.includes("checkout")).every((row) => (row.match(/checkout/g) ?? []).length === 1)).toBe(true)
+    }
+  })
+})

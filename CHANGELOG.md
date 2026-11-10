@@ -9,6 +9,39 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.13 - 2026-11-09
+
+Image generation with a ChatGPT login works again, the default theme is called MendCode, profiles can start from a clean look, and diagrams read better in a narrow terminal.
+
+### Upgrade notes
+
+- Same code as v0.0.13-beta.1.
+
+## v0.0.13-beta.1 - 2026-11-09
+
+Image generation with a ChatGPT login works again, the default theme is called MendCode, profiles can start from a clean look, and diagrams read better in a narrow terminal.
+
+### New
+
+- `mendcode profile new <name> --clean` makes a profile that starts from MendCode's clean look: while it is on, your own look settings and UI modules are set aside, and disabling it brings them back.
+
+### Changed
+
+- The name `mendcode-next` is gone: `--json` lines carry `"schema": "mendcode.cli"`, the migration report `mendcode.migrate`, `mendcode upgrade` keeps its binary as `<data dir>/bin/mendcode`, and the development wrapper is `mendcode` (`MENDCODE_BIN_DIR`).
+- The default theme is now called MendCode (`mendcode`, formerly Ink: mendcode.dev's black and white); like before it keeps the terminal's own background, so transparency and blur show through. The green Mend theme is gone: a saved `ink` or `mend` opens MendCode, and v1's orange theme is `mendcode-v1`.
+- graft's tally line no longer ends the answer; the turn's closing line shows it as `graft ~70k`.
+
+### Fixed
+
+- An install whose executables were still called `mendcode-next` moves them to the new name on its next upgrade and keeps its rollback; uninstall removes them too.
+- A sequence diagram's messages from the last participant to itself get the room beside it, so they no longer break one word per line; none of their words is cut.
+- A generated picture's path shows your home folder as `~`; copy path still copies the full path.
+- Dream no longer stays on "running…" while a session waits for your approval, even one you archived; background work only waits for sessions that are really working.
+- Mermaid diagrams read better in a narrow transcript: a sequence gives its spare room to its long messages instead of splitting them, and a state diagram writes a state's transition to itself beside its box and never lets two labels land on the same row.
+- Image generation with a ChatGPT login works again: when the image model refuses the reasoning effort, the request is sent again at once without it, quietly and in the same image card.
+- A look change saved while a profile is on (for example the theme, from chat) keeps only that change; the profile's other keys stay the profile's.
+- The home's Completed list no longer shows sessions that were never written in, and an untitled session reads "Untitled session" instead of its id.
+
 ## v0.0.12 - 2026-11-08
 
 Computer use is much faster and smarter, with its own cursor, and a profile can give a clean look by switching off your own terminal modules.

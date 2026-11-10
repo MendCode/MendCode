@@ -66,6 +66,6 @@ test("headless setup parser and runner require explicit publishing consent", asy
     expect(parsed.ok).toBe(true); if (parsed.ok !== true) throw new Error("parser")
     expect(await runAutomation(parsed.command, deps)).toBe(yes ? 0 : 4)
     expect(calls).toEqual(yes ? ["setup-preview", "setup-apply"] : ["setup-preview"])
-    expect(JSON.parse(output).schema).toBe("mendcode-next.cli.v1")
+    expect(JSON.parse(output).schema).toBe("mendcode.cli")
   }
 })

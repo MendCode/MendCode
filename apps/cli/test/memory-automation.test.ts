@@ -44,7 +44,7 @@ describe("B19 automation", () => {
     const deps = { client: { send: async (command: unknown) => { sent.push(command); return { ok: true, result: { counts: { pending: 2 } } } } }, listen() {}, out: { write: (text: string) => output.push(text) }, err: { write() {} }, cwd: "/repo", now: () => 0, onInterrupt() {} } as unknown as AutomationDeps
     expect(await runAutomation(parse("memory", "status", "--json"), deps)).toBe(0)
     expect(sent).toEqual([{ type: "memory.control", directory: "/repo", input: { operation: "status" } }])
-    expect(JSON.parse(output[0]!)).toMatchObject({ schema: "mendcode-next.cli.v1", kind: "result", command: "memory.status", data: { counts: { pending: 2 } } })
+    expect(JSON.parse(output[0]!)).toMatchObject({ schema: "mendcode.cli", kind: "result", command: "memory.status", data: { counts: { pending: 2 } } })
     output.length = 0
     expect(await runAutomation(parse("memory", "status"), deps)).toBe(0)
     expect(JSON.parse(output[0]!)).toEqual({ counts: { pending: 2 } })

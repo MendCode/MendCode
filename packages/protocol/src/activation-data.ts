@@ -14,7 +14,7 @@ import { isTier, TIER_BUNDLES, type Tier } from "./tier-data"
  * profiles every time, so there is nothing to undo when it goes away.
  */
 
-export const ACTIVATION_KEYS = ["theme", "tuiProfile", "keybindings", "tier", "promptFiles", "views", "panelPreset"] as const
+export const ACTIVATION_KEYS = ["theme", "tuiProfile", "keybindings", "tier", "promptFiles", "views", "panelPreset", "clean"] as const
 export const ACTIVATION_PROMPT_FILES = ["SYSTEM.md", "APPEND_SYSTEM.md", "COMPACTION.md"] as const
 export const ACTIVATION_PANEL_PRESETS = ["pulse", "crew", "ledger", "focus", "full", "galaxy", "orbit"] as const
 export const ACTIVATION_MAX_BYTES = 16 * 1024
@@ -34,6 +34,8 @@ export type Activation = {
   views?: Record<string, string>
   /** One of the right panel's presets; shows the panel. */
   panelPreset?: string
+  /** Start from MendCode's clean look: every look key at its default and the user's own UI modules off, then the rest of this activation. */
+  clean?: boolean
 }
 
 /** Names a profile may never set through activation, anywhere in the profile it ships: they are the user's authority, not a look. */
@@ -52,6 +54,12 @@ export const ACTIVATION_DENIED_PROFILE_KEYS: ReadonlySet<string> = new Set([
  */
 export const ACTIVATION_ADDITIVE_PROFILE_KEYS: ReadonlySet<string> = new Set(["disabledUiExtensions", "disabledViews"])
 
+// Keys a clean profile leaves as the user has them: how they type and what MendCode remembers for them, not how it looks.
+const CLEAN_KEEPS: ReadonlySet<string> = new Set([
+  "username", "vimMode", "multiline", "keyProtocol", "optionKeys", "escBacktrack", "queueRestore", "escRetract", "pasteBurst", "commentKey", "commentReplyKeys",
+  "wheelLines", "themeLock", "tutorialDone", "todayLastVisit", "todayMarks", "todayDismissed",
+])
+
 const THEME_NAME = /^[A-Za-z0-9][\w .-]{0,63}$/
 const FILE_PATH = /^(?!.*\.\.)(?!\/)[A-Za-z0-9_./-]{1,100}\.json$/
 const SLOT_NAME = /^[a-z]+(\.[a-z]+)?$/
@@ -67,7 +75,8 @@ export function activationProblems(raw: unknown): string[] {
   for (const [key, value] of Object.entries(raw)) {
     if (FORBIDDEN.test(key)) { problems.push(`activate.${key}: ${ACTIVATION_FORBIDDEN_MESSAGE}`); continue }
     if (!(ACTIVATION_KEYS as readonly string[]).includes(key)) { problems.push(`activate.${key}: unknown key (known: ${ACTIVATION_KEYS.join(", ")})`); continue }
-    if (key === "theme" && (typeof value !== "string" || !THEME_NAME.test(value))) problems.push("activate.theme: expected a theme name")
+    if (key === "clean" && typeof value !== "boolean") problems.push("activate.clean: expected true or false")
+    else if (key === "theme" && (typeof value !== "string" || !THEME_NAME.test(value))) problems.push("activate.theme: expected a theme name")
     else if (key === "keybindings" && (typeof value !== "string" || !FILE_PATH.test(value))) problems.push("activate.keybindings: expected a relative .json path inside the profile")
     else if (key === "tier" && !isTier(value)) problems.push("activate.tier: expected minimalist, balanced or full")
     else if (key === "panelPreset" && !(ACTIVATION_PANEL_PRESETS as readonly unknown[]).includes(value)) problems.push(`activate.panelPreset: expected ${ACTIVATION_PANEL_PRESETS.filter((preset) => preset !== "orbit").join(", ")}`)
@@ -91,7 +100,7 @@ export function activationProblems(raw: unknown): string[] {
 }
 
 /** Whether the activation changes how MendCode looks (so only one profile may own it per scope). Keybindings and prompt files are independent. */
-export const hasLook = (activation: Activation) => Boolean(activation.theme || activation.tier || activation.panelPreset || (activation.tuiProfile && Object.keys(activation.tuiProfile).length) || (activation.views && Object.keys(activation.views).length))
+export const hasLook = (activation: Activation) => Boolean(activation.clean || activation.theme || activation.tier || activation.panelPreset || (activation.tuiProfile && Object.keys(activation.tuiProfile).length) || (activation.views && Object.keys(activation.views).length))
 
 export type ProfileOrigin = "tier" | "panel" | "theme" | "profile"
 /** The module name as the extension loader calls it: no `.ts`/`.js`, no `/index`. */
@@ -101,6 +110,11 @@ export const moduleStem = (module: string) => module.replace(/\.(ts|js)$/, "").r
 export function activationProfile(activation: Activation, panel: (name: string) => Record<string, unknown> | undefined): Array<{ key: string; value: unknown; origin: ProfileOrigin }> {
   const out = new Map<string, { value: unknown; origin: ProfileOrigin }>()
   const put = (key: string, value: unknown, origin: ProfileOrigin) => out.set(key, { value, origin })
+  if (activation.clean) for (const [key, value] of Object.entries(TUI_DEFAULTS)) {
+    if (!CLEAN_KEEPS.has(key) && !FORBIDDEN.test(key) && (!ACTIVATION_DENIED_PROFILE_KEYS.has(key) || ACTIVATION_ADDITIVE_PROFILE_KEYS.has(key))) put(key, structuredClone(value), "profile")
+  }
+  // MendCode's own theme, not the one the user picked in settings.
+  if (activation.clean) put("theme", "mendcode", "theme")
   if (activation.tier) {
     const bundle = TIER_BUNDLES[activation.tier]
     put("presentation", bundle.view, "tier")
@@ -160,6 +174,8 @@ export type ActivationResult = {
   kept: string[]
   /** The values the user chose for kept profile keys under these owners; applied over the profile like the overlay. */
   keptValues: Record<string, unknown>
+  /** An owner starts from the clean look: its lists replace the user's, and only the owners' own UI modules load. */
+  clean: boolean
 }
 
 /** `activation.json` as stored: anything unreadable is the empty state (nothing recorded, nothing kept). */
@@ -280,5 +296,6 @@ export function resolveActivation(input: {
   }
   for (const entry of promptFiles) rows.push({ part: "prompt", key: entry.file, package: entry.package, value: "replaces the prompt file", kept: false })
   for (const pkg of usable) for (const [slot, module] of Object.entries(pkg.activation.views ?? {})) if (owners[pkg.scope] === pkg.key) rows.push({ part: "view", key: slot, package: pkg.key, value: moduleStem(module), kept: false })
-  return { owners, overlay, applied, rows, keybindings, promptFiles, suppressed, waiting, conflicts, signature, kept, keptValues }
+  const clean = usable.some((pkg) => pkg.activation.clean && Object.values(owners).includes(pkg.key))
+  return { owners, overlay, applied, rows, keybindings, promptFiles, suppressed, waiting, conflicts, signature, kept, keptValues, clean }
 }

@@ -101,13 +101,14 @@ describe("terminal mode on the screen", () => {
 
 describe("the theme's background", () => {
   const paper = THEMES.find((theme) => theme.name === "paper")!
-  const ink = THEMES.find((theme) => theme.name === "ink")!
+  const ink = THEMES.find((theme) => theme.name === "mendcode")!
   const terminal = THEMES.find((theme) => theme.name === "terminal")!
 
   test("is painted only when the terminal answered with a background of the other lightness", () => {
     expect(backgroundPaint({ theme: paper, mode: "dark", answered: true })).toEqual({ background: "#faf8f2", text: "#1f2a24", cursor: "#1f2a24" })
     expect(backgroundPaint({ theme: ink, mode: "light", answered: true })?.background).toBe("#0a0a0a")
     expect(backgroundPaint({ theme: paper, mode: "light", answered: true })).toBeUndefined()
+    // The default keeps the terminal's own background (transparency and blur show through).
     expect(backgroundPaint({ theme: ink, mode: "dark", answered: true })).toBeUndefined()
     // COLORFGBG alone (no OSC 11 answer) is a guess: the terminal's colours stay.
     expect(backgroundPaint({ theme: paper, mode: "dark", answered: false })).toBeUndefined()
@@ -186,7 +187,7 @@ describe("the theme's background", () => {
     screen.draw(rows)
     expect(writes.join("")).toContain(PAINT_RESET)
     writes.length = 0
-    setTheme("ink")
+    setTheme("mendcode")
     screen.draw(rows)
     expect(writes.join("")).toContain("\x1b]11;rgb:0a/0a/0a\x07")
     writes.length = 0
@@ -218,7 +219,7 @@ describe("the theme's background", () => {
     screen.consumeTerminalInput("\x1b]10;rgb:d0d0/d0d0/d0d0\x07\x1b]11;rgb:1212/1414/1818\x07")
     screen.draw(rows)
     writes.length = 0
-    setTheme("ink")
+    setTheme("mendcode")
     screen.draw(rows)
     expect(writes.join("")).toContain(restored)
   }))
@@ -238,3 +239,4 @@ describe("the theme's background", () => {
     }
   }))
 })
+

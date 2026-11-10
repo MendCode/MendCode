@@ -31,11 +31,11 @@ Kept, not product names: `v2` as a technical identifier (provider-auth `source: 
 | Item | Result |
 |---|---|
 | Program name in help, usage lines, hints, completions, docs | `mendcode`. A single module, `packages/program/src/index.ts`, resolves it: `MENDCODE_PROGRAM` if set, else a compiled binary's own file name when it is `mendcode` or `mendcode-<lowercase suffix>` (never a versioned asset name), else `mendcode`. Usage constants interpolate `PROGRAM_NAME`. |
-| Developer wrapper `mendcode-next` (`scripts/install-dev.sh`) | keeps its name and keeps working; it now runs `env MENDCODE_PROGRAM=mendcode-next bun ...`, so its help says `mendcode-next`. `uninstall` recognises both the old and the new wrapper text. Completions are registered for `mendcode` and for the name in use. |
+| Developer wrapper (`scripts/install-dev.sh`) | **renamed (2026-11-09)** to `mendcode`; it never overwrites a `mendcode` it did not write. `uninstall` removes it only by its exact text. |
 | Released binary and installers | `mendcode` / `mendcode.exe`; `scripts/build.ts` and `scripts/perf.ts` write `mendcode`; compiled tests use it |
-| Automation schema id `mendcode-next.cli.v1` (`--json` lines, `upgrade`, `uninstall`, `loop`, `github`, `daemon`) | **kept.** `mendcode.cli.v1` already means the legacy-compatible envelope (`--compat`, `apps/cli/src/compat.ts`), so renaming would merge two different contracts. Stored scripts that pin the id keep working. |
-| Migration report schema `mendcode-next.migrate-v1@1`, protocol ids `mendcode-app-server@1`, `mendcode-v2-mflow`, memory-sharing format `mendcode-v2` | kept (wire and stored identifiers) |
-| Env prefix `MENDCODE_` | stays. `MENDCODE_V2_DIR`, `MENDCODE_V2_ENGINE`, `MENDCODE_V2_JIT`, `MENDCODE_V2_CONPTY`, `MENDCODE_V2_LOCAL_TRANSPORT` keep their names (renaming them breaks running setups; recommendation below). `MENDCODE_NEXT_BIN_DIR` (dev wrapper directory) kept. New: `MENDCODE_PROGRAM`, `MENDCODE_CHANNEL`, `MENDCODE_ALLOW_UNSIGNED`, `MENDCODE_API_BASE` (installers). |
+| Automation schema id (`--json` lines, `upgrade`, `uninstall`, `loop`, `github`, `daemon`) | **renamed (2026-11-09)** to `mendcode.cli`. `mendcode.cli.v1` stays the legacy-compatible envelope (`--compat`, `apps/cli/src/compat.ts`). |
+| Migration report schema `mendcode.migrate` (renamed 2026-11-09), protocol ids `mendcode-app-server@1`, `mendcode-v2-mflow`, memory-sharing format `mendcode-v2` | kept (wire and stored identifiers) |
+| Env prefix `MENDCODE_` | stays. `MENDCODE_V2_DIR`, `MENDCODE_V2_ENGINE`, `MENDCODE_V2_JIT`, `MENDCODE_V2_CONPTY`, `MENDCODE_V2_LOCAL_TRANSPORT` keep their names (renaming them breaks running setups; recommendation below). `MENDCODE_BIN_DIR` is the dev wrapper's directory. New: `MENDCODE_PROGRAM`, `MENDCODE_CHANNEL`, `MENDCODE_ALLOW_UNSIGNED`, `MENDCODE_API_BASE` (installers). |
 | Service names | launchd label / systemd unit `com.mendcode.v2.daemon` kept (system identity, see d) |
 | Daemon socket, lock, endpoint inside the data directory | `mendd.sock`, `mendd.lock`, `mendd.endpoint`, `mendd.db`: kept |
 
@@ -45,9 +45,9 @@ Kept, not product names: `v2` as a technical identifier (provider-auth `source: 
 |---|---|
 | Default data directory (`DEFAULT_DIR` in `apps/cli/src/launcher.ts` and `packages/daemon/src/main.ts`, VS Code extension default) | `~/.mendcode-v2`, overridden by `--dir` or `MENDCODE_V2_DIR` |
 | Config, cache, state | all inside the data directory (`mendd.db`, `settings`, `tui/`, `upgrade.json`, ...); user extension folder is the data directory itself; project files are `<project>/.mendcode/` |
-| Managed binary and its backups | `<data dir>/bin/mendcode-next`, `.prev`, `.new` |
+| Managed binary and its backups | `<data dir>/bin/mendcode`, `.prev`, `.new` (renamed 2026-11-09) |
 | Installer receipt | `<install dir>/.mendcode-v2-install` with `schema=mendcode-v2.install.v1` |
-| Dev wrapper | `~/.local/bin/mendcode-next` |
+| Dev wrapper | `~/.local/bin/mendcode` (renamed 2026-11-09) |
 | Service definitions | `~/Library/LaunchAgents/com.mendcode.v2.daemon.plist`, `~/.config/systemd/user/com.mendcode.v2.daemon.service` |
 | Windows trash folder for uninstall | `%LOCALAPPDATA%\MendCodeV2\Trash` |
 | Keychain | none: credentials live in the data directory; there is no keychain entry |

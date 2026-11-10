@@ -37,6 +37,19 @@ describe("home Agent View scope", () => {
     expect(screen).not.toContain("Other project run")
   })
 
+  test("a session never written in is not listed as completed, and an untitled one never shows its raw id", async () => {
+    const empty = summary("", "/work/app", "idle"), drafted = { ...summary("", "/work/app", "idle"), draft: { preview: "half a question", chars: 15, attachments: 0, images: 0, updatedAt: NOW - 30_000 } } as SessionSummary
+    const h = homeApp("/work/app", [summary("Finished the docs", "/work/app", "idle"), empty, drafted])
+    await h.app.start()
+    await Bun.sleep(5)
+    h.app.render()
+    const screen = h.text().join("\n")
+    expect(screen).toContain("Finished the docs")
+    expect(screen).not.toContain(empty.sessionId)
+    expect(screen).not.toContain(drafted.sessionId)
+    expect(screen).toContain("half a question")
+  })
+
   test("the user's home is a folder like any other: only the sessions started there, not every project under it", async () => {
     const h = homeApp(homedir(), [
       summary("Home chores", homedir(), "idle"),

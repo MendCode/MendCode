@@ -57,7 +57,7 @@ test("B40 notify checks without installing; true installs only a verified stable
   automatic.service.wake()
   for (let i = 0; i < 100 && !automatic.notices.some((notice) => notice.installed); i++) await Bun.sleep(2)
   expect(automatic.notices.at(-1)).toMatchObject({ version: "v1.0.1", installed: true })
-  expect(readFileSync(path.join(automatic.dataDir, "bin/mendcode-next"), "utf8")).toBe("new")
+  expect(readFileSync(path.join(automatic.dataDir, "bin/mendcode"), "utf8")).toBe("new")
 }, 20_000)
 
 test("B40 auto refuses non-patch versions and busy sessions, cancels activation after policy changes", async () => {
@@ -66,14 +66,14 @@ test("B40 auto refuses non-patch versions and busy sessions, cancels activation 
     h.service.wake()
     for (let i = 0; i < 100 && !h.notices.length; i++) await Bun.sleep(2)
     await h.service.stop()
-    expect(existsSync(path.join(h.dataDir, "bin/mendcode-next"))).toBe(false)
+    expect(existsSync(path.join(h.dataDir, "bin/mendcode"))).toBe(false)
   }
   const h = setup({ auto: true })
   h.fake.ports.verifyProvenance = async () => { h.settings.autoupdate = false }
   h.service.wake()
   for (let i = 0; i < 100 && !h.fake.requested.some((url) => url.endsWith("release-index.json")); i++) await Bun.sleep(2)
   await h.service.stop()
-  expect(existsSync(path.join(h.dataDir, "bin/mendcode-next"))).toBe(false)
+  expect(existsSync(path.join(h.dataDir, "bin/mendcode"))).toBe(false)
 })
 
 test("B40 stale channel checks cannot replace current channel status", async () => {
@@ -129,5 +129,5 @@ test("the automatic updater installs nothing on a machine without cosign: it nev
   await Bun.sleep(200)
   await h.service.stop()
   expect(h.notices.some((notice) => notice.installed)).toBe(false)
-  expect(existsSync(path.join(h.dataDir, "bin/mendcode-next"))).toBe(false)
+  expect(existsSync(path.join(h.dataDir, "bin/mendcode"))).toBe(false)
 }, 20_000)

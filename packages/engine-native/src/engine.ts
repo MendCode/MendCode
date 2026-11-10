@@ -179,6 +179,8 @@ const SHELL_TOOL = "shell"
 const INLINE_SHELL_TIMEOUT_MS = 30_000
 /** Provider failures in a row, in steps that used a hosted tool, before the step goes on without that tool. */
 const HOSTED_FAILURE_LIMIT = 2
+/** ChatGPT's image tool takes the request's reasoning effort as its own complexity and refuses every value; it works with none. */
+const IMAGE_EFFORT_REFUSED = /Complexity '[^']*' is not supported for this image model/i
 const hostedLabel = (tool: HostedTool) => (tool === "web_search" ? "web search" : "image generation")
 /** What the model is told once a hosted tool was taken out of the step. */
 const hostedOffNote = (tools: readonly HostedTool[]) => `The provider's ${tools.map(hostedLabel).join(" and ")} is failing right now and is off for this step. Do not wait for it: answer with what you have, say that it failed, and use another tool if one can do the job.`
@@ -1028,6 +1030,10 @@ export function createNativeEngine(options: {
      */
     const hostedFailures = new Map<HostedTool, number>()
     const hostedOff = new Set<HostedTool>()
+    /** Set when the image tool refused the effort: the rest of this turn's calls that offer it go without one. */
+    let effortlessImages = false
+    /** The image card of the refused call, kept open for the call sent again so the chat shows one card, not a failed one above it. */
+    let carriedImage: ItemId | undefined
     /** A provider deadline (`RetryableProviderError.immediate`) skips the backoff once per call; if it fires again the usual waits apply. */
     let retriedAtOnce = false
     for (let attempt = 0; ; attempt++) {
@@ -1041,6 +1047,7 @@ export function createNativeEngine(options: {
       let handedOver = false
       /** Hosted tool calls still running, by the provider's id; any left open when the call ends are closed as cancelled. */
       const hosted = new Map<string, ItemId>()
+      let carrying = false
       const hostedUsed = new Set<HostedTool>()
       const continuation =carried ? continuationStream(carried.text) : undefined
       // Each attempt has its own signal, so a wake from sleep can drop a stream whose connection died silently.
@@ -1172,6 +1179,8 @@ export function createNativeEngine(options: {
         if (cacheTtl) modelRequest.cacheTtl = cacheTtl
         const repeated = share?.last ?? fork
         if (repeated) { modelRequest.effort = repeated.effort; modelRequest.parameters = repeated.parameters }
+        // After the repeated request's effort: a fork's retry goes without the effort the image tool refused, too.
+        if (effortlessImages && (modelRequest.hostedTools ?? []).includes("image_generation")) delete modelRequest.effort
         if (role === "main" && textKind === "agent_message" && !compound) lastMain.set(input.sessionId, recorded = { system, tools: callTools, hostedTools, choice, effort: modelRequest.effort, parameters: modelRequest.parameters, pruned: pruned.ids, sent: messages.length, digest: historyDigest(messages), turn: turnStarts.get(input.sessionId), cache: { mode: cacheMode, key: cacheKey, forBody: cacheKeyForBody } })
         // A plan-mode call is the session's latest request but not one a compaction can repeat (its own model and tools): nothing is on record after it.
         else if (role === "plan" && textKind === "agent_message") lastMain.delete(input.sessionId)
@@ -1220,7 +1229,11 @@ export function createNativeEngine(options: {
             step.emitted = true
             hostedUsed.add(event.tool)
             let itemId = hosted.get(event.id)
-            if (!itemId) {
+            if (!itemId && event.tool === "image_generation" && carriedImage) {
+              itemId = carriedImage
+              carriedImage = undefined
+              hosted.set(event.id, itemId)
+            } else if (!itemId) {
               itemId = input.newItemId()
               hosted.set(event.id, itemId)
               input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: event.tool } })
@@ -1265,6 +1278,13 @@ export function createNativeEngine(options: {
           keepText = true
         }
         const dropped: HostedTool[] = []
+        if (!effortlessImages && IMAGE_EFFORT_REFUSED.test(failure.message)) {
+          // Sent again at once and quietly: a known refusal, not a provider failure the user needs to see.
+          effortlessImages = true
+          const open = [...hosted].find(([, itemId]) => itemId)
+          if (open) { carriedImage = open[1]; hosted.delete(open[0]); carrying = true }
+          continue
+        }
         if (failure.kind !== "network") {
           for (const tool of hostedUsed) {
             const failures = (hostedFailures.get(tool) ?? 0) + 1
@@ -1291,6 +1311,8 @@ export function createNativeEngine(options: {
         stopWatching()
         input.signal.removeEventListener("abort", abortCall)
         for (const itemId of hosted.values()) input.emit({ type: "item.completed", itemId, status: "cancelled" })
+        // A carried card the call sent again never took up is closed with it.
+        if (carriedImage && !carrying) { input.emit({ type: "item.completed", itemId: carriedImage, status: "cancelled" }); carriedImage = undefined }
         // A card whose input never became whole (the stream stopped or the request failed) has no call to run.
         for (const card of step.cards.values()) {
           if (!card.itemId || (handedOver && card.whole)) continue
