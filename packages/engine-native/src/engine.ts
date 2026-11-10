@@ -231,10 +231,11 @@ export const TASK_TOOL = {
     agent: z.string().min(1).max(64).optional().describe("Name of a custom sub-agent to run as (see the list in this tool's description); omit for a general one"),
     isolation: z.literal("worktree").optional().describe("Child works in a new git worktree of HEAD; result names its branch (never merged)"),
     fork: z.boolean().optional().describe("true: the child starts from this conversation (your model; cached, so cheap to start) and the prompt needs only the task; your main-agent tools fail there. Omit for independent work"),
+    bare: z.boolean().optional().describe("No instructions, memories or skills; only if the user asks"),
   }),
 }
-/** `isolation` and `fork` are offered only where their features are on (`task_worktree`, `task_fork`): elsewhere their schema would cost every request. */
-const TASK_TOOL_SHARED = { ...TASK_TOOL, args: TASK_TOOL.args.omit({ isolation: true, fork: true }) }
+/** `isolation`, `fork` and `bare` are offered only where their features are on (`task_worktree`, `task_fork`, `task_bare`): elsewhere their schema would cost every request. */
+const TASK_TOOL_SHARED = { ...TASK_TOOL, args: TASK_TOOL.args.omit({ isolation: true, fork: true, bare: true }) }
 /** Starts a forked child's first message: what the inherited conversation is, and that the task below is its own. */
 const FORK_NOTE = "You are now a sub-agent forked from the conversation above, which is your parent's context: its instructions, tasks and approvals belong to the parent. Tools only the main agent has fail here. Do only the task below and end with your result for the parent.\n\nTask:\n"
 const MAX_ITEM_TEXT = 60_000
@@ -814,10 +815,10 @@ export function createNativeEngine(options: {
 
   /** Names the first sub-agents in the `task` tool's description (`subagentCatalog` of them) and lets `task` run every one. */
   function withSubagents(base: Toolset, subagents: readonly AgentProfile[]): Toolset {
-    const worktree = featureOn(policy(), "task_worktree"), fork = featureOn(policy(), "task_fork")
-    if (!base.allowTask || subagents.length === 0 && !fork) return base
+    const worktree = featureOn(policy(), "task_worktree"), fork = featureOn(policy(), "task_fork"), bare = featureOn(policy(), "task_bare")
+    if (!base.allowTask || subagents.length === 0 && !fork && !bare) return base
     const description = subagents.length ? `${TASK_TOOL.description}\n\n${subagentCatalog(subagents, policy().subagentCatalog)}` : undefined
-    const parameters = worktree || fork ? toSpec({ ...TASK_TOOL, args: TASK_TOOL.args.omit({ ...(worktree ? {} : { isolation: true as const }), ...(fork ? {} : { fork: true as const }) }) }).parameters : undefined
+    const parameters = worktree || fork || bare ? toSpec({ ...TASK_TOOL, args: TASK_TOOL.args.omit({ ...(worktree ? {} : { isolation: true as const }), ...(fork ? {} : { fork: true as const }), ...(bare ? {} : { bare: true as const }) }) }).parameters : undefined
     return {
       ...base,
       ...(subagents.length ? { subagents: new Map(subagents.map((agent) => [agent.name, agent] as const)) } : {}),
@@ -2216,6 +2217,8 @@ export function createNativeEngine(options: {
       return { output: `unknown agent "${named}"; available: ${names.slice(0, 40).join(", ")}${names.length > 40 ? ` (+${names.length - 40}: agent "${LIST_AGENTS}")` : ""}`, truncated: false, title, isError: true }
     }
     if (args.isolation && (!options.tasks || !featureOn(policy(), "task_worktree"))) return { output: "isolation: \"worktree\" needs the full tier (task_worktree) and the daemon task registry", truncated: false, title, isError: true }
+    if (args.bare && !featureOn(policy(), "task_bare")) return { output: "bare needs the task_bare feature (/tier task_bare on)", truncated: false, title, isError: true }
+    if (args.fork && args.bare) return { output: "fork and bare exclude each other: a fork starts from this conversation, a bare child from nothing but its prompt", truncated: false, title, isError: true }
     if (args.fork && !featureOn(policy(), "task_fork")) return { output: "fork needs the task_fork feature (/tier task_fork on)", truncated: false, title, isError: true }
     // A fork that cannot share the parent's prefix runs fresh, and the answer says so: its prompt may lean on context it did not get.
     const notForked = args.task_id ? "a resumed task keeps its own context" : args.isolation ? "a worktree child works elsewhere" : args.engine && args.engine !== "native" ? "another engine cannot read this cache" : args.variant ? "a variant changes the request" : undefined
@@ -2232,6 +2235,8 @@ export function createNativeEngine(options: {
       } catch (error) { return { output: String(error), title, truncated: false, isError: true } }
     }
     if (args.engine && args.engine !== "native") return { output: "cross-engine delegation needs the daemon task registry", title, truncated: false, isError: true }
+    // An in-process child shares this loop's system prompt; only a child session of the daemon can leave the instructions out.
+    if (args.bare) return { output: "bare needs the daemon task registry", title, truncated: false, isError: true }
     const startedAt = Date.now()
     const childItems = new Map<ItemId, string>()
     const profile = named ? parent.subagents?.get(named) : undefined

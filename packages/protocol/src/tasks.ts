@@ -15,6 +15,8 @@ export const TaskInput = lazySchema(() => z.strictObject({
   isolation: z.literal("worktree").optional(),
   /** Full tier, opt-in (`task_fork`): a new child starts from its parent's latest request (same model, its cached prefix) instead of a fresh context. */
   fork: z.boolean().optional(),
+  /** A new child with none of the user's or the project's instructions, memories or skills: only its prompt. Not with `fork`. */
+  bare: z.boolean().optional(),
   clientRequestId: z.string().min(1).max(128).optional(),
 }))
 export type TaskInput = z.infer<typeof TaskInput>
@@ -80,6 +82,8 @@ export const TaskRecord = lazySchema(() => z.strictObject({
   }).optional(),
   /** Launched with `fork: true`: its first turn starts from the parent's context when that is still on record (`task_fork`). */
   fork: z.literal(true).optional(),
+  /** Launched with `bare: true`: every run, resumed ones too, goes without instruction files, memories and skills. */
+  bare: z.literal(true).optional(),
 }))
 export type TaskRecord = z.infer<typeof TaskRecord>
 export const ExtractionJob = lazySchema(() => z.strictObject({
