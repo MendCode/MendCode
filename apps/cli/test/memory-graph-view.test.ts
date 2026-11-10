@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { MemoryEntry, MemoryGraphReport, MemoryLink } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
 import { nearestNode } from "../src/view/ascii-graph"
-import { createMemoryGraphState, memoryGraphCategories, memoryGraphKey, memoryGraphLayout, memoryGraphMetrics, renderMemoryGraph, selectedMemoryId, type MemoryGraphState } from "../src/view/memory-graph-view"
+import { categoryThreads, createMemoryGraphState, memoryGraphCategories, memoryGraphKey, memoryGraphLayout, memoryGraphMetrics, renderMemoryGraph, selectedMemoryId, type MemoryGraphState } from "../src/view/memory-graph-view"
 import { textWidth } from "../src/view/wrap"
 
 const NOW = Date.UTC(2026, 8, 26, 12)
@@ -378,5 +378,35 @@ describe("renderMemoryGraph", () => {
   test("rendering is deterministic", () => {
     const input = { report: big(60), state: state({ selected: "m7" }), width: 120, height: 30 }
     expect(renderMemoryGraph(input)).toEqual(renderMemoryGraph(input))
+  })
+})
+
+describe("memory graph category threads", () => {
+  const loose = report(
+    [
+      memory("r1", { text: "Beta goes through a reviewed PR", category: "release" }),
+      memory("r2", { text: "Never move a published tag", category: "release" }),
+      memory("r3", { text: "Nightly is main", category: "release" }),
+      memory("p1", { text: "Answer in Spanish", category: "preferences" }),
+      memory("p2", { text: "No jargon", category: "preferences" }),
+      memory("u1", { text: "A note with no category" }),
+      memory("u2", { text: "Another note with no category" }),
+    ],
+    [link("r1", "r2")],
+  )
+
+  test("the whole view joins each category into one group, only where no link already does", () => {
+    const threads = categoryThreads(loose, new Map())
+    expect(threads.map((edge) => [edge.from, edge.to])).toEqual([["r1", "r3"], ["p1", "p2"]])
+    expect(threads.every((edge) => edge.style === "dotted" && !edge.directed)).toBe(true)
+  })
+
+  test("the whole view draws every memory of a category with its group and names the threads; the ego view and the saved links stay as they are", () => {
+    const all = plain(renderMemoryGraph({ report: loose, state: state({ mode: "all" }), width: 140, height: 30 })).join("\n")
+    expect(all).toContain("same category")
+    expect(memoryGraphLayout(loose, state({ mode: "all" }), { width: 100, height: 26 }).edges.length).toBe(3)
+    expect(memoryGraphLayout(loose, state({ mode: "ego", selected: "r1" }), { width: 100, height: 26 }).edges.length).toBe(1)
+    expect(plain(renderMemoryGraph({ report: loose, state: state({ mode: "ego" }), width: 140, height: 30 })).join("\n")).not.toContain("same category")
+    expect(loose.links).toHaveLength(1)
   })
 })

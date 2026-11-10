@@ -69,6 +69,7 @@ export const FEATURE_PROVIDERS: Record<string, Provider> = {
     featureLine(settings, "subagents"),
     featureLine(settings, "task_worktree"),
     featureLine(settings, "task_fork"),
+    featureLine(settings, "task_bare"),
     settingsLine(settings, { subagentDepth: 1, subagentMaxChildren: 4, subagentMaxDescendants: 16, subagentOwnerWake: true, subagentCatalog: 6, agentMentions: "address" }),
     folderLine(context, "agents"),
   ]),

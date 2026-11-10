@@ -417,42 +417,29 @@ describe("tools", () => {
     expect(text.filter((l) => /^ {5}[+\-±] /.test(l))).toEqual(["     ± Add a.txt  +2", "     ± Delete b.txt", "     ± Patch c.ts -> d.ts  +1 −1"])
   })
 
-  test("a run of more than five completed one-line rows folds the oldest into `◇ N tools more`; ctrl+o unfolds", () => {
+  test("every tool call keeps its own row in full and balanced: no run of calls folds into a count, ctrl+o still opens them all", () => {
     const { item, turn, events } = stream()
     const turnId = turn()
     for (let i = 0; i < 8; i++) item(turnId, "tool_call", { meta: { tool: `webfetch: https://x.dev/f${i}` }, text: "x" })
-    const { t, text } = view(events)
-    expect(text.filter((l) => l.includes("Fetch"))).toHaveLength(5)
-    expect(text[0]).toBe("     ◇ 3 tools more")
-    expect(text[1]).toContain("f3")
-    t.toggleTools()
-    expect(t.viewport(100, 100).filter((l) => l.text.includes("Fetch"))).toHaveLength(8)
-    expect(view(events, { mode: "minimal" }).text).toEqual(["◆ 8 tools · webfetch: https://x.dev/f7 ✓"])
-  })
-
-  test("Claude Code edits, writes and commands never fold into `◇ N tools more` once they finish, in full or balanced; its reads still do", () => {
-    const { item, turn, events } = stream()
-    const turnId = turn()
-    const changing = ["edit /p/a.ts", "write /p/b.ts", "rm /p/c.ts", "notebookedit /p/n.ipynb", "MultiEdit", "bash", "edit /p/d.ts", "write /p/e.ts"]
-    for (const tool of changing) item(turnId, "tool_call", { meta: { tool }, text: "The file has been updated." })
     for (let i = 0; i < 7; i++) item(turnId, "tool_call", { meta: { tool: `read /p/r${i}.ts` }, text: "x" })
     for (const mode of ["full", "balanced"] as const) {
-      const { text } = view(events, { mode })
-      for (const tool of changing) expect(text.some((l) => l.includes(tool))).toBe(true)
-      expect(text.filter((l) => l.includes("◇"))).toEqual(["     ◇ 2 tools more"])
-      expect(text.some((l) => l.includes("r1.ts"))).toBe(false)
+      const { t, text } = view(events, { mode })
+      expect(text.filter((l) => l.includes("Fetch"))).toHaveLength(8)
+      for (let i = 0; i < 7; i++) expect(text.some((l) => l.includes(`r${i}.ts`))).toBe(true)
+      expect(text.some((l) => / tools? more|Read \d+ files/.test(l))).toBe(false)
+      t.toggleTools()
+      expect(t.viewport(200, 200).filter((l) => l.text.includes("Fetch"))).toHaveLength(8)
     }
+    expect(view(events, { mode: "minimal" }).text).toEqual(["◆ 15 tools · read /p/r6.ts ✓"])
   })
 
-  test("failed rows are never folded and a running row stays visible", () => {
+  test("failed and running rows show beside the finished ones", () => {
     const { item, turn, events } = stream()
     const turnId = turn()
     for (let i = 0; i < 7; i++) item(turnId, "tool_call", { meta: { tool: `webfetch: https://x.dev/f${i}` }, text: "x", ...(i === 0 ? { status: "error" } : {}) })
     item(turnId, "tool_call", { meta: { tool: "webfetch: https://x.dev/live" }, status: "running" })
     const { text } = view(events)
-    expect(text.some((l) => l.includes("f0"))).toBe(true)
-    expect(text.some((l) => l.includes("live"))).toBe(true)
-    expect(text.filter((l) => l.includes("◇"))).toEqual(["     ◇ 1 tool more"])
+    for (const name of ["f0", "f3", "f6", "live"]) expect(text.some((l) => l.includes(name))).toBe(true)
   })
 
   test("a todo card draws ✓ ▸ □ in success/warning/text and takes the todo icon even as `todo 2/5`", () => {

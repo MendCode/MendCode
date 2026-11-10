@@ -55,7 +55,7 @@ describe("feature manifest", () => {
     expect(featureOn({ tier: "minimalist" }, "usage_resume")).toBe(true)
     expect(featureOn({ tier: "minimalist", features: { usage_resume: false } }, "usage_resume")).toBe(false)
     expect(rows.threads).toEqual([false, true, true])
-    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "memory_auto", "plan_files", "whats_new"], removed: [] })
+    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "task_bare", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "memory_auto", "plan_files", "whats_new"], removed: [] })
     // `/whatsnew` is balanced's and full's; with no tier it is there as before tiers; minimalist keeps only the release notes' prompt.
     expect(rows.whats_new).toEqual([false, true, true])
     expect(featureOn({}, "whats_new")).toBe(true)
@@ -117,8 +117,9 @@ describe("featureState", () => {
       for (const tier of [undefined, "minimalist", "balanced", "full"] as const) expect(featureOn({ tier }, id)).toBe(tier === undefined && FEATURES[id].legacy)
       expect(featureState({ tier: "minimalist", features: { [id]: true } }, id)).toEqual({ on: true, why: "override" })
     }
-    expect(effectiveSettings(settings)).toEqual({ tools: { "computer_*": false } })
-    expect(effectiveSettings({ features: { computer: true } } as TierSettings).tools).toBeUndefined()
+    // The browser extension's tool rides only behind tool discovery, which is off here.
+    expect(effectiveSettings(settings)).toEqual({ tools: { "computer_*": false, user_browser: false } })
+    expect(effectiveSettings({ features: { computer: true }, experimental: { tool_discovery: true } } as TierSettings).tools).toBeUndefined()
     expect(tierIncludes(undefined, "full")).toBe(true)
   })
 
@@ -152,7 +153,11 @@ describe("effectiveSettings", () => {
     expect(balanced.tools?.["graph_*"]).toBeUndefined()
     expect(balanced.tools?.["mcp__*"]).toBe(false)
     const full = effectiveSettings({ tier: "full" } as TierSettings)
+    // Full turns tool discovery on with MCP, so the browser extension's tool is offered: it costs a name until it is looked for.
     expect(full.tools).toEqual({ "computer_*": false })
+    // With discovery off it waits for the user's own switch.
+    expect(effectiveSettings({ tier: "full", experimental: { tool_discovery: false } } as TierSettings).tools).toEqual({ "computer_*": false, user_browser: false })
+    expect(effectiveSettings({ tier: "full", experimental: { tool_discovery: false }, features: { browser_extension: true } } as TierSettings).tools).toEqual({ "computer_*": false })
   })
 
   test("flags follow the feature: JEV on in full, opt-in flags off below their tier, nothing is written back", () => {
@@ -212,7 +217,7 @@ describe("effectiveSettings", () => {
   test("safe mode alone turns MCP off without a tier", () => {
     const safe = effectiveSettings({} as TierSettings, { safeMode: true })
     // Safe mode keeps the chat-side package manager off too: it installs and enables code the session would then load.
-    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false })
+    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false, user_browser: false })
   })
 })
 

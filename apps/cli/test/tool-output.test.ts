@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { createIdFactory, type ItemId, type SessionEvent, type TurnId } from "@mendcode/protocol"
 import { glyphs } from "../src/ui/theme"
 import { foldOf } from "../src/view/line-meta"
-import { FOLD_CARD, FOLD_PAGE, FOLD_RUN, renderToolCard, TOOL_PAGE_LINES } from "../src/view/tool-card"
-import { foldLabel, readDetail, readResult } from "../src/view/tool-summary"
+import { FOLD_CARD, FOLD_PAGE, renderToolCard, TOOL_PAGE_LINES } from "../src/view/tool-card"
+import { readDetail, readResult } from "../src/view/tool-summary"
 import { createTranscript, type PresentationMode } from "../src/view/transcript"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
@@ -167,83 +167,19 @@ describe("reading tools in each view", () => {
   })
 })
 
-describe("a run of reading calls folds", () => {
-  const run = (count: number, extra?: (api: ReturnType<typeof stream>, turnId: TurnId) => void) => {
+describe("a run of reading calls never folds", () => {
+  test("every call keeps its own row in balanced and full, and a failed or running one shows in place", () => {
     const api = stream()
     const turnId = api.turn()
-    const found: ItemId[] = []
-    for (let i = 0; i < count; i++) found.push(api.tool(turnId, ["read: a.ts", "ls: src", "grep: src"][i % 3]!, i % 3 === 1 ? names(5) : i % 3 === 0 ? numbered(20) : matchesOf(4), { input: { pattern: "foo" } }))
-    extra?.(api, turnId)
-    return { ...api, found }
-  }
-
-  test("three or more of one turn become `Read 5 files · List 2 · Grep 3`", () => {
-    const api = stream()
-    const turnId = api.turn()
-    for (const [title, text] of [["read: a", numbered(3)], ["read: b", numbered(3)], ["read: c", numbered(3)], ["read: d", numbered(3)], ["read: e", numbered(3)], ["ls: x", names(2)], ["ls: y", names(2)], ["grep: z", matchesOf(2)], ["grep: z", matchesOf(2)], ["grep: z", matchesOf(2)]] as const) api.tool(turnId, title, text)
-    expect(view(api.events).text()).toEqual(["     ◇ Read 5 files · List 2 · Grep 3"])
-    expect(foldLabel(["read", "grep", "read"])).toBe("Read 2 files · Grep 1")
-  })
-
-  test("two calls do not fold", () => {
-    const { events } = run(2)
-    const text = view(events).text()
-    expect(text.filter((line) => /[▤▦⌕]/.test(line))).toHaveLength(2)
-    expect(text.some((line) => line.includes("◇"))).toBe(false)
-  })
-
-  test("clicking the row (or ctrl+x f) opens the run into its one-line rows, and again closes it", () => {
-    const { events, found } = run(4)
-    const { t, rows, text } = view(events)
-    const head = rows().find((line) => line.text.includes("Read 2 files"))!
-    expect(foldOf(head.spans)).toBe(FOLD_RUN)
-    expect(head.itemId).toBe(found[0])
-    t.toggleDetails(found[0]!, FOLD_RUN)
-    expect(text()[0]).toContain("◆ Read 2 files")
-    expect(text().filter((line) => /[▤▦⌕]/.test(line))).toHaveLength(4)
-    t.toggleDetails(found[0]!, FOLD_RUN)
-    expect(text()).toHaveLength(1)
-  })
-
-  test("a failed call, or a running one, ends the run and always shows", () => {
-    const api = stream()
-    const turnId = api.turn()
-    for (let i = 0; i < 3; i++) api.tool(turnId, `read: f${i}`, numbered(2))
+    for (const [title, text] of [["read: a", numbered(3)], ["read: b", numbered(3)], ["read: c", numbered(3)], ["ls: x", names(2)], ["grep: z", matchesOf(2)], ["grep: z", matchesOf(2)]] as const) api.tool(turnId, title, text)
     api.tool(turnId, "read: broken.ts", "ENOENT: no such file", { status: "error" })
-    for (let i = 0; i < 2; i++) api.tool(turnId, `read: g${i}`, numbered(2))
     api.tool(turnId, "grep: src", "", { status: "running", deltas: ["a.ts:1:x\n"] })
-    const text = view(api.events).text()
-    expect(text[0]).toBe("     ◇ Read 3 files")
-    expect(text.some((line) => line.includes("broken.ts"))).toBe(true)
-    expect(text.some((line) => line.includes("ENOENT"))).toBe(true)
-    expect(text.some((line) => line.includes("g0"))).toBe(true)
-    expect(text.some((line) => line.includes("Grep src"))).toBe(true)
-  })
-
-  test("calls of different turns, and a shell between them, do not fold together", () => {
-    const api = stream()
-    for (let i = 0; i < 2; i++) {
-      const turnId = api.turn()
-      api.tool(turnId, "read: a", numbered(1))
-      api.tool(turnId, "read: b", numbered(1))
+    for (const mode of ["balanced", "full"] as const) {
+      const text = view(api.events, { mode }).text()
+      expect(text.filter((line) => /[▤▦⌕✗]/.test(line)).length).toBeGreaterThanOrEqual(7)
+      expect(text.some((line) => line.includes("◇") || /Read \d+ files/.test(line))).toBe(false)
+      expect(text.some((line) => line.includes("broken.ts"))).toBe(true)
     }
-    expect(view(api.events).text().filter((line) => line.includes("◇"))).toEqual([])
-    const { turn, tool, events } = stream()
-    const turnId = turn()
-    tool(turnId, "read: a", numbered(1))
-    tool(turnId, "read: b", numbered(1))
-    tool(turnId, "shell: ls", "x")
-    tool(turnId, "read: c", numbered(1))
-    expect(view(events).text().filter((line) => line.includes("◇"))).toEqual([])
-  })
-
-  test("full view and ctrl+o do not fold", () => {
-    const { events } = run(6)
-    expect(view(events, { mode: "full" }).text().some((line) => line.includes("Read 2 files"))).toBe(false)
-    const { t, text } = view(events)
-    expect(text()).toHaveLength(1)
-    t.toggleTools()
-    expect(text().some((line) => line.includes("Read 2 files"))).toBe(false)
   })
 })
 
@@ -481,24 +417,24 @@ describe("failures are never folded", () => {
 })
 
 describe("find sees what the cards hide", () => {
-  test("a hit inside a folded run or a capped body opens it while the bar is up and puts it back after", () => {
+  test("a hit inside a capped body opens it while the bar is up and puts it back after", () => {
     const api = stream()
     const turnId = api.turn()
     api.tool(turnId, "read: a.ts", numbered(60).replace("line 55", "needle 55"))
     api.tool(turnId, "ls: src", names(3))
     api.tool(turnId, "grep: src", matchesOf(3))
     const { t, text } = view(api.events)
-    expect(text()).toHaveLength(1)
+    const closed = text().length
     expect(text().some((line) => line.includes("needle"))).toBe(false)
     t.revealFind("needle", 100)
     expect(text().some((line) => line.includes("needle 55"))).toBe(true)
     t.revealFind("needle 5", 100)
     expect(text().some((line) => line.includes("needle 55"))).toBe(true)
     t.revealFind("zzz", 100)
-    expect(text()).toHaveLength(1)
+    expect(text()).toHaveLength(closed)
     t.revealFind("needle", 100)
     t.endFind()
-    expect(text()).toHaveLength(1)
+    expect(text()).toHaveLength(closed)
   })
 
   test("the model's result and the transcript's text are untouched by the display", () => {

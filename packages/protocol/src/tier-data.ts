@@ -15,7 +15,7 @@ const RANK: Readonly<Record<Tier, number>> = { minimalist: 0, balanced: 1, full:
 /** True when `tier` includes something that belongs to `needs`. No tier set means no gating: everything behaves as before tiers existed. */
 export const tierIncludes = (tier: Tier | undefined, needs: Tier) => tier === undefined || RANK[tier] >= RANK[needs]
 
-export const FEATURE_IDS = ["slash_menu", "extensions", "profiles", "profile_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "codex_engine", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_profiles", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan", "graph_autopilot", "memory_auto", "resume_context", "plan_files", "message_threads", "whats_new"] as const
+export const FEATURE_IDS = ["slash_menu", "extensions", "profiles", "profile_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "browser_extension", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "codex_engine", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_profiles", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "task_bare", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan", "graph_autopilot", "memory_auto", "resume_context", "plan_files", "message_threads", "whats_new"] as const
 export type FeatureId = (typeof FEATURE_IDS)[number]
 
 /** The release channel of the running binary (`channelOfVersion` in @mendcode/upgrade/releases; `local` is a build with no release tag). */
@@ -144,6 +144,7 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   task_worktree: { label: "Sub-agent worktrees", tier: "full", mode: "tier", cost: ["tools"], legacy: false, own: "/tier task_worktree off · task isolation: \"worktree\"", doc: "docs/agents.md" },
   // One optional `fork` argument on `task`: a new child starts from the parent's latest request (same model, so its cached prefix is read) instead of a fresh context. Opt-in: a fork reads the parent's whole context on every call, cached or not (docs/agents.md#forked-sub-agents).
   task_fork: { label: "Sub-agent forks (parent's cached context)", tier: "full", mode: "permit", cost: ["tools", "calls"], legacy: false, optIn: true, experimental: true, own: "/tier task_fork on · task fork: true", doc: "docs/agents.md" },
+  task_bare: { label: "Bare sub-agents (no instructions, memories or skills)", tier: "balanced", mode: "permit", cost: ["tools"], legacy: false, optIn: true, own: "/tier task_bare on · task bare: true", doc: "docs/agents.md" },
   script_workflows: { label: "Script workflows", tier: "balanced", mode: "tier", cost: ["tools"], legacy: true, own: "tools.workflow_script", tools: ["workflow_script"], doc: "docs/workflows.md" },
   jev: { label: "Adaptive reasoning (JEV)", tier: "full", mode: "tier", cost: ["calls"], legacy: false, own: "experimental.reasoning_auto", flag: "reasoning_auto", doc: "docs/reasoning.md" },
   // Permit: the tier only allows it; nothing is consulted until the user picks the advisor model (`/advisor <model>`).
@@ -152,7 +153,8 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   pet_generator: { label: "Experimental pet generator", tier: "full", mode: "permit", cost: ["calls"], legacy: false, own: "/pet new (explicit confirmation)", experimental: true, safe: true, doc: "docs/customize.md" },
   voice: { label: "Voice dictation", tier: "full", mode: "permit", cost: ["calls"], legacy: true, own: "voice.enabled", off: { voice: { enabled: false } }, doc: "docs/voice.md" },
   computer: { label: "Computer control", tier: "balanced", mode: "permit", cost: ["tools"], legacy: false, optIn: true, own: "/tier computer on (macOS; off until then)", tools: ["computer_*"], doc: "docs/computer.md" },
-  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1", tools: ["browser", "user_browser"], doc: "docs/browser.md" },
+  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1", tools: ["browser"], doc: "docs/browser.md" },
+  browser_extension: { label: "Your own browser (MendCode extension)", tier: "full", mode: "tier", cost: ["tools"], legacy: false, own: "/tier browser_extension on|off (macOS, Linux)", tools: ["user_browser"], doc: "docs/browser.md" },
   code_mode: { label: "Code Mode", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "experimental.code_mode", flag: "code_mode", doc: "docs/code-mode.md" },
   // One compaction call of its own, in an idle session of at least `idleCompactAtTokens`, just before the provider's prompt cache expires: the history is read at the cached price one last time instead of at the full price on the next message. Off with no tier.
   idle_compact: { label: "Compact while idle", tier: "full", mode: "tier", cost: ["calls"], legacy: false, own: "/tier idle_compact off · /settings · idle compact", doc: "docs/compaction.md" },
@@ -287,6 +289,10 @@ export function effectiveSettings<S extends object>(settings: S, options: TierOp
     experimental.tool_discovery = true
     changed = true
   }
+  // The full tier offers the browser extension's tool behind tool discovery, where it costs a name until the model looks for it.
+  // With discovery off its whole schema would ride every request: it then waits for the user's own `/tier browser_extension on`.
+  const extension = featureState(input, "browser_extension", options)
+  if ((extension.on || extension.why === "legacy") && extension.why !== "override" && experimental.tool_discovery !== true) { denied.user_browser = false; changed = true }
   if (!changed) return settings
   const result: Record<string, unknown> = { ...input, ...rest, tools: { ...denied, ...(input.tools ?? {}) } }
   for (const [key, value] of Object.entries(rest)) if (value === undefined) delete result[key]

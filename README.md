@@ -430,7 +430,8 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Experimental pet generator](docs/customize.md) (`pet_generator`) | — | — | Opt-in | /pet new (explicit confirmation) |
 | [Voice dictation](docs/voice.md) (`voice`) | — | — | Opt-in | voice.enabled |
 | [Computer control](docs/computer.md) (`computer`) | — | Opt-in | Opt-in | /tier computer on (macOS; off until then) |
-| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1 |
+| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 |
+| [Your own browser (MendCode extension)](docs/browser.md) (`browser_extension`) | — | — | Included | /tier browser_extension on\|off (macOS, Linux) |
 | [Code Mode](docs/code-mode.md) (`code_mode`) | — | — | Opt-in | experimental.code_mode |
 | [Snip stale output](docs/compaction.md) (`snip`) | — | — | Opt-in | experimental.snip |
 | [Worktree tool](docs/worktrees.md) (`worktree_tool`) | — | — | Opt-in | experimental.worktree_tool |
@@ -482,6 +483,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Project backlog](docs/sidebar.md) (`backlog`) | — | — | Included | /tier backlog off · /backlog · /panel widget backlog |
 | [Sub-agent worktrees](docs/agents.md) (`task_worktree`) | — | — | Included | /tier task_worktree off · task isolation: "worktree" |
 | [Sub-agent forks (parent's cached context)](docs/agents.md) (`task_fork`) | — | — | Opt-in | /tier task_fork on · task fork: true |
+| [Bare sub-agents (no instructions, memories or skills)](docs/agents.md) (`task_bare`) | — | Opt-in | Opt-in | /tier task_bare on · task bare: true |
 | [Sub-agents on a cheaper model](docs/agents.md) (`cheap_subagents`) | — | Included | Included | /tier cheap_subagents off · /model roles · subagent |
 | [Claude Code compacts at MendCode's point](docs/claude-code.md) (`claude_compact`) | — | Included | Included | /tier claude_compact off · compactAtTokens |
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |

@@ -1,6 +1,5 @@
 /**
- * What a finished reading tool says about itself in one line (`Read README.md · 142 lines`) and how a run of them folds
- * (`Read 5 files · List 2 · Grep 3`). Pure: the tool's text and the numbers it reported in, strings out. Display only; the
+ * What a finished reading tool says about itself in one line (`Read README.md · 142 lines`). Pure: the tool's text and the numbers it reported in, strings out. Display only; the
  * model still received the whole result.
  */
 
@@ -95,20 +94,3 @@ export function readDetail({ name, detail, pattern }: { name: ReadTool; detail: 
   return detail
 }
 
-/**
- * `Read 5 files · List 2 · Grep 3`: the calls of a folded run, in the order the tools are listed above. `spelled` (the full view's
- * `calm` density) says what each count counts: `Read 5 files · List 2 folders · Grep 3 patterns`.
- */
-/** The row a folded run of shell commands draws: `Ran 6 shell commands`. */
-export const shellRunLabel = (count: number) => `Ran ${plural(count, "shell command")}`
-
-export function foldLabel(names: readonly string[], spelled = false): string {
-  const count = (tool: ReadTool) => names.filter((name) => name === tool).length
-  const parts = [
-    ...(count("read") ? [`Read ${plural(count("read"), "file")}`] : []),
-    ...(count("ls") ? [spelled ? `List ${plural(count("ls"), "folder")}` : `List ${count("ls")}`] : []),
-    ...(count("glob") ? [spelled ? `Glob ${plural(count("glob"), "pattern")}` : `Glob ${count("glob")}`] : []),
-    ...(count("grep") ? [spelled ? `Grep ${plural(count("grep"), "pattern")}` : `Grep ${count("grep")}`] : []),
-  ]
-  return parts.join(" · ")
-}

@@ -125,15 +125,15 @@ describe("inline mode", () => {
     }
     t.app.render()
     expect(t.committed).toHaveLength(written)
-    // Three reading calls of one turn are one folded row, still live while the run can grow.
-    expect(t.vt.history().filter((row) => row.includes("Read 3 files")).length).toBe(1)
+    // Each reading call keeps its own row, still live while the run can grow.
+    expect(t.vt.history().filter((row) => row.includes("▤ Read")).length).toBe(3)
     const message = ids("item")
     t.script.emit({ type: "item.started", turnId, itemId: message, kind: "agent_message" })
     t.script.emit({ type: "item.completed", itemId: message, status: "ok", text: "done reading" })
     t.script.emit({ type: "turn.completed", turnId })
     t.app.render()
     expect(t.mentions("done reading")).toBe(1)
-    expect(t.vt.history().filter((row) => row.includes("Read 3 files")).length).toBe(1)
+    expect(t.vt.history().filter((row) => row.includes("▤ Read")).length).toBe(3)
   })
 
   test("pages and overlays use the alternate screen and the chat comes back with its history intact", async () => {

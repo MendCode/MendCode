@@ -192,3 +192,40 @@ test("native Accessibility adapter addresses the approved process by pid and nev
   identity = null
   expect(await os.identify(target, signal())).toBeUndefined()
 })
+
+// A start that fails after it began (no explicit targeting in the fake) still sweeps when it ends, with nothing else live.
+const sweepNow = (f: ReturnType<typeof fixture>) => f.port.session!({ action: "start", mode: "observe", bundleID: "local.other" }, signal(), activation)
+
+test("a session left idle is ended by the next quiet sweep, which releases its app (a web app's accessibility mode goes off again)", async () => {
+  const f = fixture()
+  const first = await f.start()
+  expect(f.ax.calls).not.toContain("release:42")
+  f.advance(61_000)
+  expect((await sweepNow(f)).isError).toBe(true)
+  expect(f.ax.calls.filter((call) => call === "release:42")).toHaveLength(1)
+  expect((await f.port.observe!({ computerSessionID: first.computerSessionID }, signal())).isError).toBe(true)
+})
+
+test("an idle session is not released while another session lives, so the live one keeps its window and observation", async () => {
+  const f = fixture()
+  await f.start()
+  f.advance(61_000)
+  const second = await f.start()
+  expect(f.ax.calls).not.toContain("release:42")
+  expect((await f.port.observe!({ computerSessionID: second.computerSessionID }, signal())).isError).toBe(false)
+  f.advance(61_000)
+  await sweepNow(f)
+  expect(f.ax.calls).toContain("release:42")
+})
+
+test("a Chromium browser is never driven by Computer Use: the model is sent to the browser extension and nothing is approved", async () => {
+  const f = fixture()
+  f.ax.state.target.bundleID = "com.brave.Browser"
+  let asked = false
+  const capture = data<{ captureID: string }>(await f.port.capture({}, signal()))
+  const refused = await f.port.session!({ action: "start", mode: "control", bootstrapCaptureID: capture.captureID }, signal(), { ...activation, approve: async () => { asked = true; return true } })
+  expect(refused.isError).toBe(true)
+  expect(refused.output).toContain("user_browser")
+  expect(refused.output).toContain("/tier browser_extension on")
+  expect(asked).toBe(false)
+})

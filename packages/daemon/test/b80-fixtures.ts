@@ -16,6 +16,7 @@ export function fakeAccessibility() {
   const state = { target, nodes, truncated: false, indicator: true, front: undefined as ComputerTarget | undefined, onObserve: undefined as (() => Promise<void>) | undefined, onAction: undefined as (() => Promise<void>) | undefined }
   let visible = false
   const os: ComputerAccessibility = {
+    release(released) { calls.push(`release:${released.pid}`) },
     // `front` is another app the user works in; the target itself keeps running.
     async foreground(abort) { abort.throwIfAborted(); calls.push("foreground"); return { ...(state.front ?? state.target) } },
     async identify(approved, abort) { abort.throwIfAborted(); calls.push("identify"); return approved.pid === state.target.pid && approved.bundleID === state.target.bundleID ? { ...state.target } : undefined },

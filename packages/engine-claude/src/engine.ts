@@ -1,6 +1,9 @@
 import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import {
   claudeArgs,
@@ -12,6 +15,7 @@ import {
   controlResponse,
   changesMcpServers,
   createTurnMapper,
+  markProcessSpend,
   MCP_RELOAD_NOTE,
   REPLY_LANGUAGE_NOTE,
   MAX_TEXT,
@@ -21,6 +25,7 @@ import {
   userMessage,
   type ClaudeMessage,
   type ClaudePermissionMode,
+  type ClaudeSpend,
   type QuotaDraft,
 } from "./protocol"
 import { spawnClaude, type ClaudeTransport } from "./transport"
@@ -158,6 +163,8 @@ type Connection = {
   launches?: Map<string, string>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
+  /** The process's token total at its last `result`: a compaction's calls are the gap `result.usage` leaves. */
+  spendMark: { spend?: ClaudeSpend | undefined }
 }
 
 /** The uuid a turn's message carries into Claude Code, the same for the same turn in every process: an undo names it to `rewind_conversation`. */
@@ -220,6 +227,8 @@ export function createClaudeEngine(options: {
    * `additionalContext`: Claude Code adds it to that message for the model, out of the transcript, so every message restates it.
    */
   replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
+  /** Where each session's language line is kept for Claude Code's automatic compaction (`PreCompact` reads it); tests name their own. */
+  languageDir?: string
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
   /**
    * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
@@ -440,6 +449,7 @@ export function createClaudeEngine(options: {
       const input = connection.turn?.input
       const notice = input?.authority?.synthetic === true && input.text.length > 0 && prompt.includes(input.text.slice(0, 200))
       const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, notice ? "" : prompt)).catch(() => undefined)
+      if (line) await keepLanguage(connection.sessionId, line)
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: line } } : {}))
       return
     }
@@ -526,11 +536,14 @@ export function createClaudeEngine(options: {
     }
     // The rest of a turn already ended by esc: nothing of it belongs to the next one.
     if (connection.draining) {
-      if (message.type === "result") connection.draining = false
+      if (message.type === "result") { connection.draining = false; markProcessSpend(connection.spendMark, message) }
       return
     }
     const turn = connection.turn
-    if (!turn) return void between(connection, message)
+    if (!turn) {
+      if (message.type === "result" && !connection.unsolicited) markProcessSpend(connection.spendMark, message)
+      return void between(connection, message)
+    }
     const compaction = compactions.get(turn.input.turnId)
     if (compaction && message.type === "system" && message.subtype === "compact_boundary") {
       const facts = message.compact_metadata ?? {}
@@ -538,7 +551,7 @@ export function createClaudeEngine(options: {
       if (typeof facts.pre_tokens === "number") compaction.preTokens = facts.pre_tokens
       if (typeof facts.post_tokens === "number") compaction.postTokens = facts.post_tokens
     } else if (compaction?.done && compaction.summary === undefined && message.type === "user" && message.isSynthetic && typeof message.message?.content === "string") compaction.summary = message.message.content
-    if (message.type === "result" && turn.ownQueued) return
+    if (message.type === "result" && turn.ownQueued) return void markProcessSpend(connection.spendMark, message)
     accept(turn, message)
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
@@ -648,15 +661,35 @@ export function createClaudeEngine(options: {
     return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
   }
 
+  // Claude Code compacts on its own when the context fills; that summary is what the next turns read most. A `PreCompact` command
+  // hook prints it instructions: write the summary in the user's language, the line the last user message carried, kept in a file
+  // written only when it changes. Without it an English summary moved a Spanish session to English for good.
+  const languageDir = options.languageDir ?? path.join(tmpdir(), `mendcode-${process.getuid?.() ?? 0}-claude-language`)
+  const languageFile = (sessionId: SessionId) => path.join(languageDir, `${sessionId}.txt`)
+  const writtenLanguage = new Map<SessionId, string>()
+  async function keepLanguage(sessionId: SessionId, line: string) {
+    if (writtenLanguage.get(sessionId) === line) return
+    try {
+      await mkdir(languageDir, { recursive: true, mode: 0o700 })
+      await writeFile(languageFile(sessionId), `Write the summary in the user's language. ${line}\n`, { mode: 0o600 })
+      writtenLanguage.delete(sessionId)
+      writtenLanguage.set(sessionId, line)
+      if (writtenLanguage.size > 500) writtenLanguage.delete(writtenLanguage.keys().next().value!)
+    } catch { /* the summary then follows Claude Code's own default */ }
+  }
+  const compactLanguageArgs = (sessionId: SessionId): string[] => options.replyLanguage
+    ? ["--settings", JSON.stringify({ hooks: { PreCompact: [{ matcher: "auto", hooks: [{ type: "command", command: `cat '${languageFile(sessionId).replaceAll("'", "'\\''")}' 2>/dev/null || true` }] }] } })]
+    : []
+
   function open(sessionId: SessionId, model: ClaudeModelChoice, permission: PermissionMode, withThinkingDisplay: boolean): Connection {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
     // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
-    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, options.replyLanguage ? REPLY_LANGUAGE_NOTE : undefined, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, options.replyLanguage ? REPLY_LANGUAGE_NOTE : undefined, environment?.note].filter(Boolean).join("\n\n") }), ...compactLanguageArgs(sessionId), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan(), spendMark: {} }
     connections.set(sessionId, connection)
     if (options.onProcess && transport.pid) {
       const ended = options.onProcess(sessionId, transport.pid)
@@ -830,7 +863,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

@@ -14,7 +14,7 @@
     "commands": "feature:slash_menu file:mendcode.json",
     "comments": "command:comments group:Comments",
     "compaction": "feature:claude_compact feature:snip flag:auto_recall feature:limit_checkpoint feature:idle_compact feature:compact_notice flag:snip command:compact command:context command:files command:context-window command:compaction setting:compactAtTokens setting:defaultContextWindow setting:idleCompactAtTokens setting:compactNoticePercent setting:cacheLifetimeMinutes setting:handoffTokenCap setting:promptCache setting:compaction setting:cache setting:cacheProjects tool:snip",
-    "computer": "feature:computer feature:browser tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
+    "computer": "feature:computer feature:browser feature:browser_extension tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
     "customize": "command:view command:customize group:Look group:Home group:Top_&_side group:Input_&_keys group:Notifications group:Advanced tool:customize_ui file:journal.json file:pending.json file:report.json",
     "engines": "feature:pi feature:thread_mcp feature:acp_registry command:acp setting:acpAgents setting:threadMcp setting:ownLogins file:acp-agents.json file:acp-models.json file:pi.json",
     "extensions": "feature:extensions command:extensions tool:sidebar",
@@ -40,7 +40,7 @@
     "sessions": "feature:session_meta flag:session_recall command:sessions command:undo command:redo command:history command:rename command:title command:pin command:settle command:timeline command:fork command:tree command:label command:recap command:export command:import command:cd command:pwd command:stash command:drafts command:prompt-history command:backtrack command:copy command:quit command:queue setting:retentionDays setting:queue setting:snapshot setting:snapshotScope setting:allowMessageEdits tool:session_meta tool:session_notes tool:session_open tool:session_read tool:session_search tool:sessions",
     "settings": "command:experimental command:settings command:init tool:mendcode_settings setting:areas setting:trustedToolDirs setting:disabledSkills setting:disabledExtensions setting:onboarded setting:experimental setting:logLevel setting:shell setting:watcher setting:instructions setting:foreignResources setting:instructionFallbacks setting:projectRootMarkers setting:shellEnvironment setting:shellCommandPrefix setting:loginShell setting:autoupdate setting:enterprise setting:projectConfig setting:budgets setting:setupPreset setting:tier file:profile.json file:project.json file:statusline.json",
     "skills": "command:skills setting:skills tool:skill",
-    "subagents": "feature:subagents feature:task_worktree feature:task_fork feature:cheap_subagents setting:subagentCatalog setting:agentMentions feature:orchestration_receipts feature:panel_orbit command:scratch command:tasks command:pause command:unpause command:stop command:relaunch setting:subagentDepth setting:subagentMaxChildren setting:subagentMaxDescendants setting:subagentOwnerWake tool:task tool:task_status file:agent-mentions.json",
+    "subagents": "feature:subagents feature:task_worktree feature:task_fork feature:task_bare feature:cheap_subagents setting:subagentCatalog setting:agentMentions feature:orchestration_receipts feature:panel_orbit command:scratch command:tasks command:pause command:unpause command:stop command:relaunch setting:subagentDepth setting:subagentMaxChildren setting:subagentMaxDescendants setting:subagentOwnerWake tool:task tool:task_status file:agent-mentions.json",
     "theme": "command:theme setting:theme setting:projectThemes",
     "threads": "feature:threads feature:handoff flag:thread_tools command:handoff command:btw tool:tell tool:threads",
     "tiers": "feature:script_workflows feature:aux_tools feature:harness_tools feature:codex_engine command:tier setting:features",
@@ -62,7 +62,7 @@
       "items": "file:settings.json"
     },
     {
-      "reason": "the user_browser tool is listed only when the user opted in (MENDCODE_BROWSER_EXTENSION=1) and its own description carries the usage; the files are written by the bridge in its own folder, not edited by the user (docs/browser.md)",
+      "reason": "the user_browser tool is listed only when the user opted in (/tier browser_extension on) and its own description carries the usage; the files are written by the bridge in its own folder, not edited by the user (docs/browser.md)",
       "items": "tool:user_browser file:config.json file:installed.json file:manifest.json file:sites.json"
     },
     {

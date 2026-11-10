@@ -483,16 +483,19 @@ func stopEffects() {
     effectsUntil = 0
 }
 /** Between requests: end played effects, keep the canvas above the controlled window, and let an idle cursor rest after six seconds. */
+let restingOpacity: Float = 0.45
 func idle() {
     if effectsUntil > 0 && uptime() >= effectsUntil { stopEffects() }
     keepAbove()
     guard let stage = cursorStage, badge != nil, !cursorResting, uptime() - cursorActiveAt >= 6 else { return }
-    let rest = CABasicAnimation(keyPath: "opacity"); rest.fromValue = 1; rest.toValue = 0; rest.duration = 0.16
-    stage.root.add(rest, forKey: "rest"); stage.root.opacity = 0; cursorResting = true
+    // A resting cursor dims where it last went instead of vanishing, so the user still sees where MendCode is.
+    let rest = CABasicAnimation(keyPath: "opacity"); rest.fromValue = 1; rest.toValue = restingOpacity; rest.duration = 0.16
+    stage.root.add(rest, forKey: "rest"); stage.root.opacity = restingOpacity; cursorResting = true
     CATransaction.flush()
 }
 func showBadge(_ show: Bool) throws {
-    if show && badge?.isVisible == true { return }
+    // Shown between programs (dimmed, without the input lease): the next program takes the lease again.
+    if show && badge?.isVisible == true { try acquireLease(); return }
     if !show && cursorProgram { return }
     if let panel = badge {
         // The main thread sits in readLine() between requests, so the window server only learns the canvas is gone if the run loop
@@ -1034,7 +1037,10 @@ func dispatch(_ request: Object) throws -> Any {
             guard !cursorProgram else { try fail("Another native computer program is running") }
             _ = try running(target, foreground: false)
             try showBadge(true); cursorProgram = true
-        } else { cursorProgram = false; try showBadge(false) }
+        } else {
+            // The cursor stays where it last went until the session ends (`release`); only the input lease is given back now.
+            cursorProgram = false; releaseLease(); cursorActiveAt = min(cursorActiveAt, uptime() - 6)
+        }
         return ["active": cursorProgram]
     case "indicator": try showBadge(request["visible"] as? Bool == true); return ["visible": badge?.isVisible == true]
     case "release":
@@ -1042,6 +1048,7 @@ func dispatch(_ request: Object) throws -> Any {
         let pid = pid_t(target["pid"] as? Int ?? 0)
         for id in Array(windowHandles.keys) where windowPIDs[id] == pid { windowHandles.removeValue(forKey: id); windowPIDs.removeValue(forKey: id) }
         restoreWebAccessibility(pid)
+        if !cursorProgram { try? showBadge(false) }
         return ["released": true]
     default: try fail("Unknown native method")
     }
@@ -1211,7 +1218,7 @@ func nextLine() -> String? {
         // A line over the bound is dropped as it arrives and answered once, as invalid, when it ends.
         if pending.count > 131_072 { pending.removeAll(); discarding = true }
         var descriptor = pollfd(fd: 0, events: Int16(POLLIN), revents: 0)
-        let ready = poll(&descriptor, 1, badge != nil || effectsUntil > 0 ? 50 : -1)
+        let ready = poll(&descriptor, 1, (badge != nil && !cursorResting) || effectsUntil > 0 ? 50 : -1)
         if ready < 0 { if errno == EINTR { continue }; return nil }
         if ready == 0 { CFRunLoopRunInMode(.defaultMode, 0, false); idle(); continue }
         var chunk = [UInt8](repeating: 0, count: 65_536)

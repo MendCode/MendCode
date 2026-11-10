@@ -285,6 +285,25 @@ Measured live on 2026-10-18 with chatgpt/gpt-6-luna (effort low), parent reading
 
 Per call the fork read more (22,588 against 13,667 and 14,175), in total it sent 188 uncached tokens against about 14,270.
 
+### Bare sub-agents
+
+**Bare** (feature `task_bare`, balanced and full, opt-in: `/tier task_bare on`; until then the argument is not in the `task` schema, so it costs no request anything).
+
+A fresh child does not see the parent's conversation, but it still works in the same folder and gets everything that folder brings: the project's `AGENTS.md`/`CLAUDE.md`, your global `AGENTS.md`, your memories and the skills list. `bare: true` leaves all of that out, so the child sees MendCode's base prompt and its prompt and nothing else: a second opinion that your conventions do not steer.
+
+| | conversation | instruction files | memories | skills |
+|---|---|---|---|---|
+| `fork: true` | the parent's | yes | yes | yes |
+| fresh (default) | none | yes | yes | yes |
+| `bare: true` | none | none | none | none |
+
+- "Instruction files" includes the nearby `AGENTS.md` a read below the project brings in; a bare child reads the file without it.
+- No agent profile either: a `general.md` of yours or the project's adds nothing to a bare child's prompt, and naming an `agent` with `bare` is refused.
+- It runs on MendCode's own engine, Claude Code and Codex; a model on pi, OpenCode, Cursor or an ACP agent is refused, since those would still load their own instructions and skills. On Claude Code the child loads no `CLAUDE.md` of any level, no auto memory and only your own settings (the PR reviewer's limits), and runs none of your hooks (`disableAllHooks`), so a hook that adds context cannot steer it. A PR review keeps your hooks.
+- From Claude Code or Codex, `mcp__mendcode_threads__delegate_task` takes `bare: true` too (full tier, `thread_mcp`).
+- `bare` is for a new task; resuming one keeps its choice (and a bare task gets its limits again after a daemon restart). `fork` and `bare` together are refused.
+- The model is told to use it only when you ask for a clean or unbiased agent: say so ("ask a clean agent whether this layout reads well") and attach the files or images it should judge; its prompt is then your question and those, not a summary of this chat.
+
 ### External engines
 
 Full tier also accepts `engine: native|claude|codex|pi|acp:<name>` on `task` / `task.run` for a configured model on that engine.

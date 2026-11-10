@@ -1310,6 +1310,39 @@ describe("MCP servers changed during a turn", () => {
   })
 })
 
+describe("claude compaction spend", () => {
+  // What Claude Code 2.1.321 reported for "Say hello in five words." then "/compact" in one process (haiku): the compact turn's
+  // `result.usage` is all zero, while `modelUsage` keeps the process's running total.
+  const hello = { type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 23, cache_read_input_tokens: 0, cache_creation_input_tokens: 37_283 }, modelUsage: { "claude-haiku-5-5": { inputTokens: 2, outputTokens: 23, cacheReadInputTokens: 0, cacheCreationInputTokens: 37_283 } } }
+  const compactResult = { type: "result", subtype: "success", usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, modelUsage: { "claude-haiku-5-5": { inputTokens: 2_000, outputTokens: 858, cacheReadInputTokens: 24_863, cacheCreationInputTokens: 49_725 } } }
+  const turnUsage = (mark: { spend?: unknown }, messages: Array<Record<string, unknown>>) => {
+    const events: EngineEvent[] = []
+    const mapper = createTurnMapper({ newItemId: () => ids("item"), emit: (event) => void events.push(event), model: "claude-haiku-5-5", processMark: mark as never })
+    for (const message of messages) mapper.accept(message)
+    return events.find((event) => event.type === "usage") as Extract<EngineEvent, { type: "usage" }>
+  }
+
+  test("a turn that compacted counts the compaction's calls, which only the process's running total shows", () => {
+    const mark = {}
+    expect(turnUsage(mark, [hello])).toMatchObject({ input: 2, output: 23, cacheRead: 0, cacheWrite: 37_283 })
+    const compacted = turnUsage(mark, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual", pre_tokens: 37_308, post_tokens: 10_828 } }, compactResult])
+    expect(compacted).toMatchObject({ input: 1_998, output: 835, cacheRead: 24_863, cacheWrite: 12_442 })
+  })
+
+  test("a compaction in a process's first turn (a resumed conversation, a restarted process) counts from zero", () => {
+    const first = turnUsage({}, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual" } }, compactResult])
+    expect(first).toMatchObject({ input: 2_000, output: 858, cacheRead: 24_863, cacheWrite: 49_725 })
+  })
+
+  test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
+    expect(turnUsage({}, [{ type: "system", subtype: "compact_boundary" }, hello])).toMatchObject({ input: 2, output: 23, cacheWrite: 37_283 })
+    const mark = {}
+    turnUsage(mark, [hello])
+    const later = { ...compactResult, usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } }
+    expect(turnUsage(mark, [later])).toMatchObject({ input: 10, output: 5, cacheRead: 0, cacheWrite: 0 })
+  })
+})
+
 describe("claude protocol helpers", () => {
   test("arguments follow the session's model, effort, permission and resume id", () => {
     expect(claudeArgs({ permission: "full", model: "sonnet", effort: "minimal", resume: "abc" })).toEqual([
@@ -1353,6 +1386,13 @@ describe("claude protocol helpers", () => {
     expect(claudeRunLimits({ noContextFiles: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } })
     expect(claudeRunLimits({ noMemory: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
     expect(claudeRunLimits({ noContextFiles: true, noMemory: true })).toEqual({ args: ["--setting-sources", "user"], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+  })
+
+  test("a bare sub-agent runs none of the user's hooks, besides no CLAUDE.md, no auto memory and only the user's settings", () => {
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true, noHooks: true })).toEqual({ args: ["--setting-sources", "user", "--settings", JSON.stringify({ disableAllHooks: true })], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    // A PR review child keeps the user's hooks, as before.
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true }).args.join(" ")).not.toContain("disableAllHooks")
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeRunLimits({ noHooks: true }).args])).toEqual(["--settings", JSON.stringify({ fastMode: true, disableAllHooks: true })])
   })
 
   test("a fix session in a PR's checkout loads only the user's settings, so the PR's own hooks never run; its CLAUDE.md and memory stay", () => {
@@ -2169,4 +2209,28 @@ describe("claude engine plan mode note", () => {
     expect(fake.written.filter((message) => message.type === "user")[0].message.content).toEqual([{ type: "text", text: "/compact" }])
     engine.stop()
   })
+})
+
+test("Claude Code's own automatic compaction writes its summary in the user's language: a PreCompact command prints the session's language line", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const languageDir = mkdtempSync(`${tmpdir()}/mc-lang-`)
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push({ type: "control_request", request_id: "hook-1", request: { subtype: "hook_callback", callback_id: "mendcode-reply-language", input: { hook_event_name: "UserPromptSubmit", prompt: "arregla el pdf" } } })
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const h = engineWith([fake], { languageDir, replyLanguage: async () => "Reply in Spanish." })
+  const turn = turnInput({ text: "arregla el pdf" })
+  expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+  const args = h.spawned[0]!.args
+  const settings = JSON.parse(args[args.indexOf("--settings") + 1]!)
+  const hook = settings.hooks.PreCompact[0]
+  expect(hook.matcher).toBe("auto")
+  // The command, as Claude Code runs it, prints the instructions for the summary.
+  const printed = Bun.spawnSync(["/bin/sh", "-c", hook.hooks[0].command]).stdout.toString()
+  expect(printed).toBe("Write the summary in the user's language. Reply in Spanish.\n")
+  expect(readFileSync(`${languageDir}/${turn.input.sessionId}.txt`, "utf8")).toBe(printed)
+  h.engine.stop()
+  rmSync(languageDir, { recursive: true, force: true })
 })

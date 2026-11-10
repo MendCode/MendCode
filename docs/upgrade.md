@@ -4,7 +4,7 @@ Use `mendcode upgrade` to replace the installed binary with a release from GitHu
 
 Run the command with the target or options you need:
 
-`mendcode upgrade` never starts, stops or signals a process, and never touches the legacy MendCode data (`~/.mendcode`, `~/.local/share/mendcode`).
+`mendcode upgrade` never starts, stops or signals a process, and never touches MendCode v1's data (`~/.mendcode-v1`, `~/.local/share/mendcode`). It writes only the binaries under `<data dir>/bin` and its own `upgrade.json` and `upgrade-recovery.json`.
 
 The program name in help is the one you typed: `mendcode`, or the name of a renamed copy such as `mendcode-beta`.
 
