@@ -1383,6 +1383,13 @@ describe("claude protocol helpers", () => {
     expect(claudeRunLimits({ noContextFiles: true, noMemory: true })).toEqual({ args: ["--setting-sources", "user"], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
   })
 
+  test("a bare sub-agent runs none of the user's hooks, besides no CLAUDE.md, no auto memory and only the user's settings", () => {
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true, noHooks: true })).toEqual({ args: ["--setting-sources", "user", "--settings", JSON.stringify({ disableAllHooks: true })], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    // A PR review child keeps the user's hooks, as before.
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true }).args.join(" ")).not.toContain("disableAllHooks")
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeRunLimits({ noHooks: true }).args])).toEqual(["--settings", JSON.stringify({ fastMode: true, disableAllHooks: true })])
+  })
+
   test("a fix session in a PR's checkout loads only the user's settings, so the PR's own hooks never run; its CLAUDE.md and memory stay", () => {
     expect(claudeRunLimits({ untrustedCheckout: true })).toEqual({ args: ["--setting-sources", "user"] })
   })

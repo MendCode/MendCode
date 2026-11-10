@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - Sub-agents can start bare: with none of your or the project's instructions, memories or skills, only the question, for a second opinion your conventions do not steer. Turn it on with `/tier task_bare on` and ask for a clean agent.
+- A bare sub-agent on Claude Code also runs none of your Claude Code hooks.
 
 ### Changed
 

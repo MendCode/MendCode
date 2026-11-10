@@ -21,7 +21,7 @@ const limitsOf = async (h: NativeHarness, sessionId: SessionId) => {
   const reply = await h.client.send({ type: "session.run.configure", sessionId })
   return reply.ok ? (reply.result as { limits: Record<string, unknown> }).limits : undefined
 }
-const BARE_LIMITS = { noContextFiles: true, noMemory: true, excludeTools: ["skill"] }
+const BARE_LIMITS = { noContextFiles: true, noMemory: true, noHooks: true, excludeTools: ["skill"] }
 
 test("a bare child runs without instruction files, memory or skills; a plain child keeps them", async () => {
   const h = await start([
