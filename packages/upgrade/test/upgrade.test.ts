@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync } from "node:fs"
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync, mkdirSync, renameSync } from "node:fs"
 import path from "node:path"
 import type { UpgradeError } from "../src/errors"
 import { binPaths, installBinary, resolveDataDir, rollbackBinary } from "../src/install"
@@ -111,6 +111,18 @@ describe("rollback", () => {
     const error = await failure(rollbackBinary({ fs: nodeFs, dataDir: box.dataDir }))
     expect(error.code).toBe("no-previous")
     expect(text(box.paths.current)).toBe("only")
+  })
+
+  test("an install from when the executables were called mendcode-next keeps its rollback after the rename", async () => {
+    const box = sandbox()
+    await runUpgrade(box.request(), fakePorts([release({ tag: "v1.1.0", binaries: linux("a") })]).ports)
+    await runUpgrade(box.request({ currentVersion: "1.1.0" }), fakePorts([release({ tag: "v1.2.0", binaries: linux("b", "1.2.0") })]).ports)
+    renameSync(box.paths.current, path.join(box.paths.dir, "mendcode-next"))
+    renameSync(box.paths.prev, path.join(box.paths.dir, "mendcode-next.prev"))
+    await runUpgrade(box.request({ rollback: true, repo: "" }), fakePorts([]).ports)
+    expect(text(box.paths.current)).toBe("a")
+    expect(text(box.paths.prev)).toBe("b")
+    expect(existsSync(path.join(box.paths.dir, "mendcode-next"))).toBe(false)
   })
 
   test("rollback makes no network calls", async () => {

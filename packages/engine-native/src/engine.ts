@@ -1175,11 +1175,12 @@ export function createNativeEngine(options: {
         providerStarted = true
         const maxOutputTokens = compact?.maxOutputTokens ?? shaped?.maxOutputTokens
         const modelRequest: ModelRequest = { system, messages: request, tools: requestTools, ...(role === "subagent" || options.tasks?.isChild(input.sessionId) || textKind !== "agent_message" || carried ? { initiator: "agent" as const } : {}), ...(projection.nativeContext ? { nativeContext: projection.nativeContext } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}), ...(hostedTools.length ? { hostedTools } : {}), ...(choice ? { model: choice.model, effort: choice.effort, parameters: choice.parameters, ...(choice.fast !== undefined ? { fast: choice.fast } : {}) } : {}), ...(reasoning ? { effort: reasoning.effort } : {}), ...(parameters ? { parameters } : {}), ...transport, ...(traceBody ?? transformBody ? { transformBody: (traceBody ?? transformBody)! } : {}), ...(cacheKey ? { cacheKey } : {}), ...(cacheKeyForBody ? { cacheKeyForBody } : {}), cacheMode, signal: call.signal }
-        if (effortlessImages && hostedTools.includes("image_generation")) delete modelRequest.effort
         const cacheTtl = cacheMode === "off" ? undefined : options.cacheTtl?.({ sessionId: input.sessionId, role: hookRole, provider })
         if (cacheTtl) modelRequest.cacheTtl = cacheTtl
         const repeated = share?.last ?? fork
         if (repeated) { modelRequest.effort = repeated.effort; modelRequest.parameters = repeated.parameters }
+        // After the repeated request's effort: a fork's retry goes without the effort the image tool refused, too.
+        if (effortlessImages && (modelRequest.hostedTools ?? []).includes("image_generation")) delete modelRequest.effort
         if (role === "main" && textKind === "agent_message" && !compound) lastMain.set(input.sessionId, recorded = { system, tools: callTools, hostedTools, choice, effort: modelRequest.effort, parameters: modelRequest.parameters, pruned: pruned.ids, sent: messages.length, digest: historyDigest(messages), turn: turnStarts.get(input.sessionId), cache: { mode: cacheMode, key: cacheKey, forBody: cacheKeyForBody } })
         // A plan-mode call is the session's latest request but not one a compaction can repeat (its own model and tools): nothing is on record after it.
         else if (role === "plan" && textKind === "agent_message") lastMain.delete(input.sessionId)

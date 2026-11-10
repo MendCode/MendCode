@@ -71,11 +71,18 @@ function renderRankedVerticalFlowchart(input: {
   width: number
   renderNode?: (node: string) => string[]
 }) {
-  const orientedEdges =
+  const allEdges =
     input.direction === "bt"
       ? input.edges.map((edge) => ({ from: edge.to, to: edge.from, label: edge.label }))
       : input.edges
-  const nodes = [...new Set([...(input.nodes ?? []), ...orientedEdges.flatMap((edge) => [edge.from, edge.to])])]
+  // A transition to itself is written beside its box (↻ label), not routed.
+  const selfEdges = allEdges.filter((edge) => edge.from === edge.to)
+  const orientedEdges = allEdges.filter((edge) => edge.from !== edge.to)
+  const selfText = new Map<string, string>()
+  for (const edge of selfEdges) selfText.set(edge.from, [selfText.get(edge.from), cleanConnectorLabel(edge.label) || "self"].filter(Boolean).join(", "))
+  // Columns kept right of a box for its ↻ note, so a neighbor or a lane never sits on it.
+  const selfRoom = (node: string) => selfText.has(node) ? Bun.stringWidth(`↻ ${selfText.get(node)}`) + 2 : 0
+  const nodes = [...new Set([...(input.nodes ?? []), ...allEdges.flatMap((edge) => [edge.from, edge.to])])]
   if (nodes.length === 0 || nodes.length > FLOWCHART_MAX_LAYOUT_NODES) return undefined
 
   const { layoutEdges, deferredEdges } = flowchartLayoutEdges(nodes, orientedEdges)
@@ -120,13 +127,17 @@ function renderRankedVerticalFlowchart(input: {
     const rankWidth = rankNodes.reduce((sum, node, index) => {
       const box = renderNode(node)
       boxes.set(node, box)
-      return sum + Math.max(...box.map((line) => Bun.stringWidth(line))) + (index === 0 ? 0 : FLOWCHART_NODE_GAP)
+      return sum + Math.max(...box.map((line) => Bun.stringWidth(line))) + selfRoom(node) + (index === 0 ? 0 : FLOWCHART_NODE_GAP)
     }, 0)
     canvasWidth = Math.max(canvasWidth, rankWidth)
   }
 
   const availableWidth = Math.max(40, Math.min(FLOWCHART_MAX_CANVAS_WIDTH, input.width - 4))
   canvasWidth = Math.max(40, canvasWidth)
+  for (const [node, text] of selfText) {
+    const boxWidth = Math.max(...(boxes.get(node) ?? [""]).map((line) => Bun.stringWidth(line)))
+    canvasWidth = Math.max(canvasWidth, boxWidth + 2 * (Bun.stringWidth(text) + 4))
+  }
   const backEdges: FlowchartRoutedEdge[] = deferredEdges
     .map((edge) => ({ edge, backward: true }))
   const spanningEdges: FlowchartRoutedEdge[] = layoutEdges
@@ -153,8 +164,11 @@ function renderRankedVerticalFlowchart(input: {
   for (const [rank, edges] of compactEdgesByRank) {
     extraRowsByRank.set(rank, edges.length + (routedRanks.has(rank) ? 2 : 0))
   }
+  // Each routed edge leaves its rank on its own row, so neither its line nor its label meets another's.
+  const routedCount = new Map<number, number>()
+  for (const { edge } of routedEdges) routedCount.set(ranks.get(edge.from) ?? 0, (routedCount.get(ranks.get(edge.from) ?? 0) ?? 0) + 1)
   for (const rank of routedRanks) {
-    extraRowsByRank.set(rank, Math.max(extraRowsByRank.get(rank) ?? 0, 2))
+    extraRowsByRank.set(rank, Math.max(extraRowsByRank.get(rank) ?? 0, 2 * (routedCount.get(rank) ?? 1)))
   }
   const rankOffsets = new Map<number, number>()
   let rankOffset = 0
@@ -176,7 +190,7 @@ function renderRankedVerticalFlowchart(input: {
   for (let rank = 0; rank <= maxRank; rank++) {
     const rankNodes = byRank.get(rank) ?? []
     const rankWidth = rankNodes.reduce(
-      (sum, node, index) => sum + (boxes.get(node)?.[0]! ? Bun.stringWidth(boxes.get(node)![0]!) : 0) + (index === 0 ? 0 : FLOWCHART_NODE_GAP),
+      (sum, node, index) => sum + (boxes.get(node)?.[0]! ? Bun.stringWidth(boxes.get(node)![0]!) : 0) + selfRoom(node) + (index === 0 ? 0 : FLOWCHART_NODE_GAP),
       0,
     )
     let column =
@@ -200,9 +214,9 @@ function renderRankedVerticalFlowchart(input: {
       const currentBounds = rankBounds.get(rank)
       rankBounds.set(rank, {
         left: Math.min(currentBounds?.left ?? column, column),
-        right: Math.max(currentBounds?.right ?? column + nodeWidth - 1, column + nodeWidth - 1),
+        right: Math.max(currentBounds?.right ?? column + nodeWidth - 1 + selfRoom(node), column + nodeWidth - 1 + selfRoom(node)),
       })
-      column += nodeWidth + FLOWCHART_NODE_GAP
+      column += nodeWidth + selfRoom(node) + FLOWCHART_NODE_GAP
     }
   }
 
@@ -267,6 +281,7 @@ function renderRankedVerticalFlowchart(input: {
 
   let leftLaneIndex = 0
   let rightLaneIndex = 0
+  const escapeIndex = new Map<number, number>()
   for (const [edgeIndex, routed] of routedEdges.entries()) {
     const edge = routed.edge
     const from = layoutNodes.get(edge.from)
@@ -304,7 +319,9 @@ function renderRankedVerticalFlowchart(input: {
         ? Math.max(1, (sourceBounds?.left ?? from.center) - 3 - leftLaneIndex++ * 3)
         : Math.min(canvasWidth - 2, (sourceBounds?.right ?? from.center) + 3 + rightLaneIndex++ * 3))
     const sourceAnchorRow = rankTop(from.rank) + 3
-    const sourceEscapeRow = rankTop(from.rank) + 3 + FLOWCHART_CONNECTOR_GAP
+    const escape = escapeIndex.get(from.rank) ?? 0
+    escapeIndex.set(from.rank, escape + 1)
+    const sourceEscapeRow = rankTop(from.rank) + 3 + FLOWCHART_CONNECTOR_GAP + escape * 2
     const targetAnchorRow = routed.backward ? rankTop(to.rank) + 3 : rankTop(to.rank) - 1
 
     drawVerticalConnector(connectorCells, from.center, sourceAnchorRow, sourceEscapeRow)
@@ -323,9 +340,18 @@ function renderRankedVerticalFlowchart(input: {
       const labelWidth = Bun.stringWidth(label)
       const low = Math.min(from.center, lane)
       const high = Math.max(from.center, lane)
-      const labelStart = Math.max(0, Math.min(canvasWidth - labelWidth, Math.floor((low + high - labelWidth) / 2)))
-      putOverlay(overlays, canvasWidth, sourceEscapeRow, labelStart, label)
+      // Just under its own turn, outside the lane when it fits, so it never covers a line.
+      const outside = lane > from.center ? lane + 2 : lane - 1 - labelWidth
+      const labelStart = outside >= 0 && outside + labelWidth <= canvasWidth ? outside : Math.max(0, Math.min(canvasWidth - labelWidth, Math.floor((low + high - labelWidth) / 2)))
+      putOverlay(overlays, canvasWidth, sourceEscapeRow + 1, labelStart, label)
     }
+  }
+
+  for (const [node, text] of selfText) {
+    const at = layoutNodes.get(node)
+    if (!at) continue
+    const boxWidth = Math.max(...(boxes.get(node) ?? [""]).map((line) => Bun.stringWidth(line)))
+    putOverlay(overlays, canvasWidth, rankTop(at.rank) + 1, at.center - Math.floor(boxWidth / 2) + boxWidth + 2, `↻ ${text}`)
   }
 
   const rendered = rows

@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test"
+import { homedir } from "node:os"
+import { shownImagePath } from "../src/view/image-actions"
 import { createIdFactory, type SessionEvent } from "@mendcode/protocol"
 import { createTranscript, type PresentationMode } from "../src/view/transcript"
 import { glyphs } from "../src/ui/theme"
@@ -29,6 +31,14 @@ describe("image_generation card", () => {
       expect(lines.join("").replace(/\s/g, "")).toContain(path)
     })
   }
+  test("a picture saved under the home folder shows it as ~, so the user's name is not on screen", () => {
+    const home = homedir()
+    const lines = generatedImage("balanced", `A small green square icon\n${home}/.mendcode/blobs/cc/${sha}`).join("").replace(/\s/g, "")
+    expect(lines).toContain(`~/.mendcode/blobs/cc/${sha}`)
+    expect(lines).not.toContain(home.replace(/\s/g, ""))
+    expect(shownImagePath(`${home}/a.png and /tmp/b.png`, home)).toBe("~/a.png and /tmp/b.png")
+  })
+
   test("without a path in the text only the image count shows", () => {
     const lines = generatedImage("balanced", "A small green square icon")
     expect(lines.find((l) => l.includes("■"))).toBe("    ■ 1 image")

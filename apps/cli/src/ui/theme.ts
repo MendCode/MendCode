@@ -1,4 +1,4 @@
-import { COLOR_NAMES, DEFAULT_THEME, THEME_ALIASES, THEMES, type ColorName, type Theme } from "../themes"
+import { COLOR_NAMES, DEFAULT_THEME, resolveThemeName, THEMES, type ColorName, type Theme } from "../themes"
 import mendcode from "../themes/mendcode"
 import type { TerminalMode } from "./terminal-mode"
 
@@ -88,7 +88,7 @@ export const colorOverrides = (): Readonly<Partial<Record<ColorName, string>>> =
 
 /** Switches the palette used by `sgr`; `system` follows the terminal's mode. Unknown names return false and keep the current theme. */
 export function setTheme(name: string): boolean {
-  const requested = THEME_ALIASES[name.trim().toLowerCase()] ?? name.trim()
+  const requested = resolveThemeName(name, allThemes().map((theme) => theme.name))
   if (requested.toLowerCase() === SYSTEM_THEME) {
     following = true
     followSystem()

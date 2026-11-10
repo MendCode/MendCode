@@ -2403,7 +2403,8 @@ export async function startDaemon(options: DaemonOptions) {
       canSteer: () => engineTakesSteer(sessionId),
       waitingNotice: () => ownerWake.waiting(sessionId),
       onForeground: (state) => {
-        scheduler.setForegroundBusy(sessionId, BUSY.has(state))
+        // A turn waiting for the user uses nothing, so background jobs such as Dream do not wait for it.
+        scheduler.setForegroundBusy(sessionId, BUSY.has(state) && state !== "waiting_approval")
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },

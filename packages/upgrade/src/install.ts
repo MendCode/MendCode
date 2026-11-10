@@ -10,6 +10,17 @@ export function binPaths(dataDir: string) {
   return { dir, current: path.join(dir, BIN_NAME), next: path.join(dir, `${BIN_NAME}.new`), prev: path.join(dir, `${BIN_NAME}.prev`) }
 }
 
+/** The name the managed executables had before (`bin/mendcode-next`, `.prev`); an install from then is moved to the new names. */
+export const LEGACY_BIN_NAME = "mendcode-next"
+
+/** Moves an install's old executables to the new names, once, unless a file already has the new name. Runs under the upgrade lock. */
+export async function adoptLegacyBin(fs: UpgradeFs, dataDir: string) {
+  const paths = binPaths(dataDir)
+  for (const [from, to] of [[path.join(paths.dir, LEGACY_BIN_NAME), paths.current], [path.join(paths.dir, `${LEGACY_BIN_NAME}.prev`), paths.prev]] as const) {
+    if (await fs.exists(from) && !await fs.exists(to)) await fs.rename(from, to)
+  }
+}
+
 const within = (parent: string, child: string) => {
   const relative = path.relative(parent, child)
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))

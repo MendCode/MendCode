@@ -62,6 +62,30 @@ describe("dream in the daemon", () => {
     expect(ledger.ok && (ledger.result?.runs as DreamRun[])[0]).toMatchObject({ status: "done", proposed: 1 })
   })
 
+  test("a run does not wait for a session that only waits for an approval", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mendd-dream-"))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    const daemon = await startDaemon({
+      dir,
+      socketPath: path.join(dir, "mendd.sock"),
+      engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }),
+      dream: { complete: async () => JSON.stringify({ proposals: [], notes: "" }) },
+    })
+    cleanups.push(() => daemon.stop())
+    const runs: DreamRun[] = []
+    const client = createClient({ socketPath: daemon.socketPath, name: "dream", onGlobal: (e) => void (e.type === "dream.changed" && runs.push(e.run)) })
+    await client.connect()
+    cleanups.push(() => client.close())
+    const created = await client.send({ type: "session.create", directory: "/repo", title: "" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    await client.subscribe(sessionId, 0)
+    await client.send({ type: "user.submit", sessionId, text: "/ask", attachments: [] })
+    await until(() => daemon.store.readAfter(sessionId, 0).some((e) => e.type === "server.request"))
+    expect(await client.send({ type: "dream.run", directory: "/repo" })).toMatchObject({ ok: true })
+    await until(() => runs.some((r) => r.status !== "running"))
+    expect(runs.at(-1)?.status).not.toBe("running")
+  })
+
   test("settings.dreamAt schedules one daily run per recently active project; unset means no timer", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "mendd-dream-"))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))

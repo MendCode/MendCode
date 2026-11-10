@@ -178,7 +178,8 @@ export function createSettings(ctx: AppContext, actions: {
     configureKeyLabels({ setting: state.tuiProfile.altLabel })
     input.screen.setKeyboard?.(keyboardWanted(state.tuiProfile.keyProtocol, input.platform))
     actions.syncAudio()
-    if (state.customFooter && (patch.footerQuota !== undefined || patch.footerToday !== undefined)) {
+    // Only the user's own change edits the saved footer list; a profile's is applied where the footer is drawn (chrome.ts).
+    if (stored && state.customFooter && (patch.footerQuota !== undefined || patch.footerToday !== undefined)) {
       for (const [field, segment] of [["footerQuota", "quota"], ["footerToday", "today"]] as const) {
         if (patch[field] === undefined) continue
         state.customFooter = state.customFooter.filter((item) => item !== segment)

@@ -159,10 +159,19 @@ export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true 
   const available = maxWidth - margin * 2 - left[0]! - right.at(-1)! - 1
   if (gaps.reduce((total, gap) => total + gap, 0) + selfRoom > available) {
     const minimum = gaps.map((_, position) => Math.max(10, right[position]! + left[position + 1]! + 3))
-    selfRoom = selfRoom ? 6 : 0
-    const extra = available - selfRoom - minimum.reduce((total, gap) => total + gap, 0)
+    const selfMinimum = selfRoom ? 6 : 0
+    const extra = available - selfMinimum - minimum.reduce((total, gap) => total + gap, 0)
     if (extra < 0) return { note: MERMAID_NOTES.tooWide }
-    minimum.forEach((gap, position) => { gaps[position] = gap + Math.floor(extra / Math.max(1, gaps.length)) })
+    // The room left goes where the messages wanted it, so a long label keeps its line beside a short one.
+    // The last slot is the room right of the last lifeline, for its messages to itself.
+    const wants = [...gaps.map((gap, position) => Math.max(0, gap - minimum[position]!)), Math.max(0, selfRoom - selfMinimum)]
+    const wanted = wants.reduce((total, want) => total + want, 0)
+    const share = wants.map((want) => wanted ? Math.floor((extra * want) / wanted) : 0)
+    if (!wanted) share.forEach((_, position) => { if (position < gaps.length) share[position] = Math.floor(extra / Math.max(1, gaps.length)) })
+    let spare = (wanted ? extra : 0) - share.reduce((total, part) => total + part, 0)
+    for (const position of wants.map((_, i) => i).sort((p, q) => wants[q]! - wants[p]!)) if (spare-- > 0) share[position]!++
+    minimum.forEach((gap, position) => { gaps[position] = gap + share[position]! })
+    selfRoom = selfMinimum + share.at(-1)!
   }
   const centers: number[] = []
   let x = margin + left[0]!
@@ -173,7 +182,6 @@ export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true 
 
   let minX = 0
   let maxX = centers.length ? centers[centers.length - 1]! + right[ids.length - 1]! : 0
-  maxX = Math.max(maxX, centers[centers.length - 1]! + selfRoom)
   const noteRect = (item: Extract<SeqItem, { kind: "note" }>) => {
     const tw = textWidth(item.text)
     const first = centers[index.get(item.actors[0]!)!]!
@@ -192,6 +200,11 @@ export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true 
     minX = Math.min(minX, rect.x0)
     maxX = Math.max(maxX, rect.x1)
   }
+  // The room right of the last lifeline gives back what the notes left of it already take, down to its minimum.
+  const lastCenter = centers.at(-1) ?? 0
+  const over = Math.max(maxX, lastCenter + selfRoom) - minX + 1 + margin - maxWidth
+  if (over > 0 && selfRoom) selfRoom = Math.max(Math.min(selfRoom, 6), selfRoom - over)
+  maxX = Math.max(maxX, lastCenter + selfRoom)
   const shift = -minX
   const fragmentWidth = Math.max(0, ...seq.items.filter((item) => item.kind === "block").map((item) => textWidth(item.keyword) + textWidth(item.label) + maxDepth * 4 + 6))
   const width = Math.max(maxX - minX + 1 + margin, fragmentWidth)
@@ -205,7 +218,7 @@ export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true 
     if (item.kind === "message") {
       const first = centers[index.get(item.from)!]!
       const last = centers[index.get(item.to)!]!
-      messageRows.set(item, wrap(item.text, self ? Math.max(4, width - margin - first - 3) : Math.max(4, Math.abs(last - first) - 4)))
+      messageRows.set(item, wrap(item.text, self ? Math.max(4, width - margin - (first + shift) - 3) : Math.max(4, Math.abs(last - first) - 4)))
     }
     const size = item.kind === "message" ? messageRows.get(item)!.length + (self ? 2 : 1) : item.kind === "note" ? 3 : 1
     rows.push({ top: y, rows: size })

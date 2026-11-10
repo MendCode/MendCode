@@ -1,4 +1,4 @@
-import { THEME_ALIASES } from "../themes"
+import { resolveThemeName } from "../themes"
 import { SYSTEM_THEME, type Glyphs, type Line, type Theme } from "../ui/theme"
 import type { TerminalMode } from "../ui/terminal-mode"
 import { clip, panelGrid } from "./deck"
@@ -28,7 +28,7 @@ export function themeEntries(input: { themes: readonly Theme[]; query: string; m
 
 /** Position of `name` in the unfiltered list, so the picker opens on the current choice. */
 export function themeIndex(themes: readonly Theme[], name: string): number {
-  return Math.max(0, themeEntries({ themes, query: "", mode: { detected: undefined, locked: undefined, effective: "dark" } }).findIndex((entry) => entry.name === (THEME_ALIASES[name.toLowerCase()] ?? name)))
+  return Math.max(0, themeEntries({ themes, query: "", mode: { detected: undefined, locked: undefined, effective: "dark" } }).findIndex((entry) => entry.name === resolveThemeName(name, themes.map((theme) => theme.name))))
 }
 
 export function modeSummary(mode: ThemeModeInfo): string {
