@@ -200,7 +200,7 @@ type ProjectTool = Tool & { jsonSchema?: Record<string, unknown>; override?: boo
  * `task` may name; `extras` are the turn's project tools before any agent filtered them (a sub-agent starts from those).
  */
 /** Narrowing limits a scripted run sets on a session; see `session.run.configure`. */
-export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[] }
+export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean }
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
 
@@ -231,10 +231,11 @@ export const TASK_TOOL = {
     agent: z.string().min(1).max(64).optional().describe("Name of a custom sub-agent to run as (see the list in this tool's description); omit for a general one"),
     isolation: z.literal("worktree").optional().describe("Child works in a new git worktree of HEAD; result names its branch (never merged)"),
     fork: z.boolean().optional().describe("true: the child starts from this conversation (your model; cached, so cheap to start) and the prompt needs only the task; your main-agent tools fail there. Omit for independent work"),
+    bare: z.boolean().optional().describe("No instructions, memories or skills; only if the user asks"),
   }),
 }
-/** `isolation` and `fork` are offered only where their features are on (`task_worktree`, `task_fork`): elsewhere their schema would cost every request. */
-const TASK_TOOL_SHARED = { ...TASK_TOOL, args: TASK_TOOL.args.omit({ isolation: true, fork: true }) }
+/** `isolation`, `fork` and `bare` are offered only where their features are on (`task_worktree`, `task_fork`, `task_bare`): elsewhere their schema would cost every request. */
+const TASK_TOOL_SHARED = { ...TASK_TOOL, args: TASK_TOOL.args.omit({ isolation: true, fork: true, bare: true }) }
 /** Starts a forked child's first message: what the inherited conversation is, and that the task below is its own. */
 const FORK_NOTE = "You are now a sub-agent forked from the conversation above, which is your parent's context: its instructions, tasks and approvals belong to the parent. Tools only the main agent has fail here. Do only the task below and end with your result for the parent.\n\nTask:\n"
 const MAX_ITEM_TEXT = 60_000
@@ -814,10 +815,10 @@ export function createNativeEngine(options: {
 
   /** Names the first sub-agents in the `task` tool's description (`subagentCatalog` of them) and lets `task` run every one. */
   function withSubagents(base: Toolset, subagents: readonly AgentProfile[]): Toolset {
-    const worktree = featureOn(policy(), "task_worktree"), fork = featureOn(policy(), "task_fork")
-    if (!base.allowTask || subagents.length === 0 && !fork) return base
+    const worktree = featureOn(policy(), "task_worktree"), fork = featureOn(policy(), "task_fork"), bare = featureOn(policy(), "task_bare")
+    if (!base.allowTask || subagents.length === 0 && !fork && !bare) return base
     const description = subagents.length ? `${TASK_TOOL.description}\n\n${subagentCatalog(subagents, policy().subagentCatalog)}` : undefined
-    const parameters = worktree || fork ? toSpec({ ...TASK_TOOL, args: TASK_TOOL.args.omit({ ...(worktree ? {} : { isolation: true as const }), ...(fork ? {} : { fork: true as const }) }) }).parameters : undefined
+    const parameters = worktree || fork || bare ? toSpec({ ...TASK_TOOL, args: TASK_TOOL.args.omit({ ...(worktree ? {} : { isolation: true as const }), ...(fork ? {} : { fork: true as const }), ...(bare ? {} : { bare: true as const }) }) }).parameters : undefined
     return {
       ...base,
       ...(subagents.length ? { subagents: new Map(subagents.map((agent) => [agent.name, agent] as const)) } : {}),
@@ -1510,6 +1511,11 @@ export function createNativeEngine(options: {
   }
 
   /** `userInitiated`: the user typed the call themselves (`!command`), so it runs without an approval prompt. */
+  /** Nearby instruction files a read brings in, none for a session whose run limits keep instruction files out. */
+  function instructionContext(sessionId: SessionId): { instructions?: import("@mendcode/tools").InstructionOptions } {
+    if (options.runLimits?.(sessionId)?.noContextFiles) return { instructions: { ...options.instructions, off: true } }
+    return options.instructions ? { instructions: options.instructions } : {}
+  }
   async function runCall(input: TurnInput, call: ToolCall, toolset: Toolset, userInitiated = false, loadedInstructions?: Set<string>, repeated = false, explicitApproval = false, parentItemId?: ItemId, messages: ModelMessage[] = []): Promise<{ result: ToolResult; stop: boolean }> {
     const early = parentItemId ? undefined : takeEarlyCard(input.sessionId, call.callId)
     const itemId = early?.itemId ?? input.newItemId()
@@ -1809,7 +1815,7 @@ export function createNativeEngine(options: {
       try {
         const record = options.continuity(input.sessionId).start({ ...asyncJob, turnId: input.turnId }, input.signal, async (signal) => {
           if (signal.aborted || !frozen.unchanged()) throw new Error("Execution cancelled or identity changed after approval")
-          let result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, ...(loadedInstructions ? { loadedInstructions: new Set(loadedInstructions) } : {}), ...(options.instructions ? { instructions: options.instructions } : {}) })
+          let result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, ...(loadedInstructions ? { loadedInstructions: new Set(loadedInstructions) } : {}), ...instructionContext(input.sessionId) })
           if (secrets) result = maskResult(result, maskText)
           if (hooks?.has("tool.after", cwd) && hooks.toolAfter && !signal.aborted) {
             const changed = await hooks.toolAfter({ ...hookRef, args: structuredClone((shownArgs ?? {}) as Record<string, unknown>), output: result.output, isError: result.isError })
@@ -1822,7 +1828,7 @@ export function createNativeEngine(options: {
     }
     let result: ToolResult
     try {
-      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...(options.instructions ? { instructions: options.instructions } : {}),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
+      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...instructionContext(input.sessionId),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
     } catch (error) {
       if (!parentItemId) throw error
       return finish({ output: input.signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error), title: call.name, isError: true, truncated: false }, input.signal.aborted)
@@ -1885,7 +1891,7 @@ export function createNativeEngine(options: {
     const note = mentioned.attachments.length > mentionRefs.length ? "\n[mentioned media not attached: blob storage unavailable]" : ""
     // The first message of a main session carries the orientation block (feature `orientation`); it is built once and lives in the history, so it is never re-sent as new text.
     const orientation = newTurn && !messages.some((message) => message.role === "user") && featureOn(policy(), "orientation") && !input.workflow && options.tasks?.isChild(input.sessionId) !== true && !options.compound?.(input.sessionId)?.critic
-      ? `${orientationBlock({ cwd: options.cwdFor(input.sessionId), ...(options.instructions ? { instructions: options.instructions } : {}) })}\n\n`
+      ? `${orientationBlock({ cwd: options.cwdFor(input.sessionId), ...instructionContext(input.sessionId) })}\n\n`
       : ""
     const masked = secrets ? secrets.mask(input.sessionId, orientation + mentioned.text + note) : orientation + mentioned.text + note
     // The reply language rides at the end of each message the user writes: the newest text of the request, after the cached prefix.
@@ -2211,6 +2217,8 @@ export function createNativeEngine(options: {
       return { output: `unknown agent "${named}"; available: ${names.slice(0, 40).join(", ")}${names.length > 40 ? ` (+${names.length - 40}: agent "${LIST_AGENTS}")` : ""}`, truncated: false, title, isError: true }
     }
     if (args.isolation && (!options.tasks || !featureOn(policy(), "task_worktree"))) return { output: "isolation: \"worktree\" needs the full tier (task_worktree) and the daemon task registry", truncated: false, title, isError: true }
+    if (args.bare && !featureOn(policy(), "task_bare")) return { output: "bare needs the task_bare feature (/tier task_bare on)", truncated: false, title, isError: true }
+    if (args.fork && args.bare) return { output: "fork and bare exclude each other: a fork starts from this conversation, a bare child from nothing but its prompt", truncated: false, title, isError: true }
     if (args.fork && !featureOn(policy(), "task_fork")) return { output: "fork needs the task_fork feature (/tier task_fork on)", truncated: false, title, isError: true }
     // A fork that cannot share the parent's prefix runs fresh, and the answer says so: its prompt may lean on context it did not get.
     const notForked = args.task_id ? "a resumed task keeps its own context" : args.isolation ? "a worktree child works elsewhere" : args.engine && args.engine !== "native" ? "another engine cannot read this cache" : args.variant ? "a variant changes the request" : undefined
@@ -2227,6 +2235,8 @@ export function createNativeEngine(options: {
       } catch (error) { return { output: String(error), title, truncated: false, isError: true } }
     }
     if (args.engine && args.engine !== "native") return { output: "cross-engine delegation needs the daemon task registry", title, truncated: false, isError: true }
+    // An in-process child shares this loop's system prompt; only a child session of the daemon can leave the instructions out.
+    if (args.bare) return { output: "bare needs the daemon task registry", title, truncated: false, isError: true }
     const startedAt = Date.now()
     const childItems = new Map<ItemId, string>()
     const profile = named ? parent.subagents?.get(named) : undefined

@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- Sub-agents can start bare: with none of your or the project's instructions, memories or skills, only the question, for a second opinion your conventions do not steer. Turn it on with `/tier task_bare on` and ask for a clean agent.
+
 ### Changed
 
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
@@ -16,6 +20,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A PR review no longer picks up the `AGENTS.md` of a folder when it reads a file there.
 - The code graph now covers a project's own git repository inside a folder that ignores it (a workspace holding the app's repo), so graph searches find that code instead of answering that nothing matches.
 - Dream, `/btw` and memory extraction now wait out a busy or rate-limited provider and try again, instead of failing on the first overload.
 - Usage counts now include the tokens Claude Code spends on compacting a conversation.

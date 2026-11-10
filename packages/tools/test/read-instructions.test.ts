@@ -36,6 +36,17 @@ describe("the read tool loads nearby instructions with the system prompt's rules
     expect((await read.execute({ path: "src/a.ts" }, off)).output).not.toContain("STYLE RULES")
   })
 
+  test("a session without instruction files (a bare child, a PR review) reads the file and gets no nearby instructions", async () => {
+    const cwd = tmp()
+    put({ root: cwd, path: "src/AGENTS.md", content: "NEARBY RULES" })
+    put({ root: cwd, path: "src/a.ts", content: "export const a = 1" })
+    const context = { ...withClaims(cwd), instructions: { off: true } }
+    const output = (await read.execute({ path: "src/a.ts" }, context)).output
+    expect(output).toContain("export const a = 1")
+    expect(output).not.toContain("NEARBY RULES")
+    expect(context.loadedInstructions.size).toBe(0)
+  })
+
   test("outer directories come first, as in the system prompt", async () => {
     const cwd = tmp()
     put({ root: cwd, path: "a/AGENTS.md", content: "OUTER" })
