@@ -26,9 +26,13 @@
     will read the tree before touching anything.
 
      $ wc -l docs/*.md | sort -n  82 lines
-     ◇ Read 1 file · Glob 1 pattern · Grep 1 pattern
+     ▤ Read docs/packages.md  54 lines
+     ⌕ Grep "package"  10 matches in 8 files
+     ✲ Glob docs/**/*.md  81 files
      ⌁ Web search "bun test docs"  8 results                                                   1.6s
-     ◇ Read 1 file · Grep 2 patterns
+     ▤ Read docs/extensions.md  28 lines
+     ⌕ Grep "TOPICS"  2 matches in 1 file
+     ⌕ Grep "docsTopic"  4 matches in 3 files
      $ mendcode docs --json  json · 1,155 lines
 
     ┃ Thought: Order of the topics · 1.6s

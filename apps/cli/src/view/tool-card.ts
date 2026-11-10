@@ -12,7 +12,7 @@ import { sessionRecallCard } from "./session-recall-card"
 import { computerCard } from "./computer-card"
 import { markFold } from "./line-meta"
 import { isReadTool, type ToolCounts } from "./tool-summary"
-import { asciiGlyphs, FOLD_CARD, FOLD_PAGE, FOLD_RUN, INDENT, marksOf, railPrefix, type Marks } from "./tool-frame"
+import { asciiGlyphs, FOLD_CARD, FOLD_PAGE, INDENT, marksOf, railPrefix, type Marks } from "./tool-frame"
 import { branchRows, cardContext, failure, globCard, grepCard, header, linesOf, listCard, pagedLines, readCard, searchCard, shapeCard, shellCard, SPINNER_ASCII, taskCard, webCard, type CardContext } from "./tool-kinds"
 import { DEFAULT_TOOL_DESIGN, type ToolDesign } from "./tool-design"
 import { BRIEF_ROWS, shapeLines } from "./tool-bodies"
@@ -27,7 +27,7 @@ import { IMAGE_TOOLS, imageWaitConfig, imageWaitDetails, imageWaitRows, type Ima
  * again. Diffs keep v1's tinted rows with one line-number column and no `@@` headers, as Claude Code draws them. Pure: rows in, rows out.
  */
 
-export { FOLD_CARD, FOLD_PAGE, FOLD_RUN }
+export { FOLD_CARD, FOLD_PAGE }
 
 /** v1's icons (`timeline/normalize.ts`), keyed by tool name. */
 export const TOOL_ICONS: Readonly<Record<string, string>> = {
@@ -157,21 +157,6 @@ export function isCompactTool(title: string | undefined) {
 }
 
 /** Bare names other engines give calls that change files or run commands (pi's `bash`, Claude Code's `MultiEdit`). */
-const CHANGING_NAMES = new Set(["bash", "MultiEdit"])
-/** Free-text titles of other engines that only read: Claude Code's `read path`, `glob pattern`, `grep pattern`, `fetch url`, `search query`. */
-const FOREIGN_READING = /^(read|glob|grep|fetch|search) \S/
-
-/**
- * Whether a finished call may fold into `◇ N tools more`: a one-line tool that changes nothing. Other engines title calls in
- * free text (Claude Code's `edit src/a.ts`, `write b.ts`, or a Bash call's whole command such as `rm -rf build`), which
- * `parseToolTitle` cannot name; such a call may have written or deleted something, so it stays in view like a native edit.
- */
-export function isFoldableTool(title: string | undefined) {
-  if (!isCompactTool(title)) return false
-  const { name, detail } = parseToolTitle(title)
-  if (detail || !/\s/.test(name)) return !CHANGING_NAMES.has(name)
-  return FOREIGN_READING.test(name)
-}
 export type DiffRow = { kind: "add" | "remove" | "context" | "hunk" | "file"; text: string; number?: number; /** The line's number before the change (removed and context rows). */ old?: number; /** The line's number after it (added and context rows). */ new?: number }
 
 /** Unified-diff text (edit and apply_patch output) → rows with line numbers; undefined when it is not a diff. */

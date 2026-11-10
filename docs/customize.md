@@ -1322,7 +1322,7 @@ The directory and hub lists are never drawn in the card ([code graph](code-graph
 
 (Chat > Tool density, `toolDensity`): how much of each tool card the full view prints.
 
-`calm` (the default) keeps a short preview for the latest, running and failed calls and draws every other finished call as one row (kind, target, result count, duration) except a call that changed a file (edit, write, patch), whose diff or content always shows, and three or more looking calls in a row fold into `Read 4 files · Grep 3 patterns`; `standard` gives every call a short preview capped by kind (a read 3 lines, a grep 3 matches, a shell its last 3 lines, a JSON result as `object · 4 keys`); `dense` is the full view as it was, every call with its whole preview.
+`calm` (the default) keeps a short preview for the latest, running and failed calls and draws every other finished call as one row (kind, target, result count, duration) except a call that changed a file (edit, write, patch), whose diff or content always shows, and every call keeps its own row; `standard` gives every call a short preview capped by kind (a read 3 lines, a grep 3 matches, a shell its last 3 lines, a JSON result as `object · 4 keys`); `dense` is the full view as it was, every call with its whole preview.
 
 The balanced and minimal views ignore it; `toolOutput`, `ctrl+o` and a card opened by hand win over it.
 

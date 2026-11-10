@@ -55,7 +55,32 @@
      │     680 docs/views-10.md
      │     687 docs/layout-10.md
 
-     ◇ 2 tools more
+     ▤ Read docs/packages.md  54 lines
+       1  # Packages
+       2
+       3  Packages line 2: a package is a folder with a manifest and optional extensions, views an…
+       4  Packages line 3: a package is a folder with a manifest and optional extensions, views an…
+       5  Packages line 4: a package is a folder with a manifest and optional extensions, views an…
+       6  Packages line 5: a package is a folder with a manifest and optional extensions, views an…
+       … 48 more lines
+
+     ⌕ Grep "package"  10 matches in 8 files
+     │ docs/packages.md  2 matches
+     │   3  A package is a folder with a manifest.
+     │  12  mendcode package new writes two views to start from.
+     │ docs/views.md  1 match
+     │  44  A package that wants to own the look lists its views in activate.views.
+     │ docs/customize.md  2 matches
+     │  61  Packages can ship themes and views.
+     │ 140  Install a package from the marketplace page.
+     │ docs/layout.md  1 match
+     │  77  Package panels sit in the right slot.
+     │ docs/secrets.md  1 match
+     │   9  Packages never read the secrets store.
+     │ docs/sessions.md  1 match
+     │  31  Exports record the package that owned the look.
+     │ … +2 more matches
+
      ✲ Glob docs/**/*.md  81 files
      │ docs/guides/  views-0.md       secrets-24.md    models-48.md     customize-72.md
      │               secrets-4.md     models-28.md     customize-52.md  tools-76.md
