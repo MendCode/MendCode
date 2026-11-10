@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.14 - 2026-11-10
+
+Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.
+
+### Upgrade notes
+
+- Same code as v0.0.14-beta.1.
+
+## v0.0.14-beta.1 - 2026-11-10
+
+Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.
+
 ### New
 
 - Sub-agents can start bare: with none of your or the project's instructions, memories or skills, only the question, for a second opinion your conventions do not steer. Turn it on with `/tier task_bare on` and ask for a clean agent.
