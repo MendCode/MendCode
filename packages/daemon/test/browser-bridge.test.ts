@@ -124,7 +124,7 @@ describe("disabled", () => {
     const bridge = createUserBrowserBridge({ enabled: false, dataDir, home, platform: "darwin" })
     bridge.start()
     expect(bridge.listening()).toBe(false)
-    expect(await bridge.port().run({ action: "install" }, signal)).toMatchObject({ ok: false, error: expect.stringContaining("MENDCODE_BROWSER_EXTENSION=1") })
+    expect(await bridge.port().run({ action: "install" }, signal)).toMatchObject({ ok: false, error: expect.stringContaining("/tier browser_extension on") })
     expect(existsSync(dataDir)).toBe(false)
   })
   test("enabled but not installed still listens on nothing", () => {

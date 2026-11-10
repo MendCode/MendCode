@@ -7,7 +7,7 @@ import { createClient } from "@mendcode/client"
 import { createNativeEngine, loadSystemPrompt, memoryHistory } from "@mendcode/engine-native"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import { TIER_BASELINE_TOKENS, TIER_BUNDLES, effectiveSettings, type Tier, type TierSettings } from "@mendcode/protocol/wire"
-import { BUILTIN_TOOLS, browserTool, createComputerTools, defineTool } from "@mendcode/tools"
+import { BUILTIN_TOOLS, browserTool, createUserBrowserTool, createComputerTools, defineTool } from "@mendcode/tools"
 import { z } from "zod"
 import { startDaemon } from "../src"
 import { adaptTool, toolProblem } from "../src/extensions/tool-adapter"
@@ -36,7 +36,7 @@ async function baseline(tier: Tier | undefined, extra: { projectTools?: ReturnTy
   const settings: TierSettings = { ...(tier ? { tier } : {}), experimental: { tool_discovery: false }, ...(extra.settings ?? {}) }
   const engine = createNativeEngine({
     provider, history: memoryHistory(), compactionPrompt: "Summarize", cwdFor: () => project, subagents: true,
-    tools: [...BUILTIN_TOOLS, ...createCodeGraphTools({ cacheDir: path.join(dir, "codegraph") }), ...createComputerTools(), browserTool],
+    tools: [...BUILTIN_TOOLS, ...createCodeGraphTools({ cacheDir: path.join(dir, "codegraph") }), ...createComputerTools(), browserTool, createUserBrowserTool({ port: { run: async () => ({ ok: false, error: "test" }) } })],
     projectTools: async () => extra.projectTools ?? [fakeTool("mcp__docs__search"), fakeTool("mcp__docs__read")],
     system: (root) => composePromptParts(dir, root, [{ id: "base", label: "base prompt", text: packaged(root) }]).parts.map((part) => part.text).join("\n\n"),
     permissionPolicy: () => effectiveSettings(settings),

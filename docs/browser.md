@@ -110,7 +110,11 @@ It uses background tabs of a tab group titled "MendCode", so you keep browsing a
 
 ### Enable the extension
 
-It is **off by default**. Start the daemon with `MENDCODE_BROWSER_EXTENSION=1` (feature `browser`, full tier). Until you also install the extension, nothing listens and nothing is written.
+It is **on in the full tier** (macOS and Linux), behind tool discovery: the model finds it when you ask for your browser, and it costs no request anything until then. With tool discovery off, or in another tier, turn it on with `/tier browser_extension on`. Until the extension is installed, nothing listens and nothing is written.
+
+To start, just ask: "use my browser to …". The model checks the extension, asks you before installing it, and tells you the one step that needs you: load it once in the browser's extensions page (Developer mode, Load unpacked).
+
+Computer Use does not drive Chrome, Brave, Edge, Arc or Chromium: reading a page there switches the whole browser into its assistive accessibility mode, which slows every tab. Asked to work in one of them, the model uses this extension instead, and when it is off or not installed it tells you how to turn it on and install it.
 
 ### Extension actions
 
