@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
 
+### Fixed
+
+- Usage counts now include the tokens Claude Code spends on compacting a conversation.
+
 ## v0.0.13 - 2026-11-09
 
 Image generation with a ChatGPT login works again, the default theme is called MendCode, profiles can start from a clean look, and diagrams read better in a narrow terminal.
