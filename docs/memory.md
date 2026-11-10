@@ -331,7 +331,7 @@ The row also counts isolated memories and conflicts. A conflict turns it red.
 
 The page has the same header as `/changes` (`Memory · dir …`, the keys on the right, the counts under it) and two titled boxes: **Graph** (the health row, the canvas and a legend) and **Memory** (the selected memory's text, scope, category, area, project and origin, then its links). On a narrow terminal the Memory box goes under the graph, and on a small one it shrinks to a line under it.
 
-The canvas draws each link as a braille line: dotted for `related`, solid with an arrow for `supports` and `supersedes`, dashed for `conflicts`. A memory's dot takes the color of its category (the legend under the canvas names them), and the selected one is `◉`. With `MENDCODE_GLYPHS=ascii` the canvas is plain characters.
+The canvas draws each link as a braille line: dotted for `related`, solid with an arrow for `supports` and `supersedes`, dashed for `conflicts`. A memory's dot takes the color of its category (the legend under the canvas names them), and the selected one is `◉`. In the whole graph, memories of the same category that no link joins are tied by a dotted line in that category's color, so each category reads as one group; these lines are only drawn, never saved. With `MENDCODE_GLYPHS=ascii` the canvas is plain characters.
 
 The view shows up to 200 memories, the most linked first.
 

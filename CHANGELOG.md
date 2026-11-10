@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
+- The whole memory graph groups each category with a dotted line in its color, so memories without links no longer sit apart in a list.
 
 ### Fixed
 
