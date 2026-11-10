@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A picture the model reads shows in its tool card in terminals that draw images, also in Claude Code sessions, instead of `[image]`.
+
 ## v0.0.14 - 2026-11-10
 
 Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.

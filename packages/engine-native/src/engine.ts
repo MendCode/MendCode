@@ -1571,7 +1571,8 @@ export function createNativeEngine(options: {
       // A tool's render spec reaches clients only when it validates within RENDER_LIMITS; otherwise the text shows.
       const render = result.render !== undefined ? parseRenderSpec(normalizeRenderSpec(result.render)) : undefined
       // A generated picture is the card's own, as the hosted image tool's is: the terminal shows it in the card, also for a Claude Code session.
-      const pictures = call.name === "image_gen" && !result.isError ? await storeToolImages(input.sessionId, [...(result.images ?? []), ...(result.attachments ?? [])]) : []
+      // A read of a picture shows it in its card too (the blob is the one the model's history keeps: same bytes, one file).
+      const pictures = result.isError ? [] : call.name === "image_gen" ? await storeToolImages(input.sessionId, [...(result.images ?? []), ...(result.attachments ?? [])]) : call.name === "read" ? await storeToolImages(input.sessionId, (result.attachments ?? []).filter((file) => file.mime.startsWith("image/"))) : []
       // An item's meta holds at most 16 facts: the tool's own come first.
       if (retitle && Object.keys(result.meta ?? {}).length > 13) retitle = undefined
       input.emit({

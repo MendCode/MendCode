@@ -243,6 +243,8 @@ export function createClaudeEngine(options: {
   /** Read at each request: `false` lets a call Claude Code flags in `full` access through unattended (the `engineSafetyPrompts` setting). Unset asks. */
   safetyPrompts?(): boolean | undefined
   readBlob?(ref: BlobRef): Promise<Uint8Array>
+  /** Keeps an image a tool result carried (a Read of a picture), owned by the session, so its card can show it. Synchronous: the result's event keeps its place. */
+  storeImage?(bytes: Uint8Array, mime: string, sessionId: SessionId): BlobRef | undefined
   /** Variables added to the environment of each Claude Code process, read when one is started for a session on `model` (`claudeCacheEnv`, the sub-agent model). */
   env?(sessionId: SessionId, model: ClaudeModelChoice): Record<string, string> | undefined
   /** The session's `/env` credentials: in the process environment, and their names in the appended system prompt. */
@@ -863,7 +865,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, ...(options.storeImage ? { storeImage: (bytes: Uint8Array, mime: string) => options.storeImage!(bytes, mime, input.sessionId) } : {}), plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),
