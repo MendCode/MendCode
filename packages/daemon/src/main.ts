@@ -126,6 +126,7 @@ import { globalTrigger } from "./context-limits"
 import { hosting } from "./hosting"
 import { createLocalDictation } from "./voice-local"
 import { DETACHED_IDLE_EXIT_MS, runsAsUserService } from "./user-service"
+import { retryingCompletion } from "./completion-retry"
 
 /** Data lives in ~/.mendcode (moved from ~/.mendcode-v2 by the CLI, apps/cli/src/data-dir-move.ts); ~/.local/share/mendcode is never touched. */
 export const DEFAULT_DIR = defaultDataDirNow()
@@ -399,7 +400,8 @@ async function completeWithUsage(input: { system: string; prompt: string; images
     const provider = routedProvider()
     // An ACP agent runs whole sessions, not single completions: a session on one falls back to the default model here.
     const model = input.model && acpAgents.agentOf(input.model.model) === undefined ? usableEffort(input.model, modelCatalog) : undefined
-    for await (const event of provider.stream({ system: input.system, messages: [{ role: "user", content: input.prompt, ...(input.images?.length ? { images: input.images } : {}) }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal })) {
+    const request = { system: input.system, messages: [{ role: "user" as const, content: input.prompt, ...(input.images?.length ? { images: input.images } : {}) }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal }
+    for await (const event of retryingCompletion({ attempt: () => provider.stream(request), signal: input.signal })) {
       if (event.type === "text") {
         text += event.delta
         input.onText?.(event.delta)
