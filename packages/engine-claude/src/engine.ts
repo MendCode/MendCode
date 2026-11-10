@@ -1,6 +1,9 @@
 import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
+import { mkdir, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import path from "node:path"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import {
   claudeArgs,
@@ -224,6 +227,8 @@ export function createClaudeEngine(options: {
    * `additionalContext`: Claude Code adds it to that message for the model, out of the transcript, so every message restates it.
    */
   replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
+  /** Where each session's language line is kept for Claude Code's automatic compaction (`PreCompact` reads it); tests name their own. */
+  languageDir?: string
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
   /**
    * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
@@ -444,6 +449,7 @@ export function createClaudeEngine(options: {
       const input = connection.turn?.input
       const notice = input?.authority?.synthetic === true && input.text.length > 0 && prompt.includes(input.text.slice(0, 200))
       const line = await Promise.resolve(options.replyLanguage?.(connection.sessionId, notice ? "" : prompt)).catch(() => undefined)
+      if (line) await keepLanguage(connection.sessionId, line)
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: line } } : {}))
       return
     }
@@ -655,11 +661,31 @@ export function createClaudeEngine(options: {
     return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
   }
 
+  // Claude Code compacts on its own when the context fills; that summary is what the next turns read most. A `PreCompact` command
+  // hook prints it instructions: write the summary in the user's language, the line the last user message carried, kept in a file
+  // written only when it changes. Without it an English summary moved a Spanish session to English for good.
+  const languageDir = options.languageDir ?? path.join(tmpdir(), `mendcode-${process.getuid?.() ?? 0}-claude-language`)
+  const languageFile = (sessionId: SessionId) => path.join(languageDir, `${sessionId}.txt`)
+  const writtenLanguage = new Map<SessionId, string>()
+  async function keepLanguage(sessionId: SessionId, line: string) {
+    if (writtenLanguage.get(sessionId) === line) return
+    try {
+      await mkdir(languageDir, { recursive: true, mode: 0o700 })
+      await writeFile(languageFile(sessionId), `Write the summary in the user's language. ${line}\n`, { mode: 0o600 })
+      writtenLanguage.delete(sessionId)
+      writtenLanguage.set(sessionId, line)
+      if (writtenLanguage.size > 500) writtenLanguage.delete(writtenLanguage.keys().next().value!)
+    } catch { /* the summary then follows Claude Code's own default */ }
+  }
+  const compactLanguageArgs = (sessionId: SessionId): string[] => options.replyLanguage
+    ? ["--settings", JSON.stringify({ hooks: { PreCompact: [{ matcher: "auto", hooks: [{ type: "command", command: `cat '${languageFile(sessionId).replaceAll("'", "'\\''")}' 2>/dev/null || true` }] }] } })]
+    : []
+
   function open(sessionId: SessionId, model: ClaudeModelChoice, permission: PermissionMode, withThinkingDisplay: boolean): Connection {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
     // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
-    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, options.replyLanguage ? REPLY_LANGUAGE_NOTE : undefined, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd, sessionId), MCP_RELOAD_NOTE, options.replyLanguage ? REPLY_LANGUAGE_NOTE : undefined, environment?.note].filter(Boolean).join("\n\n") }), ...compactLanguageArgs(sessionId), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })

@@ -97,7 +97,7 @@ test("`timestamps` from an older profile: true reads as bottom, false as off, an
   expect(normalizeTuiProfile({}).timestamps).toBe("bottom")
 })
 
-test("three or more finished shell commands in a row fold into one row; a failed one ends the run and shows", () => {
+test("finished shell commands each keep their own row, and a failed one shows after them", () => {
   const s = stream()
   const turnId = s.turn()
   s.item(turnId, "user_message", { text: "check" })
@@ -106,9 +106,9 @@ test("three or more finished shell commands in a row fold into one row; a failed
   s.item(turnId, "agent_message", { text: "Done." })
   s.emit({ type: "turn.completed", turnId })
   const rows = view(s.events)
-  expect(rows.filter((row) => row.includes("Ran 3 shell commands"))).toHaveLength(1)
-  const run = rows.findIndex((row) => row.includes("Ran 3 shell commands"))
-  expect(rows[run + 1]).toMatch(/✗ shell +failed$/)
+  expect(rows.filter((row) => row.trim() === "$ shell")).toHaveLength(3)
+  expect(rows.some((row) => /Ran \d+ shell commands/.test(row))).toBe(false)
+  expect(rows[rows.findLastIndex((row) => row.trim() === "$ shell") + 2]).toMatch(/✗ shell +failed$/)
 })
 
 test("an idle compaction that found nothing to do (no usage, no content) draws no second closing line after the answer's", () => {

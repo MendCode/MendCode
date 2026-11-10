@@ -577,21 +577,13 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
 - While a tool runs, its live tail is at most 4 rows; the card keeps its header when the call finishes. Failed calls are never
   folded away or hidden in any view and show their message on an error rule.
 - The `full` view's tool density is described below.
-- In `balanced`, three or more finished reading calls of one turn in a row (reasoning between them does not break the run)
-  fold into one row, `◇ Read 5 files · List 2 · Grep 3`; three or more finished shell commands in a row fold the same way,
-  `◇ Ran 6 shell commands`. A call of the other kind, or a failed, running or approval-pending call, ends the run: a failed
-  command always shows. A click (or `ctrl+x f`) opens the row to the cards it stands for. The `full` view's `calm` density folds
-  the calls it already keeps to one row the same way.
-- In `balanced` and `full`, more than five finished one-line calls in a row keep the last five and fold the older ones into
-  `◇ N tools more` (`ctrl+o` shows them). A call that may change files never folds and ends the run: native `edit`, `write`,
-  `apply_patch` and `shell`, and the free-text calls of other engines (Claude Code's `edit path`, `write path` and the whole
-  command of a Bash call, pi's `bash`). Only their reading calls (`read`, `glob`, `grep`, `fetch`, `search`) fold.
+- In `balanced` and `full` every tool call keeps at least its own row, in every density: calls are never folded into a count,
+  so what ran (a read of an image, a search, a command) always shows in the transcript.
 - A click (press and release without a drag) on any row of a card, its head or a body row, or `ctrl+x f` at it, opens that card on
   its own; the same click on an opened card closes it, from wherever it lands, also when the head has scrolled off screen. A
   drag over the rows still selects text, and the second press of a double click on a body row selects the word and does not
-  toggle the card back. A folded run opens the same way. An opened card shows one page of 40 lines; its footer row,
-  `lines 1-40 of 312`, turns to the next page, and on the last page closes the card. `ctrl+o` opens every card at once (and
-  stops folding runs) and resets the ones opened by hand. A card always opens on its first page (closing it forgets its page),
+  toggle the card back. An opened card shows one page of 40 lines; its footer row,
+  `lines 1-40 of 312`, turns to the next page, and on the last page closes the card. `ctrl+o` opens every card at once and resets the ones opened by hand. A card always opens on its first page (closing it forgets its page),
   and opening, closing or turning a page keeps its head row on the screen row it was on (a head that was off screen goes to
   the second row), or moves it up when the card no longer fits under it; this holds while a turn streams, which no longer moves
   a reader scrolled up. A second click within 0.6 s of the one that opened a card is ignored when it lands on the footer (a
@@ -638,8 +630,7 @@ value is its shape in the header and no rows: `object · 4 keys`, `array · 20 i
 thought blocks, to-do lists, questions and plans are not part of it and draw as they always do.
 
 Heights stay put while a session streams. A call never changes its own height when it finishes (running, its live tail; finished,
-its preview). In `calm` an earlier call folds to its row when the next call is added, which is also when a run of looking calls
-folds, and the assistant's answer arriving moves nothing above it. A click on a one-row call opens it like any card.
+its preview). In `calm` an earlier call folds to its row when the next call is added, and the assistant's answer arriving moves nothing above it. A click on a one-row call opens it like any card.
 
 ## Context report (UI-8)
 

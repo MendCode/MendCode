@@ -14,7 +14,7 @@
     "commands": "feature:slash_menu file:mendcode.json",
     "comments": "command:comments group:Comments",
     "compaction": "feature:claude_compact feature:snip flag:auto_recall feature:limit_checkpoint feature:idle_compact feature:compact_notice flag:snip command:compact command:context command:files command:context-window command:compaction setting:compactAtTokens setting:defaultContextWindow setting:idleCompactAtTokens setting:compactNoticePercent setting:cacheLifetimeMinutes setting:handoffTokenCap setting:promptCache setting:compaction setting:cache setting:cacheProjects tool:snip",
-    "computer": "feature:computer feature:browser tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
+    "computer": "feature:computer feature:browser feature:browser_extension tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
     "customize": "command:view command:customize group:Look group:Home group:Top_&_side group:Input_&_keys group:Notifications group:Advanced tool:customize_ui file:journal.json file:pending.json file:report.json",
     "engines": "feature:pi feature:thread_mcp feature:acp_registry command:acp setting:acpAgents setting:threadMcp setting:ownLogins file:acp-agents.json file:acp-models.json file:pi.json",
     "extensions": "feature:extensions command:extensions tool:sidebar",
@@ -62,7 +62,7 @@
       "items": "file:settings.json"
     },
     {
-      "reason": "the user_browser tool is listed only when the user opted in (MENDCODE_BROWSER_EXTENSION=1) and its own description carries the usage; the files are written by the bridge in its own folder, not edited by the user (docs/browser.md)",
+      "reason": "the user_browser tool is listed only when the user opted in (/tier browser_extension on) and its own description carries the usage; the files are written by the bridge in its own folder, not edited by the user (docs/browser.md)",
       "items": "tool:user_browser file:config.json file:installed.json file:manifest.json file:sites.json"
     },
     {

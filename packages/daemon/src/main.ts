@@ -236,8 +236,22 @@ let skills = createSkillLoader({ userDir: dir, layers: (cwd) => layersFor(cwd) }
 const mcpAllowed = () => featureOn(extractionSettings(), "mcp", { safeMode })
 /** Servers extensions register (`api.registerMcpServer`); bound once the daemon built its extensions. */
 let extensionMcpServers: (directory: string) => Promise<Record<string, McpServerConfig>> = async () => ({})
-// Opt-in (MENDCODE_BROWSER_EXTENSION=1): the user's own browser through the MendCode extension. Nothing is loaded, opened or listened on otherwise.
-const userBrowser = process.env.MENDCODE_BROWSER_EXTENSION === "1" ? (await import("./browser-bridge")).createUserBrowserBridge({ enabled: true, dataDir: dir, home: homedir() }) : undefined
+// The user's own browser through the MendCode extension (feature `browser_extension`, opt-in). The bridge loads on the tool's first call,
+// or at start when the feature is on and the extension is installed; nothing is loaded, opened or listened on otherwise.
+const browserExtensionOn = () => featureOn(extractionSettings(), "browser_extension", { safeMode })
+let userBrowser: ReturnType<typeof import("./browser-bridge").createUserBrowserBridge> | undefined
+let userBrowserLoading: Promise<NonNullable<typeof userBrowser>> | undefined
+const loadUserBrowser = () => (userBrowserLoading ??= import("./browser-bridge").then(({ createUserBrowserBridge }) => {
+  userBrowser = createUserBrowserBridge({ enabled: true, dataDir: dir, home: homedir() })
+  userBrowser.start()
+  return userBrowser
+}))
+const userBrowserPort: import("@mendcode/tools").UserBrowserPort = {
+  async run(input, signal) {
+    if (!browserExtensionOn()) return { ok: false, error: "the browser extension is off; the user turns it on with /tier browser_extension on" }
+    return (await loadUserBrowser()).port().run(input, signal)
+  },
+}
 const mcp = createLazyMcp({ configLoader: createMcpConfigLoader({ userDir: dir, layers: (directory) => layersFor(directory), allowed: mcpAllowed, trustedDirs: () => extractionSettings().trustedToolDirs, extensionServers: (directory) => extensionMcpServers(directory) }), load: async (configLoader) => { const { createMcpManager, createMcpAuth } = await import("@mendcode/mcp"); return createMcpManager({ configLoader, auth: createMcpAuth({ dir }) }) } })
 /** Language servers are lazy, provisioned only from offline caches, and stopped after 5 idle minutes. */
 /**
@@ -581,7 +595,9 @@ export const daemon = await startDaemon({
     // Registered wherever they can work; the feature `computer` (off until `/tier computer on`) keeps them out of the model's tool list.
     if (process.platform === "darwin" || process.env.MENDCODE_COMPUTER === "1") builtinTools.push(...createComputerTools())
     if (process.env.MENDCODE_BROWSER === "1") builtinTools.push(browserTool)
-    if (userBrowser) { builtinTools.push(createUserBrowserTool({ port: userBrowser.port() })); userBrowser.start() }
+    if (process.platform !== "win32") builtinTools.push(createUserBrowserTool({ port: userBrowserPort }))
+    // An installed extension reconnects as soon as the browser runs: the bridge listens from the start then.
+    if (process.platform !== "win32" && browserExtensionOn() && existsSync(path.join(dir, "browser", "installed.json"))) void loadUserBrowser()
     extensions.setBuiltinTools(builtinTools)
     const mainModel = (sessionId: Parameters<typeof store.sessionModel>[0]) => resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), catalog: modelCatalog })
     /** The model one turn runs on: its per-turn override (already validated at submit) or the session's. */

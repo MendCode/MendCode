@@ -12,8 +12,8 @@ import { goalCardRows, goalCardTitle, type GoalCard } from "./goal"
 import { limitCardLine, limitCardRows, type LimitCard, type UsageLimitView } from "./usage-limit"
 import { hasSecretMarker, maskSecretMarkers } from "./secret-markers"
 import { graftTraceRender } from "./graft-map"
-import { FOLD_CARD, FOLD_PAGE, FOLD_RUN, isCompactTool, isFileEdit, isFoldableTool, parseToolTitle, SPINNER_FRAMES, splitDiffAt, TOOL_PAGE_LINES, type ToolLevel } from "./tool-card"
-import { countsOf, foldLabel, isReadTool, shellRunLabel } from "./tool-summary"
+import { FOLD_CARD, FOLD_PAGE, isCompactTool, isFileEdit, parseToolTitle, SPINNER_FRAMES, splitDiffAt, TOOL_PAGE_LINES, type ToolLevel } from "./tool-card"
+import { countsOf } from "./tool-summary"
 import { DEFAULT_IMAGE_ROOM, generatedImageCaps, IMAGE_TOOLS, imageWaitConfig, type ImageRoom } from "./image-wait"
 import { callArgs, type CallArgs } from "./tool-data"
 import { keyText } from "../ui/key-labels"
@@ -183,13 +183,6 @@ const TOOL_TAIL_LINES = 4
 const INDENT = "  "
 /** Columns of padding on both sides of the session column in balanced and full (v1's container `paddingLeft/Right 2`). */
 const GUTTER = 2
-/** Completed one-line tool rows kept visible in a run; older ones fold into `◇ N tools more` (v1 group.ts). */
-const COLLAPSE_AFTER = 5
-/** In `balanced`, this many finished reading calls in a row (one turn) fold into one row (`Read 5 files · List 2 · Grep 3`). */
-const READ_RUN_MIN = 3
-
-/** A run of finished reading calls drawn as one row: its first call stands for it, the others draw nothing until it is opened. */
-type ReadRun = { leader: ItemId; ids: ItemId[]; label: string }
 /** How little of a tool card the full view shows: one row (`line`) or a short preview capped by kind (`brief`). */
 type ToolDensity = "line" | "brief"
 /** Calls whose card is a plan, a question or a lookup the reader acts on: the full view's density leaves them as they are. */
@@ -253,11 +246,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   const toolOpen = new Map<ItemId, boolean>()
   /** The page of an opened card, from 0. */
   const toolPage = new Map<ItemId, number>()
-  /** Folded runs of reading calls the reader opened, by the id of the run's first call. */
-  const openRuns = new Set<ItemId>()
-  /** What an open find bar opened to show its hits (see `revealFind`): cards with the state they had, and runs. */
+  /** What an open find bar opened to show its hits (see `revealFind`): cards with the state they had. */
   const revealedCards = new Map<ItemId, boolean | undefined>()
-  const revealedRuns = new Set<ItemId>()
   let reasoningVisibility: TuiProfile["reasoning"] = "auto"
   let toolOutput: TuiProfile["toolOutput"] = "auto"
   /** True once `setAppearance` ran: a thread created later gets the same appearance. */
@@ -303,10 +293,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   const turns = new Map<TurnId, { startedAt: number | undefined; model: string | undefined; input: number; output: number; reasoning: number; usage: boolean; items: number; agent?: string; shell?: true; /** Model calls, the prompt tokens read from the cache, and the cost while every call had a price (null once one did not). */ calls?: number; cacheRead?: number; costMicros?: number | null }>()
   /** Rows of a reasoning body, from the last viewport height. */
   let reasoningRows = DEFAULT_REASONING_ROWS
-  /** itemId → hidden tool rows this block stands for (0: draws nothing); rebuilt when blocks change. */
-  let collapsed: Map<ItemId, number> | undefined
-  /** itemId → the folded run of reading calls it belongs to; rebuilt when blocks change. */
-  let readRuns: Map<ItemId, ReadRun> | undefined
+  /** Tool calls that draw no row (a running question call, which its question card stands for); rebuilt when blocks change. */
+  let collapsed: Set<ItemId> | undefined
   /** itemId → how little of a tool card the full view's `toolDensity` shows (absent: the level decides); rebuilt when blocks change. */
   let densities: Map<ItemId, ToolDensity> | undefined
   /** The latest turn end (its closing line says what still runs); rebuilt when blocks change. */
@@ -386,7 +374,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     revision++
     totalLinesWidth = 0
     collapsed = undefined
-    readRuns = undefined
     densities = undefined
     lastEnd = undefined
   }
@@ -447,30 +434,16 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   const detailsAllOpen = () => toolsExpanded
 
   /**
-   * Runs of completed one-line tool rows longer than COLLAPSE_AFTER: the oldest fold into one `◇ N tools more` line. A call
-   * that may change files (an edit, a write, any engine's command) ends a run and never folds, in any view.
+   * The tool calls that draw no row. Every other call keeps at least its own row in every view: calls are never folded into a
+   * count (`Read 5 files`, `N tools more`), so the user always sees what ran.
    */
   function collapsePlan() {
     if (collapsed) return collapsed
-    const plan = new Map<ItemId, number>()
+    const plan = new Set<ItemId>()
     collapsed = plan
     // While a question waits, the running call that asked it draws no row: the question card stands for it (it shows once answered).
     if ([...requests.values()].some((request) => request.kind === "question"))
-      for (const block of blocks) if (block.kind === "tool_call" && block.status === "running" && QUESTION_TOOLS.has(parseToolTitle(block.title).name)) plan.set(block.itemId, 0)
-    if (mode === "minimal" || detailsOpen() || toolsOpenAll || toolOutput === "expanded") return plan
-    const folded = readRunPlan()
-    let run: Block[] = []
-    const flush = () => {
-      const done = run.filter((block) => block.status === "ok")
-      const extra = done.length - COLLAPSE_AFTER
-      if (extra > 0) done.slice(0, extra).forEach((block, at) => plan.set(block.itemId, at === 0 ? extra : 0))
-      run = []
-    }
-    for (const block of blocks) {
-      if (block.kind === "tool_call" && block.meta?.memorySaved !== true && isFoldableTool(block.title) && !folded.has(block.itemId)) run.push(block)
-      else flush()
-    }
-    flush()
+      for (const block of blocks) if (block.kind === "tool_call" && block.status === "running" && QUESTION_TOOLS.has(parseToolTitle(block.title).name)) plan.add(block.itemId)
     return plan
   }
 
@@ -495,49 +468,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       const news = block.status !== "ok" && block.status !== "cancelled" || block.itemId === latest || isAwaiting(block.itemId)
       plan.set(block.itemId, setting === "calm" && !news ? "line" : "brief")
     }
-    return plan
-  }
-
-  /**
-   * In `balanced`, runs of three or more finished calls of one kind in one turn fold into one row: reading calls (read, ls, glob,
-   * grep: `Read 5 files · Grep 3`) or shell commands (`Ran 6 shell commands`); reasoning between them does not break a run, a call
-   * of the other kind does. A failed, running or approval-pending call ends a run: it always shows. In the full view's `calm`
-   * density the calls already kept to one row fold the same way, with the counts spelled (`Grep 3 patterns`).
-   */
-  function readRunPlan() {
-    if (readRuns) return readRuns
-    const plan = new Map<ItemId, ReadRun>()
-    readRuns = plan
-    const calm = mode === "full" && appearance.toolDensity === "calm"
-    if ((mode !== "balanced" && !calm) || toolOutput === "expanded" || (toolOutput === "auto" && toolsOpenAll)) return plan
-    const rows = calm ? densityPlan() : undefined
-    let run: Block[] = []
-    let runKind: "read" | "shell" | undefined
-    const flush = () => {
-      if (run.length >= READ_RUN_MIN) {
-        const label = runKind === "shell" ? shellRunLabel(run.length) : foldLabel(run.map((block) => parseToolTitle(block.title).name), calm)
-        const info: ReadRun = { leader: run[0]!.itemId, ids: run.map((block) => block.itemId), label }
-        for (const block of run) plan.set(block.itemId, info)
-      }
-      run = []
-      runKind = undefined
-    }
-    const kindOf = (block: Block): "read" | "shell" | undefined => {
-      if (block.kind !== "tool_call" || block.status !== "ok" || block.meta?.memorySaved === true || isAwaiting(block.itemId) || (rows && rows.get(block.itemId) !== "line")) return undefined
-      const name = parseToolTitle(block.title).name
-      return isReadTool(name) ? "read" : name === "shell" ? "shell" : undefined
-    }
-    for (const block of blocks) {
-      if (block.kind === "reasoning") continue
-      const kind = kindOf(block)
-      if (!kind) flush()
-      else {
-        if (run.length && (run[0]!.turnId !== block.turnId || runKind !== kind)) flush()
-        run.push(block)
-        runKind = kind
-      }
-    }
-    flush()
     return plan
   }
 
@@ -566,12 +496,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     return mode !== "minimal" && (setting === "open" || (setting === "auto" && mode === "full"))
   }
 
-  /** A click (or ctrl+x f) on a tool card's rows: open or close the card, turn to its next page, or open or close the folded run it leads. */
+  /** A click (or ctrl+x f) on a tool card's rows: open or close the card, or turn to its next page. */
   function toggleTool(block: Block, fold: number) {
     const id = block.itemId
-    if (fold === FOLD_RUN) {
-      if (!openRuns.delete(id)) openRuns.add(id)
-    } else if (fold === FOLD_PAGE) {
+    if (fold === FOLD_PAGE) {
       toolPage.set(id, (toolPage.get(id) ?? 0) + 1)
     } else {
       const open = isOrientation(block) ? mapOpen(block) : levelOf(block) === "full"
@@ -580,14 +508,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     }
     cache.delete(id)
     invalidateCounts()
-  }
-
-  /** The row a folded run of reading calls draws: `◇ Read 5 files · List 2 · Grep 3`; clicking it (or ctrl+x f) opens or closes the run. */
-  function readRunRow(run: ReadRun, width: number): Line {
-    const open = openRuns.has(run.leader)
-    const row = wrapSpans([{ text: run.label, fg: "muted" }], width, [{ text: `${" ".repeat(GUTTER)}${INDENT} ${open ? g.tool : g.collapsed} `, fg: "muted" }])[0]!
-    markFold(row, FOLD_RUN)
-    return row
   }
 
   const isAwaiting = (itemId: ItemId) => [...requests.values()].some((request) => request.itemId === itemId)
@@ -928,16 +848,15 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   function layoutOf(block: Block, width: number) {
     // mermaidGeneration bumps once, the moment the diagram module finishes loading, so any message
     // rendered with its "loading diagram…" placeholder is recomputed with the real diagram after that.
-    const fold = block.kind === "tool_call" ? collapsePlan().get(block.itemId) : undefined
+    const hidden = block.kind === "tool_call" && collapsePlan().has(block.itemId)
     const open = block.kind === "tool_call" ? toolsExpanded : block.kind === "user_message" || block.kind === "compaction" ? detailsOpen() || openItems.has(block.itemId) || commentsOpen(block) : block.kind === "agent_message" ? detailsAllOpen() : false
-    // A tool card's rows also follow how much of it shows, its page and the folded run it may belong to.
-    const run = block.kind === "tool_call" ? readRunPlan().get(block.itemId) : undefined
-    const tool = block.kind === "tool_call" || block.kind === "artifact" && block.meta?.memorySaved === true ? `:${levelOf(block)}${isOrientation(block) && mapOpen(block) ? "m" : ""}${toolPage.get(block.itemId) ?? 0}:${run ? `${run.leader === block.itemId ? run.label : "m"}${openRuns.has(run.leader) ? "o" : "c"}` : "-"}${block.kind === "tool_call" ? densityPlan().get(block.itemId)?.[0] ?? "" : ""}` : ""
+    // A tool card's rows also follow how much of it shows and its page.
+    const tool = block.kind === "tool_call" || block.kind === "artifact" && block.meta?.memorySaved === true ? `:${levelOf(block)}${isOrientation(block) && mapOpen(block) ? "m" : ""}${toolPage.get(block.itemId) ?? 0}${block.kind === "tool_call" ? densityPlan().get(block.itemId)?.[0] ?? "" : ""}` : ""
     // The latest turn's closing line also follows what still runs.
     const live = block.kind === "status" && timestamps === "bottom" && block.itemId === lastEndId() ? (({ shells, agents }) => `:r${shells},${agents}`)(stillRunning()) : ""
-    const key = `${doneSymbol}:${reasoningVisibility}:${toolOutput}:${width}:${mode}:${open ? "x" : "c"}${tool}:${mermaidGeneration()}:${fold ?? "-"}:${block.kind === "reasoning" ? reasoningRows : ""}${live}${hooks ? `:${hooks.generation()}` : ""}${images && block.attachments?.length ? `:i${images.generation()}${generatedPicture(block) ? `:r${roomKey()}` : ""}` : ""}`
+    const key = `${doneSymbol}:${reasoningVisibility}:${toolOutput}:${width}:${mode}:${open ? "x" : "c"}${tool}:${mermaidGeneration()}:${hidden ? "h" : "-"}:${block.kind === "reasoning" ? reasoningRows : ""}${live}${hooks ? `:${hooks.generation()}` : ""}${images && block.attachments?.length ? `:i${images.generation()}${generatedPicture(block) ? `:r${roomKey()}` : ""}` : ""}`
     const thread = block.meta?.subagent === true ? threads.get(block.itemId) : undefined
-    return { fold, key: thread ? `${key}:a${thread.tools}${thread.ended ? "e" : ""}${thread.last ?? ""}` : key }
+    return { hidden, key: thread ? `${key}:a${thread.tools}${thread.ended ? "e" : ""}${thread.last ?? ""}` : key }
   }
 
   /** Marks a block's rows as just used; the oldest ones past `ROWS_CACHE_BLOCKS` give their rows back and keep only their count. */
@@ -972,20 +891,13 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   function linesOf(block: Block, width: number): ViewLine[] {
     const finished = block.status !== "running"
-    const { fold, key } = layoutOf(block, width)
+    const { hidden, key } = layoutOf(block, width)
     const cached = cachedAt(block, key)
     if (finished && cached?.key === key && cached.lines) {
       retain(block.itemId)
       return cached.lines
     }
-    const run = block.kind === "tool_call" && fold === undefined ? readRunPlan().get(block.itemId) : undefined
-    const closedRun = run && !openRuns.has(run.leader)
-    const rows =
-      fold !== undefined
-        ? fold > 0 ? [[{ text: `${mode === "minimal" ? "" : " ".repeat(GUTTER)}${INDENT} ${g.collapsed} ${fold} tool${fold === 1 ? "" : "s"} more`, fg: "muted" as const }]] : []
-        : closedRun
-          ? run.leader === block.itemId ? [readRunRow(run, width)] : []
-          : [...(run && run.leader === block.itemId ? [readRunRow(run, width)] : []), ...styled(withSecretTails(block), width)]
+    const rows = hidden ? [] : styled(withSecretTails(block), width)
     while (rows.length && !rows.at(-1)!.some((span) => span.text.trim())) rows.pop()
     const kind = block.kind === "status" ? "status" : block.kind
     const lines: ViewLine[] = rows.map((spans, row) => ({ spans, text: spans.map((s) => s.text).join(""), kind, itemId: block.itemId, row, ...(gutterOf(spans) ? { gutter: gutterOf(spans) } : {}), ...(softWrapOf(spans) ? { soft: softWrapOf(spans)! } : {}), ...(foldOf(spans) !== undefined ? { fold: foldOf(spans)! } : {}), ...(copyOf(spans) ? { copy: copyOf(spans)! } : {}) }))
@@ -1001,7 +913,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       })
     }
     // Each image the terminal can draw reserves its rows under the card; the chat view places the picture over them.
-    if (images && fold === undefined && !closedRun && block.attachments?.length) {
+    if (images && !hidden && block.attachments?.length) {
       const col = (mode === "minimal" ? 0 : GUTTER) + INDENT.length
       // A generated picture takes the box its wait canvas held (image-wait.ts `generatedImageCaps`).
       const caps = generatedPicture(block) ? generatedImageCaps({ maxCols: width - col - 2, room: imageRoom(), canvas: appearance.imageWaitCanvas }) : undefined
@@ -1012,14 +924,13 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       })
     }
     // A finished generated picture keeps v1's buttons under it: open, folder, copy path.
-    const picture = finished && block.status === "ok" && fold === undefined && !closedRun && generatedPicture(block) ? block.attachments?.find((file) => file.mime.startsWith("image/")) : undefined
+    const picture = finished && block.status === "ok" && !hidden && generatedPicture(block) ? block.attachments?.find((file) => file.mime.startsWith("image/")) : undefined
     const picturePath = picture ? generatedImagePath({ ...(block.meta ? { meta: block.meta } : {}), text: block.text }) : undefined
     if (picture && picturePath) {
       const spans = imageActionRow({ path: picturePath, mime: picture.mime, ...(picture.bytes !== undefined ? { bytes: picture.bytes } : {}), col: (mode === "minimal" ? 0 : GUTTER) + INDENT.length, width })
       lines.push({ spans, text: spans.map((span) => span.text).join(""), kind, itemId: block.itemId, gutter: 1000, copy: copyOf(spans)! })
     }
-    // A folded run's row is followed by what follows the run, not by the calls it hides.
-    const next = blocks[(index.get(closedRun && run.leader === block.itemId ? run.ids.at(-1)! : block.itemId) ?? -2) + 1]
+    const next = blocks[(index.get(block.itemId) ?? -2) + 1]
     // Rows of one-line tools stack tight; a block tool (shell, diff, todo) or a card with a body gets a blank row around it.
     const stacked = (a: Block | undefined) => a?.kind === "tool_call" && (mode === "minimal" || isCompactTool(a.title) || densityPlan().get(a.itemId) === "line")
     const compactPair = (stacked(block) && stacked(next) && (mode === "minimal" || lines.length === 1)) || (mode === "minimal" && block.kind === "reasoning")
@@ -1595,7 +1506,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       detailsState.clear()
       toolOpen.clear()
       toolPage.clear()
-      openRuns.clear()
       for (const block of blocks) if (block.kind === "tool_call" || block.kind === "user_message" || block.kind === "compaction") cache.delete(block.itemId)
       invalidateCounts()
     },
@@ -1623,20 +1533,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     revealFind(query: string, width: number): boolean {
       const has = (text: string) => (/[A-Z]/.test(query) ? text : text.toLowerCase()).includes(query)
       const wanted = new Set<ItemId>()
-      const wantedRuns = new Set<ItemId>()
       if (query.length >= 2) {
         for (const block of blocks.slice(firstShown())) {
           if (block.kind !== "tool_call" || block.status === "running" || !has(block.text.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, ""))) continue
           const shows = () => linesOf(block, width).some((line) => has(line.text))
-          const run = readRunPlan().get(block.itemId)
-          if (run && revealedRuns.has(run.leader)) wantedRuns.add(run.leader)
-          else if (run && !openRuns.has(run.leader) && !shows()) {
-            openRuns.add(run.leader)
-            wantedRuns.add(run.leader)
-            revealedRuns.add(run.leader)
-            cache.delete(block.itemId)
-            invalidateCounts()
-          }
           const was = revealedCards.has(block.itemId)
           if (!was && shows()) continue
           const own = toolOpen.get(block.itemId)
@@ -1651,7 +1551,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
           invalidateCounts()
         }
       }
-      let changed = wanted.size > 0 || wantedRuns.size > 0
+      let changed = wanted.size > 0
       for (const [itemId, before] of revealedCards) {
         if (wanted.has(itemId)) continue
         if (before === undefined) toolOpen.delete(itemId)
@@ -1659,13 +1559,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         toolPage.delete(itemId)
         revealedCards.delete(itemId)
         cache.delete(itemId)
-        changed = true
-      }
-      for (const leader of revealedRuns) {
-        if (wantedRuns.has(leader)) continue
-        openRuns.delete(leader)
-        revealedRuns.delete(leader)
-        cache.delete(leader)
         changed = true
       }
       if (changed) invalidateCounts()
@@ -1679,12 +1572,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         toolPage.delete(itemId)
         cache.delete(itemId)
       })
-      revealedRuns.forEach((leader) => {
-        openRuns.delete(leader)
-        cache.delete(leader)
-      })
       revealedCards.clear()
-      revealedRuns.clear()
       invalidateCounts()
     },
     /** Opens or folds one long item (a user message, a compaction summary) on its own. */

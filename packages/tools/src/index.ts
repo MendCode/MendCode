@@ -84,7 +84,7 @@ export type { ComputerActivation } from "./tools/computer-session"
 // Opt-in (MENDCODE_BROWSER=1): the daemon adds it and supplies the headless browser port.
 export { default as browserTool } from "./tools/browser"
 export * from "./browser"
-// Opt-in (MENDCODE_BROWSER_EXTENSION=1): the user's own browser through the MendCode extension; the daemon supplies the port.
+// Opt-in (feature browser_extension): the user's own browser through the MendCode extension; the daemon supplies the port.
 export { createUserBrowserTool, toInput as userBrowserInput } from "./tools/user-browser"
 export * from "./user-browser"
 export { createWebRouting, type WebRoute } from "./web-routing"

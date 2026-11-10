@@ -192,3 +192,26 @@ test("native Accessibility adapter addresses the approved process by pid and nev
   identity = null
   expect(await os.identify(target, signal())).toBeUndefined()
 })
+
+test("a session left idle is ended by the next sweep, which releases its app (a web app's accessibility mode goes off again)", async () => {
+  const f = fixture()
+  const first = await f.start()
+  expect(f.ax.calls).not.toContain("release:42")
+  f.advance(61_000)
+  // A new session sweeps: the idle one ends and its app is released without any call naming it.
+  await f.start()
+  expect(f.ax.calls.filter((call) => call === "release:42")).toHaveLength(1)
+  expect((await f.port.observe!({ computerSessionID: first.computerSessionID }, signal())).isError).toBe(true)
+})
+
+test("a Chromium browser is never driven by Computer Use: the model is sent to the browser extension and nothing is approved", async () => {
+  const f = fixture()
+  f.ax.state.target.bundleID = "com.brave.Browser"
+  let asked = false
+  const capture = data<{ captureID: string }>(await f.port.capture({}, signal()))
+  const refused = await f.port.session!({ action: "start", mode: "control", bootstrapCaptureID: capture.captureID }, signal(), { ...activation, approve: async () => { asked = true; return true } })
+  expect(refused.isError).toBe(true)
+  expect(refused.output).toContain("user_browser")
+  expect(refused.output).toContain("/tier browser_extension on")
+  expect(asked).toBe(false)
+})

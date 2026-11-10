@@ -10,10 +10,9 @@ import { shortenMiddle, textWidth, truncateEnd } from "./wrap"
 
 export const INDENT = "   "
 
-/** Fold marks of a card's rows (`line-meta`): 0 opens or closes the card, 1 turns to its next page, 2 opens or closes a folded run. */
+/** Fold marks of a card's rows (`line-meta`): 0 opens or closes the card, 1 turns to its next page. */
 export const FOLD_CARD = 0
 export const FOLD_PAGE = 1
-export const FOLD_RUN = 2
 
 export type Marks = { rail: string; ellipsis: string; dot: string; minus: string; dash: string; folded: string; /** The marker of a failed call: it replaces the kind's glyph so the state reads without colour. */ failed: string }
 

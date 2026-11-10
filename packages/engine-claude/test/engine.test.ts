@@ -2210,3 +2210,27 @@ describe("claude engine plan mode note", () => {
     engine.stop()
   })
 })
+
+test("Claude Code's own automatic compaction writes its summary in the user's language: a PreCompact command prints the session's language line", async () => {
+  const { mkdtempSync, readFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const languageDir = mkdtempSync(`${tmpdir()}/mc-lang-`)
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push({ type: "control_request", request_id: "hook-1", request: { subtype: "hook_callback", callback_id: "mendcode-reply-language", input: { hook_event_name: "UserPromptSubmit", prompt: "arregla el pdf" } } })
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const h = engineWith([fake], { languageDir, replyLanguage: async () => "Reply in Spanish." })
+  const turn = turnInput({ text: "arregla el pdf" })
+  expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+  const args = h.spawned[0]!.args
+  const settings = JSON.parse(args[args.indexOf("--settings") + 1]!)
+  const hook = settings.hooks.PreCompact[0]
+  expect(hook.matcher).toBe("auto")
+  // The command, as Claude Code runs it, prints the instructions for the summary.
+  const printed = Bun.spawnSync(["/bin/sh", "-c", hook.hooks[0].command]).stdout.toString()
+  expect(printed).toBe("Write the summary in the user's language. Reply in Spanish.\n")
+  expect(readFileSync(`${languageDir}/${turn.input.sessionId}.txt`, "utf8")).toBe(printed)
+  h.engine.stop()
+  rmSync(languageDir, { recursive: true, force: true })
+})
