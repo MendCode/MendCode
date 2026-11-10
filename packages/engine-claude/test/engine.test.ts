@@ -1329,6 +1329,11 @@ describe("claude compaction spend", () => {
     expect(compacted).toMatchObject({ input: 1_998, output: 835, cacheRead: 24_863, cacheWrite: 12_442 })
   })
 
+  test("a compaction in a process's first turn (a resumed conversation, a restarted process) counts from zero", () => {
+    const first = turnUsage({}, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual" } }, compactResult])
+    expect(first).toMatchObject({ input: 2_000, output: 858, cacheRead: 24_863, cacheWrite: 49_725 })
+  })
+
   test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
     expect(turnUsage({}, [{ type: "system", subtype: "compact_boundary" }, hello])).toMatchObject({ input: 2, output: 23, cacheWrite: 37_283 })
     const mark = {}

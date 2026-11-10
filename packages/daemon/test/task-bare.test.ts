@@ -21,7 +21,7 @@ const limitsOf = async (h: NativeHarness, sessionId: SessionId) => {
   const reply = await h.client.send({ type: "session.run.configure", sessionId })
   return reply.ok ? (reply.result as { limits: Record<string, unknown> }).limits : undefined
 }
-const BARE_LIMITS = { noContextFiles: true, noMemory: true, noHooks: true, excludeTools: ["skill"] }
+const BARE_LIMITS = { noContextFiles: true, noMemory: true, noHooks: true, noAgentPrompt: true, excludeTools: ["skill"] }
 
 test("a bare child runs without instruction files, memory or skills; a plain child keeps them", async () => {
   const h = await start([
@@ -87,4 +87,29 @@ test("bare is refused with fork, and on a task that already ran with its context
   const late = await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Plain", prompt: "y", task_id: plain!.taskId, bare: true } })
   expect(late).toMatchObject({ ok: false, error: { message: expect.stringContaining("bare applies to a new task only") } })
   expect(children(h, parent)[0]!.bare).toBeUndefined()
+})
+
+test("a bare child gets no agent profile's prompt, even a user's own general; naming an agent is refused", async () => {
+  const h = await start([callTool("task", { description: "Clean", prompt: "Judge this.", bare: true }), stop("clean"), callTool("task", { description: "Plain", prompt: "Judge too." }), stop("plain"), stop("done")])
+  mkdirSync(path.join(h.dir, "agents"), { recursive: true })
+  writeFileSync(path.join(h.dir, "agents", "general.md"), "---\ndescription: The user's own general helper\nmode: subagent\n---\nUSER HOUSE CONVENTIONS")
+  const parent = await openSession(h)
+  await say(h, parent, "Ask a clean helper.")
+  const [bare] = children(h, parent)
+  expect(bare!.result).toBe("clean")
+  expect((h.requests[1] as ModelRequest).system).not.toContain("USER HOUSE CONVENTIONS")
+  // The same profile does reach a plain child.
+  expect((h.requests[3] as ModelRequest).system).toContain("USER HOUSE CONVENTIONS")
+  const named = await h.client.send({ type: "task.run", sessionId: parent, input: { description: "x", prompt: "x", bare: true, agent: "general" } })
+  expect(named).toMatchObject({ ok: false, error: { message: expect.stringContaining("bare runs no agent profile") } })
+})
+
+test("bare is refused on an engine that takes no run limits (pi), before any child exists", async () => {
+  const h = await boot({ steps: [stop("plain")], extraModels: [{ id: "pi:fake", name: "Pi fake", engine: "pi", efforts: [] }] })
+  cleanups.push(() => h.cleanup())
+  await h.client.send({ type: "settings.set", patch: { tier: "full", features: { task_bare: true } } })
+  const parent = await openSession(h)
+  const refused = await h.client.send({ type: "task.run", sessionId: parent, input: { description: "x", prompt: "x", bare: true, model: "pi:fake" } })
+  expect(refused).toMatchObject({ ok: false, error: { message: expect.stringContaining("would still load its own instructions and skills") } })
+  expect(children(h, parent)).toHaveLength(0)
 })

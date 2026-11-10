@@ -17,6 +17,8 @@ export type RunLimits = {
   untrustedCheckout?: boolean
   /** A bare sub-agent: an external harness runs none of the user's hooks either (Claude Code's `disableAllHooks`), so none adds context. */
   noHooks?: boolean
+  /** A bare sub-agent: its agent profile's prompt (a user or project `general` carries conventions) stays out of the system prompt. */
+  noAgentPrompt?: boolean
   /**
    * The language an external harness answers in, over the user's own setting for it (Claude Code's `language`): a PR review child
    * writes in the repository's `template.language`, never in the language of whoever runs the daemon.

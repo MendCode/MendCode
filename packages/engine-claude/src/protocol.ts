@@ -632,7 +632,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     const turn = { input: Number(raw.input_tokens ?? 0), output: Number(raw.output_tokens ?? 0), cacheRead: Number(raw.cache_read_input_tokens ?? 0), cacheWrite: Number(raw.cache_creation_input_tokens ?? 0) }
     // A compaction's calls are missing from `result.usage`; the gap in the process's running total since the last result holds them.
     const now = processSpend(result)
-    const before = input.processMark?.spend
+    // A process's first result has no mark yet: its running total started at zero, so a compaction in that turn counts too.
+    const before = input.processMark ? input.processMark.spend ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : undefined
     if (input.processMark && now) input.processMark.spend = now
     const extra = (field: keyof ClaudeSpend) => (compacted && now && before ? Math.max(0, now[field] - before[field] - turn[field]) : 0)
     return {
