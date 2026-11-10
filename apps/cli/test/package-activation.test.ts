@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import { normalizeTuiProfile, tuiProfilePath } from "../src/view/tui-profile"
-import { appHarness, scratch } from "./extensions-harness"
+import { appHarness, extension, scratch } from "./extensions-harness"
 
 const made: Array<ReturnType<typeof scratch>> = []
 const layout = () => {
@@ -192,6 +192,33 @@ describe("profile activation is an overlay on the user's profile", () => {
     installPackage(dir, "demo", { tuiProfile: { disabledUiExtensions: ["quota-footer"] } })
     const h = await start(dir, [])
     expect(profile(h).disabledUiExtensions).toEqual([...mine, "quota-footer"])
+  })
+
+  test("a clean profile starts from MendCode's own look: the user's settings and UI modules are off until it is disabled", async () => {
+    const dir = layout()
+    const mine = { disabledUiExtensions: ["old-clock"], footerRows: [["branch", "model", "quota"]], logoKind: "mascot", theme: "amber", homeLayout: "split", vimMode: true }
+    dir.write("data/tui/profile.json", JSON.stringify(mine))
+    dir.write("data/extensions/mine.ts", extension("mine", `api.slot("welcome.below", () => [[{ text: "rows from mine" }]])`))
+    installPackage(dir, "plain", { clean: true, tuiProfile: { logoKind: "wordmark" } })
+    const profileFile = tuiProfilePath(dir.dataDir), snapshot = read(profileFile)
+    const h = await start(dir, ["user:plain"])
+    const before = { ...profile(h) }
+    expect(h.text()).toContain("rows from mine")
+    await toggle(h, [])
+    const { TUI_DEFAULTS } = await import("@mendcode/protocol/wire")
+    expect(profile(h).theme).toBe("mendcode")
+    expect(profile(h).footerRows).toEqual(TUI_DEFAULTS.footerRows)
+    expect(profile(h).homeLayout).toBe(TUI_DEFAULTS.homeLayout)
+    // The user's own list is replaced, not joined; the profile's own keys still win over the defaults.
+    expect(profile(h).disabledUiExtensions).toEqual([])
+    expect(profile(h).logoKind).toBe("wordmark")
+    // How they type stays theirs.
+    expect(profile(h).vimMode).toBe(true)
+    expect(h.text()).not.toContain("rows from mine")
+    expect(read(profileFile)).toBe(snapshot)
+    await toggle(h, ["user:plain"])
+    expect(profile(h)).toEqual(before)
+    expect(h.text()).toContain("rows from mine")
   })
 
   test("a profile that asks for a forbidden key has its activation ignored with a visible problem", async () => {

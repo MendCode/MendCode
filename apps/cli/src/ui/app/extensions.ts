@@ -201,7 +201,10 @@ export function createExtensions(ctx: AppContext, actions: {
     const all = discoverExtensions({ dataDir: input.dataDir, directory: input.directory, disabled: state.settingsNow.disabledProfiles, disabledResources: [...(state.settingsNow.disabledProfileResources ?? []), ...suppressed] })
     const project = all.filter((file) => file.source === "project")
     const trusted = project.length > 0 && (projectTrustedBySettings() || (await projectTrustedByDaemon()))
-    const files = trusted ? all : all.filter((file) => file.source === "user")
+    const shown = trusted ? all : all.filter((file) => file.source === "user")
+    // A clean profile owns the look: only the owners' own modules load, the user's others wait until it is off.
+    const owners = Object.values(state.activation?.result.owners ?? {})
+    const files = state.activation?.result.clean ? shown.filter((file) => file.pkg !== undefined && owners.includes(`${file.source}:${file.pkg}`)) : shown
     state.extSkipped = trusted ? 0 : project.length
     if (files.length > 0) {
       // The only place the extension runtime is imported: a terminal without extension files never loads it.

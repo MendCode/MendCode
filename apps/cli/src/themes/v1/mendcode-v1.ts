@@ -2,12 +2,10 @@ import { defineTheme } from "../define"
 
 /** Ported from MendCode v1 `context/theme/mendcode.json` (dark variant). */
 export default defineTheme({
-  name: "mendcode",
-  label: "Mendcode",
+  name: "mendcode-v1",
+  label: "MendCode v1",
   dark: true,
   background: "#0a0a0a",
-  // MendCode's own black, also on a dark terminal with another one.
-  paintBackground: "always",
   colors: {
     primary: "#fab283",
     text: "#eeeeee",
