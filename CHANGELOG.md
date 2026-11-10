@@ -21,6 +21,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Claude Code's own automatic compaction writes its summary in your language, so a long session no longer drifts into English after it.
 - A PR review no longer picks up the `AGENTS.md` of a folder when it reads a file there.
 - The code graph now covers a project's own git repository inside a folder that ignores it (a workspace holding the app's repo), so graph searches find that code instead of answering that nothing matches.
 - Dream, `/btw` and memory extraction now wait out a busy or rate-limited provider and try again, instead of failing on the first overload.
