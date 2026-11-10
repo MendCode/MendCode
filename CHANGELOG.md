@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.14 - 2026-11-10
+
+Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.
+
+### Upgrade notes
+
+- Same code as v0.0.14-beta.1.
+
+## v0.0.14-beta.1 - 2026-11-10
+
+Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.
+
 ### New
 
 - Sub-agents can start bare: with none of your or the project's instructions, memories or skills, only the question, for a second opinion your conventions do not steer. Turn it on with `/tier task_bare on` and ask for a clean agent.
@@ -16,22 +28,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
-- The browser extension is on in the full tier: ask the model to use your browser and it offers to install it. Elsewhere `/tier browser_extension on` turns it on.
 - Computer Use sends Chrome, Brave, Edge, Arc and Chromium to the MendCode browser extension, and tells you how to install it.
+- The browser extension is on in the full tier: ask the model to use your browser and it offers to install it. Elsewhere `/tier browser_extension on` turns it on.
 - Claude Code sessions compact at 200K tokens even when `compactAtTokens` is set higher for long-window models; a per-model `compactAt` still raises it.
 - The whole memory graph groups each category with a dotted line in its color, so memories without links no longer sit apart in a list.
 
 ### Fixed
 
-- Every tool call keeps its own row in the transcript: reads, searches and commands no longer fold into `Read 5 files` or `N tools more`.
 - Computer Use no longer leaves an app slowed after it ends: a session that goes quiet ends on its own and turns the app's accessibility mode off again.
 - The Computer Use cursor stays where it last went, dimmed, instead of vanishing between steps.
+- Every tool call keeps its own row in the transcript: reads, searches and commands no longer fold into `Read 5 files` or `N tools more`.
 - Waiting for something on screen in Computer Use checks less often the longer it waits, so the app stays responsive.
-- Claude Code's own automatic compaction writes its summary in your language, so a long session no longer drifts into English after it.
 - A PR review no longer picks up the `AGENTS.md` of a folder when it reads a file there.
 - The code graph now covers a project's own git repository inside a folder that ignores it (a workspace holding the app's repo), so graph searches find that code instead of answering that nothing matches.
 - Dream, `/btw` and memory extraction now wait out a busy or rate-limited provider and try again, instead of failing on the first overload.
 - Usage counts now include the tokens Claude Code spends on compacting a conversation.
+- Claude Code's own automatic compaction writes its summary in your language, so a long session no longer drifts into English after it.
 
 ## v0.0.13 - 2026-11-09
 
