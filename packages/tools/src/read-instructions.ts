@@ -23,6 +23,7 @@ export async function readInstructions(file: string, context: ToolContext, maxBy
   const root = await realpath(context.cwd).catch(() => path.resolve(context.cwd))
   const target = await realpath(file).catch(() => file)
   const options = context.instructions ?? {}
+  if (options.off) return { loaded: [], text: "" }
   const projectRoot = await realpath(instructionChain(root, options)[0] ?? root).catch(() => root)
   const directories: string[] = []
   for (let directory = path.dirname(target); inside(root, directory); directory = path.dirname(directory)) directories.unshift(directory)
