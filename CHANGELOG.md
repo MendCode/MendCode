@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Dream, `/btw` and memory extraction now wait out a busy or rate-limited provider and try again, instead of failing on the first overload.
 - Usage counts now include the tokens Claude Code spends on compacting a conversation.
 
 ## v0.0.13 - 2026-11-09
