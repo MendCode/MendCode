@@ -298,7 +298,8 @@ A fresh child does not see the parent's conversation, but it still works in the 
 | `bare: true` | none | none | none | none |
 
 - "Instruction files" includes the nearby `AGENTS.md` a read below the project brings in; a bare child reads the file without it.
-- It works on every engine: on Claude Code the child loads no `CLAUDE.md` of any level, no auto memory and only your own settings (the PR reviewer's limits). Your Claude Code hooks still run there.
+- No agent profile either: a `general.md` of yours or the project's adds nothing to a bare child's prompt, and naming an `agent` with `bare` is refused.
+- It runs on MendCode's own engine, Claude Code and Codex; a model on pi, OpenCode, Cursor or an ACP agent is refused, since those would still load their own instructions and skills. On Claude Code the child loads no `CLAUDE.md` of any level, no auto memory and only your own settings (the PR reviewer's limits), and runs none of your hooks (`disableAllHooks`), so a hook that adds context cannot steer it. A PR review keeps your hooks.
 - From Claude Code or Codex, `mcp__mendcode_threads__delegate_task` takes `bare: true` too (full tier, `thread_mcp`).
 - `bare` is for a new task; resuming one keeps its choice (and a bare task gets its limits again after a daemon restart). `fork` and `bare` together are refused.
 - The model is told to use it only when you ask for a clean or unbiased agent: say so ("ask a clean agent whether this layout reads well") and attach the files or images it should judge; its prompt is then your question and those, not a summary of this chat.

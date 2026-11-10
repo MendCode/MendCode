@@ -1329,6 +1329,11 @@ describe("claude compaction spend", () => {
     expect(compacted).toMatchObject({ input: 1_998, output: 835, cacheRead: 24_863, cacheWrite: 12_442 })
   })
 
+  test("a compaction in a process's first turn (a resumed conversation, a restarted process) counts from zero", () => {
+    const first = turnUsage({}, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual" } }, compactResult])
+    expect(first).toMatchObject({ input: 2_000, output: 858, cacheRead: 24_863, cacheWrite: 49_725 })
+  })
+
   test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
     expect(turnUsage({}, [{ type: "system", subtype: "compact_boundary" }, hello])).toMatchObject({ input: 2, output: 23, cacheWrite: 37_283 })
     const mark = {}
@@ -1381,6 +1386,13 @@ describe("claude protocol helpers", () => {
     expect(claudeRunLimits({ noContextFiles: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } })
     expect(claudeRunLimits({ noMemory: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
     expect(claudeRunLimits({ noContextFiles: true, noMemory: true })).toEqual({ args: ["--setting-sources", "user"], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+  })
+
+  test("a bare sub-agent runs none of the user's hooks, besides no CLAUDE.md, no auto memory and only the user's settings", () => {
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true, noHooks: true })).toEqual({ args: ["--setting-sources", "user", "--settings", JSON.stringify({ disableAllHooks: true })], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    // A PR review child keeps the user's hooks, as before.
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true }).args.join(" ")).not.toContain("disableAllHooks")
+    expect(mergeSettingsArgs(["--settings", JSON.stringify({ fastMode: true }), ...claudeRunLimits({ noHooks: true }).args])).toEqual(["--settings", JSON.stringify({ fastMode: true, disableAllHooks: true })])
   })
 
   test("a fix session in a PR's checkout loads only the user's settings, so the PR's own hooks never run; its CLAUDE.md and memory stay", () => {
