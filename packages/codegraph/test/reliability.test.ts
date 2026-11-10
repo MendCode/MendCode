@@ -299,6 +299,21 @@ describe("cache and discovery resilience", () => {
     expect((await h.call("graph_map", {})).meta?.files).toBe(1)
   })
 
+  test("a repository of its own that the outer one ignores is indexed under its own ignore files", async () => {
+    const h = setup({
+      ".gitignore": "/app/\n/out/\n",
+      "notes.ts": "export function outer() {}\n",
+      "app/.git/HEAD": "ref: refs/heads/main\n",
+      "app/.gitignore": "generated/\n",
+      "app/src/turn.ts": "export function startTurn() {}\n",
+      "app/generated/schema.ts": "export function no() {}\n",
+      "out/bundle.ts": "export function no() {}\n",
+    })
+    await h.call("graph_map", {})
+    expect(h.scans.sort()).toEqual(["app/src/turn.ts", "notes.ts"])
+    expect((await h.call("graph_find", { query: "startTurn" })).meta?.results).toBe(1)
+  })
+
   test("oversized files mark coverage partial but do not stop discovery of later directories", async () => {
     const h = setup({ "a.ts": " ".repeat(513 * 1024), "z/b.ts": "export function keep() {}\n" })
     const result = await h.call("graph_map", {})
