@@ -67,12 +67,18 @@ export async function walkProject({ cwd, signal, maxFiles }: { cwd: string; sign
     }
     const hasCargo = entries.some((entry) => entry.name === "Cargo.toml")
     const subdirs: string[] = []
+    const nested: string[] = []
     for (const entry of entries) {
       if (signal.aborted) throw new DOMException("aborted", "AbortError")
       const rel = relDir === "" ? entry.name : `${relDir}/${entry.name}`
       if (entry.isDirectory()) {
         if (SKIPPED_DIRS.has(entry.name) || entry.name.startsWith(".") || (entry.name === "target" && hasCargo)) continue
-        if (ignored({ rules, rel, name: entry.name, isDir: true })) continue
+        if (ignored({ rules, rel, name: entry.name, isDir: true })) {
+          // A repository of its own that the outer one ignores (a workspace holding the app's repo) is still the user's code:
+          // it is walked under its own ignore files, as git reads it, not skipped as if it were build output.
+          if (await stat(join(cwd, rel, ".git")).then(() => true, () => false)) nested.push(rel)
+          continue
+        }
         subdirs.push(rel)
         continue
       }
@@ -85,6 +91,7 @@ export async function walkProject({ cwd, signal, maxFiles }: { cwd: string; sign
       if (files.size >= maxFiles) return { files, partial: true, packages }
       files.set(rel, { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, size: info.size, language })
     }
+    for (let i = nested.length - 1; i >= 0; i--) pending.push({ dir: nested[i]!, rules: [] })
     for (let i = subdirs.length - 1; i >= 0; i--) pending.push({ dir: subdirs[i]!, rules })
   }
   return { files, partial, packages }
