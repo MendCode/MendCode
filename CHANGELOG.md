@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The code graph now covers a project's own git repository inside a folder that ignores it (a workspace holding the app's repo), so graph searches find that code instead of answering that nothing matches.
 - Dream, `/btw` and memory extraction now wait out a busy or rate-limited provider and try again, instead of failing on the first overload.
 - Usage counts now include the tokens Claude Code spends on compacting a conversation.
 
