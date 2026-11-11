@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { createIndexer } from "../src/indexer"
-import { HOSTED_SCAN_FILES, scanHostCommand } from "../src/scan-host"
+import { HOSTED_SCAN_FILES, hostedScan, scanHostCommand } from "../src/scan-host"
 import { project, put, useTempDirs } from "./helpers"
 
 const temp = useTempDirs()
@@ -46,6 +46,25 @@ describe("hosted scan", () => {
       const failed = await graphOf(cwd, command)
       expect(shape(failed.graph)).toEqual(shape(local.graph))
       expect(failed.scans).toEqual(local.scans)
+    }
+  })
+
+  test("a host that exits before reading a large request breaks the pipe without an unhandled EPIPE; its read fails instead", async () => {
+    const unhandled: unknown[] = []
+    const record = (error: unknown) => void unhandled.push(error)
+    process.on("unhandledRejection", record)
+    try {
+      // Larger than a pipe buffer, so the write is still pending when the host is gone.
+      const files = Array.from({ length: 20_000 }, (_, index) => ({ path: `src/f${index}.ts`, walked: { mtimeMs: 1, ctimeMs: 1, size: 10, language: "typescript" } as never }))
+      for (let round = 0; round < 5; round++) {
+        const host = hostedScan({ command: ["false"], signal: new AbortController().signal, request: { cwd: temp(), files } })
+        await expect(host.next("src/f0.ts")).rejects.toThrow()
+        host.close()
+      }
+      await Bun.sleep(100)
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off("unhandledRejection", record)
     }
   })
 

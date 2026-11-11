@@ -15,7 +15,15 @@ Remote control shares the session you paired it from with your Telegram chat, th
 
 ### Upgrade notes
 
-- Same code as v0.0.15-beta.3.
+- Same code as v0.0.15-beta.4.
+
+## v0.0.15-beta.4 - 2026-11-11
+
+Building the code graph handles a helper process that cannot start without an error escaping.
+
+### Fixed
+
+- When the code graph's scan process cannot start, the graph is built in MendCode's own process without a broken-pipe error escaping.
 
 ## v0.0.15-beta.3 - 2026-11-11
 
