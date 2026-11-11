@@ -39,6 +39,8 @@ export type IdleCompactionPorts = {
 
 type Entry = {
   provider: string
+  /** GPT-5.6 and later keep the cache longer (`thirtyMinuteCacheModel`). */
+  model?: string | undefined
   /** The lifetime that call asked for and got (`promptCacheTtl`, `wait_cache`): an hour instead of the provider's default. */
   ttl?: CacheTtl | undefined
   tokens: number
@@ -83,7 +85,7 @@ export function createIdleCompaction(ports: IdleCompactionPorts) {
     if (!learner.derived) { learner.observed = observedCacheLifetime(learner.samples); learner.derived = true }
     return learner.observed
   }
-  const lifetimeOf = (entry: Pick<Entry, "provider" | "ttl">): CacheLifetime | undefined => cacheLifetime({ provider: entry.provider, ...ports.provider(entry.provider), overrides: ports.settings().cacheLifetimeMinutes, ttl: entry.ttl, observed: observedOf(entry) })
+  const lifetimeOf = (entry: Pick<Entry, "provider" | "model" | "ttl">): CacheLifetime | undefined => cacheLifetime({ provider: entry.provider, ...ports.provider(entry.provider), model: entry.model, overrides: ports.settings().cacheLifetimeMinutes, ttl: entry.ttl, observed: observedOf(entry) })
   /** The call that starts at `callAt` is a sample of the cache left by the session's previous call. */
   function learn(previous: Entry | undefined, event: { provider: string; input: number; cacheRead: number; cacheWrite: number; cacheTtl?: CacheTtl | undefined }, callAt: number) {
     if (!previous || previous.provider !== event.provider || previous.ttl !== event.cacheTtl) return
@@ -176,7 +178,7 @@ export function createIdleCompaction(ports: IdleCompactionPorts) {
         const previous = entries.get(sessionId)
         disarm(previous)
         const callAt = event.at - (event.profile?.durationMs ?? 0)
-        const entry: Entry = { provider: event.provider, ...(event.cacheTtl ? { ttl: event.cacheTtl } : {}), tokens: usageContext(event) ?? 0, prompt: event.input + event.cacheRead + event.cacheWrite, callAt, state: "armed" }
+        const entry: Entry = { provider: event.provider, model: event.model, ...(event.cacheTtl ? { ttl: event.cacheTtl } : {}), tokens: usageContext(event) ?? 0, prompt: event.input + event.cacheRead + event.cacheWrite, callAt, state: "armed" }
         learn(previous, event, callAt)
         remember(sessionId, entry)
         return arm(sessionId, entry)

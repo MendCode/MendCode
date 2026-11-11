@@ -52,6 +52,25 @@ test("a bare child runs without instruction files, memory or skills; a plain chi
   expect(await limitsOf(h, plain!.taskId)).toEqual({})
 })
 
+test("a file mentioned in a bare child's prompt comes without its nearby AGENTS.md; a plain child's mention brings it", async () => {
+  const h = await start([
+    callTool("task", { description: "Clean opinion", prompt: "Is @ui/label.css readable?", bare: true }),
+    stop("barely"),
+    callTool("task", { description: "Plain", prompt: "Is @ui/label.css readable?" }),
+    stop("plain answer"),
+    stop("done"),
+  ])
+  mkdirSync(path.join(h.project, "ui"), { recursive: true })
+  writeFileSync(path.join(h.project, "ui/AGENTS.md"), "NEARBY HOUSE STYLE")
+  writeFileSync(path.join(h.project, "ui/label.css"), ".label { font-size: 12px }")
+  const parent = await openSession(h)
+  await say(h, parent, "Ask a clean helper, then a plain one.")
+  const bare = JSON.stringify((h.requests[1] as ModelRequest).messages)
+  expect(bare).toContain("font-size: 12px")
+  expect(bare).not.toContain("NEARBY HOUSE STYLE")
+  expect(JSON.stringify((h.requests[3] as ModelRequest).messages)).toContain("NEARBY HOUSE STYLE")
+})
+
 test("a resumed bare child gets its limits again after they were lost (a daemon restart keeps none)", async () => {
   const h = await start([stop("first"), stop("second")])
   const parent = await openSession(h)

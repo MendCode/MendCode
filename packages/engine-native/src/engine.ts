@@ -200,7 +200,7 @@ type ProjectTool = Tool & { jsonSchema?: Record<string, unknown>; override?: boo
  * `task` may name; `extras` are the turn's project tools before any agent filtered them (a sub-agent starts from those).
  */
 /** Narrowing limits a scripted run sets on a session; see `session.run.configure`. */
-export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean; noAgentPrompt?: boolean }
+export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean; noAgentPrompt?: boolean; /** A bare sub-agent: no extension handler rewrites its system prompt or messages (`prompt.system`, `context`). */ noHooks?: boolean }
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
 
@@ -1082,6 +1082,8 @@ export function createNativeEngine(options: {
         const cwd = options.cwdFor(input.sessionId)
         // The role hooks see: a shared request must come out of them as the main call's did.
         const hookRole: ModelRole = share || fork ? "main" : role
+        // A bare sub-agent's prompt and messages are only its own: no extension rewrites them.
+        const bareHooks = options.runLimits?.(input.sessionId)?.noHooks === true
         // A compaction call names no tools of its own: it carries the line of the session's last main call, so its prompt stays the main one.
         const catalog = input.catalog ?? lastCatalog.get(input.sessionId)
         // The prompt is the turn's own: a prompt or notice that joins the turn must not change the system prompt (memory is chosen by it), which every cached token after it depends on.
@@ -1095,7 +1097,7 @@ export function createNativeEngine(options: {
           if (known.length) system = `${system}\n\n${secretsNote(known)}`
           if (input.turnOptions?.format && role !== "subagent" && textKind === "agent_message") system = `${system}\n\n${STRUCTURED_NOTE}`
           if (compound?.critic) { system = "Review only the immutable candidate supplied by the host. Return strict JSON. No tools."; callTools = [] }
-          if (!compound && hooks?.has("prompt.system", cwd)) system = (await hooks.system?.({ sessionId: input.sessionId, cwd, role, system })) ?? system
+          if (!compound && !bareHooks && hooks?.has("prompt.system", cwd)) system = (await hooks.system?.({ sessionId: input.sessionId, cwd, role, system })) ?? system
         }
         const projection = await checkpointContext(options.provider, { system, messages: resumed, tools: callTools, model: choice?.model, parameters: choice?.parameters, effort: choice?.effort })
         // A fork's inherited messages were pruned as the parent sent them (`forkStart`); a prune counted from the child's end would change them.
@@ -1110,7 +1112,7 @@ export function createNativeEngine(options: {
         if (trackContext) prunedTokens.set(input.sessionId, pruned.tokens)
         let outgoing = pruned.messages
         // Hooks see a copy of the messages (history stays the engine's) and only cost an await when a handler exists.
-        if (!compound && hooks?.has("context", cwd)) outgoing = (await hooks.context?.({ sessionId: input.sessionId, cwd, role: hookRole, messages: structuredClone(outgoing) })) ?? outgoing
+        if (!compound && !bareHooks && hooks?.has("context", cwd)) outgoing = (await hooks.context?.({ sessionId: input.sessionId, cwd, role: hookRole, messages: structuredClone(outgoing) })) ?? outgoing
         if (share) outgoing = [...outgoing, { role: "user", content: share.prompt }, ...continued]
         const request = await withImages(outgoing)
         const provider = options.provider.idFor?.(choice?.model) ?? options.provider.id
@@ -1571,7 +1573,8 @@ export function createNativeEngine(options: {
       // A tool's render spec reaches clients only when it validates within RENDER_LIMITS; otherwise the text shows.
       const render = result.render !== undefined ? parseRenderSpec(normalizeRenderSpec(result.render)) : undefined
       // A generated picture is the card's own, as the hosted image tool's is: the terminal shows it in the card, also for a Claude Code session.
-      const pictures = call.name === "image_gen" && !result.isError ? await storeToolImages(input.sessionId, [...(result.images ?? []), ...(result.attachments ?? [])]) : []
+      // A read of a picture shows it in its card too (the blob is the one the model's history keeps: same bytes, one file).
+      const pictures = result.isError ? [] : call.name === "image_gen" ? await storeToolImages(input.sessionId, [...(result.images ?? []), ...(result.attachments ?? [])]) : call.name === "read" ? await storeToolImages(input.sessionId, (result.attachments ?? []).filter((file) => file.mime.startsWith("image/"))) : []
       // An item's meta holds at most 16 facts: the tool's own come first.
       if (retitle && Object.keys(result.meta ?? {}).length > 13) retitle = undefined
       input.emit({
@@ -1886,7 +1889,7 @@ export function createNativeEngine(options: {
 
   async function appendUser(input: TurnInput, messages: ModelMessage[], newTurn = true) {
     const claims = new Set(messages.flatMap((message) => message.role !== "assistant" ? message.loadedInstructions ?? [] : []))
-    const mentioned = options.compound?.(input.sessionId)?.critic ? { text: input.text, attachments: [], loadedInstructions: [] } : await resolveMentions(input.text, options.cwdFor(input.sessionId), input.signal, claims, options.instructions)
+    const mentioned = options.compound?.(input.sessionId)?.critic ? { text: input.text, attachments: [], loadedInstructions: [] } : await resolveMentions(input.text, options.cwdFor(input.sessionId), input.signal, claims, instructionContext(input.sessionId).instructions)
     const mentionRefs: BlobRef[] = []
     for (const attachment of mentioned.attachments) {
       const ref = await options.storeBlob?.(attachment.bytes, attachment.mime, input.sessionId).catch(() => undefined)

@@ -8,8 +8,10 @@ receive project files. Off by default: no network call, no listener and no polli
 1. Create a bot with `@BotFather` and copy its token.
 2. Give the daemon the token, never through a slash command or a flag: export `MENDCODE_TELEGRAM_TOKEN`, or save it to
    `<data dir>/telegram-token` with mode 600 (a group/world-readable file is refused).
-3. In the terminal: `/remote-control on`, then `/remote-control pair`. It prints an 8-character code valid for 10 minutes.
-4. In a private chat with your bot send `/pair CODE`. That chat now runs turns in the project where the code was made.
+3. In the terminal: `/remote-control on`, then `/remote-control pair`. It shows an 8-character code valid for 10 minutes
+   and copies `/pair CODE` to the clipboard; the notice stays until the code expires or you send a prompt.
+4. In a private chat with your bot paste `/pair CODE`. The chat joins the session the code was made in: its last turns
+   arrive, and from then on the terminal and the phone share it. A paired chat that pastes a new code moves to that one.
 
 ### Manage the bridge
 
@@ -24,7 +26,13 @@ State lives in `<data dir>/channels.json` (mode 0600): `enabled` and the paired 
 
 ## From the phone
 
-Any text runs a turn in the chat's session, an ordinary session titled "Telegram" that you can open in the TUI. The final answer comes back as a message, split under Telegram's size limit and masked for session secrets.
+Any text runs a turn in the chat's session: the terminal's session when the code was made there, otherwise an ordinary
+session titled "Telegram" that you can open in the TUI. The final answer comes back as a message, split under Telegram's
+size limit and masked for session secrets.
+
+Turns started on the computer show in the chat too: your prompt (as "From the computer:") and then the answer. While a
+turn runs, one message shows its progress (tools used, the one running, time) and is edited at most every 3 seconds; it
+ends as `Done`, `Stopped` or `Failed` just above the answer.
 
 ### Approvals and questions
 
@@ -36,7 +44,9 @@ Any text runs a turn in the chat's session, an ordinary session titled "Telegram
 
 | Command | Does |
 |---|---|
-| `/stop` | Cancels the turn. |
+| `/sessions` | Lists the project's recent sessions as buttons; one tap moves the chat there and shows its last turns. |
+| `/history [n]` | Shows the last `n` turns of the session (5 by default, up to 20). |
+| `/stop` | Cancels the running turn, also one started on the computer. |
 | `/new` | Starts a fresh session. |
 | `/file PATH` | Sends a file as a document. |
 
