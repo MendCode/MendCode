@@ -30,7 +30,8 @@ Any text runs a turn in the chat's session: the terminal's session when the code
 session titled "Telegram" that you can open in the TUI. The final answer comes back as a message, split under Telegram's
 size limit and masked for session secrets.
 
-Turns started on the computer show in the chat too: your prompt (as "From the computer:") and then the answer. While a
+Turns started on the computer show in the chat too: your prompt (as "From the computer:") and then the answer; joining a
+session while one runs shows it from its start. A message from the phone waits until that turn ends (or `/stop` it). While a
 turn runs, one message shows its progress (tools used, the one running, time) and is edited at most every 3 seconds; it
 ends as `Done`, `Stopped` or `Failed` just above the answer.
 

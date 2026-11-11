@@ -6,6 +6,7 @@ import path from "node:path"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
+import { watchCursor } from "../src/channels"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
 import { splitMessage, type TelegramUpdate } from "../src/channels-telegram"
 
@@ -486,6 +487,26 @@ describe("following the terminal's session", () => {
     expect(h.messages.some((message) => message.text.startsWith("Approve bash?"))).toBe(true)
     await h.bridge.update(h.text(7, "/stop"))
     expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: "ses_other", turnId: "t5" })
+  })
+
+  test("a phone message while a terminal turn runs is refused, not left as a turn that never starts; after the answer it runs", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    await h.bridge.update(h.text(7, "and the docs"))
+    expect(lastMessage(h)).toBe("A turn from the computer is running. Wait for its answer, or /stop it.")
+    expect(h.sent.some((command) => command.type === "user.submit")).toBe(false)
+    terminalEvent(h, { type: "turn.completed", turnId: "t7" })
+    await Bun.sleep(0)
+    await h.bridge.update(h.text(7, "and the docs"))
+    expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: TERMINAL, text: "and the docs" })
+  })
+
+  test("the watch cursor: after the log's end, or from a running turn's start when that is earlier", () => {
+    expect(watchCursor(120, undefined)).toBe(120)
+    expect(watchCursor(120, 100)).toBe(99)
+    // A turn that started after the end was read is past the cursor already, so it replays from there.
+    expect(watchCursor(120, 125)).toBe(120)
   })
 
   test("a chat unpaired while its watch starts gets nothing that was held, and the watch is released", async () => {
