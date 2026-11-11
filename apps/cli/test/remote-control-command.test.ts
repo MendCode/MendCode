@@ -51,7 +51,8 @@ describe("/remote-control", () => {
   test("pair asks for a code in this project and shows the instruction; /pair here says where the command went", async () => {
     const { h, directory } = app()
     await h.type("/remote-control pair\r")
-    expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "pair", directory } })
+    // The code names the open session, so the chat follows it.
+    expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "pair", directory, sessionId: h.sessionId } })
     const shown = h.text().join("\n")
     // The notice fits its row whole: the code is readable, not cut to "…".
     expect(shown).toContain("copied /pair ABCD2345 · paste to @mend_bot · 10 min")

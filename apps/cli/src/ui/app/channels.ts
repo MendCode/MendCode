@@ -43,7 +43,8 @@ export function createChannels(ctx: AppContext) {
       return true
     }
     if (head === "pair") {
-      const result = await change({ action: "pair", directory: input.directory ?? "." })
+      // The chat follows this session: what is typed here shows there, and the phone continues it.
+      const result = await change({ action: "pair", directory: input.directory ?? ".", ...(ctx.state.sessionId ? { sessionId: ctx.state.sessionId } : {}) })
       if (result?.pairing) {
         const bot = result.telegram.botName ? `@${result.telegram.botName}` : "your bot"
         const left = Math.max(60_000, result.pairing.expiresAt - Date.now())

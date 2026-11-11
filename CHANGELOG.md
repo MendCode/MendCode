@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- Remote control joins the Telegram chat to the session you paired it from: its last turns arrive, turns typed in the terminal show in the chat, and a single message shows live progress. `/sessions` switches session from the phone and `/history` shows more turns.
+
 ### Fixed
 
 - A picture the model reads shows in its tool card in terminals that draw images, also in Claude Code sessions, instead of `[image]`.

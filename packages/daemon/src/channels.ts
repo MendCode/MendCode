@@ -74,7 +74,8 @@ export function createChannels(options: ChannelsOptions) {
         let current: ReturnType<typeof createChannelBridge> | undefined
         host = await (options.connect ?? defaultConnect)((event) => current?.onEvent(event))
         const { createChannelBridge } = await import("./channels-bridge")
-        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, now, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        await current.resume()
         // Messages sent while the daemon was off are dropped, not replayed as turns.
         const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal })
         let offset = backlog.length ? backlog[backlog.length - 1]!.update_id + 1 : undefined
@@ -157,7 +158,7 @@ export function createChannels(options: ChannelsOptions) {
       let exists = false
       try { exists = statSync(directory).isDirectory() } catch {}
       if (!exists) throw new Error("[CHANNELS]: the project directory does not exist")
-      return { report: status(), pairing: pairing.create(directory) }
+      return { report: status(), pairing: pairing.create(directory, request.sessionId) }
     } else if (request.action === "unpair") {
       const known = config.read().telegram.chats
       const removed = request.chatId ? known.filter((chat) => chat.id === request.chatId) : known
