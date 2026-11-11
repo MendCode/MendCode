@@ -53,14 +53,31 @@ export function nextWaitCache(state: WaitCacheState | undefined, now: number): W
  * observed from the cached tokens of each response (`observedCacheLifetime`) replaces it once it is longer.
  */
 export const OPENAI_CACHE_LIFETIME_MS = 5 * 60_000
+/**
+ * OpenAI API, GPT-5.6 and later: the default `prompt_cache_options.ttl` is `"30m"`, a minimum lifetime (OpenAI's prompt-caching guide,
+ * checked 2026-11-11). The adapter sends no `prompt_cache_options`, so the default applies.
+ */
+export const OPENAI_CACHE_LIFETIME_30M_MS = 30 * 60_000
 /** ChatGPT subscription backend: an ASSUMPTION, nobody states it; one sample found the cache alive at 4 min 30 s (docs/prompt-cache.md). */
 export const CHATGPT_CACHE_LIFETIME_MS = 5 * 60_000
+/** ChatGPT with GPT-5.6 or later: an ASSUMPTION, the API's documented minimum for the same models; the stored calls of 2026-10-28 to 11-11 hit in 90 % of the gaps of 20 to 30 minutes. */
+export const CHATGPT_CACHE_LIFETIME_30M_MS = 30 * 60_000
+
+/** GPT-5.6 and later (`gpt-6.1-sol`, `openai/gpt-5.6`): the models whose default cache lasts at least 30 minutes. */
+export function thirtyMinuteCacheModel(model: string | undefined): boolean {
+  const match = /(?:^|\/)gpt-(\d+)(?:\.(\d+))?/i.exec(model ?? "")
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2] ?? 0)
+  return major > 5 || (major === 5 && minor >= 6)
+}
 
 /**
  * Observed lifetime. Every call that follows an earlier call of the same provider leaves a sample: the gap since that call
  * and whether the response read the conversation's prefix from the cache (`CACHE_HIT_SHARE` of the previous prompt). The gaps are bucketed; a bucket with
- * enough samples is alive when at least `CACHE_HIT_RATE` of them hit. The lifetime is the longest hit gap below the first
- * dead bucket, so it is never beyond what was seen to work.
+ * enough samples is alive when at least `CACHE_HIT_RATE` of them hit. The lifetime is the longest hit gap of the alive buckets up to
+ * the last alive one, so it is never beyond what was seen to work. A dead bucket followed by an alive one is not the end of the cache:
+ * OpenAI keeps it per machine and a request can land on another one (its prompt-caching guide), which shows as misses at any gap.
  */
 export const CACHE_GAP_EDGES_MINUTES: readonly number[] = [1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 720, 1_440]
 /** A response read the conversation's cache when its cached tokens are at least this share of the previous call's prompt: the instructions and tool list alone are cached across sessions and say nothing about it. */
@@ -92,13 +109,13 @@ export function observedCacheLifetime(samples: readonly CacheSample[]): Observed
       bucket.longestHitMs = Math.max(bucket.longestHitMs, sample.gapMs)
     }
   }
-  let ms = 0
-  for (const bucket of buckets) {
-    if (bucket.total < CACHE_BUCKET_MIN_SAMPLES) continue
-    if (bucket.hits / bucket.total < CACHE_HIT_RATE) return ms > 0 ? { ms, closed: true } : undefined
-    ms = Math.max(ms, bucket.longestHitMs)
-  }
-  return ms > 0 ? { ms, closed: false } : undefined
+  const counted = buckets.filter((bucket) => bucket.total >= CACHE_BUCKET_MIN_SAMPLES)
+  const alive = (bucket: (typeof buckets)[number]) => bucket.hits / bucket.total >= CACHE_HIT_RATE
+  let last = -1
+  counted.forEach((bucket, index) => { if (alive(bucket)) last = index })
+  const ms = Math.max(0, ...counted.slice(0, last + 1).filter(alive).map((bucket) => bucket.longestHitMs))
+  if (ms <= 0) return undefined
+  return { ms, closed: counted.slice(last + 1).length > 0 }
 }
 
 export const CACHE_LIFETIME_MINUTES_RANGE = { min: 1, max: 1_440 } as const
@@ -110,7 +127,7 @@ export type CacheLifetime = { ms: number; source: CacheLifetimeSource }
  * How long `provider` keeps a prompt prefix after the last call that read or wrote it. The user's `cacheLifetimeMinutes`
  * entry wins. Undefined when nobody states it: the idle compaction then stays off for that provider, never at a guessed time.
  */
-export function cacheLifetime(input: { provider: string; type?: string | undefined; baseUrl?: string | undefined; overrides?: Readonly<Record<string, number>> | undefined; /** The lifetime the session's last call asked for (`cacheTtl` of its `usage.recorded`). */ ttl?: CacheTtl | undefined; /** What the provider's own responses showed (`observedCacheLifetime`). */ observed?: ObservedCacheLifetime | undefined }): CacheLifetime | undefined {
+export function cacheLifetime(input: { provider: string; type?: string | undefined; baseUrl?: string | undefined; /** The model of the session's last call. */ model?: string | undefined; overrides?: Readonly<Record<string, number>> | undefined; /** The lifetime the session's last call asked for (`cacheTtl` of its `usage.recorded`). */ ttl?: CacheTtl | undefined; /** What the provider's own responses showed (`observedCacheLifetime`). */ observed?: ObservedCacheLifetime | undefined }): CacheLifetime | undefined {
   const minutes = input.overrides?.[input.provider]
   if (typeof minutes === "number" && minutes >= CACHE_LIFETIME_MINUTES_RANGE.min && minutes <= CACHE_LIFETIME_MINUTES_RANGE.max) return { ms: minutes * 60_000, source: "setting" }
   const fallback = fallbackCacheLifetime(input)
@@ -123,13 +140,14 @@ export function cacheLifetime(input: { provider: string; type?: string | undefin
   return observed.ms > fallback.ms ? seen : fallback
 }
 
-function fallbackCacheLifetime(input: { provider: string; type?: string | undefined; baseUrl?: string | undefined; ttl?: CacheTtl | undefined }): CacheLifetime | undefined {
-  if (input.provider === "chatgpt") return { ms: CHATGPT_CACHE_LIFETIME_MS, source: "assumed" }
+function fallbackCacheLifetime(input: { provider: string; type?: string | undefined; baseUrl?: string | undefined; model?: string | undefined; ttl?: CacheTtl | undefined }): CacheLifetime | undefined {
+  const thirty = thirtyMinuteCacheModel(input.model)
+  if (input.provider === "chatgpt") return { ms: thirty ? CHATGPT_CACHE_LIFETIME_30M_MS : CHATGPT_CACHE_LIFETIME_MS, source: "assumed" }
   // A call that was answered with `ttl: "1h"` in its request: an hour wherever that field is taken, Vertex included.
   // Claude Code (`claude`) reports `1h` when its calls wrote the one-hour cache (`ephemeral_1h_input_tokens`), as it does on a subscription.
   if (input.ttl === "1h" && (input.provider === "claude" || (input.type !== undefined && CACHE_TTL_PROVIDER_TYPES.includes(input.type)))) return { ms: ANTHROPIC_CACHE_LIFETIME_1H_MS, source: "documented" }
   if (input.type === "anthropic") return { ms: ANTHROPIC_CACHE_LIFETIME_MS, source: "documented" }
-  if (input.type === "openai" && /^https:\/\/api\.openai\.com(\/|$)/i.test(input.baseUrl ?? "")) return { ms: OPENAI_CACHE_LIFETIME_MS, source: "documented" }
+  if (input.type === "openai" && /^https:\/\/api\.openai\.com(\/|$)/i.test(input.baseUrl ?? "")) return { ms: thirty ? OPENAI_CACHE_LIFETIME_30M_MS : OPENAI_CACHE_LIFETIME_MS, source: "documented" }
   return undefined
 }
 

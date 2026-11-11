@@ -17,6 +17,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - A picture the model reads shows in its tool card in terminals that draw images, also in Claude Code sessions, instead of `[image]`.
 - `/remote-control pair` copies `/pair CODE` to the clipboard and keeps the code readable on screen until it expires.
+- Idle compaction on ChatGPT and the OpenAI API no longer runs a couple of minutes after every turn: occasional cache misses no longer count as an expiry, and GPT-5.6 and later use OpenAI's 30-minute cache.
 
 ## v0.0.14 - 2026-11-10
 
