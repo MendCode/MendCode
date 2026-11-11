@@ -319,6 +319,18 @@ describe("native engine loop", () => {
       expect(JSON.stringify(saved)).not.toContain(Buffer.from(png).toString("base64"))
     })
 
+    test("a read of a picture carries it on its card, so the transcript draws it; a PDF it read does not", async () => {
+      const { stored, storeBlob } = blobStore()
+      const readTool = defineTool({ name: "read", description: "read a file", permission: "read", args: z.object({}), execute: async () => ({ output: "Image read successfully", truncated: false, title: "read shot.png", isError: false, attachments: [{ mime: "image/png", bytes: png, name: "shot.png" }, { mime: "application/pdf", bytes: png, name: "a.pdf" }] }) })
+      const { provider } = scriptedProvider([callTool("read", {}), stop("I see it")])
+      const engine = createNativeEngine({ provider, tools: [readTool], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", storeBlob, readBlob: async () => png })
+      const { input, events } = turn({ text: "look" })
+      await engine.runTurn(input)
+      const card = events.find((event): event is Extract<EngineEvent, { type: "item.completed" }> => event.type === "item.completed" && event.status === "ok" && event.text === "Image read successfully")!
+      expect(card.attachments).toEqual([expect.objectContaining({ mime: "image/png", name: "shot.png" })])
+      expect(stored.some((entry) => entry.mime === "image/png")).toBe(true)
+    })
+
     test("images follow all tool outputs of a step, one user message per call with images", async () => {
       const { storeBlob } = blobStore()
       const { provider, requests } = scriptedProvider([

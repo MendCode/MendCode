@@ -9,6 +9,29 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.15 - 2026-11-11
+
+Remote control shares the session you paired it from with your Telegram chat, the pair code is copied for you, pictures show in tool cards, and idle compaction on ChatGPT no longer runs after every turn.
+
+### Upgrade notes
+
+- Same code as v0.0.15-beta.1.
+
+## v0.0.15-beta.1 - 2026-11-11
+
+Remote control shares the session you paired it from with your Telegram chat, the pair code is copied for you, pictures show in tool cards, and idle compaction on ChatGPT no longer runs after every turn.
+
+### Changed
+
+- Remote control joins the Telegram chat to the session you paired it from: its last turns arrive, turns typed in the terminal show in the chat, and a single message shows live progress. `/sessions` switches session from the phone and `/history` shows more turns.
+
+### Fixed
+
+- A picture the model reads shows in its tool card in terminals that draw images, also in Claude Code sessions, instead of `[image]`.
+- `/remote-control pair` copies `/pair CODE` to the clipboard and keeps the code readable on screen until it expires.
+- Idle compaction on ChatGPT and the OpenAI API no longer runs a couple of minutes after every turn: occasional cache misses no longer count as an expiry, and GPT-5.6 and later use OpenAI's 30-minute cache.
+- A bare sub-agent no longer receives instruction files through a file mentioned in its prompt, and extensions no longer rewrite its prompt or messages.
+
 ## v0.0.14 - 2026-11-10
 
 Computer Use no longer slows the app it worked in and sends browsers to the MendCode extension, which is on in the full tier; every tool call keeps its own row in the transcript; Claude Code sessions keep your language after compacting; and sub-agents can start bare.

@@ -668,6 +668,12 @@ export const daemon = await startDaemon({
             const appendSystem = withMemoryFor(harnessText)
             const engine = createClaudeEngine({
               bin: claudeBin,
+              // A Read of a picture: its image goes to the blob store, owned by the session, so the call's card shows it.
+              storeImage: (bytes, mime, sessionId) => {
+                const ref = store.putBlob(bytes, mime)
+                store.refBlob(ref, sessionId)
+                return ref
+              },
               clock,
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
               // MendCode's native tools (code graph, computer use, memory, settings) through the daemon's loopback bridge.

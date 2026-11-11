@@ -15,7 +15,7 @@ afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
 const SESSION = "ses_phone" as SessionId
 let update = 0
 
-function setup() {
+function setup(options: { live?: boolean } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "mend-channels-"))
   const dir = path.join(root, "data")
   const project = path.join(root, "project")
@@ -30,7 +30,10 @@ function setup() {
   const callbacks: Array<{ id: string; text?: string | undefined }> = []
   const sent: CommandInput[] = []
   const unwatched: string[] = []
+  const watched: string[] = []
+  const edits: Array<{ chat: string; id: number; text: string }> = []
   const answers: Record<string, (command: CommandInput) => CommandReply> = {}
+  const hooks: { onWatch?: (id: string) => Promise<CommandReply | undefined> } = {}
   const host: BridgeHost = {
     async send(command) {
       sent.push(command)
@@ -40,28 +43,33 @@ function setup() {
       if (command.type === "user.submit") return { ok: true, result: { queueId: "queue_1" } }
       return { ok: true }
     },
-    async watch() { return { ok: true } },
+    // `onWatch` stands for what the daemon streams while the watch starts (the replay, and live events of another chat's subscription).
+    async watch(id) { watched.push(id); return (await hooks.onWatch?.(id)) ?? { ok: true } },
     unwatch: (id) => { unwatched.push(id) },
     mask: (_id, text) => text.replaceAll("hunter2", "[secret]"),
   }
   const bridge = createChannelBridge({
     api: {
-      sendMessage: async (chat, text, buttons) => { messages.push({ chat, text, ...(buttons ? { buttons } : {}) }) },
+      sendMessage: async (chat, text, buttons) => { messages.push({ chat, text, ...(buttons ? { buttons } : {}) }); return messages.length },
+      ...(options.live ? { editMessage: async (chat: string, id: number, text: string) => { edits.push({ chat, id, text }) } } : {}),
       answerCallback: async (id, text) => { callbacks.push({ id, text }) },
       sendTyping: async () => {},
       sendDocument: async (chat, file) => { documents.push({ chat, name: file.name, size: file.bytes.length }) },
     },
-    host, config, pairing, dataDir: dir, log: () => {},
+    host, config, pairing, dataDir: dir, log: () => {}, now: () => clock,
   })
   const text = (chat: number, value: string, type = "private"): TelegramUpdate => ({ update_id: ++update, message: { message_id: update, chat: { id: chat, type, first_name: "Ana" }, text: value } })
   const press = (chat: number, data: string): TelegramUpdate => ({ update_id: ++update, callback_query: { id: `cb${update}`, data, message: { chat: { id: chat, type: "private" } } } })
-  const event = (body: Record<string, unknown>) => bridge.onEvent({ sessionId: SESSION, seq: 1, at: 1, ...body } as unknown as SessionEvent)
+  // Every event gets the next seq, as the daemon's log does.
+  let seq = 0
+  const event = (body: Record<string, unknown>) => bridge.onEvent({ sessionId: SESSION, seq: ++seq, at: 1, ...body } as unknown as SessionEvent)
+  const nextSeq = () => ++seq
   async function pair(chat = 7) {
     const { code } = pairing.create(project)
     await bridge.update(text(chat, `/pair ${code}`))
     return code
   }
-  return { root, dir, project, bridge, config, pairing, messages, documents, callbacks, sent, unwatched, answers, text, press, event, pair, advance: (ms: number) => { clock += ms } }
+  return { root, dir, project, bridge, config, pairing, messages, documents, callbacks, sent, unwatched, watched, edits, answers, hooks, text, press, event, nextSeq, pair, advance: (ms: number) => { clock += ms } }
 }
 
 const lastMessage = (h: ReturnType<typeof setup>) => h.messages.at(-1)?.text ?? ""
@@ -306,5 +314,246 @@ describe("helpers", () => {
     expect(resolveTelegramToken({ dir, env: {} })).toEqual({ token: good })
     expect(resolveTelegramToken({ dir, env: { MENDCODE_TELEGRAM_TOKEN: "nonsense" } })).toMatchObject({ error: expect.any(String) })
     expect(resolveTelegramToken({ dir, env: { MENDCODE_TELEGRAM_TOKEN: "987654321:BBEhBOweik6ad9r_QXMENQjcrr9FMJAGu7e" } })).toEqual({ token: "987654321:BBEhBOweik6ad9r_QXMENQjcrr9FMJAGu7e" })
+  })
+})
+
+describe("following the terminal's session", () => {
+  const TERMINAL = "ses_terminal" as SessionId
+  const history = { turns: [
+    { turnId: "t1", at: 1, seq: 1, preview: "first", outcome: "completed", items: [{ itemId: "u1", kind: "user_message", text: "add a login page", status: "ok" }, { itemId: "a1", kind: "agent_message", text: "Added it; the password is hunter2", status: "ok" }] },
+    { turnId: "t2", at: 2, seq: 5, preview: "second", outcome: "cancelled", items: [{ itemId: "u2", kind: "user_message", text: "now the tests", status: "ok" }] },
+  ], older: 1 }
+
+  async function pairWithTerminal(h: ReturnType<typeof setup>) {
+    h.answers["session.history"] = () => ({ ok: true, result: history })
+    const { code } = h.pairing.create(h.project, TERMINAL)
+    await h.bridge.update(h.text(7, `/pair ${code}`))
+  }
+  const terminalEvent = (h: ReturnType<typeof setup>, body: Record<string, unknown>) => h.bridge.onEvent({ sessionId: TERMINAL, seq: h.nextSeq(), at: 1, ...body } as unknown as SessionEvent)
+
+  test("a code made in a session pairs the chat to that session and shows its last turns, masked", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    expect(h.watched).toEqual([TERMINAL])
+    expect(h.config.read().telegram.chats[0]!.sessionId).toBe(TERMINAL)
+    expect(h.sent.find((command) => command.type === "session.history")).toMatchObject({ sessionId: TERMINAL, limit: 5 })
+    const recap = lastMessage(h)
+    expect(recap).toContain("Last 2 turns")
+    expect(recap).toContain("You: add a login page\nMendCode: Added it; the password is [secret]")
+    expect(recap).toContain("You: now the tests\n(cancelled)")
+    // The phone continues that session; no new one is made.
+    await h.bridge.update(h.text(7, "and the docs"))
+    expect(h.sent.some((command) => command.type === "session.create")).toBe(false)
+    expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: TERMINAL, text: "and the docs" })
+  })
+
+  test("a turn typed in the terminal shows in the chat: the prompt, then the answer", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "u7", kind: "user_message" })
+    terminalEvent(h, { type: "item.completed", itemId: "u7", status: "ok", text: "rename the hunter2 helper" })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "a7", kind: "agent_message" })
+    terminalEvent(h, { type: "item.delta", itemId: "a7", text: "Renamed." })
+    terminalEvent(h, { type: "turn.completed", turnId: "t7" })
+    await Bun.sleep(0)
+    expect(h.messages.slice(-2).map((message) => message.text)).toEqual(["From the computer:\nrename the [secret] helper", "Renamed."])
+    // The next terminal turn is followed too.
+    terminalEvent(h, { type: "turn.started", turnId: "t8", queueId: "queue_terminal_2" })
+    terminalEvent(h, { type: "turn.failed", turnId: "t8", error: { code: "provider", message: "rate limited" } })
+    await Bun.sleep(0)
+    expect(lastMessage(h)).toBe("Failed: provider: rate limited")
+  })
+
+  test("an approval asked in a terminal turn can be answered from the phone; /stop cancels that turn", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "server.request", turnId: "t7", requestId: "r1", kind: "approval", title: "Run bash", detail: "rm -rf build", tool: "bash" })
+    const approval = h.messages.at(-1)!
+    expect(approval.text).toContain("Approve bash?")
+    const data = (approval.buttons as Array<Array<{ data: string }>>)[0]![0]!.data
+    await h.bridge.update(h.press(7, data))
+    expect(h.sent.find((command) => command.type === "request.resolve")).toMatchObject({ sessionId: TERMINAL, requestId: "r1", decision: { kind: "approve", scope: "once" } })
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: TERMINAL, turnId: "t7" })
+  })
+
+  test("the live progress is one message, edited, closed with the outcome before the answer", async () => {
+    const h = setup({ live: true })
+    await pairWithTerminal(h)
+    const before = h.messages.length
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "c1", kind: "tool_call", meta: { tool: "bash ls" } })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "c2", kind: "tool_call", meta: { tool: "injected recall", injected: true } })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "c3", kind: "tool_call", meta: { tool: "read a.ts" } })
+    await Bun.sleep(0)
+    expect(h.messages.slice(before).map((message) => message.text)).toEqual(["Working · 1 tool · bash ls · 0s"])
+    h.advance(42_000)
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "a7", kind: "agent_message" })
+    terminalEvent(h, { type: "item.delta", itemId: "a7", text: "All good." })
+    terminalEvent(h, { type: "turn.completed", turnId: "t7" })
+    await Bun.sleep(0)
+    await Bun.sleep(0)
+    const progressId = before + 1
+    expect(h.edits.at(-1)).toEqual({ chat: "7", id: progressId, text: "Done · 2 tools · 42s" })
+    expect(h.messages.slice(before).map((message) => message.text)).toEqual(["Working · 1 tool · bash ls · 0s", "All good."])
+  })
+
+  test("/sessions lists the project's sessions as buttons and moves the chat; /history shows more turns", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [
+      { sessionId: TERMINAL, title: "Login page", state: "idle" },
+      { sessionId: "ses_other", title: "Release notes", state: "generating" },
+    ] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    expect(h.sent.find((command) => command.type === "session.list")).toMatchObject({ directory: h.project, roots: true, hideEmpty: true })
+    const pick = h.messages.at(-1)!
+    expect((pick.buttons as Array<Array<{ text: string; data: string }>>).map((row) => row[0]!.text)).toEqual(["• Login page", "Release notes (working)"])
+    const buttonOf = (message: typeof pick, row: number) => (message.buttons as Array<Array<{ data: string }>>)[row]![0]!.data
+    await h.bridge.update(h.press(7, buttonOf(pick, 1)))
+    expect(h.callbacks.at(-1)?.text).toBe("Switched")
+    expect(h.unwatched).toContain(TERMINAL)
+    expect(h.watched.at(-1)).toBe("ses_other")
+    expect(h.config.read().telegram.chats[0]!.sessionId).toBe("ses_other")
+    await h.bridge.update(h.text(7, "/history 50"))
+    expect(h.sent.filter((command) => command.type === "session.history").at(-1)).toMatchObject({ sessionId: "ses_other", limit: 20 })
+  })
+
+  test("a button of an older /sessions list still picks the session it names, not the one now at its place", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: TERMINAL, title: "Login page", state: "idle" }, { sessionId: "ses_other", title: "Release notes", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    const older = h.messages.at(-1)!
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_third", title: "Docs", state: "idle" }, { sessionId: TERMINAL, title: "Login page", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, (older.buttons as Array<Array<{ data: string }>>)[1]![0]!.data))
+    expect(h.config.read().telegram.chats[0]!.sessionId).toBe("ses_other")
+    // A session no list offered is refused.
+    await h.bridge.update(h.press(7, "s:ses_never"))
+    expect(h.callbacks.at(-1)?.text).toBe("Expired")
+  })
+
+  test("leaving a session drops its open questions: the next message runs in the new session", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "server.request", turnId: "t7", requestId: "r1", kind: "question", title: "Which port?", detail: "" })
+    const question = h.messages.at(-1)!
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_other"))
+    await h.bridge.update(h.text(7, "8080"))
+    expect(h.sent.some((command) => command.type === "request.resolve")).toBe(false)
+    expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: "ses_other", text: "8080" })
+    expect(question.text).toContain("Which port?")
+  })
+
+  test("two chats on one session: one leaving keeps the other subscribed, and each reads an event once", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    const { code } = h.pairing.create(h.project, TERMINAL)
+    await h.bridge.update(h.text(8, `/pair ${code}`))
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "item.started", turnId: "t7", itemId: "a7", kind: "agent_message" })
+    terminalEvent(h, { type: "item.delta", itemId: "a7", text: "Both see it." })
+    terminalEvent(h, { type: "turn.completed", turnId: "t7" })
+    await Bun.sleep(0)
+    expect(h.messages.filter((message) => message.text === "Both see it.").map((message) => message.chat)).toEqual(["7", "8"])
+    await h.bridge.update(h.text(8, "/new"))
+    expect(h.unwatched).not.toContain(TERMINAL)
+    await h.bridge.update(h.text(7, "/new"))
+    expect(h.unwatched).toContain(TERMINAL)
+  })
+
+  test("live events that arrive before the replay while a chat joins are held: the joining chat reads the whole turn in order", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    const at = (seq: number, body: Record<string, unknown>) => h.bridge.onEvent({ sessionId: "ses_other", seq, at: 1, ...body } as unknown as SessionEvent)
+    h.hooks.onWatch = async (id) => {
+      if (id !== "ses_other") return undefined
+      // Another chat already follows ses_other: a live event streams before the replay of the running turn.
+      at(52, { type: "item.started", turnId: "t5", itemId: "c2", kind: "tool_call", meta: { tool: "bash" } })
+      at(50, { type: "turn.started", turnId: "t5", queueId: "queue_terminal" })
+      at(51, { type: "server.request", turnId: "t5", requestId: "r5", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
+      return undefined
+    }
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "generating" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_other"))
+    expect(h.messages.some((message) => message.text.startsWith("Approve bash?"))).toBe(true)
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: "ses_other", turnId: "t5" })
+  })
+
+  test("a chat unpaired while its watch starts gets nothing that was held, and the watch is released", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    h.hooks.onWatch = async (id) => {
+      if (id !== "ses_other") return undefined
+      h.bridge.onEvent({ sessionId: "ses_other", seq: 50, at: 1, type: "turn.started", turnId: "t5", queueId: "queue_terminal" } as unknown as SessionEvent)
+      h.bridge.onEvent({ sessionId: "ses_other", seq: 51, at: 1, type: "server.request", turnId: "t5", requestId: "r5", kind: "approval", title: "Run bash", detail: "secret plan", tool: "bash" } as unknown as SessionEvent)
+      // `/remote-control unpair` on the computer, as createChannels.change does it.
+      h.config.update((value) => { value.telegram.chats = [] })
+      h.bridge.forget("7")
+      return undefined
+    }
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "generating" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_other"))
+    // The history went out while the chat was still paired; nothing held during the watch does.
+    expect(h.messages.some((message) => message.text.includes("secret plan") || message.text.startsWith("Approve"))).toBe(false)
+    expect(h.unwatched).toContain("ses_other")
+  })
+
+  test("a switch whose watch fails leaves the chat on its session with its running turn and open question", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "server.request", turnId: "t7", requestId: "r1", kind: "question", title: "Which port?", detail: "" })
+    h.hooks.onWatch = async (id) => (id === "ses_gone" ? { ok: false, error: { code: "unknown_session", message: "no such session" } } as CommandReply : undefined)
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_gone", title: "Deleted", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_gone"))
+    expect(h.callbacks.at(-1)?.text).toBe("Not switched")
+    expect(h.config.read().telegram.chats[0]!.sessionId).toBe(TERMINAL)
+    await h.bridge.update(h.text(7, "8080"))
+    expect(h.sent.find((command) => command.type === "request.resolve")).toMatchObject({ sessionId: TERMINAL, requestId: "r1", decision: { kind: "answer", text: "8080" } })
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: TERMINAL, turnId: "t7" })
+  })
+
+  test("a session joined while its turn runs is followed from that turn's start (the watch replays it)", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    // The replay arrives again on the shared client when a second chat joins: the first chat ignores what it already read.
+    const replay = (seq: number, body: Record<string, unknown>) => h.bridge.onEvent({ sessionId: TERMINAL, seq, at: 1, ...body } as unknown as SessionEvent)
+    replay(100, { type: "turn.started", turnId: "t9", queueId: "queue_terminal" })
+    replay(101, { type: "server.request", turnId: "t9", requestId: "r9", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
+    replay(100, { type: "turn.started", turnId: "t9", queueId: "queue_terminal" })
+    replay(101, { type: "server.request", turnId: "t9", requestId: "r9", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
+    expect(h.messages.filter((message) => message.text.startsWith("Approve bash?"))).toHaveLength(1)
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: TERMINAL, turnId: "t9" })
+  })
+
+  test("a paired chat that claims a new code moves to its session; a wrong code keeps it paired", async () => {
+    const h = setup()
+    await h.pair()
+    await h.bridge.update(h.text(7, "/pair WRONGCOD"))
+    expect(lastMessage(h)).toContain("stays paired")
+    expect(h.config.read().telegram.chats).toHaveLength(1)
+    await pairWithTerminal(h)
+    expect(h.config.read().telegram.chats).toMatchObject([{ id: "7", sessionId: TERMINAL }])
+  })
+
+  test("after a restart the bridge follows each chat's session again before any phone message", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    h.watched.length = 0
+    await h.bridge.resume()
+    expect(h.watched).toEqual([TERMINAL])
   })
 })

@@ -1,4 +1,4 @@
-import { EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, todoListCard, toolInputProgress as inputProgress, type ItemId, type PermissionMode, type ReasoningEffort } from "@mendcode/protocol"
+import { EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, todoListCard, toolInputProgress as inputProgress, type BlobRef, type ItemId, type PermissionMode, type ReasoningEffort } from "@mendcode/protocol"
 import { CLAUDE_PLAN_TOOLS, createClaudePlan, todoWriteItems, type ClaudePlan } from "./plan"
 import type { EngineEvent, GlobalEventDraft } from "@mendcode/kernel"
 
@@ -250,6 +250,24 @@ export function claudeToolPermission(name: string): "read" | "write" | "execute"
   return "execute"
 }
 
+/** A tool result's pictures at most: Claude Code's Read of an image sends one. */
+const MAX_RESULT_IMAGES = 2
+const MAX_RESULT_IMAGE_BYTES = 5 * 1024 * 1024
+
+/** The base64 images of a tool result (a Read of a PNG), as bytes for the blob store. */
+export function toolResultImages(content: unknown): Array<{ bytes: Uint8Array; mime: string }> {
+  if (!Array.isArray(content)) return []
+  const images: Array<{ bytes: Uint8Array; mime: string }> = []
+  for (const part of content as any[]) {
+    if (images.length >= MAX_RESULT_IMAGES) break
+    const source = part?.type === "image" ? part.source : undefined
+    if (source?.type !== "base64" || typeof source.data !== "string" || typeof source.media_type !== "string" || !source.media_type.startsWith("image/")) continue
+    if (source.data.length * 0.75 > MAX_RESULT_IMAGE_BYTES) continue
+    images.push({ bytes: Buffer.from(source.data, "base64"), mime: source.media_type })
+  }
+  return images
+}
+
 function toolResultText(content: unknown): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
@@ -309,8 +327,15 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined } }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined } }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
+  /** A tool result's pictures kept in the blob store, for its card; none without a store or when one cannot be kept. */
+  const resultPictures = (part: any): BlobRef[] => {
+    if (!input.storeImage || part?.is_error) return []
+    return toolResultImages(part?.content).flatMap(({ bytes, mime }) => {
+      try { return [input.storeImage!(bytes, mime)].filter((ref): ref is BlobRef => ref !== undefined) } catch { return [] }
+    })
+  }
   const plan = input.plan ?? createClaudePlan()
   /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
   const planCalls = new Map<string, { name: string; args: Record<string, any> | undefined }>()
@@ -533,7 +558,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       }
       const written = writeInputs.get(String(part.tool_use_id))
       writeInputs.delete(String(part.tool_use_id))
-      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(late ? { meta: late } : {}) })
+      const pictures = resultPictures(part)
+      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(pictures.length ? { attachments: pictures } : {}), ...(late ? { meta: late } : {}) })
     }
   }
 
@@ -568,7 +594,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         agentTools.delete(String(part.tool_use_id))
         const todos = agentTodos.get(String(part.tool_use_id))
         agentTodos.delete(String(part.tool_use_id))
-        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), meta: { agentParent: parent } })
+        const pictures = resultPictures(part)
+        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), ...(pictures.length ? { attachments: pictures } : {}), meta: { agentParent: parent } })
       }
     }
   }

@@ -1,7 +1,7 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import type { CommandReply } from "@mendcode/client"
-import type { ChannelsChange, ChannelsReport, SessionEvent, SessionId } from "@mendcode/protocol"
+import type { ChannelsChange, ChannelsReport, HistoryReport, SessionEvent, SessionId } from "@mendcode/protocol"
 import type { createChannelBridge, BridgeHost } from "./channels-bridge"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "./channels-config"
 import { createTelegramApi } from "./channels-telegram"
@@ -52,6 +52,10 @@ export function createChannels(options: ChannelsOptions) {
     return {
       send: (command) => client.send(command),
       async watch(sessionId: SessionId): Promise<CommandReply> {
+        // A turn already running replays from its start: its prompt, progress and open approvals reach the chat.
+        const last = await client.send({ type: "session.history", sessionId, limit: 1 })
+        const running = last.ok ? (last.result as unknown as HistoryReport | undefined)?.turns.find((turn) => turn.outcome === "running") : undefined
+        if (running && running.seq > 0) return client.subscribe(sessionId, running.seq - 1)
         const window = await client.loadWindow(sessionId, 1)
         return window.ok ? client.subscribe(sessionId, window.window.lastSeq) : window
       },
@@ -74,7 +78,8 @@ export function createChannels(options: ChannelsOptions) {
         let current: ReturnType<typeof createChannelBridge> | undefined
         host = await (options.connect ?? defaultConnect)((event) => current?.onEvent(event))
         const { createChannelBridge } = await import("./channels-bridge")
-        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, now, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        await current.resume()
         // Messages sent while the daemon was off are dropped, not replayed as turns.
         const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal })
         let offset = backlog.length ? backlog[backlog.length - 1]!.update_id + 1 : undefined
@@ -157,7 +162,7 @@ export function createChannels(options: ChannelsOptions) {
       let exists = false
       try { exists = statSync(directory).isDirectory() } catch {}
       if (!exists) throw new Error("[CHANNELS]: the project directory does not exist")
-      return { report: status(), pairing: pairing.create(directory) }
+      return { report: status(), pairing: pairing.create(directory, request.sessionId) }
     } else if (request.action === "unpair") {
       const known = config.read().telegram.chats
       const removed = request.chatId ? known.filter((chat) => chat.id === request.chatId) : known

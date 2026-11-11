@@ -28,8 +28,8 @@ export type ChannelsReport = z.infer<typeof ChannelsReport>
 
 export const ChannelsChange = lazySchema(() => z.discriminatedUnion("action", [
   z.strictObject({ action: z.enum(["enable", "disable"]) }),
-  /** Ack: `{ code, expiresAt }`. Chats paired with it work in `directory`. */
-  z.strictObject({ action: z.literal("pair"), directory: z.string().min(1).max(4096) }),
+  /** Ack: `{ code, expiresAt }`. Chats paired with it work in `directory`, in `sessionId` when given (the terminal's open session). */
+  z.strictObject({ action: z.literal("pair"), directory: z.string().min(1).max(4096), sessionId: z.string().min(1).max(100).optional() }),
   /** Without `chatId`, every chat is unpaired. */
   z.strictObject({ action: z.literal("unpair"), chatId: z.string().regex(/^-?\d{1,20}$/).optional() }),
 ]))
