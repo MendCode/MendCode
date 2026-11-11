@@ -6,7 +6,7 @@ import path from "node:path"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
-import { watchCursor } from "../src/channels"
+import { replayAfter, watchCursor } from "../src/channels"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
 import { splitMessage, type TelegramUpdate } from "../src/channels-telegram"
 
@@ -501,6 +501,19 @@ describe("following the terminal's session", () => {
     await h.bridge.update(h.text(7, "and the docs"))
     // Queued: a terminal turn that starts meanwhile cannot take it in, so it starts a turn of its own that names it.
     expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: TERMINAL, text: "and the docs", delivery: "queue" })
+  })
+
+  test("a replay for a joining chat reads the log to its end however many pages, and fails when a page does not advance", async () => {
+    const pages = (total: number, size: number) => async (after: number) => {
+      const events = Array.from({ length: Math.min(size, total - after) }, (_, index) => ({ seq: after + index + 1 }) as unknown as SessionEvent)
+      return { ok: true as const, window: { events, lastSeq: after + events.length, more: after + events.length < total } }
+    }
+    const seen: number[] = []
+    expect(await replayAfter(pages(12_345, 200), 0, (event) => void seen.push(event.seq))).toEqual({ ok: true })
+    expect(seen).toHaveLength(12_345)
+    expect(seen.at(-1)).toBe(12_345)
+    const stuck = await replayAfter(async () => ({ ok: true as const, window: { events: [], lastSeq: 5, more: true } }), 5, () => {})
+    expect(stuck.ok).toBe(false)
   })
 
   test("the watch cursor: after the log's end, or from a running turn's start when that is earlier", () => {

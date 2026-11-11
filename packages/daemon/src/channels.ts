@@ -33,9 +33,25 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) =
  * Where a chat's watch subscribes: after the log's end read first (`lastSeq`), or from the start of a running turn (its `turn.started`
  * at `runningSeq`) when that is earlier, so the chat gets that turn's prompt, progress and open approvals.
  */
-/** A running turn replayed to a second chat is read in pages of this many events, at most this many pages. */
+/** A running turn replayed to a second chat is read in pages of this many events (fewer when a page would not fit a frame). */
 const REPLAY_PAGE_EVENTS = 200
-const REPLAY_PAGES = 50
+
+type ReplayPage = { ok: true; window: { events: SessionEvent[]; lastSeq: number; more: boolean } } | { ok: false; error: { code: string; message: string } }
+/**
+ * Reads the log after `from` to its end, page by page, into `onEvent`: a turn replayed to a joining chat comes whole, its open
+ * approval included however long it ran. A page that does not move past its cursor fails the watch instead of reporting it complete.
+ */
+export async function replayAfter(load: (after: number) => Promise<ReplayPage>, from: number, onEvent: (event: SessionEvent) => void): Promise<CommandReply> {
+  let after = from
+  for (;;) {
+    const page = await load(after)
+    if (!page.ok) return page as CommandReply
+    for (const event of page.window.events) onEvent(event)
+    if (!page.window.more) return { ok: true }
+    if (page.window.lastSeq <= after) return { ok: false, error: { code: "internal", message: "[CHANNELS]: the session log did not advance while replaying" } } as CommandReply
+    after = page.window.lastSeq
+  }
+}
 
 export function watchCursor(lastSeq: number, runningSeq: number | undefined): number {
   return runningSeq !== undefined && runningSeq > 0 ? Math.min(lastSeq, runningSeq - 1) : lastSeq
@@ -79,15 +95,7 @@ export function createChannels(options: ChannelsOptions) {
         }
         // Another chat already streams it: rewinding the shared cursor would let a live event skip the replay, so the replay is read
         // from the log and handed over; the joining chat holds it with the live events and reads both in order, each once.
-        let after = from
-        for (let page = 0; page < REPLAY_PAGES; page++) {
-          const more = await client.loadAfter(sessionId, after, REPLAY_PAGE_EVENTS)
-          if (!more.ok) return more
-          for (const event of more.window.events) onEvent(event)
-          if (!more.window.more || !more.window.events.length) break
-          after = more.window.lastSeq
-        }
-        return { ok: true }
+        return replayAfter((after) => client.loadAfter(sessionId, after, REPLAY_PAGE_EVENTS), from, onEvent)
       },
       unwatch: (sessionId) => { followed.delete(sessionId); void client.send({ type: "client.unsubscribe", sessionId }) },
       mask: options.mask,
