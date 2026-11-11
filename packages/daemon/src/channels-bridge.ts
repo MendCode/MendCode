@@ -23,7 +23,8 @@ type Pending = { sessionId: SessionId; requestId: string; kind: "approval" | "qu
 type Progress = { messageId?: number | undefined; sending?: Promise<void>; timer?: ReturnType<typeof setTimeout> | undefined; tools: number; now?: string; startedAt: number; editedAt: number; shown?: string; done?: boolean }
 /** `mirrored`: a turn this chat did not start (typed in the terminal or another client); its prompt is shown too. */
 type Turn = { buffered: SessionEvent[]; queueId?: string; turnId?: string; answers: Map<string, string>; items: Set<string>; users: Set<string>; mirrored: boolean; progress: Progress }
-type Runtime = { sessionId?: SessionId; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks?: SessionId[] }
+/** `seen`: the newest event seq of the session this chat read; `picks`: the sessions a /sessions list offered, by button. */
+type Runtime = { sessionId?: SessionId; seen?: number | undefined; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks: Set<SessionId> }
 
 const HELP = [
   "MendCode remote control",
@@ -41,10 +42,12 @@ const EDIT_MS = 3000
 const RECAP_TURNS = 5
 const MAX_RECAP_TURNS = 20
 const SESSION_PICKS = 8
+/** Sessions an older /sessions list may still pick; the oldest offered go first. */
+const MAX_PICKS = 32
 
 export function createChannelBridge({ api, host, config, pairing, dataDir, log, transcribe, now = Date.now }: { api: Api; host: BridgeHost; config: ChannelsConfig; pairing: ReturnType<typeof createPairing>; dataDir: string; log(level: "info" | "warn", message: string): void; transcribe?: (input: { bytes: Uint8Array; name: string; mime: string }) => Promise<Transcription>; now?: () => number }) {
   const runtimes = new Map<string, Runtime>()
-  const runtime = (id: string) => { let found = runtimes.get(id); if (!found) runtimes.set(id, found = { pending: new Map() }); return found }
+  const runtime = (id: string) => { let found = runtimes.get(id); if (!found) runtimes.set(id, found = { pending: new Map(), picks: new Set() }); return found }
   const chats = () => config.read().telegram.chats
   const chatOf = (id: string) => chats().find((chat) => chat.id === id)
   let counter = 0
@@ -63,8 +66,10 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const state = runtime(id)
     if (state.sessionId) return state.sessionId
     if (stored.sessionId) {
-      const watched = await host.watch(stored.sessionId as SessionId)
-      if (watched.ok) return state.sessionId = stored.sessionId as SessionId
+      state.sessionId = stored.sessionId as SessionId
+      const watched = await host.watch(state.sessionId)
+      if (watched.ok) return state.sessionId
+      delete state.sessionId
     }
     const created = await host.send({ type: "session.create", directory: stored.directory, title: "Telegram" })
     const sessionId = created.ok ? created.result?.sessionId as SessionId | undefined : undefined
@@ -75,18 +80,49 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     return state.sessionId = sessionId
   }
 
-  /** Follows `sessionId` from now on (the terminal's session at pairing, or one picked with /sessions) and shows its last turns. */
+  /** Stops following `sessionId` for chat `id`: the shared client unsubscribes only when no other chat follows it. */
+  function release(id: string, sessionId: SessionId | undefined) {
+    if (!sessionId) return
+    for (const [other, state] of runtimes) if (other !== id && state.sessionId === sessionId) return
+    host.unwatch(sessionId)
+  }
+
+  /** The chat leaves its session: the mirrored turn stops and approvals and questions of that session can no longer be answered here. */
+  function leave(id: string, state: Runtime) {
+    closeTurn(state.mirror)
+    state.mirror = undefined
+    state.pending.clear()
+    release(id, state.sessionId)
+    delete state.sessionId
+    state.seen = undefined
+  }
+
+  /**
+   * Follows `sessionId` (the terminal's session at pairing, or one picked with /sessions) and shows its last turns. The chat is on
+   * the session before the watch starts, so a turn already running replays into it (its prompt, progress and open approvals).
+   */
   async function link(id: string, sessionId: SessionId, recapTurns: number) {
     const state = runtime(id)
     if (state.turn) { await say(id, "A turn is running. /stop first."); return false }
-    const watched = await host.watch(sessionId)
-    if (!watched.ok) { await say(id, `Could not follow that session: ${clip(watched.error.message, 200)}`); return false }
-    if (state.sessionId && state.sessionId !== sessionId) host.unwatch(state.sessionId)
-    closeTurn(state.mirror)
-    state.mirror = undefined
-    state.sessionId = sessionId
-    saveSession(id, sessionId)
+    const previous = state.sessionId
     if (recapTurns > 0) await recap(id, sessionId, recapTurns)
+    if (previous !== sessionId) {
+      closeTurn(state.mirror)
+      state.mirror = undefined
+      state.pending.clear()
+      state.sessionId = sessionId
+      state.seen = undefined
+      const watched = await host.watch(sessionId)
+      if (!watched.ok) {
+        // The previous session was never released, so the chat stays on it.
+        if (previous) state.sessionId = previous
+        else delete state.sessionId
+        await say(id, `Could not follow that session: ${clip(watched.error.message, 200)}`)
+        return false
+      }
+      release(id, previous)
+    }
+    saveSession(id, sessionId)
     return true
   }
 
@@ -253,6 +289,9 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   function onEvent(event: SessionEvent) {
     for (const [id, state] of runtimes) {
       if (state.sessionId !== event.sessionId) continue
+      // Another chat joining the session replays its running turn on the shared client: a chat reads each event once.
+      if (state.seen !== undefined && event.seq <= state.seen) continue
+      state.seen = event.seq
       if (state.mirror && belongs(state.mirror, event)) { follow(id, state, state.mirror, event); continue }
       if (state.turn) {
         if (state.turn.queueId === undefined) state.turn.buffered.push(event)
@@ -270,7 +309,8 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   async function resolve(id: string, number: number, decision: Extract<CommandInput, { type: "request.resolve" }>["decision"], done: string, callback?: string) {
     const state = runtime(id)
     const pending = state.pending.get(number)
-    if (!pending) { if (callback) await api.answerCallback(callback, "Expired").catch(() => {}); return false }
+    // Only the chat's current session is answered from here.
+    if (!pending || pending.sessionId !== state.sessionId) { if (callback) await api.answerCallback(callback, "Expired").catch(() => {}); return false }
     state.pending.delete(number)
     const reply = await host.send({ type: "request.resolve", sessionId: pending.sessionId, requestId: pending.requestId as never, decision })
     const text = reply.ok ? done : "Already answered"
@@ -289,8 +329,10 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     if (!sessions.length) return say(id, "No sessions in this project yet; send a message to start one.")
     const state = runtime(id)
     const current = state.sessionId ?? stored.sessionId
-    state.picks = sessions.map((session) => session.sessionId)
-    return say(id, "Pick a session:", sessions.map((session, index) => [{ text: `${session.sessionId === current ? "• " : ""}${clip(session.title || "Untitled", 50)}${session.state !== "idle" ? " (working)" : ""}`, data: `s:${index}` }]))
+    // A button names its session, so an older list still picks what it shows; only sessions a list offered are accepted.
+    for (const session of sessions) { state.picks.delete(session.sessionId); state.picks.add(session.sessionId) }
+    for (const old of state.picks) { if (state.picks.size <= MAX_PICKS) break; state.picks.delete(old) }
+    return say(id, "Pick a session:", sessions.map((session) => [{ text: `${session.sessionId === current ? "• " : ""}${clip(session.title || "Untitled", 50)}${session.state !== "idle" ? " (working)" : ""}`, data: `s:${session.sessionId}` }]))
   }
 
   async function command(id: string, name: string, args: string) {
@@ -318,10 +360,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
       }
       case "new":
         if (state.turn) return say(id, "A turn is running. /stop first.")
-        if (state.sessionId) host.unwatch(state.sessionId)
-        closeTurn(state.mirror)
-        state.mirror = undefined
-        delete state.sessionId
+        leave(id, state)
         saveSession(id, undefined)
         return say(id, "Fresh session; your next message starts it.")
       case "file": {
@@ -341,7 +380,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
 
   function forget(id: string) {
     const state = runtimes.get(id)
-    if (state?.sessionId) host.unwatch(state.sessionId)
+    release(id, state?.sessionId)
     closeTurn(state?.turn)
     closeTurn(state?.mirror)
     runtimes.delete(id)
@@ -399,7 +438,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     if (name) return command(id, name, args)
     const prompt = spoken ?? text
     const state = runtime(id)
-    const question = [...state.pending].find(([, pending]) => pending.kind === "question")
+    const question = [...state.pending].find(([, pending]) => pending.kind === "question" && pending.sessionId === state.sessionId)
     if (question) return resolve(id, question[0], { kind: "answer", text: prompt }, "Sent").then(() => {})
     return runTurn(id, prompt)
   }
@@ -408,17 +447,17 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const chat = query.message?.chat
     const id = chat ? String(chat.id) : undefined
     if (!id || chat?.type !== "private" || !chatOf(id)) return
-    const match = /^(ap|q|s):(\d+)(?::(y|n|\d))?$/.exec(query.data ?? "")
-    if (!match) return
-    const number = Number(match[2])
-    if (match[1] === "s") {
-      const sessionId = runtime(id).picks?.[number]
-      if (!sessionId) { await api.answerCallback(query.id, "Expired").catch(() => {}); return }
+    const picked = /^s:([A-Za-z0-9_]{1,60})$/.exec(query.data ?? "")
+    if (picked) {
+      const sessionId = picked[1] as SessionId
+      if (!runtime(id).picks.has(sessionId)) { await api.answerCallback(query.id, "Expired").catch(() => {}); return }
       const moved = await link(id, sessionId, RECAP_TURNS)
       await api.answerCallback(query.id, moved ? "Switched" : "Not switched").catch(() => {})
       return
     }
-    if (match[3] === undefined) return
+    const match = /^(ap|q):(\d+):(y|n|\d)$/.exec(query.data ?? "")
+    if (!match) return
+    const number = Number(match[2])
     if (match[1] === "ap") await resolve(id, number, match[3] === "y" ? { kind: "approve", scope: "once" } : { kind: "deny", reason: "denied from Telegram" }, match[3] === "y" ? "Allowed" : "Denied", query.id)
     else {
       const option = runtime(id).pending.get(number)?.options[Number(match[3])]
@@ -431,8 +470,10 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   async function resume() {
     for (const chat of chats()) {
       if (!chat.sessionId) continue
-      const watched = await host.watch(chat.sessionId as SessionId)
-      if (watched.ok) runtime(chat.id).sessionId = chat.sessionId as SessionId
+      const state = runtime(chat.id)
+      state.sessionId = chat.sessionId as SessionId
+      const watched = await host.watch(state.sessionId)
+      if (!watched.ok) delete state.sessionId
     }
   }
 

@@ -1,7 +1,7 @@
 import { statSync } from "node:fs"
 import path from "node:path"
 import type { CommandReply } from "@mendcode/client"
-import type { ChannelsChange, ChannelsReport, SessionEvent, SessionId } from "@mendcode/protocol"
+import type { ChannelsChange, ChannelsReport, HistoryReport, SessionEvent, SessionId } from "@mendcode/protocol"
 import type { createChannelBridge, BridgeHost } from "./channels-bridge"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "./channels-config"
 import { createTelegramApi } from "./channels-telegram"
@@ -52,6 +52,10 @@ export function createChannels(options: ChannelsOptions) {
     return {
       send: (command) => client.send(command),
       async watch(sessionId: SessionId): Promise<CommandReply> {
+        // A turn already running replays from its start: its prompt, progress and open approvals reach the chat.
+        const last = await client.send({ type: "session.history", sessionId, limit: 1 })
+        const running = last.ok ? (last.result as unknown as HistoryReport | undefined)?.turns.find((turn) => turn.outcome === "running") : undefined
+        if (running && running.seq > 0) return client.subscribe(sessionId, running.seq - 1)
         const window = await client.loadWindow(sessionId, 1)
         return window.ok ? client.subscribe(sessionId, window.window.lastSeq) : window
       },

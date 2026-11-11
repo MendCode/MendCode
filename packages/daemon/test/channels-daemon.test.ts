@@ -153,6 +153,25 @@ describe("chat bridge in the daemon", () => {
     expect(sessions.ok && JSON.stringify(sessions.result)).not.toContain("\"Telegram\"")
   })
 
+  test("pairing while a terminal turn waits for an approval follows that turn: its prompt and approval arrive, /stop ends it", async () => {
+    const telegram = fakeTelegram()
+    const h = await boot({ telegram })
+    await h.client.send({ type: "channels.change", change: { action: "enable" } })
+    const created = await h.client.send({ type: "session.create", directory: h.project, title: "Terminal" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    await h.client.send({ type: "user.submit", sessionId, text: "/ask", attachments: [] })
+    const outcome = async () => { const reply = await h.client.send({ type: "session.history", sessionId, limit: 1 }); return reply.ok ? (reply.result as { turns: Array<{ outcome: string }> }).turns[0]?.outcome : undefined }
+    const end = Date.now() + 8_000
+    while (await outcome() !== "running" && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const pair = await h.client.send({ type: "channels.change", change: { action: "pair", directory: h.project, sessionId } })
+    telegram.say(7, `/pair ${(pair.ok ? pair.result?.pairing as { code: string } : undefined)!.code}`)
+    await until(() => telegram.sent.some((message) => message.text === "From the computer:\n/ask"))
+    await until(() => telegram.sent.some((message) => message.text.startsWith("Approve")))
+    telegram.say(7, "/stop")
+    await until(() => telegram.sent.at(-1)!.text === "Stopped.")
+  })
+
   test("enabled in channels.json starts with the daemon; a missing or world-readable token is reported, not used", async () => {
     const telegram = fakeTelegram()
     const missing = await boot({ telegram, enabled: true, token: false })
