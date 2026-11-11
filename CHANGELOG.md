@@ -15,7 +15,15 @@ Remote control shares the session you paired it from with your Telegram chat, th
 
 ### Upgrade notes
 
-- Same code as v0.0.15-beta.2.
+- Same code as v0.0.15-beta.3.
+
+## v0.0.15-beta.3 - 2026-11-11
+
+Remote control never folds a phone message into a turn from the computer, and a second chat that joins a running session gets the whole turn.
+
+### Fixed
+
+- A message from Telegram always runs as a turn of its own, even when a turn from the computer starts as it is sent, and a chat that joins a session another chat follows gets the running turn from its start.
 
 ## v0.0.15-beta.2 - 2026-11-11
 

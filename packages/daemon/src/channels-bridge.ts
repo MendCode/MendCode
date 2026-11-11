@@ -170,7 +170,8 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const turn = newTurn(false)
     state.turn = turn
     void api.sendTyping(id).catch(() => {})
-    const reply = await host.send({ type: "user.submit", sessionId, text, attachments: [] })
+    // Queued, never steered into a turn that started meanwhile: the message always starts a turn of its own that names it.
+    const reply = await host.send({ type: "user.submit", sessionId, text, attachments: [], delivery: "queue" })
     if (!reply.ok) { state.turn = undefined; return say(id, `Not sent: ${clip(host.mask(sessionId, reply.error.message), 300)}`) }
     if (reply.result?.handled === true) { state.turn = undefined; return say(id, String(reply.result.notice ?? "Done.")) }
     if (typeof reply.result?.queueId !== "string") { state.turn = undefined; return say(id, "The daemon did not accept the message.") }
