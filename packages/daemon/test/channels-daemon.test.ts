@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
-import { ChannelsReport, isReadOnlyCommand } from "@mendcode/protocol"
+import { ChannelsReport, isReadOnlyCommand, type SessionId } from "@mendcode/protocol"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import { startDaemon, type DaemonOptions } from "../src"
 import { remoteTokens } from "../src/remote"
@@ -25,6 +25,7 @@ async function until(check: () => boolean, ms = 8_000) {
 function fakeTelegram() {
   const calls: string[] = []
   const sent: Array<{ chat: string; text: string }> = []
+  const edited: Array<{ id: number; text: string }> = []
   const documents: string[] = []
   let queue: TelegramUpdate[] = []
   let next = 100
@@ -47,12 +48,13 @@ function fakeTelegram() {
       }
       return ok(body.timeout > 0 ? [...queue] : [])
     }
-    if (method === "sendMessage") { const body = JSON.parse(String(init?.body)) as { chat_id: string; text: string }; sent.push({ chat: body.chat_id, text: body.text }); return ok({}) }
+    if (method === "sendMessage") { const body = JSON.parse(String(init?.body)) as { chat_id: string; text: string }; sent.push({ chat: body.chat_id, text: body.text }); return ok({ message_id: sent.length }) }
+    if (method === "editMessageText") { const body = JSON.parse(String(init?.body)) as { message_id: number; text: string }; edited.push({ id: body.message_id, text: body.text }); return ok({}) }
     if (method === "sendDocument") { documents.push(((init!.body as FormData).get("document") as File).name); return ok({}) }
     return ok({})
   }) as typeof fetch
   return {
-    fetcher, calls, sent, documents,
+    fetcher, calls, sent, edited, documents,
     say(chat: number, text: string) { queue.push({ update_id: ++next, message: { message_id: next, chat: { id: chat, type: "private", first_name: "Ana" }, text } }); wake?.() },
     seed(chat: number, text: string) { queue.push({ update_id: ++next, message: { message_id: next, chat: { id: chat, type: "private" }, text } }) },
   }
@@ -125,6 +127,68 @@ describe("chat bridge in the daemon", () => {
     telegram.say(7, "still there?")
     await new Promise((resolve) => setTimeout(resolve, 100))
     expect(telegram.sent.some((message) => message.text.includes("still there"))).toBe(false)
+  })
+
+  test("a code made in the terminal's session pairs the chat to it: its history arrives and terminal turns show in the chat", async () => {
+    const telegram = fakeTelegram()
+    const h = await boot({ telegram })
+    await h.client.send({ type: "channels.change", change: { action: "enable" } })
+    const created = await h.client.send({ type: "session.create", directory: h.project, title: "Terminal" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    await h.client.send({ type: "user.submit", sessionId, text: "remember the first thing", attachments: [] })
+    const history = async () => { const reply = await h.client.send({ type: "session.history", sessionId }); return reply.ok ? (reply.result as { turns: unknown[] }).turns.length : 0 }
+    const end = Date.now() + 8_000
+    while (await history() < 1 && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20))
+    const pair = await h.client.send({ type: "channels.change", change: { action: "pair", directory: h.project, sessionId } })
+    const code = (pair.ok ? pair.result?.pairing as { code: string } : undefined)!.code
+    telegram.say(7, `/pair ${code}`)
+    await until(() => telegram.sent.some((message) => message.text.includes("You: remember the first thing")))
+    await h.client.send({ type: "user.submit", sessionId, text: "typed in the terminal", attachments: [] })
+    await until(() => telegram.sent.some((message) => message.text === "From the computer:\ntyped in the terminal"))
+    await until(() => telegram.sent.at(-1)!.text.includes("typed in the terminal") && !telegram.sent.at(-1)!.text.startsWith("From"))
+    // The phone continues the same session.
+    telegram.say(7, "sent from the phone")
+    await until(() => telegram.sent.some((message) => message.text.includes("sent from the phone")))
+    const sessions = await h.client.send({ type: "session.list" })
+    expect(sessions.ok && JSON.stringify(sessions.result)).not.toContain("\"Telegram\"")
+  })
+
+  test("pairing while a terminal turn waits for an approval follows that turn: its prompt and approval arrive, /stop ends it", async () => {
+    const telegram = fakeTelegram()
+    const h = await boot({ telegram })
+    await h.client.send({ type: "channels.change", change: { action: "enable" } })
+    const created = await h.client.send({ type: "session.create", directory: h.project, title: "Terminal" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    await h.client.send({ type: "user.submit", sessionId, text: "/ask", attachments: [] })
+    const outcome = async () => { const reply = await h.client.send({ type: "session.history", sessionId, limit: 1 }); return reply.ok ? (reply.result as { turns: Array<{ outcome: string }> }).turns[0]?.outcome : undefined }
+    const end = Date.now() + 8_000
+    while (await outcome() !== "running" && Date.now() < end) await new Promise((resolve) => setTimeout(resolve, 20))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    const pair = await h.client.send({ type: "channels.change", change: { action: "pair", directory: h.project, sessionId } })
+    telegram.say(7, `/pair ${(pair.ok ? pair.result?.pairing as { code: string } : undefined)!.code}`)
+    await until(() => telegram.sent.some((message) => message.text === "From the computer:\n/ask"))
+    await until(() => telegram.sent.some((message) => message.text.startsWith("Approve")))
+    telegram.say(7, "/stop")
+    await until(() => telegram.sent.at(-1)!.text === "Stopped.")
+  })
+
+  test("a second chat joining a session another chat follows, while a turn waits for an approval, gets that turn once; the first chat is not sent it again", async () => {
+    const telegram = fakeTelegram()
+    const h = await boot({ telegram })
+    await h.client.send({ type: "channels.change", change: { action: "enable" } })
+    const created = await h.client.send({ type: "session.create", directory: h.project, title: "Terminal" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    const code = async () => { const pair = await h.client.send({ type: "channels.change", change: { action: "pair", directory: h.project, sessionId } }); return (pair.ok ? pair.result?.pairing as { code: string } : undefined)!.code }
+    telegram.say(7, `/pair ${await code()}`)
+    await until(() => telegram.sent.some((message) => message.chat === "7" && message.text.includes("No turns in this session yet.")))
+    await h.client.send({ type: "user.submit", sessionId, text: "/ask", attachments: [] })
+    await until(() => telegram.sent.some((message) => message.chat === "7" && message.text.startsWith("Approve")))
+    telegram.say(8, `/pair ${await code()}`)
+    await until(() => telegram.sent.some((message) => message.chat === "8" && message.text === "From the computer:\n/ask"))
+    await until(() => telegram.sent.some((message) => message.chat === "8" && message.text.startsWith("Approve")))
+    expect(telegram.sent.filter((message) => message.chat === "7" && message.text.startsWith("Approve"))).toHaveLength(1)
+    telegram.say(8, "/stop")
+    await until(() => telegram.sent.filter((message) => message.text === "Stopped.").length === 2)
   })
 
   test("enabled in channels.json starts with the daemon; a missing or world-readable token is reported, not used", async () => {

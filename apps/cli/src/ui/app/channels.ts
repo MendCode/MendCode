@@ -43,11 +43,14 @@ export function createChannels(ctx: AppContext) {
       return true
     }
     if (head === "pair") {
-      const result = await change({ action: "pair", directory: input.directory ?? "." })
+      // The chat follows this session: what is typed here shows there, and the phone continues it.
+      const result = await change({ action: "pair", directory: input.directory ?? ".", ...(ctx.state.sessionId ? { sessionId: ctx.state.sessionId } : {}) })
       if (result?.pairing) {
         const bot = result.telegram.botName ? `@${result.telegram.botName}` : "your bot"
-        const minutes = Math.max(1, Math.round((result.pairing.expiresAt - Date.now()) / 60_000))
-        say(`pair code ${result.pairing.code}: send /pair ${result.pairing.code} to ${bot} within ${minutes} min. That chat will then run turns in this project.`, "success")
+        const left = Math.max(60_000, result.pairing.expiresAt - Date.now())
+        const minutes = Math.round(left / 60_000)
+        // Short enough to fit the notice row whole, on screen until the code expires, and the whole /pair command on the clipboard.
+        ctx.copyText(`/pair ${result.pairing.code}`, `/pair ${result.pairing.code}`, { hint: `paste to ${bot} · ${minutes} min`, ms: left })
       }
       return true
     }

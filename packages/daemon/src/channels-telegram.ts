@@ -55,12 +55,19 @@ export function createTelegramApi({ token, fetch: request = fetch, base = "https
     getMe: (signal?: AbortSignal) => call<{ username?: string }>("getMe", {}, 15_000, signal),
     getUpdates: ({ offset, timeoutSeconds, signal }: { offset?: number; timeoutSeconds: number; signal?: AbortSignal }) =>
       call<TelegramUpdate[]>("getUpdates", { ...(offset === undefined ? {} : { offset }), timeout: timeoutSeconds, allowed_updates: ["message", "callback_query"] }, timeoutSeconds * 1000 + 15_000, signal),
-    async sendMessage(chatId: string, text: string, buttons?: TelegramButton[][]) {
+    /** Sends `text` in parts under the size limit; resolves to the id of the last part (what `editMessage` can change). */
+    async sendMessage(chatId: string, text: string, buttons?: TelegramButton[][]): Promise<number | undefined> {
       const parts = splitMessage(text)
+      let last: number | undefined
       for (const [index, part] of parts.entries()) {
-        await call("sendMessage", { chat_id: chatId, text: part || "(empty)", disable_web_page_preview: true, ...(buttons && index === parts.length - 1 ? { reply_markup: keyboard(buttons) } : {}) }, 30_000)
+        const sent = await call<{ message_id?: number } | undefined>("sendMessage", { chat_id: chatId, text: part || "(empty)", disable_web_page_preview: true, ...(buttons && index === parts.length - 1 ? { reply_markup: keyboard(buttons) } : {}) }, 30_000)
+        last = typeof sent?.message_id === "number" ? sent.message_id : undefined
       }
+      return last
     },
+    /** Replaces a message's text (the live progress line); text past the limit is cut, never split. */
+    editMessage: (chatId: string, messageId: number, text: string) =>
+      call("editMessageText", { chat_id: chatId, message_id: messageId, text: (text.length > MESSAGE_LIMIT ? `${text.slice(0, MESSAGE_LIMIT)}…` : text) || "(empty)", disable_web_page_preview: true }, 15_000),
     answerCallback: (id: string, text?: string) => call("answerCallbackQuery", { callback_query_id: id, ...(text ? { text: text.slice(0, 180) } : {}) }, 15_000),
     sendTyping: (chatId: string) => call("sendChatAction", { chat_id: chatId, action: "typing" }, 15_000),
     /** A file the chat sent (a voice message); the download URL carries the token, so errors are scrubbed. */

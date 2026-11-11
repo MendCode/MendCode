@@ -81,6 +81,24 @@ describe("scripted-run limits", () => {
     expect(requests).toHaveLength(2)
   })
 
+  test("noHooks (a bare sub-agent): no extension rewrites its system prompt or messages", async () => {
+    const hooks = {
+      has: (name: string) => name === "prompt.system" || name === "context",
+      system: async () => "HOUSE STYLE SYSTEM",
+      context: async ({ messages }: { messages: unknown[] }) => [...messages, { role: "user", content: "HOUSE STYLE NOTE" }],
+    }
+    const run = async (limits: RunLimits | undefined) => {
+      const { provider, requests } = scripted([stop("ok")])
+      await createNativeEngine({ provider, tools: [], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", runLimits: () => limits, hooks: hooks as never }).runTurn(input().turn)
+      return JSON.stringify(requests[0])
+    }
+    const bare = await run({ noHooks: true })
+    expect(bare).not.toContain("HOUSE STYLE")
+    const plain = await run(undefined)
+    expect(plain).toContain("HOUSE STYLE SYSTEM")
+    expect(plain).toContain("HOUSE STYLE NOTE")
+  })
+
   test("without limits nothing changes", async () => {
     const { provider, requests } = scripted([stop("ok")])
     await engineWith(undefined, provider).runTurn(input().turn)

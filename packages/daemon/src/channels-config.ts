@@ -60,26 +60,27 @@ const BLOCK_MS = 15 * 60_000
 
 /** One live code at a time, single use, expiring, and a chat that guesses wrong five times is ignored for 15 minutes. */
 export function createPairing({ now }: { now(): number }) {
-  let current: { code: string; directory: string; expiresAt: number } | undefined
+  let current: { code: string; directory: string; sessionId?: string; expiresAt: number } | undefined
   const failures = new Map<string, { count: number; until: number }>()
   return {
-    create(directory: string) {
+    /** With `sessionId` (the terminal's open session) the chat that claims the code follows that session. */
+    create(directory: string, sessionId?: string) {
       const bytes = randomBytes(8)
       const code = Array.from(bytes, (byte) => ALPHABET[byte % ALPHABET.length]).join("")
-      current = { code, directory, expiresAt: now() + PAIR_TTL_MS }
+      current = { code, directory, ...(sessionId ? { sessionId } : {}), expiresAt: now() + PAIR_TTL_MS }
       return { code, expiresAt: current.expiresAt }
     },
     get expiresAt() { return current && current.expiresAt > now() ? current.expiresAt : undefined },
     cancel() { current = undefined },
     blocked(chatId: string) { return (failures.get(chatId)?.until ?? 0) > now() },
-    claim(chatId: string, given: string): { ok: true; directory: string } | { ok: false } {
+    claim(chatId: string, given: string): { ok: true; directory: string; sessionId?: string } | { ok: false } {
       if (this.blocked(chatId)) return { ok: false }
       const live = current && current.expiresAt > now() ? current : undefined
       const want = Buffer.from(live?.code ?? "!".repeat(8)), have = Buffer.from(given.trim().toUpperCase().padEnd(8, "!").slice(0, 8))
       if (live && timingSafeEqual(want, have) && given.trim().length === 8) {
         current = undefined
         failures.delete(chatId)
-        return { ok: true, directory: live.directory }
+        return { ok: true, directory: live.directory, ...(live.sessionId ? { sessionId: live.sessionId } : {}) }
       }
       const failed = failures.get(chatId) ?? { count: 0, until: 0 }
       failed.count++

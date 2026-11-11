@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createVirtualClock } from "@mendcode/kernel"
-import { ANTHROPIC_CACHE_LIFETIME_1H_MS, ANTHROPIC_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, OPENAI_CACHE_LIFETIME_MS, cacheLifetime, observedCacheLifetime, type CacheSample } from "@mendcode/protocol/wire"
+import { ANTHROPIC_CACHE_LIFETIME_1H_MS, ANTHROPIC_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_30M_MS, CHATGPT_CACHE_LIFETIME_MS, DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, OPENAI_CACHE_LIFETIME_30M_MS, OPENAI_CACHE_LIFETIME_MS, cacheLifetime, observedCacheLifetime, thirtyMinuteCacheModel, type CacheSample } from "@mendcode/protocol/wire"
 import type { SessionEvent, SessionId, Settings, TurnId } from "@mendcode/protocol"
 import { createIdleCompaction, idleCompactFireAt } from "../src/idle-compaction"
 
@@ -360,6 +360,28 @@ describe("cache lifetimes: learned from the cached tokens of each response", () 
     expect(observedCacheLifetime([...samples(4, 5, 0), ...samples(9, 3, 0), ...samples(14, 0, 4)])).toEqual({ ms: 9 * MIN, closed: true })
     expect(observedCacheLifetime([...samples(4, 5, 0), ...samples(12, 1, 0)])).toEqual({ ms: 4 * MIN, closed: false })
     expect(observedCacheLifetime([...samples(180, 4, 0), ...samples(400, 0, 5)])).toEqual({ ms: 180 * MIN, closed: true })
+  })
+
+  test("scattered misses at a short gap are no expiry when longer gaps still hit (OpenAI routes to another machine)", () => {
+    // The owner's stored ChatGPT calls: 68 % at 3 to 5 minutes, then mostly hits up to 30 minutes.
+    const seen = [...samples(3, 54, 2), ...samples(4.5, 17, 8), ...samples(6, 14, 1), ...samples(9, 10, 0), ...samples(14, 6, 0), ...samples(18, 2, 2), ...samples(28, 9, 1)]
+    expect(observedCacheLifetime(seen)).toEqual({ ms: 28 * MIN, closed: false })
+    // A run of dead buckets after the last alive one still closes it.
+    expect(observedCacheLifetime([...seen, ...samples(50, 0, 4)])).toEqual({ ms: 28 * MIN, closed: true })
+  })
+
+  test("GPT-5.6 and later: 30 minutes on the OpenAI API (documented) and on ChatGPT (assumed)", () => {
+    expect(thirtyMinuteCacheModel("gpt-6.1-sol")).toBe(true)
+    expect(thirtyMinuteCacheModel("openai/gpt-5.6")).toBe(true)
+    expect(thirtyMinuteCacheModel("gpt-5.5")).toBe(false)
+    expect(thirtyMinuteCacheModel("gpt-4.1")).toBe(false)
+    expect(thirtyMinuteCacheModel("o3")).toBe(false)
+    expect(cacheLifetime({ provider: "openai", type: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-6.1-terra" })).toEqual({ ms: OPENAI_CACHE_LIFETIME_30M_MS, source: "documented" })
+    expect(cacheLifetime({ provider: "openai", type: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5.5" })).toEqual({ ms: OPENAI_CACHE_LIFETIME_MS, source: "documented" })
+    expect(cacheLifetime({ provider: "chatgpt", model: "gpt-6.1-sol" })).toEqual({ ms: CHATGPT_CACHE_LIFETIME_30M_MS, source: "assumed" })
+    const { idle, call } = setup()
+    call(150_000, { model: "gpt-6.1-sol" })
+    expect(idle.status(SESSION)).toMatchObject({ scheduled: true, at: START + CHATGPT_CACHE_LIFETIME_30M_MS - IDLE_COMPACT_MARGIN_MS, lifetimeMinutes: 30 })
   })
 
   test("too few samples in a bucket say nothing, and a window with no hits has no lifetime", () => {
