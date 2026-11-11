@@ -33,6 +33,7 @@ function setup(options: { live?: boolean } = {}) {
   const watched: string[] = []
   const edits: Array<{ chat: string; id: number; text: string }> = []
   const answers: Record<string, (command: CommandInput) => CommandReply> = {}
+  const hooks: { onWatch?: (id: string) => Promise<CommandReply | undefined> } = {}
   const host: BridgeHost = {
     async send(command) {
       sent.push(command)
@@ -42,7 +43,8 @@ function setup(options: { live?: boolean } = {}) {
       if (command.type === "user.submit") return { ok: true, result: { queueId: "queue_1" } }
       return { ok: true }
     },
-    async watch(id) { watched.push(id); return { ok: true } },
+    // `onWatch` stands for what the daemon streams while the watch starts (the replay, and live events of another chat's subscription).
+    async watch(id) { watched.push(id); return (await hooks.onWatch?.(id)) ?? { ok: true } },
     unwatch: (id) => { unwatched.push(id) },
     mask: (_id, text) => text.replaceAll("hunter2", "[secret]"),
   }
@@ -67,7 +69,7 @@ function setup(options: { live?: boolean } = {}) {
     await bridge.update(text(chat, `/pair ${code}`))
     return code
   }
-  return { root, dir, project, bridge, config, pairing, messages, documents, callbacks, sent, unwatched, watched, edits, answers, text, press, event, nextSeq, pair, advance: (ms: number) => { clock += ms } }
+  return { root, dir, project, bridge, config, pairing, messages, documents, callbacks, sent, unwatched, watched, edits, answers, hooks, text, press, event, nextSeq, pair, advance: (ms: number) => { clock += ms } }
 }
 
 const lastMessage = (h: ReturnType<typeof setup>) => h.messages.at(-1)?.text ?? ""
@@ -464,6 +466,43 @@ describe("following the terminal's session", () => {
     expect(h.unwatched).not.toContain(TERMINAL)
     await h.bridge.update(h.text(7, "/new"))
     expect(h.unwatched).toContain(TERMINAL)
+  })
+
+  test("live events that arrive before the replay while a chat joins are held: the joining chat reads the whole turn in order", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    const at = (seq: number, body: Record<string, unknown>) => h.bridge.onEvent({ sessionId: "ses_other", seq, at: 1, ...body } as unknown as SessionEvent)
+    h.hooks.onWatch = async (id) => {
+      if (id !== "ses_other") return undefined
+      // Another chat already follows ses_other: a live event streams before the replay of the running turn.
+      at(52, { type: "item.started", turnId: "t5", itemId: "c2", kind: "tool_call", meta: { tool: "bash" } })
+      at(50, { type: "turn.started", turnId: "t5", queueId: "queue_terminal" })
+      at(51, { type: "server.request", turnId: "t5", requestId: "r5", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
+      return undefined
+    }
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "generating" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_other"))
+    expect(h.messages.some((message) => message.text.startsWith("Approve bash?"))).toBe(true)
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: "ses_other", turnId: "t5" })
+  })
+
+  test("a switch whose watch fails leaves the chat on its session with its running turn and open question", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    terminalEvent(h, { type: "turn.started", turnId: "t7", queueId: "queue_terminal" })
+    terminalEvent(h, { type: "server.request", turnId: "t7", requestId: "r1", kind: "question", title: "Which port?", detail: "" })
+    h.hooks.onWatch = async (id) => (id === "ses_gone" ? { ok: false, error: { code: "unknown_session", message: "no such session" } } as CommandReply : undefined)
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_gone", title: "Deleted", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_gone"))
+    expect(h.callbacks.at(-1)?.text).toBe("Not switched")
+    expect(h.config.read().telegram.chats[0]!.sessionId).toBe(TERMINAL)
+    await h.bridge.update(h.text(7, "8080"))
+    expect(h.sent.find((command) => command.type === "request.resolve")).toMatchObject({ sessionId: TERMINAL, requestId: "r1", decision: { kind: "answer", text: "8080" } })
+    await h.bridge.update(h.text(7, "/stop"))
+    expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: TERMINAL, turnId: "t7" })
   })
 
   test("a session joined while its turn runs is followed from that turn's start (the watch replays it)", async () => {

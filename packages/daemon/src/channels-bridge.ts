@@ -24,7 +24,7 @@ type Progress = { messageId?: number | undefined; sending?: Promise<void>; timer
 /** `mirrored`: a turn this chat did not start (typed in the terminal or another client); its prompt is shown too. */
 type Turn = { buffered: SessionEvent[]; queueId?: string; turnId?: string; answers: Map<string, string>; items: Set<string>; users: Set<string>; mirrored: boolean; progress: Progress }
 /** `seen`: the newest event seq of the session this chat read; `picks`: the sessions a /sessions list offered, by button. */
-type Runtime = { sessionId?: SessionId; seen?: number | undefined; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks: Set<SessionId> }
+type Runtime = { sessionId?: SessionId; seen?: number | undefined; /** A watch being started: its session's events wait here until it answers. */ joining?: { sessionId: SessionId; events: SessionEvent[] } | undefined; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks: Set<SessionId> }
 
 const HELP = [
   "MendCode remote control",
@@ -66,18 +66,40 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const state = runtime(id)
     if (state.sessionId) return state.sessionId
     if (stored.sessionId) {
-      state.sessionId = stored.sessionId as SessionId
-      const watched = await host.watch(state.sessionId)
-      if (watched.ok) return state.sessionId
-      delete state.sessionId
+      const joined = await join(state, stored.sessionId as SessionId)
+      if (joined.ok) { enter(id, state, stored.sessionId as SessionId, joined.events); return state.sessionId }
     }
     const created = await host.send({ type: "session.create", directory: stored.directory, title: "Telegram" })
     const sessionId = created.ok ? created.result?.sessionId as SessionId | undefined : undefined
     if (!sessionId) { await say(id, `Could not start a session: ${created.ok ? "no session id" : clip(created.error.message, 200)}`); return undefined }
-    const watched = await host.watch(sessionId)
-    if (!watched.ok) { await say(id, `Could not follow the session: ${clip(watched.error.message, 200)}`); return undefined }
+    const joined = await join(state, sessionId)
+    if (!joined.ok) { await say(id, `Could not follow the session: ${clip(joined.error.message, 200)}`); return undefined }
+    enter(id, state, sessionId, joined.events)
     saveSession(id, sessionId)
-    return state.sessionId = sessionId
+    return sessionId
+  }
+
+  /**
+   * Starts the watch of `sessionId` for a chat without moving it yet. A turn already running replays from its start, and while the watch
+   * starts every event of that session is held (live ones too, when another chat already follows it), so nothing is skipped or lost.
+   */
+  async function join(state: Runtime, sessionId: SessionId): Promise<({ ok: true; events: SessionEvent[] }) | { ok: false; error: { message: string } }> {
+    const joining = { sessionId, events: [] as SessionEvent[] }
+    state.joining = joining
+    const watched = await host.watch(sessionId).finally(() => { if (state.joining === joining) state.joining = undefined })
+    return watched.ok ? { ok: true, events: joining.events } : { ok: false, error: watched.error }
+  }
+
+  /** The chat moves to `sessionId` it now watches: what was held while joining is read in order, each event once. */
+  function enter(id: string, state: Runtime, sessionId: SessionId, held: SessionEvent[]) {
+    const previous = state.sessionId
+    closeTurn(state.mirror)
+    state.mirror = undefined
+    state.pending.clear()
+    state.sessionId = sessionId
+    state.seen = undefined
+    if (previous !== sessionId) release(id, previous)
+    for (const event of [...held].sort((a, b) => a.seq - b.seq)) deliver(id, state, event)
   }
 
   /** Stops following `sessionId` for chat `id`: the shared client unsubscribes only when no other chat follows it. */
@@ -98,29 +120,18 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   }
 
   /**
-   * Follows `sessionId` (the terminal's session at pairing, or one picked with /sessions) and shows its last turns. The chat is on
-   * the session before the watch starts, so a turn already running replays into it (its prompt, progress and open approvals).
+   * Follows `sessionId` (the terminal's session at pairing, or one picked with /sessions) and shows its last turns; a turn already
+   * running there replays into the chat (its prompt, progress and open approvals). A watch that fails leaves the chat where it was.
    */
   async function link(id: string, sessionId: SessionId, recapTurns: number) {
     const state = runtime(id)
     if (state.turn) { await say(id, "A turn is running. /stop first."); return false }
-    const previous = state.sessionId
     if (recapTurns > 0) await recap(id, sessionId, recapTurns)
-    if (previous !== sessionId) {
-      closeTurn(state.mirror)
-      state.mirror = undefined
-      state.pending.clear()
-      state.sessionId = sessionId
-      state.seen = undefined
-      const watched = await host.watch(sessionId)
-      if (!watched.ok) {
-        // The previous session was never released, so the chat stays on it.
-        if (previous) state.sessionId = previous
-        else delete state.sessionId
-        await say(id, `Could not follow that session: ${clip(watched.error.message, 200)}`)
-        return false
-      }
-      release(id, previous)
+    if (state.sessionId !== sessionId) {
+      const joined = await join(state, sessionId)
+      if (!joined.ok) { await say(id, `Could not follow that session: ${clip(joined.error.message, 200)}`); return false }
+      if (state.turn) { release(id, sessionId); await say(id, "A turn is running. /stop first."); return false }
+      enter(id, state, sessionId, joined.events)
     }
     saveSession(id, sessionId)
     return true
@@ -288,21 +299,25 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
 
   function onEvent(event: SessionEvent) {
     for (const [id, state] of runtimes) {
-      if (state.sessionId !== event.sessionId) continue
-      // Another chat joining the session replays its running turn on the shared client: a chat reads each event once.
-      if (state.seen !== undefined && event.seq <= state.seen) continue
-      state.seen = event.seq
-      if (state.mirror && belongs(state.mirror, event)) { follow(id, state, state.mirror, event); continue }
-      if (state.turn) {
-        if (state.turn.queueId === undefined) state.turn.buffered.push(event)
-        else ownEvent(id, state, state.turn, event)
-        continue
-      }
-      // A turn started from the terminal (or any other client) is followed like one started here.
-      if (event.type === "turn.started" && !state.mirror) {
-        const turn = state.mirror = newTurn(true)
-        turn.turnId = event.turnId
-      }
+      if (state.joining?.sessionId === event.sessionId) { state.joining.events.push(event); continue }
+      if (state.sessionId === event.sessionId) deliver(id, state, event)
+    }
+  }
+
+  function deliver(id: string, state: Runtime, event: SessionEvent) {
+    // Another chat joining the session replays its running turn on the shared client: a chat reads each event once.
+    if (state.seen !== undefined && event.seq <= state.seen) return
+    state.seen = event.seq
+    if (state.mirror && belongs(state.mirror, event)) { follow(id, state, state.mirror, event); return }
+    if (state.turn) {
+      if (state.turn.queueId === undefined) state.turn.buffered.push(event)
+      else ownEvent(id, state, state.turn, event)
+      return
+    }
+    // A turn started from the terminal (or any other client) is followed like one started here.
+    if (event.type === "turn.started" && !state.mirror) {
+      const turn = state.mirror = newTurn(true)
+      turn.turnId = event.turnId
     }
   }
 
@@ -471,9 +486,8 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     for (const chat of chats()) {
       if (!chat.sessionId) continue
       const state = runtime(chat.id)
-      state.sessionId = chat.sessionId as SessionId
-      const watched = await host.watch(state.sessionId)
-      if (!watched.ok) delete state.sessionId
+      const joined = await join(state, chat.sessionId as SessionId)
+      if (joined.ok) enter(chat.id, state, chat.sessionId as SessionId, joined.events)
     }
   }
 
