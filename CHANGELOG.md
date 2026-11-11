@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.15 - 2026-11-11
+
+Remote control shares the session you paired it from with your Telegram chat, the pair code is copied for you, pictures show in tool cards, and idle compaction on ChatGPT no longer runs after every turn.
+
+### Upgrade notes
+
+- Same code as v0.0.15-beta.1.
+
+## v0.0.15-beta.1 - 2026-11-11
+
+Remote control shares the session you paired it from with your Telegram chat, the pair code is copied for you, pictures show in tool cards, and idle compaction on ChatGPT no longer runs after every turn.
+
 ### Changed
 
 - Remote control joins the Telegram chat to the session you paired it from: its last turns arrive, turns typed in the terminal show in the chat, and a single message shows live progress. `/sessions` switches session from the phone and `/history` shows more turns.
