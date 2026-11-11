@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- An install guide your coding agent can follow: paste "Fetch https://raw.githubusercontent.com/MendCode/MendCode/main/install.md and follow it." into any agent.
+
 ### Fixed
 
 - With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later.
