@@ -29,14 +29,35 @@ function emphasis(html: string) {
     .replace(/~~(?=\S)([^~\n]*?\S)~~/g, "<s>$1</s>")
 }
 
-/** A Markdown table as aligned columns in a <pre>: Telegram has no tables, and monospace keeps them readable. */
-function table(rows: string[]) {
+/** A Markdown table as aligned monospace columns: neither Telegram nor Discord shows tables. */
+function tableText(rows: string[]) {
   const cells = rows.filter((row) => !TABLE_RULE.test(row)).map((row) => row.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim().replace(/\*\*|__|`/g, "")))
   const widths: number[] = []
   for (const row of cells) row.forEach((cell, index) => { widths[index] = Math.max(widths[index] ?? 0, cell.length) })
   const lines = cells.map((row) => row.map((cell, index) => cell.padEnd(widths[index] ?? 0)).join("  ").trimEnd())
   if (lines.length > 1) lines.splice(1, 0, widths.map((width) => "─".repeat(width)).join("  "))
-  return `<pre>${escape(lines.join("\n"))}</pre>`
+  return lines.join("\n")
+}
+const table = (rows: string[]) => `<pre>${escape(tableText(rows))}</pre>`
+
+/** Discord shows Markdown itself; only tables, which it does not, become aligned columns in a code block. */
+export function markdownForDiscord(markdown: string): string {
+  const lines = markdown.replace(/\r\n?/g, "\n").split("\n")
+  const out: string[] = []
+  let fence: string | undefined
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]!
+    const opened = FENCE.exec(line)
+    if (opened) { fence = fence && line.trim().startsWith(fence) ? undefined : fence ?? opened[1]; out.push(line); continue }
+    if (!fence && TABLE_ROW.test(line) && index + 1 < lines.length && TABLE_RULE.test(lines[index + 1]!)) {
+      const rows = [line]
+      while (index + 1 < lines.length && TABLE_ROW.test(lines[index + 1]!)) rows.push(lines[++index]!)
+      out.push("```", tableText(rows).replace(/`{3,}/g, "'''"), "```")
+      continue
+    }
+    out.push(line)
+  }
+  return out.join("\n")
 }
 
 export function markdownToTelegramHtml(markdown: string): string {

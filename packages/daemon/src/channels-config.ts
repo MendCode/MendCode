@@ -3,22 +3,24 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import path from "node:path"
 import { z } from "zod"
 import { ChannelChat } from "@mendcode/protocol"
+import type { ChannelService } from "./channels-api"
 
 export const MAX_CHANNEL_CHATS = 16
 export const MAX_CHAT_TOPICS = 64
 /** A topic of a paired chat (bot topic mode): it follows its own session, in its own project. */
-const StoredTopic = z.strictObject({ thread: z.number().int().positive(), directory: z.string().min(1).max(4096), sessionId: z.string().max(100).optional() })
+/** Thread ids are strings (Discord snowflakes); Telegram topics stored before are numbers. */
+const StoredTopic = z.strictObject({ thread: z.union([z.number().int().positive(), z.string().regex(/^\d{1,20}$/)]), directory: z.string().min(1).max(4096), sessionId: z.string().max(100).optional() })
 export type StoredTopic = z.infer<typeof StoredTopic>
-const StoredChat = ChannelChat.extend({ sessionId: z.string().max(100).optional(), topics: z.array(StoredTopic).max(MAX_CHAT_TOPICS).optional() })
+/** `owner`: the user who paired it; in a channel other people can read, only they drive it. */
+const StoredChat = ChannelChat.extend({ sessionId: z.string().max(100).optional(), topics: z.array(StoredTopic).max(MAX_CHAT_TOPICS).optional(), owner: z.string().regex(/^\d{1,20}$/).optional() })
 export type StoredChat = z.infer<typeof StoredChat>
-const Stored = z.strictObject({
-  telegram: z.strictObject({
-    enabled: z.boolean().default(false),
-    /** Path of a private file holding the bot token; defaults to `<dir>/telegram-token`. */
-    tokenFile: z.string().min(1).max(4096).optional(),
-    chats: z.array(StoredChat).max(MAX_CHANNEL_CHATS).default([]),
-  }).default(() => ({ enabled: false, chats: [] })),
-})
+const StoredService = () => z.strictObject({
+  enabled: z.boolean().default(false),
+  /** Path of a private file holding the bot token; defaults to `<dir>/telegram-token` or `<dir>/discord-token`. */
+  tokenFile: z.string().min(1).max(4096).optional(),
+  chats: z.array(StoredChat).max(MAX_CHANNEL_CHATS).default([]),
+}).default(() => ({ enabled: false, chats: [] }))
+const Stored = z.strictObject({ telegram: StoredService(), discord: StoredService() })
 export type StoredChannels = z.infer<typeof Stored>
 
 /** `<dir>/channels.json` (mode 0600): off by default; holds the paired chat ids, never the bot token. */
@@ -46,16 +48,32 @@ export function createChannelsConfig(dir: string) {
 }
 export type ChannelsConfig = ReturnType<typeof createChannelsConfig>
 
-/** The bot token: `MENDCODE_TELEGRAM_TOKEN`, else a token file that only its owner can read. Never returned by any command. */
-export function resolveTelegramToken({ dir, tokenFile, env }: { dir: string; tokenFile?: string | undefined; env: Record<string, string | undefined> }): { token: string } | { error: string } | undefined {
-  const fromEnv = env.MENDCODE_TELEGRAM_TOKEN?.trim()
-  if (fromEnv) return validToken(fromEnv)
-  const file = tokenFile ?? path.join(dir, "telegram-token")
-  if (!existsSync(file)) return undefined
-  if (process.platform !== "win32" && (statSync(file).mode & 0o077) !== 0) return { error: "the Telegram token file must be private (chmod 600)" }
-  return validToken(readFileSync(file, "utf8").trim())
+/** One service's paired chats, read and written whole. */
+export type ChannelStore = { chats(): StoredChat[]; update(change: (chats: StoredChat[]) => StoredChat[] | void): void }
+export function channelStore(config: ChannelsConfig, service: ChannelService): ChannelStore {
+  return {
+    chats: () => config.read()[service].chats,
+    update: (change) => { config.update((value) => { const next = change(value[service].chats); if (next) value[service].chats = next }) },
+  }
 }
-const validToken = (token: string) => /^\d{3,20}:[A-Za-z0-9_-]{20,100}$/.test(token) ? { token } : { error: "the Telegram bot token has an unexpected format" }
+
+const TOKENS: Record<ChannelService, { env: string; file: string; label: string; pattern: RegExp }> = {
+  telegram: { env: "MENDCODE_TELEGRAM_TOKEN", file: "telegram-token", label: "Telegram", pattern: /^\d{3,20}:[A-Za-z0-9_-]{20,100}$/ },
+  discord: { env: "MENDCODE_DISCORD_TOKEN", file: "discord-token", label: "Discord", pattern: /^[A-Za-z0-9_-]{20,40}\.[A-Za-z0-9_-]{4,10}\.[A-Za-z0-9_-]{20,60}$/ },
+}
+
+/** The bot token: `MENDCODE_<SERVICE>_TOKEN`, else a token file that only its owner can read. Never returned by any command. */
+export function resolveChannelToken({ service, dir, tokenFile, env }: { service: ChannelService; dir: string; tokenFile?: string | undefined; env: Record<string, string | undefined> }): { token: string } | { error: string } | undefined {
+  const spec = TOKENS[service]
+  const valid = (token: string) => spec.pattern.test(token) ? { token } : { error: `the ${spec.label} bot token has an unexpected format` }
+  const fromEnv = env[spec.env]?.trim()
+  if (fromEnv) return valid(fromEnv)
+  const file = tokenFile ?? path.join(dir, spec.file)
+  if (!existsSync(file)) return undefined
+  if (process.platform !== "win32" && (statSync(file).mode & 0o077) !== 0) return { error: `the ${spec.label} token file must be private (chmod 600)` }
+  return valid(readFileSync(file, "utf8").trim())
+}
+export const resolveTelegramToken = (input: { dir: string; tokenFile?: string | undefined; env: Record<string, string | undefined> }) => resolveChannelToken({ service: "telegram", ...input })
 
 const ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 export const PAIR_TTL_MS = 10 * 60_000

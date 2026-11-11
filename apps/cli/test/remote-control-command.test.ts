@@ -9,7 +9,7 @@ const asReply = (reply: unknown) => reply as CommandReply
 
 function app(options: { remote?: boolean; enabled?: boolean; running?: boolean; error?: string; token?: boolean } = {}) {
   const directory = tempDir("mendcode-remote-control-")
-  const report = (enabled: boolean) => ({ telegram: { enabled, tokenConfigured: options.token !== false, running: enabled && options.running !== false, botName: "mend_bot", chats: enabled ? [{ id: "7", name: "Ana", directory, pairedAt: 1 }] : [], ...(options.error ? { error: options.error } : {}) } })
+  const report = (enabled: boolean) => ({ telegram: { enabled, tokenConfigured: options.token !== false, running: enabled && options.running !== false, botName: "mend_bot", chats: enabled ? [{ id: "7", name: "Ana", directory, pairedAt: 1 }] : [], ...(options.error ? { error: options.error } : {}) }, discord: { enabled, tokenConfigured: options.token !== false, running: enabled && options.running !== false, botName: "mend_discord", chats: [] } })
   const h = appHarness({
     directory,
     ...(options.remote ? { remote: { host: "test.invalid", readOnly: false } } : {}),
@@ -63,6 +63,20 @@ describe("/remote-control", () => {
     expect(h.text().join("\n")).toContain("/remote-control")
     expect(h.sentOf("channels.change")).toHaveLength(1)
     expect(removedAliasHint("/pair")).toBe("/pair is now /remote-control")
+  })
+
+  test("discord drives the Discord bridge: on, pair and unpair name it; the bare command shows both bridges", async () => {
+    const { h, directory } = app()
+    await h.type("/remote-control discord on\r")
+    expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "enable", channel: "discord" } })
+    expect(h.text().join("\n")).toContain("Discord remote control on as @mend_discord")
+    await h.type("/remote-control discord pair\r")
+    expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "pair", directory, channel: "discord" } })
+    expect(h.text().join("\n")).toContain("copied /pair ABCD2345 · paste to your Discord channel")
+    await h.type("/remote-control discord unpair 100\r")
+    expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "unpair", chatId: "100", channel: "discord" } })
+    await h.type("/remote-control\r")
+    expect((await h.details()).join("\n")).toContain("Discord remote control off")
   })
 
   test("unpair takes an optional chat id; a wrong argument shows the usage", async () => {
