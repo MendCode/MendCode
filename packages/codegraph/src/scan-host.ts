@@ -43,8 +43,16 @@ export function hostedScan(input: { command: string[]; request: ScanRequest; sig
   const child = Bun.spawn(input.command, { stdin: "pipe", stdout: "pipe", stderr: "ignore", env: process.env })
   const kill = () => child.kill()
   input.signal.addEventListener("abort", kill, { once: true })
-  child.stdin.write(JSON.stringify(input.request))
-  void child.stdin.end()
+  // A host that exits before reading its request (it could not start) breaks the pipe: the write and the end then reject with
+  // EPIPE. That is handled here; the read below fails on its own and the indexer scans the files in this process.
+  const ignore = () => {}
+  try {
+    const written = child.stdin.write(JSON.stringify(input.request))
+    if (written instanceof Promise) written.catch(ignore)
+    Promise.resolve(child.stdin.end()).catch(ignore)
+  } catch {
+    // The same broken pipe, raised at once.
+  }
   const reader = child.stdout.getReader()
   const decoder = new TextDecoder()
   let pending = ""
