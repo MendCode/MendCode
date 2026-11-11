@@ -499,7 +499,8 @@ describe("following the terminal's session", () => {
     terminalEvent(h, { type: "turn.completed", turnId: "t7" })
     await Bun.sleep(0)
     await h.bridge.update(h.text(7, "and the docs"))
-    expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: TERMINAL, text: "and the docs" })
+    // Queued: a terminal turn that starts meanwhile cannot take it in, so it starts a turn of its own that names it.
+    expect(h.sent.find((command) => command.type === "user.submit")).toMatchObject({ sessionId: TERMINAL, text: "and the docs", delivery: "queue" })
   })
 
   test("the watch cursor: after the log's end, or from a running turn's start when that is earlier", () => {

@@ -33,6 +33,10 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) =
  * Where a chat's watch subscribes: after the log's end read first (`lastSeq`), or from the start of a running turn (its `turn.started`
  * at `runningSeq`) when that is earlier, so the chat gets that turn's prompt, progress and open approvals.
  */
+/** A running turn replayed to a second chat is read in pages of this many events, at most this many pages. */
+const REPLAY_PAGE_EVENTS = 200
+const REPLAY_PAGES = 50
+
 export function watchCursor(lastSeq: number, runningSeq: number | undefined): number {
   return runningSeq !== undefined && runningSeq > 0 ? Math.min(lastSeq, runningSeq - 1) : lastSeq
 }
@@ -57,6 +61,8 @@ export function createChannels(options: ChannelsOptions) {
     const { createClient } = await import("@mendcode/client")
     const client = createClient({ socketPath: options.socketPath, name: "telegram-bridge", reconnect: true, onEvent })
     await client.connect()
+    /** Sessions this client streams (one subscription per session, shared by the chats that follow it). */
+    const followed = new Set<SessionId>()
     return {
       send: (command) => client.send(command),
       async watch(sessionId: SessionId): Promise<CommandReply> {
@@ -65,9 +71,25 @@ export function createChannels(options: ChannelsOptions) {
         if (!window.ok) return window
         const last = await client.send({ type: "session.history", sessionId, limit: 1 })
         const running = last.ok ? (last.result as unknown as HistoryReport | undefined)?.turns.find((turn) => turn.outcome === "running") : undefined
-        return client.subscribe(sessionId, watchCursor(window.window.lastSeq, running?.seq))
+        const from = watchCursor(window.window.lastSeq, running?.seq)
+        if (!followed.has(sessionId)) {
+          const subscribed = await client.subscribe(sessionId, from)
+          if (subscribed.ok) followed.add(sessionId)
+          return subscribed
+        }
+        // Another chat already streams it: rewinding the shared cursor would let a live event skip the replay, so the replay is read
+        // from the log and handed over; the joining chat holds it with the live events and reads both in order, each once.
+        let after = from
+        for (let page = 0; page < REPLAY_PAGES; page++) {
+          const more = await client.loadAfter(sessionId, after, REPLAY_PAGE_EVENTS)
+          if (!more.ok) return more
+          for (const event of more.window.events) onEvent(event)
+          if (!more.window.more || !more.window.events.length) break
+          after = more.window.lastSeq
+        }
+        return { ok: true }
       },
-      unwatch: (sessionId) => { void client.send({ type: "client.unsubscribe", sessionId }) },
+      unwatch: (sessionId) => { followed.delete(sessionId); void client.send({ type: "client.unsubscribe", sessionId }) },
       mask: options.mask,
       close: () => client.close(),
     }

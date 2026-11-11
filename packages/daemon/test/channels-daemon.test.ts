@@ -172,6 +172,25 @@ describe("chat bridge in the daemon", () => {
     await until(() => telegram.sent.at(-1)!.text === "Stopped.")
   })
 
+  test("a second chat joining a session another chat follows, while a turn waits for an approval, gets that turn once; the first chat is not sent it again", async () => {
+    const telegram = fakeTelegram()
+    const h = await boot({ telegram })
+    await h.client.send({ type: "channels.change", change: { action: "enable" } })
+    const created = await h.client.send({ type: "session.create", directory: h.project, title: "Terminal" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    const code = async () => { const pair = await h.client.send({ type: "channels.change", change: { action: "pair", directory: h.project, sessionId } }); return (pair.ok ? pair.result?.pairing as { code: string } : undefined)!.code }
+    telegram.say(7, `/pair ${await code()}`)
+    await until(() => telegram.sent.some((message) => message.chat === "7" && message.text.includes("No turns in this session yet.")))
+    await h.client.send({ type: "user.submit", sessionId, text: "/ask", attachments: [] })
+    await until(() => telegram.sent.some((message) => message.chat === "7" && message.text.startsWith("Approve")))
+    telegram.say(8, `/pair ${await code()}`)
+    await until(() => telegram.sent.some((message) => message.chat === "8" && message.text === "From the computer:\n/ask"))
+    await until(() => telegram.sent.some((message) => message.chat === "8" && message.text.startsWith("Approve")))
+    expect(telegram.sent.filter((message) => message.chat === "7" && message.text.startsWith("Approve"))).toHaveLength(1)
+    telegram.say(8, "/stop")
+    await until(() => telegram.sent.filter((message) => message.text === "Stopped.").length === 2)
+  })
+
   test("enabled in channels.json starts with the daemon; a missing or world-readable token is reported, not used", async () => {
     const telegram = fakeTelegram()
     const missing = await boot({ telegram, enabled: true, token: false })
