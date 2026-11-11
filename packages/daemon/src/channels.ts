@@ -116,7 +116,7 @@ export function createChannels(options: ChannelsOptions) {
         let current: ReturnType<typeof createChannelBridge> | undefined
         host = await (options.connect ?? defaultConnect)((event) => current?.onEvent(event))
         const { createChannelBridge } = await import("./channels-bridge")
-        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, now, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, now, topics: me.has_topics_enabled === true, ...(me.username ? { botName: me.username } : {}), ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
         await current.resume()
         // Messages sent while the daemon was off are dropped, not replayed as turns.
         const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal })
@@ -179,7 +179,7 @@ export function createChannels(options: ChannelsOptions) {
         tokenConfigured: token !== undefined && "token" in token,
         running,
         ...(botName ? { botName } : {}),
-        chats: stored.chats.map(({ sessionId: _session, ...chat }) => chat),
+        chats: stored.chats.map(({ sessionId: _session, topics: _topics, ...chat }) => chat),
         ...(expiresAt ? { pairingExpiresAt: expiresAt } : {}),
         ...(error ? { error } : {}),
       },

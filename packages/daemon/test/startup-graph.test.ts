@@ -56,5 +56,6 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   // /marketplace's controller, keys and drawing load with the page; what a profile would take over loads with the first preview.
   for (const file of ["apps/cli/src/view/marketplace-page.ts", "apps/cli/src/ui/app/marketplace-controller.ts", "apps/cli/src/ui/app/marketplace-takeover.ts", "apps/cli/src/extensions/activation.ts"]) expect(inputs.has(file), file).toBe(false)
   // The pet system and the built-in MendGirl (module and sheet) load with the pet list or a chosen pet, never at start.
+  for (const file of ["packages/daemon/src/channels-bridge.ts", "packages/daemon/src/channels-format.ts"]) expect(inputs.has(file), file).toBe(false)
   for (const file of ["apps/cli/src/pets/builtin.ts", "apps/cli/src/pets/manifest.ts", "apps/cli/src/pets/sprite.ts", "apps/cli/assets/pets/mendgirl.webp"]) expect(inputs.has(file), file).toBe(false)
 }, 20_000)

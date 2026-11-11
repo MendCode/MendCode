@@ -11,7 +11,20 @@ receive project files. Off by default: no network call, no listener and no polli
 3. In the terminal: `/remote-control on`, then `/remote-control pair`. It shows an 8-character code valid for 10 minutes
    and copies `/pair CODE` to the clipboard; the notice stays until the code expires or you send a prompt.
 4. In a private chat with your bot paste `/pair CODE`. The chat joins the session the code was made in: its last turns
-   arrive, and from then on the terminal and the phone share it. A paired chat that pastes a new code moves to that one.
+   arrive, and from then on the terminal and the phone share it. A paired chat that pastes a new code moves to that one,
+   unless topics are on (below).
+
+### Several sessions and projects: topics
+
+Turn on topics for the bot in `@BotFather` (bot settings, topics in private chats). Then every session gets its own topic in the
+same chat with the bot, and they all run side by side; one bot is enough.
+
+- A code from another project's terminal opens that session in a new topic; the chat stays paired with the others.
+- `/new` opens a fresh session in a new topic, and a `/sessions` pick opens that session in its topic (or links to it).
+- A topic you create yourself runs a new session in the chat's project.
+- Deleting a topic stops following its session there; the session itself stays.
+
+The bridge reads the setting when it starts and again at most once a minute while it is off, so no restart is needed.
 
 ### Manage the bridge
 
@@ -22,13 +35,14 @@ receive project files. Off by default: no network call, no listener and no polli
 | `unpair [chat id]` | Removes one or all chats. |
 | `/remote-control pair` | Makes a code. |
 
-State lives in `<data dir>/channels.json` (mode 0600): `enabled` and the paired chat ids and sessions, never the token. With `enabled: true` the daemon starts the bridge on launch.
+State lives in `<data dir>/channels.json` (mode 0600): `enabled` and the paired chat ids, their topics and sessions, never the token. With `enabled: true` the daemon starts the bridge on launch.
 
 ## From the phone
 
 Any text runs a turn in the chat's session: the terminal's session when the code was made there, otherwise an ordinary
 session titled "Telegram" that you can open in the TUI. The final answer comes back as a message, split under Telegram's
-size limit and masked for session secrets.
+size limit and masked for session secrets. Its Markdown is formatted: bold, italics, code, links, lists and quotes as Telegram
+shows them, code blocks and tables in monospace. A part Telegram cannot read formatted arrives as plain text.
 
 Turns started on the computer show in the chat too: your prompt (as "From the computer:") and then the answer; joining a
 session while one runs shows it from its start. A message from the phone waits until that turn ends (or `/stop` it). While a
@@ -45,10 +59,10 @@ ends as `Done`, `Stopped` or `Failed` just above the answer.
 
 | Command | Does |
 |---|---|
-| `/sessions` | Lists the project's recent sessions as buttons; one tap moves the chat there and shows its last turns. |
+| `/sessions` | Lists the project's recent sessions as buttons; one tap moves the chat there (with topics, opens its topic) and shows its last turns. |
 | `/history [n]` | Shows the last `n` turns of the session (5 by default, up to 20). |
 | `/stop` | Cancels the running turn, also one started on the computer. |
-| `/new` | Starts a fresh session. |
+| `/new` | Starts a fresh session (with topics, in a new topic). |
 | `/file PATH` | Sends a file as a document. |
 
 Also available: `/status`, `/unpair`, `/help`.

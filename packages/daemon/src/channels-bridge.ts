@@ -1,9 +1,10 @@
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import { startedQueueIds, type HistoryReport, type QueueId, type SessionEvent, type SessionId, type SessionSummary } from "@mendcode/protocol"
+import path from "node:path"
 import { readChannelFile } from "./channels-files"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
-import { MAX_CHANNEL_CHATS, type ChannelsConfig, type createPairing } from "./channels-config"
-import type { TelegramApi, TelegramUpdate, TelegramVoice } from "./channels-telegram"
+import { MAX_CHANNEL_CHATS, MAX_CHAT_TOPICS, type ChannelsConfig, type createPairing } from "./channels-config"
+import type { TelegramApi, TelegramButton, TelegramUpdate, TelegramVoice } from "./channels-telegram"
 import type { Transcription } from "./voice"
 
 /** What the bridge needs from the daemon: an ordinary full-authority client of the local socket. */
@@ -15,7 +16,12 @@ export type BridgeHost = {
   mask(sessionId: string, text: string): string
 }
 
-type Api = Pick<TelegramApi, "sendMessage" | "answerCallback" | "sendTyping" | "sendDocument"> & Partial<Pick<TelegramApi, "downloadFile" | "editMessage">>
+type Api = Pick<TelegramApi, "sendMessage" | "answerCallback" | "sendTyping" | "sendDocument"> & Partial<Pick<TelegramApi, "downloadFile" | "editMessage" | "createTopic" | "getMe">>
+/**
+ * Where a session is followed: a paired chat (`"<chat id>"`) or one topic of it (`"<chat id>/<thread id>"`, bot topic mode). Each
+ * place has its own session and project, so a chat with topics follows several sessions at once.
+ */
+type Place = string
 const VOICE_LIMIT_BYTES = 20 * 1024 * 1024
 const VOICE_LIMIT_SECONDS = 300
 type Pending = { sessionId: SessionId; requestId: string; kind: "approval" | "question"; options: string[] }
@@ -23,20 +29,23 @@ type Pending = { sessionId: SessionId; requestId: string; kind: "approval" | "qu
 type Progress = { messageId?: number | undefined; sending?: Promise<void>; timer?: ReturnType<typeof setTimeout> | undefined; tools: number; now?: string; startedAt: number; editedAt: number; shown?: string; done?: boolean }
 /** `mirrored`: a turn this chat did not start (typed in the terminal or another client); its prompt is shown too. */
 type Turn = { buffered: SessionEvent[]; queueId?: string; turnId?: string; answers: Map<string, string>; items: Set<string>; users: Set<string>; mirrored: boolean; progress: Progress }
-/** `seen`: the newest event seq of the session this chat read; `picks`: the sessions a /sessions list offered, by button. */
-type Runtime = { sessionId?: SessionId; seen?: number | undefined; /** A watch being started: its session's events wait here until it answers. */ joining?: { sessionId: SessionId; events: SessionEvent[] } | undefined; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks: Set<SessionId> }
+/** `seen`: the newest event seq of the session this place read; `picks`: the sessions a /sessions list offered, by button, with their titles. */
+type Runtime = { sessionId?: SessionId; seen?: number | undefined; /** A watch being started: its session's events wait here until it answers. */ joining?: { sessionId: SessionId; events: SessionEvent[] } | undefined; turn?: Turn | undefined; mirror?: Turn | undefined; pending: Map<number, Pending>; picks: Map<SessionId, string> }
 
 const HELP = [
-  "MendCode remote control",
+  "**MendCode remote control**",
   "Send a message to run a turn in the session; turns started on the computer show here too.",
-  "/sessions  switch to another session of the project",
-  "/history [n]  the last turns of this session",
-  "/stop  cancel the running turn",
-  "/new  start a fresh session",
-  "/status  session and turn state",
-  "/file PATH  receive a project file",
-  "/unpair  disconnect this chat",
+  "`/sessions` switch to another session of the project",
+  "`/history [n]` the last turns of this session",
+  "`/stop` cancel the running turn",
+  "`/new` start a fresh session",
+  "`/status` session and turn state",
+  "`/file PATH` receive a project file",
+  "`/unpair` disconnect this chat",
 ].join("\n")
+const TOPICS_HELP = "With topics on, every session has its own topic: pair from another project's terminal, `/new` or a `/sessions` pick opens one."
+const TOPIC_GONE = /thread not found|topic_deleted|topic_closed|topic was deleted/i
+const TOPICS_RECHECK_MS = 60_000
 const DETAIL_LIMIT = 1500
 const EDIT_MS = 3000
 const RECAP_TURNS = 5
@@ -45,32 +54,108 @@ const SESSION_PICKS = 8
 /** Sessions an older /sessions list may still pick; the oldest offered go first. */
 const MAX_PICKS = 32
 
-export function createChannelBridge({ api, host, config, pairing, dataDir, log, transcribe, now = Date.now }: { api: Api; host: BridgeHost; config: ChannelsConfig; pairing: ReturnType<typeof createPairing>; dataDir: string; log(level: "info" | "warn", message: string): void; transcribe?: (input: { bytes: Uint8Array; name: string; mime: string }) => Promise<Transcription>; now?: () => number }) {
-  const runtimes = new Map<string, Runtime>()
-  const runtime = (id: string) => { let found = runtimes.get(id); if (!found) runtimes.set(id, found = { pending: new Map(), picks: new Set() }); return found }
+export function createChannelBridge({ api, host, config, pairing, dataDir, log, transcribe, now = Date.now, topics: topicMode = false, botName }: { api: Api; host: BridgeHost; config: ChannelsConfig; pairing: ReturnType<typeof createPairing>; dataDir: string; log(level: "info" | "warn", message: string): void; transcribe?: (input: { bytes: Uint8Array; name: string; mime: string }) => Promise<Transcription>; now?: () => number; /** The bot has topic mode on in private chats (`getMe`). */ topics?: boolean; /** The bot's username, for topic links. */ botName?: string }) {
+  const runtimes = new Map<Place, Runtime>()
+  const runtime = (id: Place) => { let found = runtimes.get(id); if (!found) runtimes.set(id, found = { pending: new Map(), picks: new Map() }); return found }
   const chats = () => config.read().telegram.chats
-  const chatOf = (id: string) => chats().find((chat) => chat.id === id)
+  const chatIdOf = (id: Place) => id.split("/")[0]!
+  const threadOf = (id: Place) => { const thread = id.split("/")[1]; return thread ? Number(thread) : undefined }
+  const placeOf = (chat: string, thread?: number) => (thread === undefined ? chat : `${chat}/${thread}`)
+  const chatOf = (id: Place) => chats().find((chat) => chat.id === chatIdOf(id))
+  const topicOf = (id: Place) => { const thread = threadOf(id); return thread === undefined ? undefined : chatOf(id)?.topics?.find((topic) => topic.thread === thread) }
+  /** A topic the chat made itself (or one from before) runs in the chat's project. */
+  const directoryOf = (id: Place) => topicOf(id)?.directory ?? chatOf(id)?.directory
+  const storedSession = (id: Place) => (threadOf(id) === undefined ? chatOf(id)?.sessionId : topicOf(id)?.sessionId) as SessionId | undefined
   let counter = 0
+  let topicsCheckedAt = now()
 
-  const say = (id: string, text: string, buttons?: Parameters<Api["sendMessage"]>[2]) => api.sendMessage(id, text, buttons).catch((error: unknown) => { log("warn", error instanceof Error ? error.message : "[CHANNELS]: send failed"); return undefined })
+  /** Topic mode is read again (at most once a minute) when it was off, so turning it on in @BotFather needs no restart. */
+  async function topicsOn() {
+    if (!topicMode && api.getMe && now() - topicsCheckedAt > TOPICS_RECHECK_MS) {
+      topicsCheckedAt = now()
+      try { topicMode = (await api.getMe()).has_topics_enabled === true } catch {}
+    }
+    return topicMode && !!api.createTopic
+  }
+
+  function send(id: Place, text: string, buttons: TelegramButton[][] | undefined, markdown: boolean) {
+    const thread = threadOf(id)
+    return api.sendMessage(chatIdOf(id), text, buttons, { ...(thread === undefined ? {} : { thread }), ...(markdown ? { markdown } : {}) }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : "[CHANNELS]: send failed"
+      log("warn", message)
+      // The user deleted the topic: its session is no longer followed there.
+      if (thread !== undefined && TOPIC_GONE.test(message)) dropTopic(id)
+      return undefined
+    })
+  }
+  const say = (id: Place, text: string, buttons?: TelegramButton[][]) => send(id, text, buttons, false)
+  /** The model's Markdown (and the bridge's own bold labels), formatted for Telegram. */
+  const md = (id: Place, text: string, buttons?: TelegramButton[][]) => send(id, text, buttons, true)
+  const topicLink = (thread: number): TelegramButton[][] | undefined => (botName ? [[{ text: "Open the topic", url: `https://t.me/${botName}/${thread}` }]] : undefined)
   const clip = (text: string, limit = DETAIL_LIMIT) => (text.length > limit ? `${text.slice(0, limit)}…` : text)
   const newTurn = (mirrored: boolean): Turn => ({ buffered: [], answers: new Map(), items: new Set(), users: new Set(), mirrored, progress: { tools: 0, startedAt: now(), editedAt: 0 } })
 
-  function saveSession(id: string, sessionId: SessionId | undefined) {
-    config.update((value) => { const chat = value.telegram.chats.find((entry) => entry.id === id); if (chat) { if (sessionId) chat.sessionId = sessionId; else delete chat.sessionId } })
+  /** The session a place follows; a topic not stored yet (made by the user) is stored in the chat's project. */
+  function saveSession(id: Place, sessionId: SessionId | undefined) {
+    config.update((value) => {
+      const chat = value.telegram.chats.find((entry) => entry.id === chatIdOf(id))
+      if (!chat) return
+      const thread = threadOf(id)
+      if (thread === undefined) { if (sessionId) chat.sessionId = sessionId; else delete chat.sessionId; return }
+      const topics = chat.topics ??= []
+      let topic = topics.find((entry) => entry.thread === thread)
+      if (!topic) { topic = { thread, directory: chat.directory }; topics.push(topic); if (topics.length > MAX_CHAT_TOPICS) topics.shift() }
+      if (sessionId) topic.sessionId = sessionId; else delete topic.sessionId
+    })
   }
 
-  async function ensureSession(id: string): Promise<SessionId | undefined> {
+  /** A new topic of chat `chat` for `directory` (and `sessionId`, when there is one yet); undefined when Telegram refuses it. */
+  async function openTopic(chat: string, name: string, directory: string, sessionId?: SessionId): Promise<Place | undefined> {
+    let thread: number
+    try { thread = await api.createTopic!(chat, name) } catch (error) {
+      log("warn", error instanceof Error ? error.message.slice(0, 200) : "[CHANNELS]: topic not created")
+      return undefined
+    }
+    config.update((value) => {
+      const stored = value.telegram.chats.find((entry) => entry.id === chat)
+      if (!stored) return
+      const topics = stored.topics ??= []
+      topics.push({ thread, directory, ...(sessionId ? { sessionId } : {}) })
+      if (topics.length > MAX_CHAT_TOPICS) topics.shift()
+    })
+    return placeOf(chat, thread)
+  }
+
+  function dropTopic(id: Place) {
+    const thread = threadOf(id)
+    config.update((value) => { const chat = value.telegram.chats.find((entry) => entry.id === chatIdOf(id)); if (chat?.topics) chat.topics = chat.topics.filter((topic) => topic.thread !== thread) })
+    forgetPlace(id)
+  }
+
+  /** A topic's name: the project folder, and the session's title when it has one. */
+  async function topicName(directory: string, sessionId?: SessionId, title?: string) {
+    let named = title
+    if (!named && sessionId) {
+      const reply = await host.send({ type: "session.list", directory, limit: 50, roots: true })
+      named = reply.ok ? ((reply.result as { sessions?: SessionSummary[] } | undefined)?.sessions ?? []).find((session) => session.sessionId === sessionId)?.title : undefined
+    }
+    const project = path.basename(directory) || directory
+    return named && named !== "Telegram" ? `${project} · ${clip(named, 90)}` : project
+  }
+
+  async function ensureSession(id: Place): Promise<SessionId | undefined> {
     const stored = chatOf(id)
-    if (!stored) return undefined
+    const directory = directoryOf(id)
+    if (!stored || !directory) return undefined
     const state = runtime(id)
     if (state.sessionId) return state.sessionId
-    if (stored.sessionId) {
-      const joined = await join(id, state, stored.sessionId as SessionId)
-      if (joined.ok) { enter(id, state, stored.sessionId as SessionId, joined.events); return state.sessionId }
+    const known = storedSession(id)
+    if (known) {
+      const joined = await join(id, state, known)
+      if (joined.ok) { enter(id, state, known, joined.events); return state.sessionId }
       if (joined.gone) return undefined
     }
-    const created = await host.send({ type: "session.create", directory: stored.directory, title: "Telegram" })
+    const created = await host.send({ type: "session.create", directory, title: "Telegram" })
     const sessionId = created.ok ? created.result?.sessionId as SessionId | undefined : undefined
     if (!sessionId) { await say(id, `Could not start a session: ${created.ok ? "no session id" : clip(created.error.message, 200)}`); return undefined }
     const joined = await join(id, state, sessionId)
@@ -88,7 +173,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const joining = { sessionId, events: [] as SessionEvent[] }
     state.joining = joining
     const watched = await host.watch(sessionId).finally(() => { if (state.joining === joining) state.joining = undefined })
-    // Unpaired (or moved by a new code) while the watch started: what was held never reaches the chat.
+    // Unpaired (or moved by a new code, or its topic deleted) while the watch started: what was held never reaches the chat.
     if (runtimes.get(id) !== state || !chatOf(id)) {
       if (watched.ok) release(id, sessionId)
       return { ok: false, gone: true, error: { message: "this chat is no longer paired" } }
@@ -152,9 +237,9 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const blocks = history.turns.map((turn) => {
       const asked = turn.items.find((item) => item.kind === "user_message")?.text ?? turn.preview
       const answer = turn.items.filter((item) => item.kind === "agent_message" && item.text.trim()).at(-1)?.text
-      return [`You: ${clip(asked.trim(), 400)}`, answer ? `MendCode: ${clip(answer.trim(), 900)}` : `(${turn.outcome})`].join("\n")
+      return [`**You:** ${clip(asked.trim(), 400)}`, answer ? `**MendCode:** ${clip(answer.trim(), 900)}` : `_(${turn.outcome})_`].join("\n")
     })
-    return say(id, host.mask(sessionId, `${history.older ? "Last" : "All"} ${history.turns.length} turn${history.turns.length === 1 ? "" : "s"}:\n\n${blocks.join("\n\n")}`))
+    return md(id, host.mask(sessionId, `**${history.older ? "Last" : "All"} ${history.turns.length} turn${history.turns.length === 1 ? "" : "s"}**\n\n${blocks.join("\n\n")}`))
   }
 
   async function runTurn(id: string, text: string) {
@@ -169,7 +254,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     if (state.mirror) return say(id, "A turn from the computer is running. Wait for its answer, or /stop it.")
     const turn = newTurn(false)
     state.turn = turn
-    void api.sendTyping(id).catch(() => {})
+    void api.sendTyping(chatIdOf(id), threadOf(id)).catch(() => {})
     // Queued, never steered into a turn that started meanwhile: the message always starts a turn of its own that names it.
     const reply = await host.send({ type: "user.submit", sessionId, text, attachments: [], delivery: "queue" })
     if (!reply.ok) { state.turn = undefined; return say(id, `Not sent: ${clip(host.mask(sessionId, reply.error.message), 300)}`) }
@@ -220,18 +305,20 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     turn.progress.timer = undefined
   }
 
-  function finish(id: string, state: Runtime, turn: Turn, text: string, outcome: string) {
+  /** `markdown`: the answer is the model's text, sent formatted. */
+  function finish(id: string, state: Runtime, turn: Turn, text: string, outcome: string, markdown = false) {
     if (state.turn === turn) state.turn = undefined
     if (state.mirror === turn) state.mirror = undefined
     for (const [key, pending] of state.pending) if (pending.kind === "approval" || pending.kind === "question") state.pending.delete(key)
     closeTurn(turn)
     const progress = turn.progress
-    if (!progress.sending || !api.editMessage) return say(id, text)
+    const answer = () => (markdown ? md(id, text) : say(id, text))
+    if (!progress.sending || !api.editMessage) return answer()
     // The progress line closes with the outcome before the answer arrives below it.
     const closing = `${outcome} · ${tools(progress.tools)} · ${elapsed(progress)}`
     return progress.sending
       .then(() => progress.messageId === undefined ? undefined : api.editMessage!(id, progress.messageId, closing).catch(() => {}))
-      .then(() => say(id, text))
+      .then(answer)
   }
 
   /** A turn this chat started: its events count once its `turn.started` names the chat's queued message. */
@@ -271,7 +358,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
       case "item.completed":
         if (turn.answers.has(event.itemId) && !turn.answers.get(event.itemId) && event.text) turn.answers.set(event.itemId, event.text)
         // A prompt typed elsewhere shows before its answer, so the chat reads like the session.
-        if (turn.mirrored && turn.users.has(event.itemId) && event.text?.trim()) void say(id, `From the computer:\n${clip(host.mask(sessionId, event.text.trim()))}`)
+        if (turn.mirrored && turn.users.has(event.itemId) && event.text?.trim()) void md(id, `**From the computer:**\n${clip(host.mask(sessionId, event.text.trim()))}`)
         break
       case "server.request": {
         if (event.kind === "approval" && (event.planReview || event.questions)) { void say(id, "A plan review needs an answer on the computer."); break }
@@ -280,14 +367,16 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
         const detail = clip(host.mask(sessionId, `${event.title}\n${event.detail}`.trim()))
         if (event.kind === "approval") {
           state.pending.set(number, { sessionId, requestId: event.requestId, kind: "approval", options: [] })
-          void say(id, `Approve${event.tool ? ` ${event.tool}` : ""}?\n${detail}`, [[{ text: "Allow once", data: `ap:${number}:y` }, { text: "Deny", data: `ap:${number}:n` }]])
+          // The request (a command, a path, a diff) reads as written: in a code block, never as Markdown.
+          const shown = clip(host.mask(sessionId, event.detail.trim())).replace(/`{3,}/g, "''\'")
+          void md(id, `**Approve${event.tool ? ` ${event.tool}` : ""}?**\n${clip(host.mask(sessionId, event.title.trim()), 300)}${shown ? `\n\`\`\`\n${shown}\n\`\`\`` : ""}`, [[{ text: "Allow once", data: `ap:${number}:y` }, { text: "Deny", data: `ap:${number}:n` }]])
         } else if (event.title === SETTINGS_PROPOSAL_LOCAL) {
           // A settings change that names a key only the machine running MendCode sets (permission, sandbox…) is answered there, never from a chat.
           void say(id, `${detail}\nAnswer this on the computer that runs MendCode.`)
         } else {
           const options = (event.options ?? []).map((option) => option.label)
           state.pending.set(number, { sessionId, requestId: event.requestId, kind: "question", options })
-          void say(id, `${detail}\nReply with your answer.`, options.length ? options.map((label, index) => [{ text: label.slice(0, 60), data: `q:${number}:${index}` }]) : undefined)
+          void md(id, `${detail}\n_Reply with your answer._`, options.length ? options.map((label, index) => [{ text: label.slice(0, 60), data: `q:${number}:${index}` }]) : undefined)
         }
         break
       }
@@ -296,7 +385,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
         break
       case "turn.completed": {
         const answer = [...turn.answers.values()].filter((value) => value.trim()).at(-1)
-        void finish(id, state, turn, answer ? host.mask(sessionId, answer) : "Done (no text answer).", "Done")
+        void finish(id, state, turn, answer ? host.mask(sessionId, answer) : "Done (no text answer).", "Done", answer !== undefined)
         break
       }
       case "turn.failed":
@@ -336,7 +425,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   async function resolve(id: string, number: number, decision: Extract<CommandInput, { type: "request.resolve" }>["decision"], done: string, callback?: string) {
     const state = runtime(id)
     const pending = state.pending.get(number)
-    // Only the chat's current session is answered from here.
+    // Only the place's current session is answered from here.
     if (!pending || pending.sessionId !== state.sessionId) { if (callback) await api.answerCallback(callback, "Expired").catch(() => {}); return false }
     state.pending.delete(number)
     const reply = await host.send({ type: "request.resolve", sessionId: pending.sessionId, requestId: pending.requestId as never, decision })
@@ -346,33 +435,50 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     return reply.ok
   }
 
-  /** The project's recent sessions as buttons; pressing one moves the chat there. */
-  async function listSessions(id: string) {
+  /** The project's recent sessions as buttons; pressing one moves the place there, or opens it in its own topic. */
+  async function listSessions(id: Place) {
     const stored = chatOf(id)
-    if (!stored) return
-    const reply = await host.send({ type: "session.list", directory: stored.directory, limit: SESSION_PICKS, roots: true, hideEmpty: true })
+    const directory = directoryOf(id)
+    if (!stored || !directory) return
+    const reply = await host.send({ type: "session.list", directory, limit: SESSION_PICKS, roots: true, hideEmpty: true })
     if (!reply.ok) return say(id, `Could not list sessions: ${clip(reply.error.message, 200)}`)
     const sessions = ((reply.result as { sessions?: SessionSummary[] } | undefined)?.sessions ?? []).slice(0, SESSION_PICKS)
     if (!sessions.length) return say(id, "No sessions in this project yet; send a message to start one.")
     const state = runtime(id)
-    const current = state.sessionId ?? stored.sessionId
+    const current = state.sessionId ?? storedSession(id)
     // A button names its session, so an older list still picks what it shows; only sessions a list offered are accepted.
-    for (const session of sessions) { state.picks.delete(session.sessionId); state.picks.add(session.sessionId) }
-    for (const old of state.picks) { if (state.picks.size <= MAX_PICKS) break; state.picks.delete(old) }
-    return say(id, "Pick a session:", sessions.map((session) => [{ text: `${session.sessionId === current ? "• " : ""}${clip(session.title || "Untitled", 50)}${session.state !== "idle" ? " (working)" : ""}`, data: `s:${session.sessionId}` }]))
+    for (const session of sessions) { state.picks.delete(session.sessionId); state.picks.set(session.sessionId, session.title) }
+    for (const old of state.picks.keys()) { if (state.picks.size <= MAX_PICKS) break; state.picks.delete(old) }
+    const open = new Set((stored.topics ?? []).map((topic) => topic.sessionId).filter(Boolean))
+    return md(id, `**Sessions in ${path.basename(directory) || directory}**${await topicsOn() ? "\nA pick opens in its own topic." : ""}`, sessions.map((session) => [{ text: `${session.sessionId === current ? "• " : open.has(session.sessionId) ? "# " : ""}${clip(session.title || "Untitled", 50)}${session.state !== "idle" ? " (working)" : ""}`, data: `s:${session.sessionId}` }]))
+  }
+
+  /** A /sessions pick with topics on: the session's topic, opened (or made) and followed there; the place itself stays where it is. */
+  async function pickInTopic(id: Place, sessionId: SessionId, title: string | undefined): Promise<string | undefined> {
+    const chat = chatIdOf(id)
+    const directory = directoryOf(id)!
+    const existing = chatOf(id)?.topics?.find((topic) => topic.sessionId === sessionId)
+    if (existing) {
+      if (placeOf(chat, existing.thread) === id) return "Already here"
+      await say(id, "That session already has its topic.", topicLink(existing.thread))
+      return "Already open"
+    }
+    const place = await openTopic(chat, await topicName(directory, sessionId, title), directory, sessionId)
+    if (!place) return undefined
+    await link(place, sessionId, RECAP_TURNS)
+    await say(id, "Opened in its own topic.", topicLink(threadOf(place)!))
+    return "Opened"
   }
 
   async function command(id: string, name: string, args: string) {
     const state = runtime(id)
     switch (name) {
-      case "start": case "help": return say(id, HELP)
-      case "status": {
-        const stored = chatOf(id)
-        return say(id, `Project ${stored?.directory ?? "?"}\nSession ${state.sessionId ?? stored?.sessionId ?? "none yet"}\n${state.turn || state.mirror ? "A turn is running" : "Idle"}`)
-      }
+      case "start": case "help": return md(id, `${HELP}${await topicsOn() ? `\n\n${TOPICS_HELP}` : ""}`)
+      case "status":
+        return md(id, `**Project** ${directoryOf(id) ?? "?"}\n**Session** ${state.sessionId ?? storedSession(id) ?? "none yet"}\n${state.turn || state.mirror ? "A turn is running" : "Idle"}${await topicsOn() ? `\n**Topics** ${(chatOf(id)?.topics ?? []).length} open` : ""}`)
       case "sessions": return listSessions(id)
       case "history": {
-        const sessionId = state.sessionId ?? (chatOf(id)?.sessionId as SessionId | undefined)
+        const sessionId = state.sessionId ?? storedSession(id)
         if (!sessionId) return say(id, "No session yet; send a message to start one.")
         const asked = Number.parseInt(args, 10)
         return recap(id, sessionId, Number.isFinite(asked) && asked > 0 ? Math.min(asked, MAX_RECAP_TURNS) : RECAP_TURNS)
@@ -385,32 +491,49 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
         if (!reply.ok) return say(id, `Could not stop: ${clip(reply.error.message, 200)}`)
         return
       }
-      case "new":
+      case "new": {
+        const directory = directoryOf(id)
+        // With topics, a fresh session gets a topic of its own and this place keeps its session.
+        if (directory && await topicsOn()) {
+          const place = await openTopic(chatIdOf(id), `${path.basename(directory) || directory} · new`, directory)
+          if (place) {
+            await say(place, "Fresh session; your next message here starts it.")
+            return say(id, "Opened a new topic.", topicLink(threadOf(place)!))
+          }
+        }
         if (state.turn) return say(id, "A turn is running. /stop first.")
         leave(id, state)
         saveSession(id, undefined)
         return say(id, "Fresh session; your next message starts it.")
-      case "file": {
-        const stored = chatOf(id)
-        if (!stored) return
-        const file = readChannelFile({ directory: stored.directory, dataDir, input: args })
-        if (!file.ok) return say(id, `Not sent: ${file.reason}`)
-        return api.sendDocument(id, { name: file.name, bytes: file.bytes }).catch((error: unknown) => say(id, `Not sent: ${error instanceof Error ? clip(error.message, 200) : "upload failed"}`))
       }
-      case "unpair":
-        config.update((value) => { value.telegram.chats = value.telegram.chats.filter((entry) => entry.id !== id) })
-        forget(id)
+      case "file": {
+        const directory = directoryOf(id)
+        if (!directory) return
+        const file = readChannelFile({ directory, dataDir, input: args })
+        if (!file.ok) return say(id, `Not sent: ${file.reason}`)
+        return api.sendDocument(chatIdOf(id), { name: file.name, bytes: file.bytes }, threadOf(id)).catch((error: unknown) => say(id, `Not sent: ${error instanceof Error ? clip(error.message, 200) : "upload failed"}`))
+      }
+      case "unpair": {
+        const chat = chatIdOf(id)
+        config.update((value) => { value.telegram.chats = value.telegram.chats.filter((entry) => entry.id !== chat) })
+        forget(chat)
         return say(id, "Unpaired.")
+      }
       default: return say(id, "Unknown command. /help lists them.")
     }
   }
 
-  function forget(id: string) {
+  function forgetPlace(id: Place) {
     const state = runtimes.get(id)
     release(id, state?.sessionId)
     closeTurn(state?.turn)
     closeTurn(state?.mirror)
     runtimes.delete(id)
+  }
+
+  /** Every place of chat `chat`: the chat and its topics. */
+  function forget(chat: string) {
+    for (const id of [...runtimes.keys()]) if (chatIdOf(id) === chat) forgetPlace(id)
   }
 
   /** A voice message as text (opt-in `voice.enabled`); the transcript is echoed so a mishearing is visible. Undefined when nothing can be run. */
@@ -429,36 +552,49 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     return heard.text
   }
 
-  /** `/pair CODE`: pairs a new chat, or moves a paired one to the code's project and session. */
-  async function claim(id: string, code: string, label: string | undefined) {
+  /**
+   * `/pair CODE`: pairs a new chat, or moves a paired one to the code's project and session. With topics on, the code's session opens
+   * in a topic of its own instead, so a chat follows sessions of several projects side by side.
+   */
+  async function claim(id: Place, code: string, label: string | undefined) {
+    const chat = chatIdOf(id)
     const known = chatOf(id)
     if (!known && chats().length >= MAX_CHANNEL_CHATS) return say(id, "Too many paired chats.")
-    const claimed = pairing.claim(id, code)
+    const claimed = pairing.claim(chat, code)
     if (!claimed.ok) return say(id, known ? "That code is not valid or has expired. This chat stays paired." : "That code is not valid or has expired.")
-    config.update((value) => {
-      const chat = value.telegram.chats.find((entry) => entry.id === id)
-      if (chat) { chat.directory = claimed.directory; delete chat.sessionId }
-      else value.telegram.chats.push({ id, ...(label ? { name: label.slice(0, 100) } : {}), directory: claimed.directory, pairedAt: Date.now() })
-    })
+    const sessionId = claimed.sessionId as SessionId | undefined
+    if (!known) config.update((value) => { value.telegram.chats.push({ id: chat, ...(label ? { name: label.slice(0, 100) } : {}), directory: claimed.directory, pairedAt: Date.now() }) })
+    if (await topicsOn() && (known || sessionId)) {
+      const place = await openTopic(chat, await topicName(claimed.directory, sessionId), claimed.directory, sessionId)
+      if (place) {
+        log("info", known ? "telegram topic paired" : "telegram chat paired")
+        if (!known) await md(chat, `Paired.\n\n${HELP}\n\n${TOPICS_HELP}`)
+        await md(place, `**Paired with** \`${claimed.directory}\``)
+        if (sessionId) await link(place, sessionId, RECAP_TURNS)
+        if (known) await say(id, `Paired ${path.basename(claimed.directory) || claimed.directory} in its own topic.`, topicLink(threadOf(place)!))
+        return
+      }
+    }
+    if (known) config.update((value) => { const entry = value.telegram.chats.find((stored) => stored.id === chat); if (entry) { entry.directory = claimed.directory; delete entry.sessionId; delete entry.topics } })
     log("info", known ? "telegram chat moved" : "telegram chat paired")
-    if (known) forget(id)
-    await say(id, `Paired with ${claimed.directory}.\n${HELP}`)
-    if (claimed.sessionId) await link(id, claimed.sessionId as SessionId, RECAP_TURNS)
+    if (known) forget(chat)
+    await md(chat, `**Paired with** \`${claimed.directory}\`\n\n${HELP}`)
+    if (sessionId) await link(chat, sessionId, RECAP_TURNS)
   }
 
   async function message(chat: NonNullable<TelegramUpdate["message"]>) {
     if (chat.chat.type !== "private") return
-    const id = String(chat.chat.id)
+    const id = placeOf(String(chat.chat.id), chat.is_topic_message ? chat.message_thread_id : undefined)
     const text = (chat.text ?? "").trim()
     const slash = /^\/([A-Za-z_]+)(?:@\S+)?(?:\s+([\s\S]*))?$/.exec(text)
     const name = slash?.[1]?.toLowerCase(), args = (slash?.[2] ?? "").trim()
     if (!chatOf(id)) {
-      if (pairing.blocked(id)) return
+      if (pairing.blocked(chatIdOf(id))) return
       if (name === "pair") return claim(id, args, chat.chat.username ?? chat.chat.first_name)
       if (name === "start") return say(id, "Pair this chat with /pair CODE. Create the code with /remote-control in the MendCode terminal.")
       return
     }
-    if (name === "pair") return pairing.blocked(id) ? undefined : claim(id, args, undefined)
+    if (name === "pair") return pairing.blocked(chatIdOf(id)) ? undefined : claim(id, args, undefined)
     // A transcript is always a plain prompt, never a chat command.
     const spoken = !text && chat.voice ? await hear(id, chat.voice) : undefined
     if (!text && spoken === undefined) return chat.voice ? undefined : say(id, "Only text messages are supported.")
@@ -472,12 +608,15 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
 
   async function callback(query: NonNullable<TelegramUpdate["callback_query"]>) {
     const chat = query.message?.chat
-    const id = chat ? String(chat.id) : undefined
+    const id = chat ? placeOf(String(chat.id), query.message?.is_topic_message ? query.message.message_thread_id : undefined) : undefined
     if (!id || chat?.type !== "private" || !chatOf(id)) return
     const picked = /^s:([A-Za-z0-9_]{1,60})$/.exec(query.data ?? "")
     if (picked) {
       const sessionId = picked[1] as SessionId
-      if (!runtime(id).picks.has(sessionId)) { await api.answerCallback(query.id, "Expired").catch(() => {}); return }
+      const picks = runtime(id).picks
+      if (!picks.has(sessionId)) { await api.answerCallback(query.id, "Expired").catch(() => {}); return }
+      const opened = await topicsOn() ? await pickInTopic(id, sessionId, picks.get(sessionId)) : undefined
+      if (opened) { await api.answerCallback(query.id, opened).catch(() => {}); return }
       const moved = await link(id, sessionId, RECAP_TURNS)
       await api.answerCallback(query.id, moved ? "Switched" : "Not switched").catch(() => {})
       return
@@ -493,13 +632,16 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     }
   }
 
-  /** At start, follows again the session each paired chat was on, so its turns show without a message from the phone first. */
+  /** At start, follows again the session of each paired chat and topic, so its turns show without a message from the phone first. */
   async function resume() {
     for (const chat of chats()) {
-      if (!chat.sessionId) continue
-      const state = runtime(chat.id)
-      const joined = await join(chat.id, state, chat.sessionId as SessionId)
-      if (joined.ok) enter(chat.id, state, chat.sessionId as SessionId, joined.events)
+      const places: Array<[Place, string | undefined]> = [[chat.id, chat.sessionId], ...(chat.topics ?? []).map((topic): [Place, string | undefined] => [placeOf(chat.id, topic.thread), topic.sessionId])]
+      for (const [id, sessionId] of places) {
+        if (!sessionId) continue
+        const state = runtime(id)
+        const joined = await join(id, state, sessionId as SessionId)
+        if (joined.ok) enter(id, state, sessionId as SessionId, joined.events)
+      }
     }
   }
 

@@ -12,6 +12,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - An install guide your coding agent can follow: paste "Fetch https://raw.githubusercontent.com/MendCode/MendCode/main/install.md and follow it." into any agent.
+- Telegram remote control follows several sessions and projects at once from one bot: with topics on in @BotFather, each session has its own topic, opened by pairing from another project, `/new` or `/sessions`.
+- Answers in Telegram arrive formatted: bold, code, lists, links and quotes, with code blocks and tables in monospace.
 
 ### Fixed
 
