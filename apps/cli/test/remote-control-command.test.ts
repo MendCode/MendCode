@@ -52,7 +52,11 @@ describe("/remote-control", () => {
     const { h, directory } = app()
     await h.type("/remote-control pair\r")
     expect(h.sentOf("channels.change").at(-1)).toMatchObject({ change: { action: "pair", directory } })
-    expect(h.text().join("\n")).toContain("send /pair ABCD2345 to @mend_bot")
+    const shown = h.text().join("\n")
+    // The notice fits its row whole: the code is readable, not cut to "…".
+    expect(shown).toContain("copied /pair ABCD2345 · paste to @mend_bot · 10 min")
+    // The pair command goes to the clipboard (OSC 52) so it can be pasted into Telegram.
+    expect(h.written.join("")).toContain(`\x1b]52;c;${Buffer.from("/pair ABCD2345").toString("base64")}`)
     // /pair is no command: the menu finds /remote-control by its summary (it says "Pair"), and the hint names where the word went.
     await h.type("/pair")
     expect(h.text().join("\n")).toContain("/remote-control")

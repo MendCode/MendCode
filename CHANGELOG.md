@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - A picture the model reads shows in its tool card in terminals that draw images, also in Claude Code sessions, instead of `[image]`.
+- `/remote-control pair` copies `/pair CODE` to the clipboard and keeps the code readable on screen until it expires.
 
 ## v0.0.14 - 2026-11-10
 

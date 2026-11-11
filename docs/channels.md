@@ -8,8 +8,9 @@ receive project files. Off by default: no network call, no listener and no polli
 1. Create a bot with `@BotFather` and copy its token.
 2. Give the daemon the token, never through a slash command or a flag: export `MENDCODE_TELEGRAM_TOKEN`, or save it to
    `<data dir>/telegram-token` with mode 600 (a group/world-readable file is refused).
-3. In the terminal: `/remote-control on`, then `/remote-control pair`. It prints an 8-character code valid for 10 minutes.
-4. In a private chat with your bot send `/pair CODE`. That chat now runs turns in the project where the code was made.
+3. In the terminal: `/remote-control on`, then `/remote-control pair`. It shows an 8-character code valid for 10 minutes
+   and copies `/pair CODE` to the clipboard; the notice stays until the code expires or you send a prompt.
+4. In a private chat with your bot paste `/pair CODE`. That chat now runs turns in the project where the code was made.
 
 ### Manage the bridge
 
