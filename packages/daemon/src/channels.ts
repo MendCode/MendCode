@@ -30,6 +30,14 @@ const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) =
 })
 
 /**
+ * Where a chat's watch subscribes: after the log's end read first (`lastSeq`), or from the start of a running turn (its `turn.started`
+ * at `runningSeq`) when that is earlier, so the chat gets that turn's prompt, progress and open approvals.
+ */
+export function watchCursor(lastSeq: number, runningSeq: number | undefined): number {
+  return runningSeq !== undefined && runningSeq > 0 ? Math.min(lastSeq, runningSeq - 1) : lastSeq
+}
+
+/**
  * The opt-in chat bridge (docs/channels.md). Nothing starts unless `channels.json` enables Telegram and a bot token exists;
  * then the daemon long-polls the bot API outward (no listener) and relays paired chats to ordinary sessions.
  */
@@ -52,12 +60,12 @@ export function createChannels(options: ChannelsOptions) {
     return {
       send: (command) => client.send(command),
       async watch(sessionId: SessionId): Promise<CommandReply> {
-        // A turn already running replays from its start: its prompt, progress and open approvals reach the chat.
+        // The log's end is read before the running turn, so a turn that starts in between is after the cursor and replays too.
+        const window = await client.loadWindow(sessionId, 1)
+        if (!window.ok) return window
         const last = await client.send({ type: "session.history", sessionId, limit: 1 })
         const running = last.ok ? (last.result as unknown as HistoryReport | undefined)?.turns.find((turn) => turn.outcome === "running") : undefined
-        if (running && running.seq > 0) return client.subscribe(sessionId, running.seq - 1)
-        const window = await client.loadWindow(sessionId, 1)
-        return window.ok ? client.subscribe(sessionId, window.window.lastSeq) : window
+        return client.subscribe(sessionId, watchCursor(window.window.lastSeq, running?.seq))
       },
       unwatch: (sessionId) => { void client.send({ type: "client.unsubscribe", sessionId }) },
       mask: options.mask,

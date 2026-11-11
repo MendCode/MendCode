@@ -160,8 +160,13 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
   async function runTurn(id: string, text: string) {
     const state = runtime(id)
     if (state.turn) return say(id, "A turn is running. /stop cancels it.")
+    // The session may take a message into the turn it is running, which then never starts one of this chat's own.
+    if (state.mirror) return say(id, "A turn from the computer is running. Wait for its answer, or /stop it.")
     const sessionId = await ensureSession(id)
     if (!sessionId) return
+    // Joining the session may have replayed a running turn into the chat.
+    if (state.turn) return say(id, "A turn is running. /stop cancels it.")
+    if (state.mirror) return say(id, "A turn from the computer is running. Wait for its answer, or /stop it.")
     const turn = newTurn(false)
     state.turn = turn
     void api.sendTyping(id).catch(() => {})

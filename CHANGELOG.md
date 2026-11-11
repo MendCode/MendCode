@@ -15,7 +15,15 @@ Remote control shares the session you paired it from with your Telegram chat, th
 
 ### Upgrade notes
 
-- Same code as v0.0.15-beta.1.
+- Same code as v0.0.15-beta.2.
+
+## v0.0.15-beta.2 - 2026-11-11
+
+Remote control waits for a turn from the computer before running one from the phone, and a chat that joins a session never misses a turn that just started.
+
+### Fixed
+
+- A message sent from Telegram while a turn from the computer runs is answered with a note to wait or `/stop`, instead of leaving the chat unable to send more, and a chat that joins a session as a turn starts follows that turn.
 
 ## v0.0.15-beta.1 - 2026-11-11
 
