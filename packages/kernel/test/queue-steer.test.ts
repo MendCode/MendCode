@@ -433,3 +433,23 @@ test("a notice told again with its queueId while it still waits is rewritten in 
   expect(lastQueue(s)).toEqual([])
   expect(await input.takeQueued?.()).toBeUndefined()
 })
+
+test("an engine that holds a message until its tools' results takes it while they run and hears when one is queued; others wait for the results", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  let told = 0
+  input.onQueued?.(() => void told++)
+  const toolId = input.newItemId()
+  input.emit({ type: "item.started", sessionId: input.sessionId, turnId: input.turnId, itemId: toolId, kind: "tool_call" } as never)
+  await flush()
+  await s.submit("while the tool runs")
+  expect(told).toBe(1)
+  expect(await input.takeQueued?.()).toBeUndefined()
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  expect(s.actor.snapshot().queue).toHaveLength(0)
+  // A message marked `queue` still waits for the answer, early or not.
+  await s.submit("after the answer", { delivery: "queue" })
+  expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
+  expect(s.actor.snapshot().queue).toHaveLength(1)
+})

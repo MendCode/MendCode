@@ -57,6 +57,8 @@ type ActiveTurn = {
   grace?: TimerHandle
   /** The engine's way to take a promoted message without a cancel (`TurnInput.onSendNow`). */
   sendNow?: (message: Pick<TurnInput, "text" | "attachments">) => boolean
+  /** The engine's ear for a message queued during the turn (`TurnInput.onQueued`). */
+  queued?: () => void
   /** Set once a promoted message was handed to the engine: another promotion then waits for this turn to end. */
   handedOff?: boolean
   /** When the current run of network failures began; cleared by the next item event. */
@@ -86,7 +88,7 @@ type Message =
   | { kind: "notice"; text: string; queueId?: QueueId; idleOnly?: boolean; delivery?: "queue" | "steer"; rides?: boolean; unless?: () => boolean; recordOnly?: boolean; reply(queueId: QueueId | undefined): void }
   | { kind: "steer"; steering: Steering; reply(started: boolean): void }
   | { kind: "compact.idle"; reply(started: boolean): void }
-  | { kind: "engine.queue"; turnId: TurnId; userOnly?: boolean; reply(entry: Pick<TurnInput, "text" | "attachments" | "authority"> | undefined): void }
+  | { kind: "engine.queue"; turnId: TurnId; userOnly?: boolean; whileTools?: boolean; reply(entry: Pick<TurnInput, "text" | "attachments" | "authority"> | undefined): void }
   | { kind: "engine.request.cancel"; turnId: TurnId; requestId: RequestId }
 
 export type SessionActorOptions = {
@@ -223,6 +225,16 @@ export function createSessionActor(options: SessionActorOptions) {
   }
 
   /** Notices whose news the model already read another way leave the queue unread, before anything is taken from it. */
+  /** Tells the running turn's engine that a message entered the queue; it asks for it the usual way (`takeQueued`). */
+  function tellEngineQueued() {
+    if (!steerable() || held) return
+    try {
+      active?.queued?.()
+    } catch {
+      // The engine's ear failing changes nothing: the message is taken at its next boundary.
+    }
+  }
+
   function dropShown() {
     const shown = queue.filter((entry) => entry.unless?.())
     if (!shown.length) return
@@ -327,8 +339,9 @@ export function createSessionActor(options: SessionActorOptions) {
       ask: (request) => new Promise((resolve) => post({ kind: "engine.request", turnId, request, resolve })),
       permissionMode: () => permissionMode,
       setPermissionMode: (mode) => post({ kind: "engine.permission", turnId, mode }),
-      takeQueued: (take) => new Promise((reply) => post({ kind: "engine.queue", turnId, reply, ...(take?.userOnly ? { userOnly: true } : {}) })),
+      takeQueued: (take) => new Promise((reply) => post({ kind: "engine.queue", turnId, reply, ...(take?.userOnly ? { userOnly: true } : {}), ...(take?.whileTools ? { whileTools: true } : {}) })),
       onSendNow: (handler) => { turn.sendNow = handler },
+      onQueued: (handler) => { turn.queued = handler },
     }
     // A shell entry is only queued when the engine has runShell (checked at user.shell).
     run(turn, "turn", () => (entry.shell && engine.runShell ? engine.runShell(input) : engine.runTurn(input)))
@@ -618,6 +631,7 @@ export function createSessionActor(options: SessionActorOptions) {
         emitQueue()
         const interrupts = delivery === "restart" || (delivery === undefined && options.queueMode?.() === "immediate")
         if (interrupts && !paused && active && !active.cancelBy && !active.interruptReason) cancel(active, "promotion")
+        else tellEngineQueued()
         settleIdle()
         return { ok: true, result: { queueId, ...(command.delivery ? { delivery: delivery ?? command.delivery, steered: delivery === "steer" } : {}) } }
       }
@@ -865,6 +879,7 @@ export function createSessionActor(options: SessionActorOptions) {
         else queue.push(entry)
         emit({ type: "queue.added", sessionId, queueId, text: message.text, attachments: [], notice: true, ...recorded })
         emitQueue()
+        tellEngineQueued()
         settleIdle()
         return message.reply(queueId)
       }
@@ -899,7 +914,8 @@ export function createSessionActor(options: SessionActorOptions) {
         // Send now already delivered the message; its queued entry must survive the interrupted tool's result for the adopted turn.
         if (turn?.handedOff) return message.reply(undefined)
         // Never bypass a held queue. Only the main agent's own open steps hold a message back: a sub-agent's tools run in its thread.
-        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size > turn.agentOpen.size) return message.reply(undefined)
+        // An engine that holds the message until its tools' results (`whileTools`) may take it while they run; an approval still waits.
+        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || (!message.whileTools && turn.openItems.size > turn.agentOpen.size)) return message.reply(undefined)
         // After its answer, such a turn is done: the next message gets a turn of its own (and no selection made for another one).
         if (turn.alone && message.userOnly) return message.reply(undefined)
         dropShown()

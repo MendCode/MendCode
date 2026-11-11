@@ -472,7 +472,7 @@ Bridge instructions name those models because Claude Code's Agent tool lists onl
 
 ### Messages, silence and attachments
 
-A message sent during a turn enters at its next tool result, as in Claude Code. Claude reads it after the step at hand; one taken only after the turn's answer is done is answered in the same turn.
+A message sent during a turn reaches Claude Code while the step's tools run, as typing in Claude Code does, so Claude reads it with those tools' results; one sent while Claude writes goes at the next tool result, and one taken only after the turn's answer is done is answered in the same turn. An approval waiting keeps it in the queue until it is answered.
 
 A saved `/queue` policy wins.
 
