@@ -66,14 +66,15 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     const state = runtime(id)
     if (state.sessionId) return state.sessionId
     if (stored.sessionId) {
-      const joined = await join(state, stored.sessionId as SessionId)
+      const joined = await join(id, state, stored.sessionId as SessionId)
       if (joined.ok) { enter(id, state, stored.sessionId as SessionId, joined.events); return state.sessionId }
+      if (joined.gone) return undefined
     }
     const created = await host.send({ type: "session.create", directory: stored.directory, title: "Telegram" })
     const sessionId = created.ok ? created.result?.sessionId as SessionId | undefined : undefined
     if (!sessionId) { await say(id, `Could not start a session: ${created.ok ? "no session id" : clip(created.error.message, 200)}`); return undefined }
-    const joined = await join(state, sessionId)
-    if (!joined.ok) { await say(id, `Could not follow the session: ${clip(joined.error.message, 200)}`); return undefined }
+    const joined = await join(id, state, sessionId)
+    if (!joined.ok) { if (!joined.gone) await say(id, `Could not follow the session: ${clip(joined.error.message, 200)}`); return undefined }
     enter(id, state, sessionId, joined.events)
     saveSession(id, sessionId)
     return sessionId
@@ -83,10 +84,15 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
    * Starts the watch of `sessionId` for a chat without moving it yet. A turn already running replays from its start, and while the watch
    * starts every event of that session is held (live ones too, when another chat already follows it), so nothing is skipped or lost.
    */
-  async function join(state: Runtime, sessionId: SessionId): Promise<({ ok: true; events: SessionEvent[] }) | { ok: false; error: { message: string } }> {
+  async function join(id: string, state: Runtime, sessionId: SessionId): Promise<({ ok: true; events: SessionEvent[] }) | { ok: false; gone?: true; error: { message: string } }> {
     const joining = { sessionId, events: [] as SessionEvent[] }
     state.joining = joining
     const watched = await host.watch(sessionId).finally(() => { if (state.joining === joining) state.joining = undefined })
+    // Unpaired (or moved by a new code) while the watch started: what was held never reaches the chat.
+    if (runtimes.get(id) !== state || !chatOf(id)) {
+      if (watched.ok) release(id, sessionId)
+      return { ok: false, gone: true, error: { message: "this chat is no longer paired" } }
+    }
     return watched.ok ? { ok: true, events: joining.events } : { ok: false, error: watched.error }
   }
 
@@ -128,8 +134,8 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     if (state.turn) { await say(id, "A turn is running. /stop first."); return false }
     if (recapTurns > 0) await recap(id, sessionId, recapTurns)
     if (state.sessionId !== sessionId) {
-      const joined = await join(state, sessionId)
-      if (!joined.ok) { await say(id, `Could not follow that session: ${clip(joined.error.message, 200)}`); return false }
+      const joined = await join(id, state, sessionId)
+      if (!joined.ok) { if (!joined.gone) await say(id, `Could not follow that session: ${clip(joined.error.message, 200)}`); return false }
       if (state.turn) { release(id, sessionId); await say(id, "A turn is running. /stop first."); return false }
       enter(id, state, sessionId, joined.events)
     }
@@ -486,7 +492,7 @@ export function createChannelBridge({ api, host, config, pairing, dataDir, log, 
     for (const chat of chats()) {
       if (!chat.sessionId) continue
       const state = runtime(chat.id)
-      const joined = await join(state, chat.sessionId as SessionId)
+      const joined = await join(chat.id, state, chat.sessionId as SessionId)
       if (joined.ok) enter(chat.id, state, chat.sessionId as SessionId, joined.events)
     }
   }

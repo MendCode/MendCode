@@ -488,6 +488,26 @@ describe("following the terminal's session", () => {
     expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: "ses_other", turnId: "t5" })
   })
 
+  test("a chat unpaired while its watch starts gets nothing that was held, and the watch is released", async () => {
+    const h = setup()
+    await pairWithTerminal(h)
+    h.hooks.onWatch = async (id) => {
+      if (id !== "ses_other") return undefined
+      h.bridge.onEvent({ sessionId: "ses_other", seq: 50, at: 1, type: "turn.started", turnId: "t5", queueId: "queue_terminal" } as unknown as SessionEvent)
+      h.bridge.onEvent({ sessionId: "ses_other", seq: 51, at: 1, type: "server.request", turnId: "t5", requestId: "r5", kind: "approval", title: "Run bash", detail: "secret plan", tool: "bash" } as unknown as SessionEvent)
+      // `/remote-control unpair` on the computer, as createChannels.change does it.
+      h.config.update((value) => { value.telegram.chats = [] })
+      h.bridge.forget("7")
+      return undefined
+    }
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "generating" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, "s:ses_other"))
+    // The history went out while the chat was still paired; nothing held during the watch does.
+    expect(h.messages.some((message) => message.text.includes("secret plan") || message.text.startsWith("Approve"))).toBe(false)
+    expect(h.unwatched).toContain("ses_other")
+  })
+
   test("a switch whose watch fails leaves the chat on its session with its running turn and open question", async () => {
     const h = setup()
     await pairWithTerminal(h)
