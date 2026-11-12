@@ -125,7 +125,17 @@ export type TurnInput = {
    * Native engines call only after every tool result in an iteration is persisted, before the next model call. A reply with no
    * `authority` is a notice about the session's own background work: context for the model, read as it is, and the turn keeps its own.
    */
-  takeQueued?(options?: { /** Only a message of the user's: a notice about the session's background work waits for its own turn. */ userOnly?: boolean }): Promise<Pick<TurnInput, "text" | "attachments" | "authority"> | undefined>
+  takeQueued?(options?: {
+    /** Only a message of the user's: a notice about the session's background work waits for its own turn. */
+    userOnly?: boolean
+    /**
+     * Taken while the main agent's tools still run: the engine holds the message itself and reads it after their results (Claude Code
+     * keeps a message written while a tool runs and reads it with that tool's result; written after the result, it waits a step more).
+     */
+    whileTools?: boolean
+  }): Promise<Pick<TurnInput, "text" | "attachments" | "authority"> | undefined>
+  /** An engine that takes messages while its tools run (`whileTools`) registers this; it is called when one enters the queue during the turn. */
+  onQueued?(handler: () => void): void
   /**
    * An engine that can take a message mid-turn without stopping what the turn started (Claude Code: a plain interrupt also stops its
    * background agents) registers how. "Send now" then hands it the message: the handler returns true when it took it, and the turn

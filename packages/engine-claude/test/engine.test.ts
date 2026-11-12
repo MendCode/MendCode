@@ -1329,9 +1329,43 @@ describe("claude compaction spend", () => {
     expect(compacted).toMatchObject({ input: 1_998, output: 835, cacheRead: 24_863, cacheWrite: 12_442 })
   })
 
-  test("a compaction in a process's first turn (a resumed conversation, a restarted process) counts from zero", () => {
-    const first = turnUsage({}, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual" } }, compactResult])
+  test("a compaction in a new conversation's first turn counts from zero", () => {
+    const fresh = { spend: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    const first = turnUsage(fresh, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "manual" } }, compactResult])
     expect(first).toMatchObject({ input: 2_000, output: 858, cacheRead: 24_863, cacheWrite: 49_725 })
+  })
+
+  test("a resumed process's first turn that compacts adds nothing for it: its running total holds what the session spent before", () => {
+    // Claude Code's figures for such a turn of a long session: `modelUsage` carries the session's whole spend, not this process's.
+    const resumed = { ...compactResult, usage: { input_tokens: 2_745, output_tokens: 16_543, cache_read_input_tokens: 2_228_317, cache_creation_input_tokens: 110_428 }, modelUsage: { "claude-opus-5-5": { inputTokens: 481_309, outputTokens: 3_141_144, cacheReadInputTokens: 751_689_027, cacheCreationInputTokens: 11_895_150 } } }
+    const mark: { spend?: unknown } = {}
+    expect(turnUsage(mark, [{ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto" } }, resumed])).toMatchObject({ input: 2_745, output: 16_543, cacheRead: 2_228_317, cacheWrite: 110_428 })
+    // The mark is set from that result, so the process's next compaction is counted from there.
+    expect(mark.spend).toEqual({ input: 481_309, output: 3_141_144, cacheRead: 751_689_027, cacheWrite: 11_895_150 })
+  })
+
+  test("a turn that compacts records the session's whole spend only for a new conversation's process, never a resumed one's", async () => {
+    const spend = { inputTokens: 400_000, outputTokens: 3_000_000, cacheReadInputTokens: 700_000_000, cacheCreationInputTokens: 11_000_000 }
+    const recorded: number[] = []
+    for (const resumed of [false, true]) {
+      const fake = fakeClaude({
+        onUser(api) {
+          api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+          api.push({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 190_000, post_tokens: 100_000 } })
+          streamText(api, 0, "done")
+          api.push(result({ usage: { input_tokens: 10, output_tokens: 500, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 100 }, modelUsage: { "claude-opus-5-5": spend } }))
+        },
+      })
+      const h = engineWith([fake], { notify: () => {} })
+      const turn = turnInput()
+      if (resumed) h.bound.set(turn.input.sessionId, "cc-old")
+      expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+      expect(h.spawned[0]!.args.some((arg) => arg.startsWith("--resume="))).toBe(resumed)
+      recorded.push((turn.events.find((event) => event.type === "usage") as Extract<EngineEvent, { type: "usage" }>).output)
+      h.engine.stop()
+    }
+    // New: the whole gap is this process's own (the compaction's calls). Resumed: the running total held the session's past, so only the turn's own.
+    expect(recorded).toEqual([3_000_000, 500])
   })
 
   test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
@@ -1918,6 +1952,55 @@ describe("claude engine background tasks", () => {
     expect(fake.written.some((message) => message.request?.subtype === "interrupt")).toBe(false)
     expect(turn.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "DONE BANANA")).toBe(true)
     h.engine.stop()
+  })
+
+  test("a message queued while a tool runs is written to Claude Code before that tool's result, so it is read with that result", async () => {
+    for (const when of ["before the tool started", "while the tool runs"] as const) {
+      let toolResultSent = false
+      let writtenBeforeResult = false
+      const fake = fakeClaude({
+        onUser(api, content) {
+          if (content.some((part: any) => part.text === "Also say BANANA")) {
+            writtenBeforeResult = !toolResultSent
+            const queued = fake.written.at(-1)
+            api.push({ type: "command_lifecycle", command_uuid: queued.uuid, state: "queued" })
+            toolResultSent = true
+            api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_sleep", content: "" }] } })
+            api.push({ type: "command_lifecycle", command_uuid: queued.uuid, state: "started" })
+            streamText(api, 0, "DONE BANANA")
+            api.push({ type: "command_lifecycle", command_uuid: queued.uuid, state: "completed" })
+            api.push(result())
+            return
+          }
+          api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+          api.push({ type: "command_lifecycle", command_uuid: fake.written.at(-1).uuid, state: "started" })
+          // The tool runs until the message comes: its result is only sent with the message (or never, failing the turn's wait).
+          streamTool(api, 0, "toolu_sleep", "Bash", { command: "sleep 8" })
+        },
+      })
+      const h = engineWith([fake], { notify: () => {} })
+      const turn = turnInput()
+      let available = when === "before the tool started"
+      let offered = false
+      let tell: (() => void) | undefined
+      const asked: Array<{ whileTools?: boolean } | undefined> = []
+      turn.input.onQueued = (handler) => { tell = handler }
+      turn.input.takeQueued = async (options) => {
+        asked.push(options)
+        return !available || offered ? undefined : ((offered = true), { text: "Also say BANANA", attachments: [] })
+      }
+      const running = h.engine.runTurn(turn.input)
+      if (when === "while the tool runs") {
+        for (let wait = 0; wait < 200 && !asked.length; wait++) await Bun.sleep(5)
+        available = true
+        tell?.()
+      }
+      expect(await running).toEqual({ status: "ok" })
+      expect(writtenBeforeResult).toBe(true)
+      expect(asked[0]).toEqual({ whileTools: true })
+      expect(turn.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "DONE BANANA")).toBe(true)
+      h.engine.stop()
+    }
   })
 
   test("a turn whose result comes while a steered message still waits ends with the answer to that message, not before", async () => {

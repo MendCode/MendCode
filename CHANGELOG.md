@@ -9,6 +9,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- An install guide your coding agent can follow: paste "Fetch https://raw.githubusercontent.com/MendCode/MendCode/main/install.md and follow it." into any agent.
+
+### Fixed
+
+- With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later.
+- With Claude Code, a turn that compacts in a resumed session no longer counts the whole session's tokens as its own, in the activity line and in usage.
+
 ## v0.0.15 - 2026-11-11
 
 Remote control shares the session you paired it from with your Telegram chat, the pair code is copied for you, pictures show in tool cards, and idle compaction on ChatGPT no longer runs after every turn.

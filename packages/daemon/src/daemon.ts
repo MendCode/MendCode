@@ -1499,7 +1499,7 @@ export async function startDaemon(options: DaemonOptions) {
       // every message it takes mid-turn; the native engine reads it from the attachment itself.
       if (external) {
         const takeQueued = turn.takeQueued
-        turn = { ...turn, ...withPastedTexts(turn), ...(takeQueued ? { takeQueued: async () => { const queued = await takeQueued(); return queued ? { ...queued, ...withPastedTexts(queued) } : undefined } } : {}) }
+        turn = { ...turn, ...withPastedTexts(turn), ...(takeQueued ? { takeQueued: async (take) => { const queued = await takeQueued(take); return queued ? { ...queued, ...withPastedTexts(queued) } : undefined } } : {}) }
       }
       if (!external) importForeign(turn.sessionId, model, turn.turnId)
       const carried = portable.prepare({ sessionId: turn.sessionId, turnId: turn.turnId, key: engineKeyOf(model) })
