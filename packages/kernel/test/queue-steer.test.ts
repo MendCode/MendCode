@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import type { QueueId, Settings } from "@mendcode/protocol"
+import { MAX_QUEUE_ENTRIES, type QueueId, type Settings } from "@mendcode/protocol"
 import { createSessionActor } from "../src/session-actor"
 import { createHarness, createManualEngine, flush } from "./helpers"
 
@@ -485,4 +485,34 @@ test("a message taken while the tools run shows as steering until the model read
   expect(userMessages()).toHaveLength(2)
   expect(lastQueue(s)).toEqual([])
   expect(s.manual.turns).toHaveLength(1)
+})
+
+test("a message queued while an approval waits is offered to the engine once the approval is answered", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  let told = 0
+  input.onQueued?.(() => void told++)
+  void input.ask({ kind: "approval", title: "bash", detail: "sleep 8" })
+  await flush()
+  await s.submit("while it waits")
+  expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
+  const before = told
+  const request = s.h.events.find((event) => event.type === "server.request")
+  if (request?.type !== "server.request") throw new Error("missing request")
+  await s.command({ type: "request.resolve", requestId: request.requestId, decision: { kind: "approve", scope: "once" } })
+  expect(told).toBe(before + 1)
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while it waits" })
+})
+
+test("messages handed to the engine and still unread count toward the queue's bound", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  await s.submit("handed over")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "handed over" })
+  for (let at = 1; at < MAX_QUEUE_ENTRIES; at++) expect(await s.submit(`waits ${at}`, { delivery: "queue" })).toMatchObject({ ok: true })
+  expect(lastQueue(s)).toHaveLength(MAX_QUEUE_ENTRIES)
+  expect(await s.submit("one too many")).toMatchObject({ ok: false, code: "busy" })
+  expect(lastQueue(s)).toHaveLength(MAX_QUEUE_ENTRIES)
 })

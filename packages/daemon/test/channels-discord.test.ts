@@ -13,7 +13,8 @@ import { markdownForDiscord } from "../src/channels-format"
 const TOKEN = ["MTIzNDU2Nzg5MDEyMzQ1Njc4", "GabcDe", "fake".repeat(4) + "0123456789AB"].join(".")
 const GUILD = "500"
 const LOBBY = "100"
-const OWNER = "42"
+// Long and unlike anything else in a report (a temporary path, a port), so finding it there means the report leaked it.
+const OWNER = "731294866250154042"
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
 
