@@ -184,7 +184,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "tsm", group: "more", aliases: [], summary: "Configure terminal-session integration" },
   { name: "ide", group: "code", aliases: [], summary: "Connect editor context and files" },
   { name: "mflow", group: "more", aliases: [], summary: "Manage rooms, peers and file leases" },
-  { name: "remote-control", group: "more", aliases: [], summary: "Pair and control a Telegram bridge" },
+  { name: "remote-control", group: "more", aliases: [], summary: "Pair and control a Telegram or Discord bridge" },
   { name: "org", group: "more", aliases: [], summary: "Switch Console organization" },
   { name: "console", group: "more", aliases: [], summary: "Manage Console accounts" },
   { name: "share", group: "more", aliases: [], summary: "Create and sync a session link" },

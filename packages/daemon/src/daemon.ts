@@ -411,8 +411,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   packageFetchers?: import("@mendcode/packages").PackageFetchers
   console?: { request?: typeof fetch; openUrl?(url: string): Promise<void>; debounceMs?: number }
   mflowListen?: string
-  /** Chat bridge test seams (docs/channels.md): the Telegram transport, environment and daemon client. */
-  channels?: Pick<ChannelsOptions, "fetch" | "env" | "connect">
+  /** Chat bridge test seams (docs/channels.md): the Telegram and Discord transports, environment and daemon client. */
+  channels?: Pick<ChannelsOptions, "fetch" | "env" | "connect" | "discord">
   socketPath: string
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
@@ -627,7 +627,7 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Pasted secrets (K1): markers in everything stored or shown to the model, values only in the encrypted store and in tool runs. */
   const secrets = createSecretsService({ store, log: logLine })
-  /** Opt-in Telegram bridge: idle (no network, no listener) until channels.json enables it. */
+  /** Opt-in Telegram and Discord bridges: idle (no network, no listener) until channels.json enables one. */
   const channels = createChannels({ dir: options.dir, socketPath: options.socketPath, now: () => clock.now(), mask: (sessionId, text) => secrets.mask(sessionId as SessionId, text), log: (level, message) => logLine(level, message), transcribe: (clip) => voice.transcribe(clip), ...options.channels })
 
   /** Text a user typed with its secrets swapped for markers; `undefined` (with the reply sent by the caller) when the key file is unusable. */
@@ -1499,7 +1499,7 @@ export async function startDaemon(options: DaemonOptions) {
       // every message it takes mid-turn; the native engine reads it from the attachment itself.
       if (external) {
         const takeQueued = turn.takeQueued
-        turn = { ...turn, ...withPastedTexts(turn), ...(takeQueued ? { takeQueued: async () => { const queued = await takeQueued(); return queued ? { ...queued, ...withPastedTexts(queued) } : undefined } } : {}) }
+        turn = { ...turn, ...withPastedTexts(turn), ...(takeQueued ? { takeQueued: async (take) => { const queued = await takeQueued(take); return queued ? { ...queued, ...withPastedTexts(queued) } : undefined } } : {}) }
       }
       if (!external) importForeign(turn.sessionId, model, turn.turnId)
       const carried = portable.prepare({ sessionId: turn.sessionId, turnId: turn.turnId, key: engineKeyOf(model) })
@@ -6933,7 +6933,7 @@ export async function startDaemon(options: DaemonOptions) {
         ...(store.workflows.hasLive() ? ["workflows"] : []),
         ...(store.settings.get().dreamAt ? ["dream"] : []),
         ...(usageLimit.scheduled() > 0 ? ["usage resume"] : []),
-        ...(channels.status().telegram.enabled ? ["channels"] : []),
+        ...(channels.enabled() ? ["channels"] : []),
         ...(remoteConfig ? ["remote"] : []),
         ...prReviewStanding(),
       ],

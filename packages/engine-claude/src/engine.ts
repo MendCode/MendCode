@@ -61,8 +61,14 @@ type ActiveTurn = {
   interrupted: boolean
   /** Messages the user sent while the turn ran, written to Claude Code and not yet taken in (`command_lifecycle` `started`). */
   steered: Set<string>
+  /** Of those, the ones taken while tools ran: told when Claude Code takes each in, so it shows as queued until then. */
+  reads: Map<string, (started: boolean) => void>
   /** A `taken` loop is running, so a second tool result does not start another. */
   steering?: boolean
+  /** Asked again while that loop ran (a message queued meanwhile): it reads the queue once more before it stops. */
+  steerAgain?: boolean
+  /** The main agent's tool calls still waiting for their result: a message written now is read with their results. */
+  toolsOpen: Set<string>
   /** The turn's `result` came while a steered message still waited: Claude Code answers it next, in the same MendCode turn. */
   held?: TurnOutcome
   /**
@@ -486,6 +492,9 @@ export function createClaudeEngine(options: {
       if (steered && message.command_uuid === messageUuid(steered.input.turnId)) steered.ownQueued = message.state === "queued"
       if (steered && typeof message.command_uuid === "string" && steered.steered.has(message.command_uuid) && message.state !== "queued") {
         steered.steered.delete(message.command_uuid)
+        const read = steered.reads.get(message.command_uuid)
+        steered.reads.delete(message.command_uuid)
+        read?.(message.state === "started")
         if (message.state === "started") delete steered.held
         else if (steered.held && !steered.steered.size) {
           // Claude Code dropped the last message the turn's result waited on: the turn ends with that result after all.
@@ -555,9 +564,24 @@ export function createClaudeEngine(options: {
     } else if (compaction?.done && compaction.summary === undefined && message.type === "user" && message.isSynthetic && typeof message.message?.content === "string") compaction.summary = message.message.content
     if (message.type === "result" && turn.ownQueued) return void markProcessSpend(connection.spendMark, message)
     accept(turn, message)
-    // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
-    // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
-    if (message.type === "user" && !message.parent_tool_use_id && Array.isArray(message.message?.content) && message.message.content.some((part: { type?: string }) => part?.type === "tool_result")) void steerQueued(connection, turn)
+    // Claude Code reads a message typed while it works with the running step's tool results. Written once those results are out, it
+    // already sent them on and the message waits a whole step more; so queued messages go to it while the step's tools run.
+    if (message.parent_tool_use_id) return
+    // A tool call is known from its first streamed block (`--include-partial-messages`) or from the whole assistant message.
+    const block = message.type === "stream_event" ? message.event?.content_block : undefined
+    if (message.event?.type === "content_block_start" && block?.type === "tool_use" && typeof block.id === "string") {
+      turn.toolsOpen.add(block.id)
+      return void steerQueued(connection, turn)
+    }
+    if (!Array.isArray(message.message?.content)) return
+    const parts = message.message.content as Array<{ type?: string; id?: unknown; tool_use_id?: unknown }>
+    if (message.type === "assistant") {
+      for (const part of parts) if (part?.type === "tool_use" && typeof part.id === "string") turn.toolsOpen.add(part.id)
+      if (turn.toolsOpen.size) void steerQueued(connection, turn)
+    } else if (message.type === "user" && parts.some((part) => part?.type === "tool_result")) {
+      for (const part of parts) if (part?.type === "tool_result" && typeof part.tool_use_id === "string") turn.toolsOpen.delete(part.tool_use_id)
+      void steerQueued(connection, turn)
+    }
   }
 
   /** Keeps what a Bash, Monitor or Agent call runs (`launches`), and moves it to the task id Claude Code starts it as. */
@@ -599,20 +623,35 @@ export function createClaudeEngine(options: {
   /** Writes what the user queued while the turn runs to Claude Code, which takes it into the turn the way it takes a typed message. */
   async function steerQueued(connection: Connection, turn: ActiveTurn) {
     const take = turn.input.takeQueued
-    if (turn.steering || !take || !connection.lifecycle) return
+    if (!take || !connection.lifecycle) return
+    if (turn.steering) return void (turn.steerAgain = true)
     turn.steering = true
     try {
       for (let count = 0; count < 64 && !turn.interrupted && connection.turn === turn && !connection.closed; count++) {
-        const queued = await take()
-        if (!queued) break
+        turn.steerAgain = false
+        const queued = await take(turn.toolsOpen.size ? { whileTools: true } : undefined)
+        if (!queued) {
+          if (turn.steerAgain) continue
+          break
+        }
+        let body: Awaited<ReturnType<typeof content>>
+        try {
+          body = await content({ ...turn.input, ...queued })
+        } catch (error) {
+          // Never written: it goes back to the queue (a message taken at a tool result becomes the turn's, as before).
+          queued.read?.(false)
+          throw error
+        }
         const uuid = randomUUID()
         turn.steered.add(uuid)
-        write(connection, userMessage(await content({ ...turn.input, ...queued }), uuid))
+        if (queued.read) turn.reads.set(uuid, queued.read)
+        write(connection, userMessage(body, uuid))
       }
     } catch {
       // A message that could not be read stays where the actor put it; the turn goes on.
     } finally {
       turn.steering = false
+      turn.steerAgain = false
     }
   }
 
@@ -691,7 +730,9 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan(), spendMark: {} }
+    // A new conversation's running total starts at zero; a resumed one's starts from what the session spent before, unknown until its first result.
+    const spendMark = options.bindings?.get(sessionId) ? {} : { spend: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan(), spendMark }
     connections.set(sessionId, connection)
     if (options.onProcess && transport.pid) {
       const ended = options.onProcess(sessionId, transport.pid)
@@ -869,6 +910,8 @@ export function createClaudeEngine(options: {
           waitingUser: false,
           interrupted: false,
           steered: new Set(),
+          reads: new Map(),
+          toolsOpen: new Set(),
           touch() {
             turn.watchdog?.cancel()
             if (settled || turn.waitingUser || idleMs === undefined) return
@@ -938,6 +981,10 @@ export function createClaudeEngine(options: {
         // "Send now": the message goes into this turn as Claude Code's own send-now does (`interrupt` with `send_now`), which ends the
         // step at hand without stopping the background agents a plain interrupt stops. Claude Code closes this turn and answers the
         // message as its next one; those records wait as an unsolicited turn whose notice is the message, and its MendCode turn adopts them.
+        // A message queued while the step's tools run goes to Claude Code at once, so it reads it with their results.
+        input.onQueued?.(() => {
+          if (!settled && connection.turn === turn && turn.toolsOpen.size) void steerQueued(connection, turn)
+        })
         input.onSendNow?.((message) => {
           if (settled || turn.interrupted || connection.turn !== turn || connection.unsolicited || connection.closed) return false
           const uuid = randomUUID()

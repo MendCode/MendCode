@@ -62,6 +62,20 @@ pull requests.
 
 ## Install
 
+### Install with your AI assistant
+
+Paste this into MendCode, Claude Code, Codex or any coding agent:
+
+```text
+Fetch https://raw.githubusercontent.com/MendCode/MendCode/main/install.md and follow it.
+```
+
+It installs MendCode with the channel and starting tier you confirm, checks the installation, finds which of your logins it can
+run on and tells you what to type next, asking before each step that changes something. It never signs in for you or touches a
+key.
+
+### Install by hand
+
 macOS and Linux:
 
 ```sh
