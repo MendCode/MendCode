@@ -8,8 +8,8 @@ import { createVirtualClock } from "@mendcode/kernel"
 import { Settings, isReadOnlyCommand, type SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
-import { createChannelsConfig, createPairing } from "../src/channels-config"
-import { createTelegramApi, type TelegramUpdate } from "../src/channels-telegram"
+import { channelStore, createChannelsConfig, createPairing } from "../src/channels-config"
+import { createTelegramApi, telegramUpdate, type TelegramUpdate } from "../src/channels-telegram"
 import { remoteTokens } from "../src/remote"
 import { createVoice, type VoiceRecorder } from "../src/voice"
 import { createVoiceRecorder, recorderTools } from "../src/voice-recorder"
@@ -446,13 +446,13 @@ describe("Telegram voice messages", () => {
     }
     const result = options.text ?? "run the tests"
     const live = createChannelBridge({
-      api: { sendMessage: async (_chat, text) => { messages.push(text) }, answerCallback: async () => {}, sendTyping: async () => {}, sendDocument: async () => {}, downloadFile: options.download ? async () => options.download!() : async () => new Uint8Array(3000) },
-      host, config, pairing, dataDir: path.join(root, "data"), log: () => {},
+      api: { sendMessage: async (_chat, text) => { messages.push(text); return undefined }, answerCallback: async () => {}, sendTyping: async () => {}, sendDocument: async () => {}, downloadFile: options.download ? async () => options.download!() : async () => new Uint8Array(3000) },
+      host, store: channelStore(config, "telegram"), pairing, dataDir: path.join(root, "data"), log: () => {},
       ...(options.transcribe === false ? {} : { transcribe: async (clip) => { transcribed.push({ name: clip.name, mime: clip.mime, size: clip.bytes.length }); return result === "FAIL" ? { ok: false as const, message: "voice dictation is off" } : { ok: true as const, text: result } } }),
     })
     let id = 0
-    const voice = (chat: number, extra: Record<string, unknown> = {}): TelegramUpdate => ({ update_id: ++id, message: { message_id: id, chat: { id: chat, type: "private", first_name: "Ana" }, voice: { file_id: "f1", duration: 4, mime_type: "audio/ogg", ...extra } } })
-    const text = (chat: number, value: string): TelegramUpdate => ({ update_id: ++id, message: { message_id: id, chat: { id: chat, type: "private", first_name: "Ana" }, text: value } })
+    const voice = (chat: number, extra: Record<string, unknown> = {}) => telegramUpdate({ update_id: ++id, message: { message_id: id, chat: { id: chat, type: "private", first_name: "Ana" }, voice: { file_id: "f1", duration: 4, mime_type: "audio/ogg", ...extra } } } as TelegramUpdate)!
+    const text = (chat: number, value: string) => telegramUpdate({ update_id: ++id, message: { message_id: id, chat: { id: chat, type: "private", first_name: "Ana" }, text: value } })!
     return { live, messages, submitted, transcribed, voice, text, async pair() { await live.update(text(7, `/pair ${pairing.create(project).code}`)) } }
   }
 

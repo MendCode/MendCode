@@ -1,7 +1,8 @@
-# Remote channels (Telegram)
+# Remote channels (Telegram, Discord)
 
-Drive a MendCode session from a phone: pair a Telegram chat, send prompts, get answers, approve tool calls with buttons and
-receive project files. Off by default: no network call, no listener and no polling until you turn it on.
+Drive MendCode sessions from a phone: pair a Telegram chat or a Discord channel, send prompts, get answers, approve tool calls
+with buttons and receive project files. Off by default: no network call, no listener and no polling until you turn one on.
+Both can run at once; everything below works the same on each, except where [Discord](#discord) says otherwise.
 
 ## Setup
 
@@ -35,7 +36,28 @@ The bridge reads the setting when it starts and again at most once a minute whil
 | `unpair [chat id]` | Removes one or all chats. |
 | `/remote-control pair` | Makes a code. |
 
-State lives in `<data dir>/channels.json` (mode 0600): `enabled` and the paired chat ids, their topics and sessions, never the token. With `enabled: true` the daemon starts the bridge on launch.
+State lives in `<data dir>/channels.json` (mode 0600), one section per service: `enabled` and the paired chat ids, their topics
+and sessions, and who paired each, never a token. With `enabled: true` the daemon starts the bridge on launch.
+
+## Discord
+
+On Discord a paired channel of your server is the lobby and every session has its own thread, as in Hermes.
+
+1. In the [Discord Developer Portal](https://discord.com/developers/applications) create an application, add a bot, turn on
+   its **Message Content** intent and copy its token.
+2. Invite the bot to your server (OAuth2 URL generator, scope `bot`) with View Channel, Send Messages, Send Messages in Threads,
+   Create Public Threads, Read Message History and Attach Files. Use a channel only you (or people you trust to read it) can see.
+3. Give the daemon the token: `MENDCODE_DISCORD_TOKEN`, or `<data dir>/discord-token` with mode 600.
+4. In the terminal: `/remote-control discord on`, then `/remote-control discord pair`, and paste `/pair CODE` in the channel.
+
+- A message in the channel starts a new session in a thread made from that message; replies in the thread continue it.
+- A code from a terminal session (or another project's terminal) opens that session in its own thread; `/new` and a
+  `/sessions` pick open threads too. The channel gets a link to each new thread.
+- Only the person who paired the channel drives it: messages and button presses from other members are ignored.
+- Answers keep their Markdown (Discord shows it); tables arrive as aligned columns in a code block. Mentions never ping anyone.
+- Commands start with `/` or `!` (`!new`, `!sessions`), so they work even where Discord would open its own command menu.
+
+`/remote-control discord` shows the Discord bridge's state; `off` and `unpair [channel id]` work as for Telegram.
 
 ## From the phone
 

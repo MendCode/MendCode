@@ -2,9 +2,10 @@ import { statSync } from "node:fs"
 import path from "node:path"
 import type { CommandReply } from "@mendcode/client"
 import type { ChannelsChange, ChannelsReport, HistoryReport, SessionEvent, SessionId } from "@mendcode/protocol"
+import type { ChannelApi, ChannelService, ChannelUpdate, ChannelWords } from "./channels-api"
 import type { createChannelBridge, BridgeHost } from "./channels-bridge"
-import { createChannelsConfig, createPairing, resolveTelegramToken } from "./channels-config"
-import { createTelegramApi } from "./channels-telegram"
+import { channelStore, createChannelsConfig, createPairing, resolveChannelToken, type ChannelsConfig } from "./channels-config"
+import { createTelegramApi, telegramChannel, telegramUpdate } from "./channels-telegram"
 import type { Transcription } from "./voice"
 
 export type ChannelsHost = BridgeHost & { close(): void }
@@ -22,7 +23,21 @@ export type ChannelsOptions = {
   transcribe?: ((input: { bytes: Uint8Array; name: string; mime: string }) => Promise<Transcription>) | undefined
   /** The daemon client the bridge acts through; defaults to a client of the daemon's own Unix socket. */
   connect?: ((onEvent: (event: SessionEvent) => void) => Promise<ChannelsHost>) | undefined
+  /** Discord transport seams; tests pass a local fake REST server and gateway. */
+  discord?: { fetch?: typeof fetch; base?: string; gateway?: string; WebSocket?: typeof WebSocket } | undefined
 }
+
+/** A chat service, connected: the bridge's API, the bot's name, and `listen`, which reads updates until the connection drops. */
+type Connected = {
+  api: ChannelApi
+  name?: string | undefined
+  words?: ChannelWords
+  autoThread?: boolean
+  label: string
+  /** Calls `ready` once updates flow; settles when the connection ends (rejects to reconnect). */
+  listen(onUpdate: (update: ChannelUpdate) => Promise<void>, signal: AbortSignal, ready: () => void): Promise<void>
+}
+type Transport = (token: string, signal: AbortSignal) => Promise<Connected>
 
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
   const timer = setTimeout(resolve, ms)
@@ -61,10 +76,69 @@ export function watchCursor(lastSeq: number, runningSeq: number | undefined): nu
  * The opt-in chat bridge (docs/channels.md). Nothing starts unless `channels.json` enables Telegram and a bot token exists;
  * then the daemon long-polls the bot API outward (no listener) and relays paired chats to ordinary sessions.
  */
-export function createChannels(options: ChannelsOptions) {
+function telegramTransport(options: ChannelsOptions, now: () => number): Transport {
+  return async (token, signal) => {
+    const api = createTelegramApi({ token, ...(options.fetch ? { fetch: options.fetch } : {}) })
+    const me = await api.getMe(signal)
+    return {
+      api: telegramChannel(api, { topics: me.has_topics_enabled === true, botName: me.username, now }),
+      name: me.username,
+      label: "Telegram",
+      async listen(onUpdate, listening, ready) {
+        // Messages sent while the daemon was off are dropped, not replayed as turns.
+        const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal: listening })
+        let offset = backlog.length ? backlog[backlog.length - 1]!.update_id + 1 : undefined
+        ready()
+        while (!listening.aborted) {
+          const updates = await api.getUpdates({ ...(offset === undefined ? {} : { offset }), timeoutSeconds: 25, signal: listening })
+          for (const update of updates) {
+            offset = update.update_id + 1
+            const placed = telegramUpdate(update)
+            if (placed) await onUpdate(placed)
+          }
+        }
+      },
+    }
+  }
+}
+
+function discordTransport(options: ChannelsOptions): Transport {
+  return async (token) => {
+    const { createDiscordApi, discordChannel, runGateway, DISCORD_WORDS } = await import("./channels-discord")
+    const seams = options.discord ?? {}
+    const rest = createDiscordApi({ token, ...(seams.fetch ? { fetch: seams.fetch } : {}), ...(seams.base ? { base: seams.base } : {}) })
+    const me = await rest.me()
+    const channel = discordChannel(rest)
+    return {
+      api: channel.api,
+      name: me.username,
+      words: DISCORD_WORDS,
+      autoThread: true,
+      label: "Discord",
+      async listen(onUpdate, listening, ready) {
+        const url = seams.gateway ?? (await rest.gateway()).url
+        // Dispatches are read in order: a message is placed (its thread looked up) before the next one.
+        let queue = Promise.resolve()
+        await runGateway({
+          url, token, signal: listening, ...(seams.WebSocket ? { WebSocket: seams.WebSocket } : {}),
+          onDispatch(type, data) {
+            if (type === "READY") ready()
+            queue = queue.then(async () => { const update = await channel.dispatch(type, data); if (update) await onUpdate(update) }).catch(() => {})
+          },
+        })
+      },
+    }
+  }
+}
+
+/**
+ * One chat service of the opt-in bridge (docs/channels.md). Nothing starts unless `channels.json` enables it and a bot token exists;
+ * then the daemon reaches the service outward (Telegram long polling, the Discord gateway; no listener) and relays paired chats.
+ */
+function createChannelService(service: ChannelService, options: ChannelsOptions, config: ChannelsConfig, transport: Transport) {
   const now = options.now ?? Date.now
-  const config = createChannelsConfig(options.dir)
   const pairing = createPairing({ now })
+  const store = channelStore(config, service)
   const env = options.env ?? process.env
   let controller: AbortController | undefined
   let finished: Promise<void> | undefined
@@ -75,7 +149,7 @@ export function createChannels(options: ChannelsOptions) {
 
   async function defaultConnect(onEvent: (event: SessionEvent) => void): Promise<ChannelsHost> {
     const { createClient } = await import("@mendcode/client")
-    const client = createClient({ socketPath: options.socketPath, name: "telegram-bridge", reconnect: true, onEvent })
+    const client = createClient({ socketPath: options.socketPath, name: `${service}-bridge`, reconnect: true, onEvent })
     await client.connect()
     /** Sessions this client streams (one subscription per session, shared by the chats that follow it). */
     const followed = new Set<SessionId>()
@@ -103,36 +177,34 @@ export function createChannels(options: ChannelsOptions) {
     }
   }
 
+  const token = () => resolveChannelToken({ service, dir: options.dir, tokenFile: config.read()[service].tokenFile, env })
+
   async function session(signal: AbortSignal, ready: () => void) {
     let delay = 1000
     while (!signal.aborted) {
       let host: ChannelsHost | undefined
       try {
-        const resolved = resolveTelegramToken({ dir: options.dir, tokenFile: config.read().telegram.tokenFile, env })
-        if (!resolved) throw new Error("no bot token: set MENDCODE_TELEGRAM_TOKEN or create a private telegram-token file in the data directory")
+        const resolved = token()
+        if (!resolved) throw new Error(`no bot token: set MENDCODE_${service.toUpperCase()}_TOKEN or create a private ${service}-token file in the data directory`)
         if ("error" in resolved) throw new Error(resolved.error)
-        const api = createTelegramApi({ token: resolved.token, ...(options.fetch ? { fetch: options.fetch } : {}) })
-        const me = await api.getMe(signal)
+        const connected = await transport(resolved.token, signal)
         let current: ReturnType<typeof createChannelBridge> | undefined
         host = await (options.connect ?? defaultConnect)((event) => current?.onEvent(event))
         const { createChannelBridge } = await import("./channels-bridge")
-        current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, now, topics: me.has_topics_enabled === true, ...(me.username ? { botName: me.username } : {}), ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
+        current = bridge = createChannelBridge({
+          api: connected.api, host, store, pairing, dataDir: options.dir, log: options.log, now, service: connected.label,
+          ...(connected.words ? { words: connected.words } : {}), ...(connected.autoThread ? { autoThread: true } : {}),
+          ...(options.transcribe ? { transcribe: options.transcribe } : {}),
+        })
         await current.resume()
-        // Messages sent while the daemon was off are dropped, not replayed as turns.
-        const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal })
-        let offset = backlog.length ? backlog[backlog.length - 1]!.update_id + 1 : undefined
-        botName = me.username
-        problem = undefined
-        running = true
-        delay = 1000
-        ready()
-        while (!signal.aborted) {
-          const updates = await api.getUpdates({ ...(offset === undefined ? {} : { offset }), timeoutSeconds: 25, signal })
-          for (const update of updates) {
-            offset = update.update_id + 1
-            await current.update(update)
-          }
-        }
+        const live = current
+        await connected.listen((update) => live.update(update), signal, () => {
+          botName = connected.name
+          problem = undefined
+          running = true
+          delay = 1000
+          ready()
+        })
       } catch (error) {
         if (!signal.aborted) {
           const message = error instanceof Error ? error.message.slice(0, 300) : "channel error"
@@ -152,7 +224,7 @@ export function createChannels(options: ChannelsOptions) {
   }
 
   async function start() {
-    if (controller || !config.read().telegram.enabled) return
+    if (controller || !config.read()[service].enabled) return
     const own = controller = new AbortController()
     let ready!: () => void
     const first = new Promise<void>((resolve) => { ready = resolve })
@@ -168,49 +240,68 @@ export function createChannels(options: ChannelsOptions) {
     finished = undefined
   }
 
-  function status(): ChannelsReport {
-    const stored = config.read().telegram
-    const token = resolveTelegramToken({ dir: options.dir, tokenFile: stored.tokenFile, env })
+  function status(): ChannelsReport["telegram"] {
+    const stored = config.read()[service]
+    const resolved = token()
     const expiresAt = pairing.expiresAt
-    const error = problem ?? (token && "error" in token ? token.error : undefined)
+    const error = problem ?? (resolved && "error" in resolved ? resolved.error : undefined)
     return {
-      telegram: {
-        enabled: stored.enabled,
-        tokenConfigured: token !== undefined && "token" in token,
-        running,
-        ...(botName ? { botName } : {}),
-        chats: stored.chats.map(({ sessionId: _session, topics: _topics, ...chat }) => chat),
-        ...(expiresAt ? { pairingExpiresAt: expiresAt } : {}),
-        ...(error ? { error } : {}),
-      },
+      enabled: stored.enabled,
+      tokenConfigured: resolved !== undefined && "token" in resolved,
+      running,
+      ...(botName ? { botName } : {}),
+      chats: stored.chats.map(({ sessionId: _session, topics: _topics, owner: _owner, ...chat }) => chat),
+      ...(expiresAt ? { pairingExpiresAt: expiresAt } : {}),
+      ...(error ? { error } : {}),
     }
   }
 
-  async function change(request: ChannelsChange): Promise<{ report: ChannelsReport; pairing?: { code: string; expiresAt: number } }> {
+  async function change(request: ChannelsChange): Promise<{ code: string; expiresAt: number } | undefined> {
     if (request.action === "enable") {
-      config.update((value) => { value.telegram.enabled = true })
+      config.update((value) => { value[service].enabled = true })
       await start()
     } else if (request.action === "disable") {
-      config.update((value) => { value.telegram.enabled = false })
+      config.update((value) => { value[service].enabled = false })
       pairing.cancel()
       await stop()
     } else if (request.action === "pair") {
-      if (!config.read().telegram.enabled) throw new Error("[CHANNELS]: enable the bridge first (/remote-control on)")
+      if (!config.read()[service].enabled) throw new Error(`[CHANNELS]: enable the bridge first (/remote-control${service === "telegram" ? "" : ` ${service}`} on)`)
       const directory = path.resolve(request.directory)
       let exists = false
       try { exists = statSync(directory).isDirectory() } catch {}
       if (!exists) throw new Error("[CHANNELS]: the project directory does not exist")
-      return { report: status(), pairing: pairing.create(directory, request.sessionId) }
+      return pairing.create(directory, request.sessionId)
     } else if (request.action === "unpair") {
-      const known = config.read().telegram.chats
+      const known = store.chats()
       const removed = request.chatId ? known.filter((chat) => chat.id === request.chatId) : known
       if (request.chatId && !removed.length) throw new Error("[CHANNELS]: no such paired chat")
-      config.update((value) => { value.telegram.chats = value.telegram.chats.filter((chat) => !removed.some((gone) => gone.id === chat.id)) })
+      store.update((chats) => chats.filter((chat) => !removed.some((gone) => gone.id === chat.id)))
       for (const chat of removed) bridge?.forget(chat.id)
     }
-    return { report: status() }
+    return undefined
   }
 
-  return { start, stop, status, change }
+  return { start, stop, status, change, enabled: () => config.read()[service].enabled }
+}
+
+/** The opt-in chat bridges, Telegram and Discord: each idle (no network, no listener) until channels.json enables it. */
+export function createChannels(options: ChannelsOptions) {
+  const now = options.now ?? Date.now
+  const config = createChannelsConfig(options.dir)
+  const services = {
+    telegram: createChannelService("telegram", options, config, telegramTransport(options, now)),
+    discord: createChannelService("discord", options, config, discordTransport(options)),
+  }
+  const status = (): ChannelsReport => ({ telegram: services.telegram.status(), discord: services.discord.status() })
+  return {
+    async start() { await Promise.all([services.telegram.start(), services.discord.start()]) },
+    async stop() { await Promise.all([services.telegram.stop(), services.discord.stop()]) },
+    status,
+    enabled: () => services.telegram.enabled() || services.discord.enabled(),
+    async change(request: ChannelsChange): Promise<{ report: ChannelsReport; pairing?: { code: string; expiresAt: number } }> {
+      const pairing = await services[request.channel ?? "telegram"].change(request)
+      return { report: status(), ...(pairing ? { pairing } : {}) }
+    },
+  }
 }
 export type Channels = ReturnType<typeof createChannels>

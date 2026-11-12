@@ -7,8 +7,8 @@ import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
 import { replayAfter, watchCursor } from "../src/channels"
-import { createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
-import { createTelegramApi, splitMessage, type TelegramUpdate } from "../src/channels-telegram"
+import { channelStore, createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
+import { createTelegramApi, splitMessage, telegramUpdate, type TelegramUpdate } from "../src/channels-telegram"
 import { balanceFences, markdownToTelegramHtml } from "../src/channels-format"
 
 const cleanups: Array<() => void> = []
@@ -27,8 +27,8 @@ function setup(options: { live?: boolean; topics?: boolean } = {}) {
   let clock = 1_000
   const pairing = createPairing({ now: () => clock })
   const config = createChannelsConfig(dir)
-  const messages: Array<{ chat: string; text: string; buttons?: unknown; thread?: number; markdown?: boolean }> = []
-  const topics: Array<{ chat: string; name: string; thread: number }> = []
+  const messages: Array<{ chat: string; text: string; buttons?: unknown; thread?: string; markdown?: boolean }> = []
+  const topics: Array<{ chat: string; name: string; thread: string }> = []
   const documents: Array<{ chat: string; name: string; size: number }> = []
   const callbacks: Array<{ id: string; text?: string | undefined }> = []
   const sent: CommandInput[] = []
@@ -56,18 +56,20 @@ function setup(options: { live?: boolean; topics?: boolean } = {}) {
       sendMessage: async (chat, text, buttons, send) => {
         if (send?.thread !== undefined && !topics.some((topic) => topic.thread === send.thread)) throw new Error("[CHANNELS]: telegram sendMessage failed: Bad Request: message thread not found")
         messages.push({ chat, text, ...(buttons ? { buttons } : {}), ...(send?.thread !== undefined ? { thread: send.thread } : {}), ...(send?.markdown ? { markdown: true } : {}) })
-        return messages.length
+        return String(messages.length)
       },
-      ...(options.topics ? { createTopic: async (chat: string, name: string) => { const thread = 100 + topics.length; topics.push({ chat, name, thread }); return thread } } : {}),
-      ...(options.live ? { editMessage: async (chat: string, id: number, text: string) => { edits.push({ chat, id, text }) } } : {}),
+      ...(options.topics ? { createTopic: async (chat: string, name: string) => { const thread = String(100 + topics.length); topics.push({ chat, name, thread }); return thread }, topicLink: (_chat: string, thread: string) => `https://t.me/mend_bot/${thread}` } : {}),
+      ...(options.live ? { editMessage: async (chat: string, id: string, text: string) => { edits.push({ chat, id: Number(id), text }) } } : {}),
       answerCallback: async (id, text) => { callbacks.push({ id, text }) },
       sendTyping: async () => {},
       sendDocument: async (chat, file) => { documents.push({ chat, name: file.name, size: file.bytes.length }) },
     },
-    host, config, pairing, dataDir: dir, log: () => {}, now: () => clock, ...(options.topics ? { topics: true, botName: "mend_bot" } : {}),
+    host, store: channelStore(config, "telegram"), pairing, dataDir: dir, log: () => {}, now: () => clock,
   })
-  const text = (chat: number, value: string, type = "private", thread?: number): TelegramUpdate => ({ update_id: ++update, message: { message_id: update, chat: { id: chat, type, first_name: "Ana" }, text: value, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } })
-  const press = (chat: number, data: string, thread?: number): TelegramUpdate => ({ update_id: ++update, callback_query: { id: `cb${update}`, data, message: { chat: { id: chat, type: "private" }, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } } })
+  // Updates go through the Telegram adapter, as the daemon reads them.
+  const placed = (raw: TelegramUpdate) => telegramUpdate(raw)!
+  const text = (chat: number, value: string, type = "private", thread?: number) => placed({ update_id: ++update, message: { message_id: update, chat: { id: chat, type, first_name: "Ana" }, text: value, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } })
+  const press = (chat: number, data: string, thread?: number) => placed({ update_id: ++update, callback_query: { id: `cb${update}`, data, message: { chat: { id: chat, type: "private" }, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } } })
   // Every event gets the next seq, as the daemon's log does.
   let seq = 0
   const event = (body: Record<string, unknown>) => bridge.onEvent({ sessionId: SESSION, seq: ++seq, at: 1, ...body } as unknown as SessionEvent)
@@ -619,7 +621,7 @@ describe("topics: several sessions and projects in one chat", () => {
     await h.bridge.update(h.text(7, `/pair ${h.pairing.create(h.project, A).code}`))
     await h.bridge.update(h.text(7, `/pair ${h.pairing.create(other, B).code}`))
     expect(h.topics.map((topic) => topic.name)).toEqual(["project", "other"])
-    expect(h.config.read().telegram.chats[0]!.topics).toEqual([{ thread: 100, directory: h.project, sessionId: A }, { thread: 101, directory: other, sessionId: B }])
+    expect(h.config.read().telegram.chats[0]!.topics).toEqual([{ thread: "100", directory: h.project, sessionId: A }, { thread: "101", directory: other, sessionId: B }])
     expect(h.watched).toEqual([A, B])
     expect(h.messages.at(-1)).toMatchObject({ chat: "7", buttons: [[{ text: "Open the topic", url: "https://t.me/mend_bot/101" }]] })
     expect(h.messages.at(-1)!.thread).toBeUndefined()
@@ -627,7 +629,7 @@ describe("topics: several sessions and projects in one chat", () => {
     answer(h, A, "t1", "**alpha** done")
     answer(h, B, "t2", "beta done")
     await Bun.sleep(0)
-    expect(h.messages.slice(-2)).toMatchObject([{ thread: 100, text: "**alpha** done", markdown: true }, { thread: 101, text: "beta done", markdown: true }])
+    expect(h.messages.slice(-2)).toMatchObject([{ thread: "100", text: "**alpha** done", markdown: true }, { thread: "101", text: "beta done", markdown: true }])
 
     await h.bridge.update(h.text(7, "ship it", "private", 101))
     expect(h.sent.filter((command) => command.type === "user.submit").at(-1)).toMatchObject({ sessionId: B, text: "ship it" })
@@ -646,7 +648,7 @@ describe("topics: several sessions and projects in one chat", () => {
     h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: A, title: "Release notes", state: "idle" }] } })
     await h.bridge.update(h.text(7, "/sessions"))
     await h.bridge.update(h.press(7, `s:${A}`))
-    expect(h.topics.at(-1)).toMatchObject({ name: "project · Release notes", thread: 100 })
+    expect(h.topics.at(-1)).toMatchObject({ name: "project · Release notes", thread: "100" })
     expect(h.callbacks.at(-1)?.text).toBe("Opened")
     expect(h.watched).toEqual([A])
     await h.bridge.update(h.press(7, `s:${A}`))
@@ -654,18 +656,18 @@ describe("topics: several sessions and projects in one chat", () => {
     expect(h.topics).toHaveLength(1)
 
     await h.bridge.update(h.text(7, "/new"))
-    expect(h.topics.at(-1)).toMatchObject({ name: "project · new", thread: 101 })
-    expect(h.messages.find((message) => message.thread === 101)?.text).toContain("Fresh session")
+    expect(h.topics.at(-1)).toMatchObject({ name: "project · new", thread: "101" })
+    expect(h.messages.find((message) => message.thread === "101")?.text).toContain("Fresh session")
     await h.bridge.update(h.text(7, "start here", "private", 101))
     expect(h.sent.find((command) => command.type === "session.create")).toMatchObject({ directory: h.project })
-    expect(h.config.read().telegram.chats[0]!.topics?.find((topic) => topic.thread === 101)?.sessionId).toBe(SESSION)
+    expect(h.config.read().telegram.chats[0]!.topics?.find((topic) => topic.thread === "101")?.sessionId).toBe(SESSION)
 
     // The user deleted topic 100: the next message there fails, and its session stops being followed.
     h.topics.splice(0, 1)
     answer(h, A, "t3", "late answer")
     await Bun.sleep(0)
     await Bun.sleep(0)
-    expect(h.config.read().telegram.chats[0]!.topics?.map((topic) => topic.thread)).toEqual([101])
+    expect(h.config.read().telegram.chats[0]!.topics?.map((topic) => topic.thread)).toEqual(["101"])
     expect(h.unwatched).toContain(A)
   })
 

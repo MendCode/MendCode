@@ -1,11 +1,12 @@
 /** Telegram Bot API over an injected `fetch` (tests pass a local fake; nothing here opens a socket itself). */
+import type { ChannelApi, ChannelUpdate } from "./channels-api"
 export type TelegramChat = { id: number; type: string; first_name?: string; username?: string }
 export type TelegramVoice = { file_id: string; duration?: number; file_size?: number; mime_type?: string }
 export type TelegramUpdate = {
   update_id: number
   /** `message_thread_id` names a topic only when `is_topic_message` is set (bot topics in a private chat). */
-  message?: { message_id: number; chat: TelegramChat; text?: string; voice?: TelegramVoice; message_thread_id?: number; is_topic_message?: boolean }
-  callback_query?: { id: string; data?: string; message?: { chat: TelegramChat; message_thread_id?: number; is_topic_message?: boolean } }
+  message?: { message_id: number; chat: TelegramChat; from?: { id: number }; text?: string; voice?: TelegramVoice; message_thread_id?: number; is_topic_message?: boolean }
+  callback_query?: { id: string; from?: { id: number }; data?: string; message?: { chat: TelegramChat; message_thread_id?: number; is_topic_message?: boolean } }
 }
 /** A button answers the bot (`data`) or opens a link (`url`, such as a topic's t.me link). */
 export type TelegramButton = { text: string; data: string } | { text: string; url: string }
@@ -119,5 +120,53 @@ export function createTelegramApi({ token, fetch: request = fetch, base = "https
       form.set("document", new Blob([file.bytes as BlobPart]), file.name)
       return call("sendDocument", form, 120_000)
     },
+  }
+}
+
+/** A Telegram update as the bridge reads it: only private chats run, and a topic is named only when `is_topic_message` is set. */
+export function telegramUpdate(update: TelegramUpdate): ChannelUpdate | undefined {
+  const message = update.message
+  if (message) {
+    const thread = message.is_topic_message && message.message_thread_id !== undefined ? String(message.message_thread_id) : undefined
+    const label = message.chat.username ?? message.chat.first_name
+    const voice = message.voice ? { file: message.voice.file_id, duration: message.voice.duration, size: message.voice.file_size, mime: message.voice.mime_type } : undefined
+    return { kind: "message", chat: String(message.chat.id), thread, messageId: String(message.message_id), from: String(message.from?.id ?? message.chat.id), label, allowed: message.chat.type === "private", text: message.text, voice }
+  }
+  const query = update.callback_query
+  const chat = query?.message?.chat
+  if (!query || !chat) return undefined
+  const thread = query.message?.is_topic_message && query.message.message_thread_id !== undefined ? String(query.message.message_thread_id) : undefined
+  return { kind: "press", id: query.id, chat: String(chat.id), thread, from: String(query.from?.id ?? chat.id), allowed: chat.type === "private", data: query.data }
+}
+
+const TOPICS_RECHECK_MS = 60_000
+
+/**
+ * The Telegram API as the bridge's ChannelApi. Topic mode (`getMe`) is read again at most once a minute while it is off, so turning
+ * it on in @BotFather needs no restart.
+ */
+export function telegramChannel(api: TelegramApi, { topics = false, botName, now = Date.now }: { topics?: boolean; botName?: string | undefined; now?: () => number } = {}): ChannelApi {
+  let on = topics
+  let checkedAt = now()
+  const thread = (value: string | undefined) => (value === undefined ? undefined : Number(value))
+  return {
+    sendMessage: async (chat, text, buttons, options = {}) => {
+      const id = await api.sendMessage(chat, text, buttons, { thread: thread(options.thread), markdown: options.markdown })
+      return id === undefined ? undefined : String(id)
+    },
+    answerCallback: (id, text) => api.answerCallback(id, text),
+    sendTyping: (chat, topic) => api.sendTyping(chat, thread(topic)),
+    sendDocument: (chat, file, topic) => api.sendDocument(chat, file, thread(topic)),
+    downloadFile: (file, maxBytes) => api.downloadFile(file, maxBytes),
+    editMessage: (chat, messageId, text) => api.editMessage(chat, Number(messageId), text),
+    createTopic: async (chat, name) => String(await api.createTopic(chat, name)),
+    async topicsEnabled() {
+      if (!on && now() - checkedAt > TOPICS_RECHECK_MS) {
+        checkedAt = now()
+        try { on = (await api.getMe()).has_topics_enabled === true } catch {}
+      }
+      return on
+    },
+    topicLink: (_chat, topic) => (botName ? `https://t.me/${botName}/${topic}` : undefined),
   }
 }
