@@ -267,13 +267,21 @@ describe("Discord connection", () => {
 
   test("a button press is answered as it arrives, before the updates ahead of it are read, and only once", async () => {
     const acks: string[] = []
-    const rest = { acknowledge: async (id: string) => { acks.push(id) } } as unknown as DiscordApi
+    let answer: (() => void) | undefined
+    const rest = { acknowledge: (id: string) => { acks.push(id); return new Promise<void>((resolve) => { answer = resolve }) } } as unknown as DiscordApi
     const channel = discordChannel(rest)
     const press = { type: 3, id: "int_1", token: "tok", channel_id: "100", application_id: "app", user: { id: OWNER }, data: { custom_id: "ap:1:y" } }
-    channel.acknowledge("INTERACTION_CREATE", press)
+    void channel.acknowledge("INTERACTION_CREATE", press)
     expect(acks).toEqual(["int_1"])
-    channel.acknowledge("MESSAGE_CREATE", { id: "m", type: 0 })
-    await channel.dispatch("INTERACTION_CREATE", press).catch(() => undefined)
+    expect(channel.acknowledge("MESSAGE_CREATE", { id: "m", type: 0 })).toBeUndefined()
+    // The press is read only once Discord has its first answer: a follow-up before it would be refused.
+    let read = false
+    const reading = channel.dispatch("INTERACTION_CREATE", press).catch(() => undefined).finally(() => { read = true })
+    await Bun.sleep(5)
+    expect(read).toBe(false)
+    answer?.()
+    await reading
+    expect(read).toBe(true)
     expect(acks).toEqual(["int_1"])
   })
 })

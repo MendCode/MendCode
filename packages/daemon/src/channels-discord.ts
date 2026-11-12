@@ -229,17 +229,21 @@ export function discordChannel(api: DiscordApi) {
     topicLink: (chat, thread) => { const guild = guilds.get(chat); return guild ? `https://discord.com/channels/${guild}/${thread}` : undefined },
   }
 
-  const acknowledged = new Set<string>()
+  /** Each press's answer, kept so its follow-ups wait for it: Discord takes a follow-up only after the first answer. */
+  const acknowledged = new Map<string, Promise<void>>()
   /**
    * Answers a button press at once (Discord drops one not answered within 3 seconds). Called as the dispatch arrives, before it waits
-   * behind slower updates in order; `dispatch` calls it too, and a press is answered once.
+   * behind slower updates in order; `dispatch` calls it too and waits for that answer, and a press is answered once.
    */
-  function acknowledge(type: string, data: Json) {
-    if (type !== "INTERACTION_CREATE" || data.type !== 3 || typeof data.id !== "string" || typeof data.token !== "string" || acknowledged.has(data.id)) return
+  function acknowledge(type: string, data: Json): Promise<void> | undefined {
+    if (type !== "INTERACTION_CREATE" || data.type !== 3 || typeof data.id !== "string" || typeof data.token !== "string") return undefined
+    const known = acknowledged.get(data.id)
+    if (known) return known
     if (typeof data.application_id === "string") application ??= data.application_id
-    acknowledged.add(data.id)
-    if (acknowledged.size > 256) acknowledged.delete(acknowledged.values().next().value!)
-    void api.acknowledge(data.id, data.token).catch(() => {})
+    const answered = api.acknowledge(data.id, data.token).then(() => {}, () => {})
+    acknowledged.set(data.id, answered)
+    if (acknowledged.size > 256) acknowledged.delete(acknowledged.keys().next().value!)
+    return answered
   }
 
   /** A gateway dispatch as bridge updates. */
@@ -280,7 +284,7 @@ export function discordChannel(api: DiscordApi) {
       }
       case "INTERACTION_CREATE": {
         if (data.type !== 3 || typeof data.id !== "string" || typeof data.token !== "string" || typeof data.channel_id !== "string") return undefined
-        acknowledge(type, data)
+        await acknowledge(type, data)
         const user = ((data.member as Json | undefined)?.user ?? data.user) as Json | undefined
         if (typeof user?.id !== "string") return undefined
         presses.set(data.id, data.token)
