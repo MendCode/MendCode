@@ -123,7 +123,8 @@ function discordTransport(options: ChannelsOptions): Transport {
           url, token, signal: listening, ...(seams.WebSocket ? { WebSocket: seams.WebSocket } : {}),
           onDispatch(type, data) {
             if (type === "READY") ready()
-            queue = queue.then(async () => { const update = await channel.dispatch(type, data); if (update) await onUpdate(update) }).catch(() => {})
+            channel.acknowledge(type, data)
+            queue =queue.then(async () => { const update = await channel.dispatch(type, data); if (update) await onUpdate(update) }).catch(() => {})
           },
         })
       },

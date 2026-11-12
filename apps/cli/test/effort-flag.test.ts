@@ -112,6 +112,32 @@ describe("run --effort reaches the model request", () => {
     expect(refused.err).toContain("unknown effort xhigh for gpt-6-sol; use low, medium, high")
     expect(h.requests).toHaveLength(2)
   }, 30_000)
+
+  test("--fast turns the session's fast mode on, so the model is called with priority processing", async () => {
+    const h = await boot({ steps: [stop("one"), stop("two")] })
+    harnesses.push(h)
+    expect((await output(launch(h.dir, ["run", "go", "--cwd", h.project, "--model", "gpt-6-sol", "--fast"]))).code).toBe(0)
+    expect((await output(launch(h.dir, ["run", "go", "--cwd", h.project, "--model", "gpt-6-sol"]))).code).toBe(0)
+    expect(h.requests.map((request) => request.fast === true)).toEqual([true, false])
+  }, 30_000)
+})
+
+describe("--fast", () => {
+  test("run, the terminal and session create and send take it; other session commands refuse it", () => {
+    expect(parseStartup(["run", "go", "--model", "chatgpt/gpt-6-luna", "--fast"])).toMatchObject({ model: "chatgpt/gpt-6-luna", fast: true })
+    expect(parseStartup(["run", "go"])).not.toHaveProperty("fast")
+    expect(parseStartup(["--fast"])).toMatchObject({ kind: "tui", fast: true })
+    expect(STARTUP_USAGE).toContain("--fast")
+    expect(parseAutomation(["session", "send", "ses_x", "hi", "--fast"])).toMatchObject({ ok: true, command: { kind: "session.send", fast: true } })
+    expect(parseAutomation(["session", "create", "--dir", "/repo", "--fast"])).toMatchObject({ ok: true, command: { kind: "session.create", fast: true } })
+    expect(parseAutomation(["session", "list", "--fast"])).toMatchObject({ ok: false })
+  })
+  test("the choice carries fast mode for a model it reaches, and a model it does not reach is refused with the reason", async () => {
+    expect(await sessionSelection(client, { model: "chatgpt/gpt-6-luna", fast: true }, {})).toEqual({ ok: true, model: { model: "gpt-6-luna", fast: true } })
+    expect(await sessionSelection(client, { fast: true }, {})).toEqual({ ok: true, model: { model: "gpt-6-luna", effort: "medium", fast: true } })
+    expect(await sessionSelection(client, { model: "local/small", fast: true }, {})).toEqual({ ok: false, message: "--fast does not reach local:small: local has no priority tier" })
+    expect(await sessionSelection(client, { model: "claude-haiku", fast: true }, {})).toMatchObject({ ok: false, message: expect.stringContaining("Claude Code's fast mode is for Opus") })
+  })
 })
 
 test("a model is accepted by the name `mendcode models` prints for it (its reference), such as claude/claude-sonnet", async () => {

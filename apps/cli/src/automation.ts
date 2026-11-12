@@ -57,7 +57,7 @@ export const SCHEMA = "mendcode.cli"
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
 export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
-const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary"])
+const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast"])
 /** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
 const WORKFLOW_LIST_LIMIT = 50
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
@@ -193,12 +193,12 @@ export const USAGE: Record<string, string> = {
     "  list     --all --all-projects --active --archived --max-count N --since MS",
     "           --project PATH --state STATE --search TEXT --agent A --model P/M",
     "  create   --title T --parent ID --agent A --model P/M --variant V",
-    "           --effort LEVEL",
+    "           --effort LEVEL --fast",
     "  inspect  --limit N --summary",
     "  send     --async | --wait   --mode auto|queue|steer|restart",
     "           --approve | --dangerously-skip-permissions",
     "           without either flag, approvals stay pending for the terminal owner",
-    "           --agent A --model P/M --variant V --effort LEVEL",
+    "           --agent A --model P/M --variant V --effort LEVEL --fast",
     "           --file PATH (repeatable) --command NAME",
     "  wait     --timeout-ms MS --interval-ms MS --idle",
     "  events   --after SEQ --limit N --follow --keep-open",

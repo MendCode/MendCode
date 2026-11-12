@@ -1,7 +1,7 @@
 import type { ReasoningEffort } from "@mendcode/protocol"
 import { REASONING_EFFORTS } from "@mendcode/protocol/wire"
 import { parseTransferExport, type TransferExport } from "./session-transfer-args"
-export type SessionSelection = { agent?: string; model?: string; variant?: string; effort?: ReasoningEffort }
+export type SessionSelection = { agent?: string; model?: string; variant?: string; effort?: ReasoningEffort; /** `--fast`: the session's fast mode on (what `/fast` turns on). */ fast?: boolean }
 export type SessionAutomation =
   | { kind: "session.list"; all: boolean; allProjects?: boolean; limit: number; project?: string; state?: string; active?: boolean; since?: number; search?: string; agent?: string; model?: string; archived?: boolean }
   | ({ kind: "session.create"; title: string; parent?: string } & SessionSelection)
@@ -52,9 +52,10 @@ export function parseSession(sub: string | undefined, rest: string[], flags: Map
     if (!sub) throw new Error("session needs a command")
     if (flags.has("archived") && sub !== "list") throw new Error("--archived is only valid for session list")
     if (flags.has("restore") && sub !== "archive") throw new Error("--restore is only valid for session archive")
-    const selection: SessionSelection = { ...(str("agent") ? { agent: str("agent")! } : {}), ...(str("model") ? { model: str("model")! } : {}), ...(str("variant") ? { variant: str("variant")! } : {}), ...(str("effort") ? { effort: str("effort") as ReasoningEffort } : {}) }
+    const selection: SessionSelection = { ...(str("agent") ? { agent: str("agent")! } : {}), ...(str("model") ? { model: str("model")! } : {}), ...(str("variant") ? { variant: str("variant")! } : {}), ...(str("effort") ? { effort: str("effort") as ReasoningEffort } : {}), ...(flags.get("fast") === true ? { fast: true } : {}) }
     if (selection.effort && !(REASONING_EFFORTS as readonly string[]).includes(selection.effort)) throw new Error(`--effort must be one of ${REASONING_EFFORTS.join(", ")}`)
     if (selection.effort && sub !== "create" && sub !== "send") throw new Error("--effort is only valid for session create and session send")
+    if (selection.fast && sub !== "create" && sub !== "send") throw new Error("--fast is only valid for session create and session send")
     if (selection.model && (!selection.model.trim() || selection.model.endsWith("/"))) throw new Error("--model needs provider/model or a MendCode catalog id")
     const timeout = () => {
       if (flags.has("timeout") && flags.has("timeout-ms")) throw new Error("use --timeout or --timeout-ms")

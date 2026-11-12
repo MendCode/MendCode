@@ -6,7 +6,7 @@ import { createClient } from "@mendcode/client"
 import { ChannelsReport, type SessionId } from "@mendcode/protocol"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import { startDaemon } from "../src"
-import { discordComponents, DISCORD_INTENTS } from "../src/channels-discord"
+import { discordChannel, discordComponents, DISCORD_INTENTS, runGateway, type DiscordApi } from "../src/channels-discord"
 import { markdownForDiscord } from "../src/channels-format"
 
 /** A made-up token in Discord's shape, assembled here so secret scanners do not take it for a real one. */
@@ -253,5 +253,27 @@ describe("Discord formatting", () => {
     expect(rows.map((row) => (row.components as unknown[]).length)).toEqual([5, 4])
     expect((rows[0]!.components as Array<{ style: number }>).slice(0, 3).map((button) => button.style)).toEqual([3, 4, 2])
     expect((rows[1]!.components as Array<{ style: number; url?: string }>).at(-1)).toMatchObject({ style: 5, url: "https://discord.com/channels/1/2" })
+  })
+})
+
+describe("Discord connection", () => {
+  test("a stop that came while the connection was being set up opens no gateway", async () => {
+    let opened = 0
+    const Socket = class { constructor() { opened++ } } as unknown as typeof WebSocket
+    const stopped = AbortSignal.abort()
+    await runGateway({ url: "ws://127.0.0.1:1", token: "t", onDispatch: () => {}, signal: stopped, WebSocket: Socket })
+    expect(opened).toBe(0)
+  })
+
+  test("a button press is answered as it arrives, before the updates ahead of it are read, and only once", async () => {
+    const acks: string[] = []
+    const rest = { acknowledge: async (id: string) => { acks.push(id) } } as unknown as DiscordApi
+    const channel = discordChannel(rest)
+    const press = { type: 3, id: "int_1", token: "tok", channel_id: "100", application_id: "app", user: { id: OWNER }, data: { custom_id: "ap:1:y" } }
+    channel.acknowledge("INTERACTION_CREATE", press)
+    expect(acks).toEqual(["int_1"])
+    channel.acknowledge("MESSAGE_CREATE", { id: "m", type: 0 })
+    await channel.dispatch("INTERACTION_CREATE", press).catch(() => undefined)
+    expect(acks).toEqual(["int_1"])
   })
 })

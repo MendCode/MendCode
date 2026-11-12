@@ -7,7 +7,7 @@ import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
 import { replayAfter, watchCursor } from "../src/channels"
-import { channelStore, createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
+import { channelStore, createChannelsConfig, createPairing, MAX_CHAT_TOPICS, resolveTelegramToken } from "../src/channels-config"
 import { createTelegramApi, splitMessage, telegramUpdate, type TelegramUpdate } from "../src/channels-telegram"
 import { balanceFences, markdownToTelegramHtml } from "../src/channels-format"
 
@@ -671,6 +671,29 @@ describe("topics: several sessions and projects in one chat", () => {
     expect(h.unwatched).toContain(A)
   })
 
+  test("stopping releases every topic's session; past the cap the oldest topic is let go with its session", async () => {
+    const h = setup({ topics: true })
+    const other = path.join(h.root, "other")
+    mkdirSync(other)
+    h.answers["session.history"] = () => ({ ok: true, result: { turns: [] } })
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(h.project, A).code}`))
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(other, B).code}`))
+    h.bridge.stop()
+    expect(h.unwatched).toEqual(expect.arrayContaining([A, B]))
+
+    await h.bridge.resume()
+    h.unwatched.length = 0
+    // Two topics are open (A's and B's): these fill the cap.
+    for (let opened = 0; opened < MAX_CHAT_TOPICS - 2; opened++) await h.bridge.update(h.text(7, "/new"))
+    const stored = () => h.config.read().telegram.chats[0]!.topics ?? []
+    expect(stored()).toHaveLength(MAX_CHAT_TOPICS)
+    expect(h.unwatched).toEqual([])
+    await h.bridge.update(h.text(7, "/new"))
+    expect(stored()).toHaveLength(MAX_CHAT_TOPICS)
+    expect(stored().some((topic) => topic.sessionId === A)).toBe(false)
+    expect(h.unwatched).toEqual([A])
+  })
+
   test("without topic mode a second pairing still moves the chat", async () => {
     const h = setup()
     h.answers["session.history"] = () => ({ ok: true, result: { turns: [] } })
@@ -711,6 +734,28 @@ describe("formatting for Telegram", () => {
       "<pre><code class=\"language-ts\">if (a &lt; b &amp;&amp; c) {}</code></pre>",
       "☑ done",
     ].join("\n"))
+  })
+
+  test("a link whose label is code keeps the label", () => {
+    expect(markdownToTelegramHtml("see [`src/a.ts`](https://x.dev/a)")).toBe("see <a href=\"https://x.dev/a\"><code>src/a.ts</code></a>")
+  })
+
+  test("a part that formatting makes longer than Telegram allows goes as its plain text", async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const api = createTelegramApi({
+      token: "123456789:AAEhBOweik6ad9r_QXMENQjcrr9FMJAGu7e",
+      fetch: (async (_url: string, init: RequestInit) => {
+        bodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return Response.json({ ok: true, result: { message_id: bodies.length } })
+      }) as unknown as typeof fetch,
+    })
+    const table = ["| Name | N |", "|---|---|", `| ${"x".repeat(100)} | 1 |`, ...Array.from({ length: 45 }, (_, row) => `| r${row} | ${row} |`)].join("\n")
+    expect(table.length).toBeLessThan(3800)
+    expect(markdownToTelegramHtml(table).length).toBeGreaterThan(4096)
+    await api.sendMessage("7", table, undefined, { markdown: true })
+    expect(bodies).toHaveLength(1)
+    expect(bodies[0]).toMatchObject({ text: table })
+    expect(bodies[0]!.parse_mode).toBeUndefined()
   })
 
   test("a code block split between two messages is closed and opened again", () => {
