@@ -5,7 +5,11 @@ import { z } from "zod"
 import { ChannelChat } from "@mendcode/protocol"
 
 export const MAX_CHANNEL_CHATS = 16
-const StoredChat = ChannelChat.extend({ sessionId: z.string().max(100).optional() })
+export const MAX_CHAT_TOPICS = 64
+/** A topic of a paired chat (bot topic mode): it follows its own session, in its own project. */
+const StoredTopic = z.strictObject({ thread: z.number().int().positive(), directory: z.string().min(1).max(4096), sessionId: z.string().max(100).optional() })
+export type StoredTopic = z.infer<typeof StoredTopic>
+const StoredChat = ChannelChat.extend({ sessionId: z.string().max(100).optional(), topics: z.array(StoredTopic).max(MAX_CHAT_TOPICS).optional() })
 export type StoredChat = z.infer<typeof StoredChat>
 const Stored = z.strictObject({
   telegram: z.strictObject({

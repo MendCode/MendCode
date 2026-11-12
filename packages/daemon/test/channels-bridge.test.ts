@@ -8,7 +8,8 @@ import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createChannelBridge, type BridgeHost } from "../src/channels-bridge"
 import { replayAfter, watchCursor } from "../src/channels"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "../src/channels-config"
-import { splitMessage, type TelegramUpdate } from "../src/channels-telegram"
+import { createTelegramApi, splitMessage, type TelegramUpdate } from "../src/channels-telegram"
+import { balanceFences, markdownToTelegramHtml } from "../src/channels-format"
 
 const cleanups: Array<() => void> = []
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
@@ -16,7 +17,7 @@ afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
 const SESSION = "ses_phone" as SessionId
 let update = 0
 
-function setup(options: { live?: boolean } = {}) {
+function setup(options: { live?: boolean; topics?: boolean } = {}) {
   const root = mkdtempSync(path.join(tmpdir(), "mend-channels-"))
   const dir = path.join(root, "data")
   const project = path.join(root, "project")
@@ -26,7 +27,8 @@ function setup(options: { live?: boolean } = {}) {
   let clock = 1_000
   const pairing = createPairing({ now: () => clock })
   const config = createChannelsConfig(dir)
-  const messages: Array<{ chat: string; text: string; buttons?: unknown }> = []
+  const messages: Array<{ chat: string; text: string; buttons?: unknown; thread?: number; markdown?: boolean }> = []
+  const topics: Array<{ chat: string; name: string; thread: number }> = []
   const documents: Array<{ chat: string; name: string; size: number }> = []
   const callbacks: Array<{ id: string; text?: string | undefined }> = []
   const sent: CommandInput[] = []
@@ -51,16 +53,21 @@ function setup(options: { live?: boolean } = {}) {
   }
   const bridge = createChannelBridge({
     api: {
-      sendMessage: async (chat, text, buttons) => { messages.push({ chat, text, ...(buttons ? { buttons } : {}) }); return messages.length },
+      sendMessage: async (chat, text, buttons, send) => {
+        if (send?.thread !== undefined && !topics.some((topic) => topic.thread === send.thread)) throw new Error("[CHANNELS]: telegram sendMessage failed: Bad Request: message thread not found")
+        messages.push({ chat, text, ...(buttons ? { buttons } : {}), ...(send?.thread !== undefined ? { thread: send.thread } : {}), ...(send?.markdown ? { markdown: true } : {}) })
+        return messages.length
+      },
+      ...(options.topics ? { createTopic: async (chat: string, name: string) => { const thread = 100 + topics.length; topics.push({ chat, name, thread }); return thread } } : {}),
       ...(options.live ? { editMessage: async (chat: string, id: number, text: string) => { edits.push({ chat, id, text }) } } : {}),
       answerCallback: async (id, text) => { callbacks.push({ id, text }) },
       sendTyping: async () => {},
       sendDocument: async (chat, file) => { documents.push({ chat, name: file.name, size: file.bytes.length }) },
     },
-    host, config, pairing, dataDir: dir, log: () => {}, now: () => clock,
+    host, config, pairing, dataDir: dir, log: () => {}, now: () => clock, ...(options.topics ? { topics: true, botName: "mend_bot" } : {}),
   })
-  const text = (chat: number, value: string, type = "private"): TelegramUpdate => ({ update_id: ++update, message: { message_id: update, chat: { id: chat, type, first_name: "Ana" }, text: value } })
-  const press = (chat: number, data: string): TelegramUpdate => ({ update_id: ++update, callback_query: { id: `cb${update}`, data, message: { chat: { id: chat, type: "private" } } } })
+  const text = (chat: number, value: string, type = "private", thread?: number): TelegramUpdate => ({ update_id: ++update, message: { message_id: update, chat: { id: chat, type, first_name: "Ana" }, text: value, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } })
+  const press = (chat: number, data: string, thread?: number): TelegramUpdate => ({ update_id: ++update, callback_query: { id: `cb${update}`, data, message: { chat: { id: chat, type: "private" }, ...(thread === undefined ? {} : { message_thread_id: thread, is_topic_message: true }) } } })
   // Every event gets the next seq, as the daemon's log does.
   let seq = 0
   const event = (body: Record<string, unknown>) => bridge.onEvent({ sessionId: SESSION, seq: ++seq, at: 1, ...body } as unknown as SessionEvent)
@@ -70,7 +77,7 @@ function setup(options: { live?: boolean } = {}) {
     await bridge.update(text(chat, `/pair ${code}`))
     return code
   }
-  return { root, dir, project, bridge, config, pairing, messages, documents, callbacks, sent, unwatched, watched, edits, answers, hooks, text, press, event, nextSeq, pair, advance: (ms: number) => { clock += ms } }
+  return { root, dir, project, bridge, config, pairing, messages, topics, documents, callbacks, sent, unwatched, watched, edits, answers, hooks, text, press, event, nextSeq, pair, advance: (ms: number) => { clock += ms } }
 }
 
 const lastMessage = (h: ReturnType<typeof setup>) => h.messages.at(-1)?.text ?? ""
@@ -340,8 +347,8 @@ describe("following the terminal's session", () => {
     expect(h.sent.find((command) => command.type === "session.history")).toMatchObject({ sessionId: TERMINAL, limit: 5 })
     const recap = lastMessage(h)
     expect(recap).toContain("Last 2 turns")
-    expect(recap).toContain("You: add a login page\nMendCode: Added it; the password is [secret]")
-    expect(recap).toContain("You: now the tests\n(cancelled)")
+    expect(recap).toContain("**You:** add a login page\n**MendCode:** Added it; the password is [secret]")
+    expect(recap).toContain("**You:** now the tests\n_(cancelled)_")
     // The phone continues that session; no new one is made.
     await h.bridge.update(h.text(7, "and the docs"))
     expect(h.sent.some((command) => command.type === "session.create")).toBe(false)
@@ -358,7 +365,7 @@ describe("following the terminal's session", () => {
     terminalEvent(h, { type: "item.delta", itemId: "a7", text: "Renamed." })
     terminalEvent(h, { type: "turn.completed", turnId: "t7" })
     await Bun.sleep(0)
-    expect(h.messages.slice(-2).map((message) => message.text)).toEqual(["From the computer:\nrename the [secret] helper", "Renamed."])
+    expect(h.messages.slice(-2).map((message) => message.text)).toEqual(["**From the computer:**\nrename the [secret] helper", "Renamed."])
     // The next terminal turn is followed too.
     terminalEvent(h, { type: "turn.started", turnId: "t8", queueId: "queue_terminal_2" })
     terminalEvent(h, { type: "turn.failed", turnId: "t8", error: { code: "provider", message: "rate limited" } })
@@ -484,7 +491,7 @@ describe("following the terminal's session", () => {
     h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: "ses_other", title: "Release notes", state: "generating" }] } })
     await h.bridge.update(h.text(7, "/sessions"))
     await h.bridge.update(h.press(7, "s:ses_other"))
-    expect(h.messages.some((message) => message.text.startsWith("Approve bash?"))).toBe(true)
+    expect(h.messages.some((message) => message.text.startsWith("**Approve bash?**"))).toBe(true)
     await h.bridge.update(h.text(7, "/stop"))
     expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: "ses_other", turnId: "t5" })
   })
@@ -539,7 +546,7 @@ describe("following the terminal's session", () => {
     await h.bridge.update(h.text(7, "/sessions"))
     await h.bridge.update(h.press(7, "s:ses_other"))
     // The history went out while the chat was still paired; nothing held during the watch does.
-    expect(h.messages.some((message) => message.text.includes("secret plan") || message.text.startsWith("Approve"))).toBe(false)
+    expect(h.messages.some((message) => message.text.includes("secret plan") || message.text.startsWith("**Approve"))).toBe(false)
     expect(h.unwatched).toContain("ses_other")
   })
 
@@ -569,7 +576,7 @@ describe("following the terminal's session", () => {
     replay(101, { type: "server.request", turnId: "t9", requestId: "r9", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
     replay(100, { type: "turn.started", turnId: "t9", queueId: "queue_terminal" })
     replay(101, { type: "server.request", turnId: "t9", requestId: "r9", kind: "approval", title: "Run bash", detail: "make", tool: "bash" })
-    expect(h.messages.filter((message) => message.text.startsWith("Approve bash?"))).toHaveLength(1)
+    expect(h.messages.filter((message) => message.text.startsWith("**Approve bash?**"))).toHaveLength(1)
     await h.bridge.update(h.text(7, "/stop"))
     expect(h.sent.find((command) => command.type === "turn.cancel")).toMatchObject({ sessionId: TERMINAL, turnId: "t9" })
   })
@@ -590,5 +597,142 @@ describe("following the terminal's session", () => {
     h.watched.length = 0
     await h.bridge.resume()
     expect(h.watched).toEqual([TERMINAL])
+  })
+})
+
+describe("topics: several sessions and projects in one chat", () => {
+  const A = "ses_alpha" as SessionId
+  const B = "ses_beta" as SessionId
+  const on = (h: ReturnType<typeof setup>, sessionId: SessionId, body: Record<string, unknown>) => h.bridge.onEvent({ sessionId, seq: h.nextSeq(), at: 1, ...body } as unknown as SessionEvent)
+  const answer = (h: ReturnType<typeof setup>, sessionId: SessionId, turnId: string, text: string) => {
+    on(h, sessionId, { type: "turn.started", turnId, queueId: `q_${turnId}` })
+    on(h, sessionId, { type: "item.started", turnId, itemId: `a_${turnId}`, kind: "agent_message" })
+    on(h, sessionId, { type: "item.delta", itemId: `a_${turnId}`, text })
+    on(h, sessionId, { type: "turn.completed", turnId })
+  }
+
+  test("each pairing opens a topic: sessions of two projects are followed at once, each in its own topic", async () => {
+    const h = setup({ topics: true })
+    const other = path.join(h.root, "other")
+    mkdirSync(other)
+    h.answers["session.history"] = () => ({ ok: true, result: { turns: [] } })
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(h.project, A).code}`))
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(other, B).code}`))
+    expect(h.topics.map((topic) => topic.name)).toEqual(["project", "other"])
+    expect(h.config.read().telegram.chats[0]!.topics).toEqual([{ thread: 100, directory: h.project, sessionId: A }, { thread: 101, directory: other, sessionId: B }])
+    expect(h.watched).toEqual([A, B])
+    expect(h.messages.at(-1)).toMatchObject({ chat: "7", buttons: [[{ text: "Open the topic", url: "https://t.me/mend_bot/101" }]] })
+    expect(h.messages.at(-1)!.thread).toBeUndefined()
+
+    answer(h, A, "t1", "**alpha** done")
+    answer(h, B, "t2", "beta done")
+    await Bun.sleep(0)
+    expect(h.messages.slice(-2)).toMatchObject([{ thread: 100, text: "**alpha** done", markdown: true }, { thread: 101, text: "beta done", markdown: true }])
+
+    await h.bridge.update(h.text(7, "ship it", "private", 101))
+    expect(h.sent.filter((command) => command.type === "user.submit").at(-1)).toMatchObject({ sessionId: B, text: "ship it" })
+    expect(h.sent.some((command) => command.type === "session.create")).toBe(false)
+
+    h.watched.length = 0
+    h.bridge.stop()
+    await h.bridge.resume()
+    expect(h.watched).toEqual([A, B])
+  })
+
+  test("a /sessions pick and /new open topics; a topic made in Telegram gets its own session; a deleted topic is dropped", async () => {
+    const h = setup({ topics: true })
+    await h.pair()
+    h.answers["session.history"] = () => ({ ok: true, result: { turns: [] } })
+    h.answers["session.list"] = () => ({ ok: true, result: { sessions: [{ sessionId: A, title: "Release notes", state: "idle" }] } })
+    await h.bridge.update(h.text(7, "/sessions"))
+    await h.bridge.update(h.press(7, `s:${A}`))
+    expect(h.topics.at(-1)).toMatchObject({ name: "project · Release notes", thread: 100 })
+    expect(h.callbacks.at(-1)?.text).toBe("Opened")
+    expect(h.watched).toEqual([A])
+    await h.bridge.update(h.press(7, `s:${A}`))
+    expect(h.callbacks.at(-1)?.text).toBe("Already open")
+    expect(h.topics).toHaveLength(1)
+
+    await h.bridge.update(h.text(7, "/new"))
+    expect(h.topics.at(-1)).toMatchObject({ name: "project · new", thread: 101 })
+    expect(h.messages.find((message) => message.thread === 101)?.text).toContain("Fresh session")
+    await h.bridge.update(h.text(7, "start here", "private", 101))
+    expect(h.sent.find((command) => command.type === "session.create")).toMatchObject({ directory: h.project })
+    expect(h.config.read().telegram.chats[0]!.topics?.find((topic) => topic.thread === 101)?.sessionId).toBe(SESSION)
+
+    // The user deleted topic 100: the next message there fails, and its session stops being followed.
+    h.topics.splice(0, 1)
+    answer(h, A, "t3", "late answer")
+    await Bun.sleep(0)
+    await Bun.sleep(0)
+    expect(h.config.read().telegram.chats[0]!.topics?.map((topic) => topic.thread)).toEqual([101])
+    expect(h.unwatched).toContain(A)
+  })
+
+  test("without topic mode a second pairing still moves the chat", async () => {
+    const h = setup()
+    h.answers["session.history"] = () => ({ ok: true, result: { turns: [] } })
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(h.project, A).code}`))
+    await h.bridge.update(h.text(7, `/pair ${h.pairing.create(h.project, B).code}`))
+    expect(h.topics).toHaveLength(0)
+    expect(h.config.read().telegram.chats).toMatchObject([{ id: "7", sessionId: B }])
+  })
+})
+
+describe("formatting for Telegram", () => {
+  test("the model's Markdown becomes Telegram HTML: bold, code, links, lists, quotes, tables and code blocks, all escaped", () => {
+    const html = markdownToTelegramHtml([
+      "## Result",
+      "Fixed **two things** in `src/a_b.ts` and *also* snake_case_name <here>.",
+      "- see [docs](https://x.dev/a_b?c=1&d=2)",
+      "  - nested **bold *italic***",
+      "> a quote",
+      "",
+      "| File | Lines |",
+      "|---|---|",
+      "| a.ts | **12** |",
+      "",
+      "```ts",
+      "if (a < b && c) {}",
+      "```",
+      "- [x] done",
+    ].join("\n"))
+    expect(html).toBe([
+      "<b>Result</b>",
+      "Fixed <b>two things</b> in <code>src/a_b.ts</code> and <i>also</i> snake_case_name &lt;here&gt;.",
+      "• see <a href=\"https://x.dev/a_b?c=1&amp;d=2\">docs</a>",
+      "   • nested <b>bold <i>italic</i></b>",
+      "<blockquote>a quote</blockquote>",
+      "",
+      "<pre>File  Lines\n────  ─────\na.ts  12</pre>",
+      "",
+      "<pre><code class=\"language-ts\">if (a &lt; b &amp;&amp; c) {}</code></pre>",
+      "☑ done",
+    ].join("\n"))
+  })
+
+  test("a code block split between two messages is closed and opened again", () => {
+    expect(balanceFences(["intro\n```js\nconst a = 1", "const b = 2\n```\nafter"])).toEqual(["intro\n```js\nconst a = 1\n```", "```js\nconst b = 2\n```\nafter"])
+  })
+
+  test("formatted sends go to the topic as HTML, and a part Telegram cannot parse is sent again as plain text", async () => {
+    const bodies: Array<Record<string, unknown>> = []
+    const api = createTelegramApi({
+      token: "123456789:AAEhBOweik6ad9r_QXMENQjcrr9FMJAGu7e",
+      fetch: (async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        bodies.push(body)
+        if (body.parse_mode && String(body.text).includes("broken")) return Response.json({ ok: false, description: "Bad Request: can't parse entities: unexpected end tag" }, { status: 400 })
+        return Response.json({ ok: true, result: { message_id: bodies.length } })
+      }) as unknown as typeof fetch,
+    })
+    await api.sendMessage("7", "**hi**", undefined, { thread: 100, markdown: true })
+    expect(bodies[0]).toMatchObject({ chat_id: "7", message_thread_id: 100, parse_mode: "HTML", text: "<b>hi</b>" })
+    await api.sendMessage("7", "broken **x**", undefined, { markdown: true })
+    expect(bodies.slice(1)).toMatchObject([{ parse_mode: "HTML" }, { text: "broken **x**" }])
+    expect(bodies[2]!.parse_mode).toBeUndefined()
+    await api.sendMessage("7", "plain *text*")
+    expect(bodies[3]).toMatchObject({ text: "plain *text*" })
+    expect(bodies[3]!.parse_mode).toBeUndefined()
   })
 })
