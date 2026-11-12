@@ -61,6 +61,8 @@ type ActiveTurn = {
   interrupted: boolean
   /** Messages the user sent while the turn ran, written to Claude Code and not yet taken in (`command_lifecycle` `started`). */
   steered: Set<string>
+  /** Of those, the ones taken while tools ran: told when Claude Code takes each in, so it shows as queued until then. */
+  reads: Map<string, (started: boolean) => void>
   /** A `taken` loop is running, so a second tool result does not start another. */
   steering?: boolean
   /** Asked again while that loop ran (a message queued meanwhile): it reads the queue once more before it stops. */
@@ -490,6 +492,9 @@ export function createClaudeEngine(options: {
       if (steered && message.command_uuid === messageUuid(steered.input.turnId)) steered.ownQueued = message.state === "queued"
       if (steered && typeof message.command_uuid === "string" && steered.steered.has(message.command_uuid) && message.state !== "queued") {
         steered.steered.delete(message.command_uuid)
+        const read = steered.reads.get(message.command_uuid)
+        steered.reads.delete(message.command_uuid)
+        read?.(message.state === "started")
         if (message.state === "started") delete steered.held
         else if (steered.held && !steered.steered.size) {
           // Claude Code dropped the last message the turn's result waited on: the turn ends with that result after all.
@@ -629,9 +634,18 @@ export function createClaudeEngine(options: {
           if (turn.steerAgain) continue
           break
         }
+        let body: Awaited<ReturnType<typeof content>>
+        try {
+          body = await content({ ...turn.input, ...queued })
+        } catch (error) {
+          // Never written: it goes back to the queue (a message taken at a tool result becomes the turn's, as before).
+          queued.read?.(false)
+          throw error
+        }
         const uuid = randomUUID()
         turn.steered.add(uuid)
-        write(connection, userMessage(await content({ ...turn.input, ...queued }), uuid))
+        if (queued.read) turn.reads.set(uuid, queued.read)
+        write(connection, userMessage(body, uuid))
       }
     } catch {
       // A message that could not be read stays where the actor put it; the turn goes on.
@@ -896,6 +910,7 @@ export function createClaudeEngine(options: {
           waitingUser: false,
           interrupted: false,
           steered: new Set(),
+          reads: new Map(),
           toolsOpen: new Set(),
           touch() {
             turn.watchdog?.cancel()

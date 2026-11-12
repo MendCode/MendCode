@@ -15,6 +15,9 @@ export type TelegramSend = { thread?: number | undefined; markdown?: boolean | u
 export type TelegramApi = ReturnType<typeof createTelegramApi>
 
 const MESSAGE_LIMIT = 3800
+/** Telegram's limit on a message's text once its HTML is parsed (tags do not count, an entity counts as one character). */
+const TELEGRAM_TEXT_LIMIT = 4096
+const visibleLength = (html: string) => html.replace(/<[^>]*>/g, "").replace(/&(?:lt|gt|amp|quot);/g, "&").length
 
 /** Splits at line breaks where it can, so a long answer arrives in readable parts under Telegram's 4096 limit. */
 export function splitMessage(text: string, limit = MESSAGE_LIMIT) {
@@ -60,11 +63,13 @@ export function createTelegramApi({ token, fetch: request = fetch, base = "https
   /** One part, formatted when asked; a part Telegram cannot parse goes again as the plain text it came from. */
   async function sendPart(chatId: string, part: string, options: TelegramSend, markup: Record<string, unknown>, html?: (markdown: string) => string) {
     const base = { chat_id: chatId, disable_web_page_preview: true, ...threadOf(options.thread), ...markup }
-    if (html) {
+    // Formatting can make a part longer than it was (a table's padding): one past Telegram's limit goes as its plain text, which fits.
+    const formatted = html?.(part)
+    if (formatted !== undefined && visibleLength(formatted) <= TELEGRAM_TEXT_LIMIT) {
       try {
-        return await call<{ message_id?: number } | undefined>("sendMessage", { ...base, text: html(part) || "(empty)", parse_mode: "HTML" }, 30_000)
+        return await call<{ message_id?: number } | undefined>("sendMessage", { ...base, text: formatted || "(empty)", parse_mode: "HTML" }, 30_000)
       } catch (error) {
-        if (!(error instanceof Error && /can't parse entities|can't find end|unsupported start tag|unexpected end tag/i.test(error.message))) throw error
+        if (!(error instanceof Error && /can't parse entities|can't find end|unsupported start tag|unexpected end tag|message is too long/i.test(error.message))) throw error
       }
     }
     return call<{ message_id?: number } | undefined>("sendMessage", { ...base, text: part || "(empty)" }, 30_000)

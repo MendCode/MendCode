@@ -122,6 +122,8 @@ const CLOSE_REASONS: Record<number, string> = {
  */
 export function runGateway({ url, token, intents = DISCORD_INTENTS, onDispatch, signal, WebSocket: Socket = WebSocket }: { url: string; token: string; intents?: number; onDispatch(type: string, data: Json): void; signal: AbortSignal; WebSocket?: typeof WebSocket }): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Stopped while the connection was being set up: an abort is not replayed to a listener added now, so no socket opens.
+    if (signal.aborted) return resolve()
     const socket = new Socket(`${url}${url.includes("?") ? "&" : "?"}v=10&encoding=json`)
     let seq: number | null = null
     let acked = true
@@ -227,7 +229,24 @@ export function discordChannel(api: DiscordApi) {
     topicLink: (chat, thread) => { const guild = guilds.get(chat); return guild ? `https://discord.com/channels/${guild}/${thread}` : undefined },
   }
 
-  /** A gateway dispatch as bridge updates; button presses are acknowledged here, within Discord's 3 seconds. */
+  /** Each press's answer, kept so its follow-ups wait for it: Discord takes a follow-up only after the first answer. */
+  const acknowledged = new Map<string, Promise<void>>()
+  /**
+   * Answers a button press at once (Discord drops one not answered within 3 seconds). Called as the dispatch arrives, before it waits
+   * behind slower updates in order; `dispatch` calls it too and waits for that answer, and a press is answered once.
+   */
+  function acknowledge(type: string, data: Json): Promise<void> | undefined {
+    if (type !== "INTERACTION_CREATE" || data.type !== 3 || typeof data.id !== "string" || typeof data.token !== "string") return undefined
+    const known = acknowledged.get(data.id)
+    if (known) return known
+    if (typeof data.application_id === "string") application ??= data.application_id
+    const answered = api.acknowledge(data.id, data.token).then(() => {}, () => {})
+    acknowledged.set(data.id, answered)
+    if (acknowledged.size > 256) acknowledged.delete(acknowledged.keys().next().value!)
+    return answered
+  }
+
+  /** A gateway dispatch as bridge updates. */
   async function dispatch(type: string, data: Json): Promise<ChannelUpdate | undefined> {
     switch (type) {
       case "READY": {
@@ -265,8 +284,7 @@ export function discordChannel(api: DiscordApi) {
       }
       case "INTERACTION_CREATE": {
         if (data.type !== 3 || typeof data.id !== "string" || typeof data.token !== "string" || typeof data.channel_id !== "string") return undefined
-        if (typeof data.application_id === "string") application ??= data.application_id
-        await api.acknowledge(data.id, data.token).catch(() => {})
+        await acknowledge(type, data)
         const user = ((data.member as Json | undefined)?.user ?? data.user) as Json | undefined
         if (typeof user?.id !== "string") return undefined
         presses.set(data.id, data.token)
@@ -278,5 +296,5 @@ export function discordChannel(api: DiscordApi) {
     return undefined
   }
 
-  return { api: channelApi, dispatch }
+  return { api: channelApi, dispatch, acknowledge }
 }

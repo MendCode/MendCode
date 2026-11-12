@@ -4,7 +4,7 @@ import path from "node:path"
 import { readChannelFile } from "./channels-files"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
 import type { ChannelApi, ChannelButton, ChannelUpdate, ChannelVoice, ChannelWords } from "./channels-api"
-import { MAX_CHANNEL_CHATS, MAX_CHAT_TOPICS, type ChannelStore, type createPairing } from "./channels-config"
+import { MAX_CHANNEL_CHATS, MAX_CHAT_TOPICS, type ChannelStore, type createPairing, type StoredChat } from "./channels-config"
 import type { Transcription } from "./voice"
 
 /** What the bridge needs from the daemon: an ordinary full-authority client of the local socket. */
@@ -100,6 +100,7 @@ export function createChannelBridge({ api, host, store, pairing, dataDir, log, t
 
   /** The session a place follows; a topic not stored yet (made by the user) is stored in the chat's project. */
   function saveSession(id: Place, sessionId: SessionId | undefined) {
+    let evicted: Place | undefined
     store.update((list) => {
       const chat = list.find((entry) => entry.id === chatIdOf(id))
       if (!chat) return
@@ -107,9 +108,20 @@ export function createChannelBridge({ api, host, store, pairing, dataDir, log, t
       if (thread === undefined) { if (sessionId) chat.sessionId = sessionId; else delete chat.sessionId; return }
       const topics = chat.topics ??= []
       let topic = topics.find((entry) => sameThread(entry.thread, thread))
-      if (!topic) { topic = { thread, directory: chat.directory }; topics.push(topic); if (topics.length > MAX_CHAT_TOPICS) topics.shift() }
+      if (!topic) { topic = { thread, directory: chat.directory }; topics.push(topic); evicted = evictOldest(chat.id, topics) }
       if (sessionId) topic.sessionId = sessionId; else delete topic.sessionId
     })
+    if (evicted) forgetPlace(evicted)
+  }
+
+  /**
+   * Past the cap, the oldest topic is no longer followed: its stored session and project go, and so does what runs for it here (its
+   * watch, its turn), so a message there later starts fresh in the chat's project for everything, prompt and commands alike.
+   */
+  function evictOldest(chat: string, topics: NonNullable<StoredChat["topics"]>): Place | undefined {
+    if (topics.length <= MAX_CHAT_TOPICS) return undefined
+    const oldest = topics.shift()
+    return oldest ? placeOf(chat, String(oldest.thread)) : undefined
   }
 
   /** A new topic of chat `chat` for `directory` (and `sessionId`, when there is one yet); undefined when the service refuses it. */
@@ -119,13 +131,15 @@ export function createChannelBridge({ api, host, store, pairing, dataDir, log, t
       log("warn", error instanceof Error ? error.message.slice(0, 200) : "[CHANNELS]: topic not created")
       return undefined
     }
+    let evicted: Place | undefined
     store.update((list) => {
       const stored = list.find((entry) => entry.id === chat)
       if (!stored) return
       const topics = stored.topics ??= []
       topics.push({ thread, directory, ...(sessionId ? { sessionId } : {}) })
-      if (topics.length > MAX_CHAT_TOPICS) topics.shift()
+      evicted = evictOldest(chat, topics)
     })
+    if (evicted) forgetPlace(evicted)
     return placeOf(chat, thread)
   }
 
@@ -672,6 +686,6 @@ export function createChannelBridge({ api, host, store, pairing, dataDir, log, t
     onEvent,
     forget,
     resume,
-    stop() { for (const id of [...runtimes.keys()]) forget(id) },
+    stop() { for (const id of [...runtimes.keys()]) forgetPlace(id) },
   }
 }

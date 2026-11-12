@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import type { QueueId, Settings } from "@mendcode/protocol"
+import { MAX_QUEUE_ENTRIES, type QueueId, type Settings } from "@mendcode/protocol"
 import { createSessionActor } from "../src/session-actor"
 import { createHarness, createManualEngine, flush } from "./helpers"
 
@@ -452,4 +452,67 @@ test("an engine that holds a message until its tools' results takes it while the
   await s.submit("after the answer", { delivery: "queue" })
   expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
   expect(s.actor.snapshot().queue).toHaveLength(1)
+})
+
+test("a message taken while the tools run shows as steering until the model reads it, and goes back to the queue when dropped", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const userMessages = () => s.h.events.filter((event) => event.type === "item.completed" && "text" in event && event.text === "while the tool runs")
+  const read = async () => {
+    await s.submit("while the tool runs")
+    const before = userMessages().length
+    const taken = await input.takeQueued?.({ whileTools: true })
+    expect(taken).toMatchObject({ text: "while the tool runs" })
+    expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs", delivery: "steer" }])
+    expect(userMessages()).toHaveLength(before)
+    // Out of the queue's reach: nothing takes it twice.
+    expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
+    return taken!
+  }
+  ;(await read()).read?.(true)
+  await flush()
+  expect(userMessages()).toHaveLength(1)
+  expect(lastQueue(s)).toEqual([])
+  ;(await read()).read?.(false)
+  await flush()
+  expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs" }])
+  expect(lastQueue(s)[0]).not.toHaveProperty("delivery")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  // Not reported by the end of the turn: it was written to the engine, so it counts as read there.
+  s.manual.last().finish()
+  await flush()
+  expect(userMessages()).toHaveLength(2)
+  expect(lastQueue(s)).toEqual([])
+  expect(s.manual.turns).toHaveLength(1)
+})
+
+test("a message queued while an approval waits is offered to the engine once the approval is answered", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  let told = 0
+  input.onQueued?.(() => void told++)
+  void input.ask({ kind: "approval", title: "bash", detail: "sleep 8" })
+  await flush()
+  await s.submit("while it waits")
+  expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
+  const before = told
+  const request = s.h.events.find((event) => event.type === "server.request")
+  if (request?.type !== "server.request") throw new Error("missing request")
+  await s.command({ type: "request.resolve", requestId: request.requestId, decision: { kind: "approve", scope: "once" } })
+  expect(told).toBe(before + 1)
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while it waits" })
+})
+
+test("messages handed to the engine and still unread count toward the queue's bound", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  await s.submit("handed over")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "handed over" })
+  for (let at = 1; at < MAX_QUEUE_ENTRIES; at++) expect(await s.submit(`waits ${at}`, { delivery: "queue" })).toMatchObject({ ok: true })
+  expect(lastQueue(s)).toHaveLength(MAX_QUEUE_ENTRIES)
+  expect(await s.submit("one too many")).toMatchObject({ ok: false, code: "busy" })
+  expect(lastQueue(s)).toHaveLength(MAX_QUEUE_ENTRIES)
 })

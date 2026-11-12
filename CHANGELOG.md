@@ -9,16 +9,29 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.16 - 2026-11-12
+
+Remote control comes to Discord, with a thread per session, and Telegram gives each session its own topic with formatted answers; with Claude Code, a message queued while a tool runs is read right after it.
+
+### Upgrade notes
+
+- Same code as v0.0.16-beta.1.
+
+## v0.0.16-beta.1 - 2026-11-12
+
+Remote control comes to Discord, with a thread per session, and Telegram gives each session its own topic with formatted answers; with Claude Code, a message queued while a tool runs is read right after it.
+
 ### New
 
 - Remote control on Discord: pair a channel of your server with `/remote-control discord pair`; every session runs in its own thread, a message in the channel starts a new one, and only you can drive it.
 - An install guide your coding agent can follow: paste "Fetch https://raw.githubusercontent.com/MendCode/MendCode/main/install.md and follow it." into any agent.
 - Telegram remote control follows several sessions and projects at once from one bot: with topics on in @BotFather, each session has its own topic, opened by pairing from another project, `/new` or `/sessions`.
 - Answers in Telegram arrive formatted: bold, code, lists, links and quotes, with code blocks and tables in monospace.
+- `--fast` turns on a session's fast mode from the command line, as `/fast` does: on `mendcode run`, the terminal, `session create` and `session send`; a model it does not reach is refused with the reason.
 
 ### Fixed
 
-- With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later.
+- With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later; until then it stays in the queue as steering instead of showing as already sent.
 - With Claude Code, a turn that compacts in a resumed session no longer counts the whole session's tokens as its own, in the activity line and in usage.
 
 ## v0.0.15 - 2026-11-11

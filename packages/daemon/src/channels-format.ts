@@ -17,7 +17,10 @@ export function inlineHtml(text: string): string {
   let rest = text.replace(/\u0000/g, "")
   rest = rest.replace(/(`+)([^`]|[^`][\s\S]*?[^`])\1(?!`)/g, (_all, _ticks: string, code: string) => keep(`<code>${escape(code.trim() || code)}</code>`))
   rest = rest.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g, (_all, label: string, url: string) => keep(`<a href="${attribute(url)}">${emphasis(escape(label))}</a>`))
-  return emphasis(escape(rest)).replace(/\u0000(\d+)\u0000/g, (_all, index: string) => kept[Number(index)] ?? "")
+  // A kept link can hold a kept code span (a linked file name): restored until none is left, at most as deep as they nest.
+  let html = emphasis(escape(rest))
+  for (let depth = 0; depth < 3 && html.includes("\u0000"); depth++) html = html.replace(/\u0000(\d+)\u0000/g, (_all, index: string) => kept[Number(index)] ?? "")
+  return html
 }
 
 function emphasis(html: string) {

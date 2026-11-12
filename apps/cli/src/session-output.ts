@@ -2,6 +2,7 @@ import type { Client } from "@mendcode/client"
 import type { ModelChoice, ModelInfo, ModelsReport, ReasoningEffort, SessionDetail } from "@mendcode/protocol"
 import { findModel, modelRef } from "@mendcode/protocol/wire"
 import type { SessionSelection } from "./session-args"
+import { fastReach } from "./view/fast-mode"
 
 export function sessionHuman(session: SessionDetail, waiting: ReadonlyArray<{ requestId: string; kind: string; tool?: string; detail: string }> = []) {
   return [
@@ -26,7 +27,7 @@ export function sessionModelPrefix(model: string) {
 }
 
 export async function sessionSelection(client: Pick<Client, "send">, selection: SessionSelection, target: { directory?: string; sessionId?: import("@mendcode/protocol").SessionId }): Promise<{ ok: true; model?: ModelChoice; agent?: string } | { ok: false; message: string }> {
-  if (!selection.model && !selection.variant && !selection.effort) return { ok: true as const, ...(selection.agent ? { agent: selection.agent } : {}) }
+  if (!selection.model && !selection.variant && !selection.effort && !selection.fast) return { ok: true as const, ...(selection.agent ? { agent: selection.agent } : {}) }
   // `models.list` is scoped by session only: a session that does not exist yet (create) reads the daemon's catalog.
   const reply = await client.send({ type: "models.list", ...(target.sessionId ? { sessionId: target.sessionId } : {}) })
   if (!reply.ok) return { ok: false as const, message: reply.error.message }
@@ -46,7 +47,11 @@ export async function sessionSelection(client: Pick<Client, "send">, selection: 
     const problem = effortProblem(findModel(report.models, choice.model), selection.effort, selection.variant)
     if (problem) return { ok: false as const, message: problem }
   }
-  return { ok: true as const, model: { ...choice, ...(selection.variant ? { variant: selection.variant } : {}), ...(selection.effort ? { effort: selection.effort } : {}) }, ...(selection.agent ? { agent: selection.agent } : {}) }
+  if (selection.fast) {
+    const reach = fastReach(choice.model, report)
+    if (!reach.applies) return { ok: false as const, message: `--fast does not reach ${choice.model}: ${reach.why ?? "its engine has no fast mode"}` }
+  }
+  return { ok: true as const, model: { ...choice, ...(selection.variant ? { variant: selection.variant } : {}), ...(selection.effort ? { effort: selection.effort } : {}), ...(selection.fast ? { fast: true } : {}) }, ...(selection.agent ? { agent: selection.agent } : {}) }
 }
 
 /**

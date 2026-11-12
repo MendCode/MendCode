@@ -24,6 +24,8 @@ export type Startup = {
   variant?: string
   /** `--effort LEVEL`: the reasoning effort of the session's model (the choice F3 and `/model ID LEVEL` make). */
   effort?: ReasoningEffort
+  /** `--fast`: the session's fast mode on, as `/fast` turns it on (a model it does not reach is refused). */
+  fast?: boolean
   files: string[]
   command?: string
   title?: string
@@ -76,7 +78,7 @@ export const CONFIG_KEYS: Record<string, { flag: string; boolean?: true }> = {
 }
 
 const VALUES = new Set(["dir", "data-dir", "cwd", "project", "engine", "session", "model", "agent", "variant", "effort", "file", "command", "prompt", "initial-message", "format", "compat", "title", "output-schema", "output-last-message", "max-turns", "tools", "exclude-tools", "system-prompt", "append-system-prompt", "permission", "config", "add-dir"])
-const BOOLEANS = new Set(["continue", "fork", "json", "approve", "dangerously-skip-permissions", "thinking", "isolated", "diagnostics", "help", "restart-daemon", "reasoning", "tui-control", "ephemeral", "no-tools", "offline", "no-context-files", "alt-screen", "no-alt-screen", "accessible", "bg"])
+const BOOLEANS = new Set(["continue", "fork", "json", "approve", "dangerously-skip-permissions", "thinking", "isolated", "diagnostics", "help", "restart-daemon", "reasoning", "tui-control", "ephemeral", "no-tools", "offline", "no-context-files", "alt-screen", "no-alt-screen", "accessible", "bg", "fast"])
 const ALIASES: Record<string, string> = { "-m": "--model", "-s": "--session", "-c": "--continue", "-f": "--file", "-h": "--help", "-o": "--output-last-message", "-nc": "--no-context-files" }
 const RUN_ONLY = ["output-schema", "output-last-message", "max-turns", "tools", "exclude-tools", "system-prompt", "append-system-prompt", "permission"]
 const list = (value: string) => value.split(",").map((entry) => entry.trim()).filter(Boolean)
@@ -211,6 +213,7 @@ export function parseStartup(argv: string[], probe: FileProbe = {}): Startup {
     ...(values.has("agent") ? { agent: values.get("agent")! } : {}),
     ...(values.has("variant") ? { variant: values.get("variant")! } : {}),
     ...(values.has("effort") ? { effort: values.get("effort") as ReasoningEffort } : {}),
+    ...(flags.has("fast") ? { fast: true } : {}),
     ...(values.has("command") ? { command: values.get("command")! } : {}),
     ...(values.has("title") ? { title: values.get("title")! } : {}),
     ...(values.has("prompt") ? { prompt: values.get("prompt")! } : {}),
@@ -287,6 +290,7 @@ export const STARTUP_USAGE = [
   "  --cwd PROJECT · --model P/M · --agent A · --variant V",
   "  --effort minimal|low|medium|high|xhigh   one of the model's levels",
   "                           (for a Claude Code model, --variant LEVEL)",
+  "  --fast                   fast mode on for the session, as /fast does",
   "  --continue | --session ID · --fork · --command NAME · --title [TITLE]",
   "  --file PATH...           attachments; the first argument that is not a path",
   "                           starts the message",
@@ -358,7 +362,7 @@ export async function prepareStartup(client: Pick<Client, "send">, options: Star
     const result = await request(client, { type: "session.get", sessionId })
     directory = (result.session as SessionDetail).directory
   }
-  if (remote?.readOnly && (options.fork || !sessionId || options.model || options.agent || options.variant || options.effort || options.title !== undefined)) throw new Error("read-only attach requires an existing session without startup changes")
+  if (remote?.readOnly && (options.fork || !sessionId || options.model || options.agent || options.variant || options.effort || options.fast || options.title !== undefined)) throw new Error("read-only attach requires an existing session without startup changes")
   const selected = await sessionSelection(client, options, sessionId ? { sessionId } : {})
   if (!selected.ok) throw new Error(selected.message)
   if (selected.agent) {

@@ -189,6 +189,7 @@ Selections use the daemon catalog and primary-agent validation:
 | `--variant NAME` | name a provider variant |
 | `--effort LEVEL` | select reasoning effort |
 | `--effort minimal|low|medium|high|xhigh`, or `-c effort=LEVEL` | must name one of the model's own levels; otherwise a usage error lists them ([providers](providers.md#reasoning-effort-from-the-command-line)) |
+| `--fast` | the session's fast mode on, as `/fast` turns it on; a model it does not reach is refused with the reason (also on `session create` and `session send`) |
 
 ### Continue or fork a session
 
@@ -397,7 +398,7 @@ Windows uses manual `daemon start|run`; Authenticode signing and a Windows CI da
 
 ```bash
 mendcode session list [--all] [--all-projects] [--max-count N] [--search TEXT]
-mendcode session create [--title T] [--parent ID] [--agent A] [--model P/M] [--variant V] [--effort LEVEL]
+mendcode session create [--title T] [--parent ID] [--agent A] [--model P/M] [--variant V] [--effort LEVEL] [--fast]
 mendcode session get|status|inspect|export <id>
 mendcode session rename <id> <title...>
 mendcode session fork <id> [--message-id ITEM]
@@ -463,7 +464,7 @@ For session commands, `--dir PROJECT` after `session` targets a project; a prefi
 Example: `mendcode --dir /tmp/data session create --dir /work/repo --title Review`.
 ### session create
 
-`session create` accepts `--parent ID`, `--agent A`, `--model provider/model` (or a catalog ID), `--variant V` and `--effort LEVEL`.
+`session create` accepts `--parent ID`, `--agent A`, `--model provider/model` (or a catalog ID), `--variant V`, `--effort LEVEL` and `--fast`.
 
 Unknown parents and invalid selections fail before creation.
 ### session stats ID [--json]

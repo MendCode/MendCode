@@ -1984,10 +1984,11 @@ describe("claude engine background tasks", () => {
       let offered = false
       let tell: (() => void) | undefined
       const asked: Array<{ whileTools?: boolean } | undefined> = []
+      const reads: string[] = []
       turn.input.onQueued = (handler) => { tell = handler }
       turn.input.takeQueued = async (options) => {
         asked.push(options)
-        return !available || offered ? undefined : ((offered = true), { text: "Also say BANANA", attachments: [] })
+        return !available || offered ? undefined : ((offered = true), { text: "Also say BANANA", attachments: [], read: (started: boolean) => void reads.push(`${started}:${toolResultSent}`) })
       }
       const running = h.engine.runTurn(turn.input)
       if (when === "while the tool runs") {
@@ -1998,6 +1999,8 @@ describe("claude engine background tasks", () => {
       expect(await running).toEqual({ status: "ok" })
       expect(writtenBeforeResult).toBe(true)
       expect(asked[0]).toEqual({ whileTools: true })
+      // Told once Claude Code takes it in (after the tool's result), so it shows as queued until then.
+      expect(reads).toEqual(["true:true"])
       expect(turn.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "DONE BANANA")).toBe(true)
       h.engine.stop()
     }
