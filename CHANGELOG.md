@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.16 - 2026-11-12
+
+Remote control comes to Discord, with a thread per session, and Telegram gives each session its own topic with formatted answers; with Claude Code, a message queued while a tool runs is read right after it.
+
+### Upgrade notes
+
+- Same code as v0.0.16-beta.1.
+
+## v0.0.16-beta.1 - 2026-11-12
+
+Remote control comes to Discord, with a thread per session, and Telegram gives each session its own topic with formatted answers; with Claude Code, a message queued while a tool runs is read right after it.
+
 ### New
 
 - Remote control on Discord: pair a channel of your server with `/remote-control discord pair`; every session runs in its own thread, a message in the channel starts a new one, and only you can drive it.
