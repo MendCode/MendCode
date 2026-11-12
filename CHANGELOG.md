@@ -18,7 +18,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
-- With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later.
+- With Claude Code, a message you queue while a tool runs is read right after that tool, not one step later; until then it stays in the queue as steering instead of showing as already sent.
 - With Claude Code, a turn that compacts in a resumed session no longer counts the whole session's tokens as its own, in the activity line and in usage.
 
 ## v0.0.15 - 2026-11-11

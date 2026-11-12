@@ -453,3 +453,36 @@ test("an engine that holds a message until its tools' results takes it while the
   expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
   expect(s.actor.snapshot().queue).toHaveLength(1)
 })
+
+test("a message taken while the tools run shows as steering until the model reads it, and goes back to the queue when dropped", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const userMessages = () => s.h.events.filter((event) => event.type === "item.completed" && "text" in event && event.text === "while the tool runs")
+  const read = async () => {
+    await s.submit("while the tool runs")
+    const before = userMessages().length
+    const taken = await input.takeQueued?.({ whileTools: true })
+    expect(taken).toMatchObject({ text: "while the tool runs" })
+    expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs", delivery: "steer" }])
+    expect(userMessages()).toHaveLength(before)
+    // Out of the queue's reach: nothing takes it twice.
+    expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
+    return taken!
+  }
+  ;(await read()).read?.(true)
+  await flush()
+  expect(userMessages()).toHaveLength(1)
+  expect(lastQueue(s)).toEqual([])
+  ;(await read()).read?.(false)
+  await flush()
+  expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs" }])
+  expect(lastQueue(s)[0]).not.toHaveProperty("delivery")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  // Not reported by the end of the turn: it was written to the engine, so it counts as read there.
+  s.manual.last().finish()
+  await flush()
+  expect(userMessages()).toHaveLength(2)
+  expect(lastQueue(s)).toEqual([])
+  expect(s.manual.turns).toHaveLength(1)
+})

@@ -15,7 +15,7 @@ import type {
 } from "@mendcode/protocol"
 import type { createIdFactory } from "@mendcode/protocol"
 import type { Clock, TimerHandle } from "./clock"
-import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
+import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, QueuedMessage, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
 import type { Scope } from "./scope"
 import { createLiveOutput } from "./live-output"
 
@@ -88,7 +88,8 @@ type Message =
   | { kind: "notice"; text: string; queueId?: QueueId; idleOnly?: boolean; delivery?: "queue" | "steer"; rides?: boolean; unless?: () => boolean; recordOnly?: boolean; reply(queueId: QueueId | undefined): void }
   | { kind: "steer"; steering: Steering; reply(started: boolean): void }
   | { kind: "compact.idle"; reply(started: boolean): void }
-  | { kind: "engine.queue"; turnId: TurnId; userOnly?: boolean; whileTools?: boolean; reply(entry: Pick<TurnInput, "text" | "attachments" | "authority"> | undefined): void }
+  | { kind: "engine.queue"; turnId: TurnId; userOnly?: boolean; whileTools?: boolean; reply(entry: QueuedMessage | undefined): void }
+  | { kind: "engine.read"; queueId: QueueId; started: boolean }
   | { kind: "engine.request.cancel"; turnId: TurnId; requestId: RequestId }
 
 export type SessionActorOptions = {
@@ -149,6 +150,11 @@ export function createSessionActor(options: SessionActorOptions) {
   const cancelGraceMs = options.cancelGraceMs ?? 5_000
   const mailbox: Message[] = []
   const queue: QueueEntry[] = [...(options.restoredQueue ?? [])]
+  /**
+   * Messages the engine took while its tools run (`whileTools`): out of the queue, so nothing takes them again, and still shown
+   * there (steering) until the model reads them; then they become the turn's user message.
+   */
+  const sent: Array<{ entry: QueueEntry; turnId: TurnId; itemId: ItemId; text: string }> = []
   let foreground: ForegroundState = "idle"
   let active: ActiveTurn | undefined
   let held = queue.length > 0
@@ -214,7 +220,7 @@ export function createSessionActor(options: SessionActorOptions) {
     emit({
       type: "queue.changed",
       sessionId,
-      queue: queue.map((entry) => ({
+      queue: [...sent.map((each) => ({ ...each.entry, delivery: "steer" as const })), ...queue].map((entry) => ({
         queueId: entry.queueId,
         preview: entry.compact ? "compact context" : (entry.displayText ?? entry.text).slice(0, PREVIEW_CHARS),
         attachments: entry.attachments.length,
@@ -419,9 +425,22 @@ export function createSessionActor(options: SessionActorOptions) {
     turn.agentOpen.clear()
   }
 
+  /** The message the engine took while its tools ran is read now: it becomes the user message of the turn that took it. */
+  function showRead(each: (typeof sent)[number]) {
+    sent.splice(sent.indexOf(each), 1)
+    const { entry, turnId, itemId, text } = each
+    emit({ type: "item.started", sessionId, turnId, itemId, kind: "user_message" })
+    emit({ type: "item.completed", sessionId, itemId, status: "ok", text, ...(entry.authorityText !== undefined ? { authorityText: entry.authorityText } : {}), ...(entry.attachments.length ? { attachments: entry.attachments } : {}) })
+  }
+
   function onEngineDone(turnId: TurnId, phase: Phase, outcome: TurnOutcome) {
     const turn = active
     if (!turn || turn.turnId !== turnId || turn.phase !== phase) return
+    const unread = sent.filter((each) => each.turnId === turnId)
+    if (unread.length) {
+      for (const each of unread) showRead(each)
+      emitQueue()
+    }
     turn.grace?.cancel()
     abandonPending(turn)
     // Already announced at the cancel: the engine has now stopped, so what waits can start.
@@ -718,7 +737,10 @@ export function createSessionActor(options: SessionActorOptions) {
         return { ok: true, result: { steered: true } }
       }
       case "queue.list":
-        return { ok: true, result: { held, paused, entries: queue.map((entry) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.compact ? "" : entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: editable(entry), ...(entry.delivery ? { delivery: entry.delivery } : {}) })) } }
+        return { ok: true, result: { held, paused, entries: [
+          ...sent.map(({ entry }) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: false, delivery: "steer" as const })),
+          ...queue.map((entry) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.compact ? "" : entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: editable(entry), ...(entry.delivery ? { delivery: entry.delivery } : {}) })),
+        ] } }
       case "turn.cancel": {
         if (!active || active.turnId !== command.turnId) {
           return { ok: false, code: "target_mismatch", message: "[ACTOR]: turn is not active" }
@@ -941,6 +963,15 @@ export function createSessionActor(options: SessionActorOptions) {
           taken.push(each)
         }
         const joined = outside && taken.some((each) => !each.queued) ? outside : undefined
+        const authority = !entry || entry.rides ? undefined : { sourceId: itemId, text: entry.authorityText ?? entry.text, ...(entry.notice ? { synthetic: true } : {}) }
+        // The user's own message taken while the tools run: it shows as steering until the model reads it (`read`).
+        if (message.whileTools && entry && !entry.notice && !entry.rides && !joined && taken.length === 1) {
+          const queueId = entry.queueId
+          queue.splice(queue.indexOf(entry), 1)
+          sent.push({ entry, turnId: turn.turnId, itemId, text })
+          emitQueue()
+          return message.reply({ text, attachments: entry.attachments, ...(authority ? { authority } : {}), read: (started) => post({ kind: "engine.read", queueId, started }) })
+        }
         // In the log under its own queue id first: whoever kept it finds it there after a crash and does not send it again.
         if (joined) emit({ type: "queue.added", sessionId, queueId: joined.queueId, text: joined.text, attachments: [], notice: true })
         emit({ type: "item.started", sessionId, turnId: turn.turnId, itemId, kind: "user_message", ...(!entry || entry.notice ? { meta: { notice: true } } : {}) })
@@ -949,7 +980,20 @@ export function createSessionActor(options: SessionActorOptions) {
         emitQueue()
         joined?.taken()
         // Such a notice reports work this turn's session started, like a tool result: it carries no authority, so the turn keeps the one it has.
-        return message.reply({ text, attachments: entry?.attachments ?? [], ...(!entry || entry.rides ? {} : { authority: { sourceId: itemId, text: entry.authorityText ?? entry.text, ...(entry.notice ? { synthetic: true } : {}) } }) })
+        return message.reply({ text, attachments: entry?.attachments ?? [], ...(authority ? { authority } : {}) })
+      }
+      case "engine.read": {
+        const each = sent.find((candidate) => candidate.entry.queueId === message.queueId)
+        if (!each) return
+        if (message.started) showRead(each)
+        else {
+          // The engine dropped it unread: it waits in the queue again, first, for the next boundary or turn.
+          sent.splice(sent.indexOf(each), 1)
+          queue.unshift(each.entry)
+        }
+        emitQueue()
+        if (!message.started) settleIdle()
+        return
       }
     }
   }
