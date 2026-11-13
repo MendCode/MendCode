@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - The `/btw` side chat can be copied from: drag to select and copy, double or triple click for a word or a line, a `copy` button under each answer, and the transcript's `copy` buttons on code blocks.
 
+### Fixed
+
+- The workflows page opens with many workflows across projects: it lists the newest and says how many older ones are not shown, instead of failing with a frame-limit error.
+
 ## v0.0.16 - 2026-11-12
 
 Remote control comes to Discord, with a thread per session, and Telegram gives each session its own topic with formatted answers; with Claude Code, a message queued while a tool runs is read right after it.

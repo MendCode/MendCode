@@ -10,6 +10,8 @@ export function createWorkflows(ctx: AppContext) {
     const reply = await input.send({ type: "workflow.list", ...(state.workflowsState.scope === "project" ? { directory: input.directory ?? "" } : {}) })
     if (reply.ok) {
       state.workflows = (reply.result?.workflows ?? []) as WorkflowSummary[]
+      const omitted = Number(reply.result?.omitted ?? 0)
+      if (omitted > 0) say(`${omitted} older workflow${omitted === 1 ? " is" : "s are"} not listed; the newest are shown`, "info")
       state.workflowsLoaded = true
       state.workflowsError = ""
       state.workflowsState = { ...state.workflowsState, selected: Math.max(0, Math.min(state.workflowsState.selected, state.workflows.length - 1)) }
