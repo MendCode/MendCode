@@ -843,7 +843,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const side = sideChat(ctx)
     if (pointer && currentLayout.right > 0 && side.open && state.rightChatArea && (pointer.point.col >= input.screen.size.width - currentLayout.right || side.selection)) {
       const point = { row: pointer.point.row - state.rightChatArea.top, col: pointer.point.col - (input.screen.size.width - currentLayout.right) }
-      const used = sideChatMouse(side, { kind: pointer.kind, point }, { copy: (copied, label) => ctx.copyText(copied, label), now: now() })
+      const used = sideChatMouse(side, { kind: pointer.kind, point }, { copy: (copied, label) => ctx.copyText(copied, label), now: now(), copyOnSelect: state.tuiProfile.copyOnSelect === true })
       if (used) {
         requestFrame()
         return true

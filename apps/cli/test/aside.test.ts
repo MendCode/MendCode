@@ -3,7 +3,7 @@ import { createIdFactory } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
 import { renderAsideCard } from "../src/view/aside-card"
-import { sideChatMouse, sideChatRows, type SideChatState } from "../src/ui/app/aside"
+import { sideChatKeptKey, sideChatMouse, sideChatRows, type SideChatState } from "../src/ui/app/aside"
 import { markdownStyleFor } from "../src/view/markdown-style"
 import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { createEditor } from "../src/view/editor"
@@ -168,11 +168,11 @@ describe("side chat panel", () => {
       const from = at(rows, "The furniture")
       const to = at(rows, "map.ts.")
       const { copied, copy } = recorder()
-      expect(sideChatMouse(chat, { kind: "press", point: from }, { copy, now: 0 })).toBe(false)
-      expect(sideChatMouse(chat, { kind: "drag", point: { row: to.row, col: to.col + "map.ts.".length - 1 } }, { copy, now: 10 })).toBe(true)
+      expect(sideChatMouse(chat, { kind: "press", point: from }, { copy, now: 0, copyOnSelect: true })).toBe(false)
+      expect(sideChatMouse(chat, { kind: "drag", point: { row: to.row, col: to.col + "map.ts.".length - 1 } }, { copy, now: 10, copyOnSelect: true })).toBe(true)
       const lit = sideChatRows(chat, 60, 24, "btw", 1_800_000_000_000)[from.row]!
       expect(lit.some((span) => span.bg === "primary" && span.text.includes("furniture"))).toBe(true)
-      expect(sideChatMouse(chat, { kind: "release", point: { row: to.row, col: to.col + "map.ts.".length - 1 } }, { copy, now: 20 })).toBe(true)
+      expect(sideChatMouse(chat, { kind: "release", point: { row: to.row, col: to.col + "map.ts.".length - 1 } }, { copy, now: 20, copyOnSelect: true })).toBe(true)
       expect(copied).toEqual([{ text: "The furniture lives in map.ts.", label: "30 chars" }])
       expect(chat.selection).toBeUndefined()
     })
@@ -183,7 +183,7 @@ describe("side chat panel", () => {
       const button = rows.findIndex((text, index) => index > at(rows, "map.ts.").row && text.replace(/[│\s]+$/, "").endsWith("copy"))
       expect(button).toBeGreaterThan(-1)
       const { copied, copy } = recorder()
-      expect(sideChatMouse(chat, { kind: "press", point: { row: button, col: rows[button]!.lastIndexOf("copy") } }, { copy, now: 0 })).toBe(true)
+      expect(sideChatMouse(chat, { kind: "press", point: { row: button, col: rows[button]!.lastIndexOf("copy") } }, { copy, now: 0, copyOnSelect: true })).toBe(true)
       expect(copied).toEqual([{ text: answer, label: "answer" }])
     })
 
@@ -193,7 +193,7 @@ describe("side chat panel", () => {
       const header = rows.findIndex((text) => text.includes("bash") && text.includes("copy"))
       expect(header).toBeGreaterThan(-1)
       const { copied, copy } = recorder()
-      sideChatMouse(chat, { kind: "press", point: { row: header, col: rows[header]!.lastIndexOf("copy") } }, { copy, now: 0 })
+      sideChatMouse(chat, { kind: "press", point: { row: header, col: rows[header]!.lastIndexOf("copy") } }, { copy, now: 0, copyOnSelect: true })
       expect(copied).toEqual([{ text: "open /tmp/office", label: "bash code" }])
     })
 
@@ -203,8 +203,8 @@ describe("side chat panel", () => {
       const word = at(rows, "furniture")
       const { copied, copy } = recorder()
       const click = (now: number) => {
-        sideChatMouse(chat, { kind: "press", point: word }, { copy, now })
-        sideChatMouse(chat, { kind: "release", point: word }, { copy, now })
+        sideChatMouse(chat, { kind: "press", point: word }, { copy, now, copyOnSelect: true })
+        sideChatMouse(chat, { kind: "release", point: word }, { copy, now, copyOnSelect: true })
       }
       click(0)
       click(100)
@@ -214,13 +214,39 @@ describe("side chat panel", () => {
       expect(copied).toHaveLength(2)
     })
 
+    test("with copy on select off a selection is kept, not copied: ctrl+c copies it, any other key drops it", () => {
+      const chat = chatWith()
+      const rows = draw(chat)
+      const from = at(rows, "The furniture")
+      const to = at(rows, "map.ts.")
+      const end = { row: to.row, col: to.col + "map.ts.".length - 1 }
+      const { copied, copy } = recorder()
+      const select = () => {
+        sideChatMouse(chat, { kind: "press", point: from }, { copy, now: 0, copyOnSelect: false })
+        sideChatMouse(chat, { kind: "drag", point: end }, { copy, now: 10, copyOnSelect: false })
+        sideChatMouse(chat, { kind: "release", point: end }, { copy, now: 20, copyOnSelect: false })
+      }
+      select()
+      expect(copied).toEqual([])
+      expect(chat.kept).toBeDefined()
+      const lit = sideChatRows(chat, 60, 24, "btw", 1_800_000_000_000)[from.row]!
+      expect(lit.some((span) => span.bg === "primary" && span.text.includes("furniture"))).toBe(true)
+      expect(sideChatKeptKey(chat, "\x03", copy)).toBe(true)
+      expect(copied).toEqual([{ text: "The furniture lives in map.ts.", label: "30 chars" }])
+      expect(chat.kept).toBeUndefined()
+      select()
+      expect(sideChatKeptKey(chat, "x", copy)).toBe(false)
+      expect(chat.kept).toBeUndefined()
+      expect(copied).toHaveLength(1)
+    })
+
     test("a press outside the exchange starts nothing, so the box only takes the keyboard", () => {
       const chat = chatWith()
       draw(chat)
       const { copied, copy } = recorder()
-      expect(sideChatMouse(chat, { kind: "press", point: { row: 1, col: 4 } }, { copy, now: 0 })).toBe(false)
+      expect(sideChatMouse(chat, { kind: "press", point: { row: 1, col: 4 } }, { copy, now: 0, copyOnSelect: true })).toBe(false)
       expect(chat.selection).toBeUndefined()
-      expect(sideChatMouse(chat, { kind: "release", point: { row: 1, col: 4 } }, { copy, now: 0 })).toBe(false)
+      expect(sideChatMouse(chat, { kind: "release", point: { row: 1, col: 4 } }, { copy, now: 0, copyOnSelect: true })).toBe(false)
       expect(copied).toEqual([])
     })
   })

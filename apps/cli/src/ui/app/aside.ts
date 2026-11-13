@@ -34,6 +34,8 @@ export type SideChatState = {
   serial: number
   /** A drag over the exchange, like the transcript's: rows index the drawn lines, columns are cells inside the box. */
   selection?: Selection | undefined
+  /** A finished selection kept on screen with `copyOnSelect` off, as the transcript keeps one: ctrl+c copies it, any other key drops it. */
+  kept?: Selection | undefined
   /** What the last frame drew, so a press in the box turns into text: every line of the exchange and the first one on screen. */
   drawn?: { map: SelectionMap; start: number; shown: number }
   /** The last press in the exchange, to count double and triple clicks. */
@@ -157,7 +159,8 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   const start = Math.max(0, end - room)
   const map: SelectionMap = { width: inner, bodyTop: 0, bodyBase: 0, body: lines.map(bodyLineOf), promptTop: 0, promptRows: 0, promptFirst: 0, promptInset: 0, promptLines: [] }
   chat.drawn = { map, start, shown: Math.min(room, lines.length - start) }
-  const marks = chat.selection ? bodyHighlight(map, chat.selection) : undefined
+  const shownSelection = chat.selection ?? chat.kept
+  const marks = shownSelection ? bodyHighlight(map, shownSelection) : undefined
   const shownLines = lines.slice(start, end).map((line, index) => {
     const covered = marks?.get(start + index)
     return covered ? highlightLine(line, covered[0], covered[1]) : line
@@ -190,7 +193,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
  * selects and the release copies, a double click copies a word, a triple click a line, a press on a `copy` button copies what
  * it stands for. True when the report is used up; a plain press inside the exchange returns false so the box still takes the keyboard.
  */
-export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "drag" | "release"; point: Point }, input: { copy: (text: string, label: string) => void; now: number }): boolean {
+export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "drag" | "release"; point: Point }, input: { copy: (text: string, label: string) => void; now: number; /** The `copyOnSelect` setting: off, a selection is kept for ctrl+c instead of copied. */ copyOnSelect: boolean }): boolean {
   const drawn = chat.drawn
   if (!drawn || !chat.open) return false
   const { map } = drawn
@@ -200,6 +203,7 @@ export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "dra
   const index = drawn.start + Math.max(0, Math.min(drawn.shown - 1, row))
   if (event.kind === "press") {
     chat.selection = undefined
+    chat.kept = undefined
     if (row < 0 || row >= drawn.shown || event.point.col < EXCHANGE_LEFT || event.point.col >= EXCHANGE_LEFT + inner) return false
     const button = map.body[index]?.copy?.find((region) => region.to > region.from && col >= region.from && col < region.to)
     if (button) {
@@ -231,7 +235,20 @@ export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "dra
     if (end && rowText(map, top).trim()) picked = { ...selection, anchor: { row: top, col: 0 }, focus: { row: bottom, col: end[1] - 1 }, moved: true }
   }
   const text = picked ? bodyText(map, picked) : ""
-  if (text) input.copy(text, `${text.length} chars`)
+  if (text && input.copyOnSelect) input.copy(text, `${text.length} chars`)
+  else if (text && picked) chat.kept = picked
+  return true
+}
+
+/** A key while a side-chat selection is kept: ctrl+c copies it and is used up; any other key drops it and goes on. */
+export function sideChatKeptKey(chat: SideChatState, key: string, copy: (text: string, label: string) => void): boolean {
+  const kept = chat.kept
+  const map = chat.drawn?.map
+  if (!kept) return false
+  chat.kept = undefined
+  if (key !== "\x03" || !map) return false
+  const text = bodyText(map, kept)
+  if (text) copy(text, `${text.length} chars`)
   return true
 }
 

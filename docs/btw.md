@@ -24,6 +24,7 @@ Tier: balanced and full; minimalist does not list the command.
 | Click on the side chat | Focus it. |
 | Drag over its text | Select it like the transcript; releasing copies it without the `›`/`•` leads. |
 | Double or triple click | Copy the word, or the whole line. |
+| `copyOnSelect` off | A drag or a double or triple click only selects; ctrl+c copies the selection and any other key drops it, as in the transcript. |
 | `copy` under an answer | Copy that answer as written (Markdown). Code blocks drawn by the `full` renderer have their own `copy`. |
 | Alt+] | Close it. |
 | PgUp/PgDn | Scroll while focused. |
