@@ -4,6 +4,9 @@ import { textWidth } from "../../view/wrap"
 import { modelWithEffort, sessionModelId } from "../../view/model-label"
 import { boxPanel, fit } from "../../view/deck"
 import { renderMarkdown } from "../../view/markdown"
+import type { MarkdownStyle } from "../../view/markdown-style"
+import { carryMeta, copyOf, gutterOf, markCopy, markGutter, softWrapOf } from "../../view/line-meta"
+import { bodyHighlight, bodyText, highlightLine, lineSpan, rowText, wordSpan, wrappedRows, type BodyLine, type Point, type Selection, type SelectionMap } from "../selection"
 import { compact } from "../../view/format"
 import { parseToolTitle, toolLabel } from "../../view/tool-card"
 import { asciiGlyphs, glyphOf, headerRow, marksOf, toneOf } from "../../view/tool-frame"
@@ -29,6 +32,34 @@ export type SideChatState = {
   scroll: number
   loaded: boolean
   serial: number
+  /** A drag over the exchange, like the transcript's: rows index the drawn lines, columns are cells inside the box. */
+  selection?: Selection | undefined
+  /** What the last frame drew, so a press in the box turns into text: every line of the exchange and the first one on screen. */
+  drawn?: { map: SelectionMap; start: number; shown: number }
+  /** The last press in the exchange, to count double and triple clicks. */
+  press?: { at: number; row: number; col: number; count: number } | undefined
+}
+
+/** Rows of the box above the exchange: the top border, the name row and the row of what the chat sees. */
+const EXCHANGE_TOP = 3
+/** Cells of the box left of the exchange: the border and its space. */
+const EXCHANGE_LEFT = 2
+const DOUBLE_CLICK_MS = 450
+
+const bodyLineOf = (line: Line): BodyLine => {
+  const soft = softWrapOf(line)
+  const copy = copyOf(line)
+  return { text: line.map((span) => span.text).join(""), gutter: gutterOf(line), ...(soft ? { soft } : {}), ...(copy ? { copy } : {}) }
+}
+
+/** The `copy` button under an answer: right-aligned on the blank row that follows it, all chrome so a selection skips it. */
+function answerCopyRow(text: string, inner: number): Line {
+  const label = "copy"
+  const from = Math.max(0, inner - label.length)
+  const row: Line = [{ text: " ".repeat(from) }, { text: label, fg: "muted" }]
+  markGutter(row, 1000)
+  markCopy(row, [{ from, to: from + label.length, text, label: "answer" }])
+  return row
 }
 
 export function sideChat(ctx: AppContext): SideChatState {
@@ -68,7 +99,7 @@ export function sideToolRow(message: AsideThread["messages"][number], width: num
 }
 
 /** The exchange of one thread in the chat's own leads: `›` for the question, `•` for the answer, a tool row under the question it serves. */
-function threadLines(thread: Pick<AsideThread, "messages">, inner: number): Line[] {
+function threadLines(thread: Pick<AsideThread, "messages">, inner: number, style?: MarkdownStyle): Line[] {
   const lines: Line[] = []
   for (const [index, message] of thread.messages.entries()) {
     if (!message.text.trim()) continue
@@ -78,9 +109,11 @@ function threadLines(thread: Pick<AsideThread, "messages">, inner: number): Line
     }
     if (lines.length && thread.messages[index - 1]?.role === "tool") lines.push([])
     const user = message.role === "user"
-    const text = renderMarkdown(message.text, Math.max(1, inner - 2))
-    text.forEach((line, index) => lines.push([{ text: index > 0 ? "  " : user ? "› " : "• ", fg: user ? "primary" : "muted" }, ...(user ? line.map((span) => ({ ...span, fg: "muted" as const })) : line)]))
-    lines.push([])
+    // The user's Markdown look, so code blocks, tables and lists carry the same `copy` buttons as in the transcript.
+    const text = renderMarkdown(message.text, Math.max(1, inner - 2), "body", style ? { style } : {})
+    // The lead is chrome: a selection copies the text without `›`/`•`, and the buttons move with it.
+    text.forEach((line, index) => lines.push(carryMeta(line, [{ text: index > 0 ? "  " : user ? "› " : "• ", fg: user ? "primary" : "muted" }, ...(user ? line.map((span) => ({ ...span, fg: "muted" as const })) : line)], 2)))
+    lines.push(user ? [] : answerCopyRow(message.text, inner))
   }
   return lines
 }
@@ -107,10 +140,10 @@ function historyLines(chat: SideChatState, inner: number, now: number): Line[] {
 }
 
 /** The side chat as a box: its name and keys on the first row, what it sees on the second, the exchange in the chat's own leads, the prompt on the last row. */
-export function sideChatRows(chat: SideChatState, width: number, height: number, title = "btw", now = Date.now()): Line[] {
+export function sideChatRows(chat: SideChatState, width: number, height: number, title = "btw", now = Date.now(), style?: MarkdownStyle): Line[] {
   const inner = Math.max(1, width - 4)
   const earlier = chat.view === "entry" ? chat.history[chat.pick] : undefined
-  const lines: Line[] = chat.view === "list" ? historyLines(chat, inner, now) : threadLines(earlier ?? chat.thread, inner)
+  const lines: Line[] = chat.view === "list" ? historyLines(chat, inner, now) : threadLines(earlier ?? chat.thread, inner, style)
   if (chat.view === "chat") {
     if (chat.thread.busy) lines.push([{ text: `• ${chat.thread.status ?? "thinking…"}`, fg: chat.thread.status?.startsWith("Retrying") ? "warning" : "muted" }])
     if (chat.thread.error) lines.push(...renderMarkdown(chat.thread.error, inner).map((line) => line.map((span) => ({ ...span, fg: "error" as const }))))
@@ -121,6 +154,14 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   const room = Math.max(1, height - 6)
   chat.scroll = Math.min(chat.scroll, Math.max(0, lines.length - room))
   const end = Math.max(room, lines.length - chat.scroll)
+  const start = Math.max(0, end - room)
+  const map: SelectionMap = { width: inner, bodyTop: 0, bodyBase: 0, body: lines.map(bodyLineOf), promptTop: 0, promptRows: 0, promptFirst: 0, promptInset: 0, promptLines: [] }
+  chat.drawn = { map, start, shown: Math.min(room, lines.length - start) }
+  const marks = chat.selection ? bodyHighlight(map, chat.selection) : undefined
+  const shownLines = lines.slice(start, end).map((line, index) => {
+    const covered = marks?.get(start + index)
+    return covered ? highlightLine(line, covered[0], covered[1]) : line
+  })
   // The keys that apply now, the longest set that fits beside the name.
   // The model answering follows the name when the keys leave room for it.
   const shown = earlier ?? chat.thread
@@ -135,13 +176,63 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   // (the model's own " · " lead is part of \`model\`, so its width already counts the separator)
   const body: Line[] = [
     [{ text: heading, fg: "primary", bold: true }, ...(named ? [{ text: named, fg: "muted" as const }] : []), { text: " ".repeat(Math.max(1, inner - textWidth(heading) - textWidth(named) - textWidth(keys))) }, { text: keys, fg: "muted" }],
-    fit([{ text: [!named && model ? model.slice(3) : "", rest].filter(Boolean).join(" · "), fg: "muted" }], inner), ...lines.slice(Math.max(0, end - room), end),
+    fit([{ text: [!named && model ? model.slice(3) : "", rest].filter(Boolean).join(" · "), fg: "muted" }], inner), ...shownLines,
   ]
   while (body.length < height - 4) body.push([])
   body.push([{ text: "─".repeat(inner), fg: "border" }], chat.view !== "chat"
     ? fit([{ text: "› ", fg: "muted" }, { text: "esc to go back to the side chat", fg: "muted" }], inner)
     : fit([{ text: "› ", fg: chat.focused ? "primary" : "muted" }, { text: sideInput(chat, width).text || (chat.focused ? "Ask…" : keyText("ctrl+] to type")), fg: chat.focused && chat.draft ? "text" : "muted" }], inner))
   return boxPanel({ body, width, height, compact: true, active: chat.focused })
+}
+
+/**
+ * A left-button report over the side chat, `point` in cells of its box (row 0 is the top border). Like the transcript: a drag
+ * selects and the release copies, a double click copies a word, a triple click a line, a press on a `copy` button copies what
+ * it stands for. True when the report is used up; a plain press inside the exchange returns false so the box still takes the keyboard.
+ */
+export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "drag" | "release"; point: Point }, input: { copy: (text: string, label: string) => void; now: number }): boolean {
+  const drawn = chat.drawn
+  if (!drawn || !chat.open) return false
+  const { map } = drawn
+  const inner = map.width
+  const row = event.point.row - EXCHANGE_TOP
+  const col = Math.max(0, Math.min(inner - 1, event.point.col - EXCHANGE_LEFT))
+  const index = drawn.start + Math.max(0, Math.min(drawn.shown - 1, row))
+  if (event.kind === "press") {
+    chat.selection = undefined
+    if (row < 0 || row >= drawn.shown || event.point.col < EXCHANGE_LEFT || event.point.col >= EXCHANGE_LEFT + inner) return false
+    const button = map.body[index]?.copy?.find((region) => region.to > region.from && col >= region.from && col < region.to)
+    if (button) {
+      chat.press = undefined
+      input.copy(button.text, button.label)
+      return true
+    }
+    const last = chat.press
+    const count = last && last.row === index && last.col === col && input.now - last.at <= DOUBLE_CLICK_MS && last.count < 3 ? last.count + 1 : 1
+    chat.press = { at: input.now, row: index, col, count }
+    chat.selection = { anchor: { row: index, col }, focus: { row: index, col }, area: "body", moved: false }
+    return false
+  }
+  const selection = chat.selection
+  if (!selection) return false
+  if (event.kind === "drag") {
+    if (selection.moved || index !== selection.anchor.row || col !== selection.anchor.col) chat.selection = { ...selection, focus: { row: index, col }, moved: true }
+    return true
+  }
+  chat.selection = undefined
+  const clicks = chat.press?.row === selection.anchor.row ? chat.press.count : 1
+  let picked: Selection | undefined = selection.moved ? { ...selection, focus: { row: index, col } } : undefined
+  if (!picked && clicks === 2) {
+    const span = wordSpan(rowText(map, selection.anchor.row), selection.anchor.col)
+    if (span) picked = { ...selection, anchor: { row: selection.anchor.row, col: span[0] }, focus: { row: selection.anchor.row, col: span[1] - 1 }, moved: true }
+  } else if (!picked && clicks === 3) {
+    const [top, bottom] = wrappedRows(map, selection.anchor.row)
+    const end = lineSpan(rowText(map, bottom))
+    if (end && rowText(map, top).trim()) picked = { ...selection, anchor: { row: top, col: 0 }, focus: { row: bottom, col: end[1] - 1 }, moved: true }
+  }
+  const text = picked ? bodyText(map, picked) : ""
+  if (text) input.copy(text, `${text.length} chars`)
+  return true
 }
 
 export function createAside(ctx: AppContext) {

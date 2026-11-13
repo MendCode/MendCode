@@ -22,6 +22,9 @@ Tier: balanced and full; minimalist does not list the command.
 | Ctrl+] | Open ready to type, return the keyboard to the side chat, or close it from inside. |
 | Esc or a click on the main chat | Return the keyboard to the main prompt and keep the side chat open. |
 | Click on the side chat | Focus it. |
+| Drag over its text | Select it like the transcript; releasing copies it without the `›`/`•` leads. |
+| Double or triple click | Copy the word, or the whole line. |
+| `copy` under an answer | Copy that answer as written (Markdown). Code blocks drawn by the `full` renderer have their own `copy`. |
 | Alt+] | Close it. |
 | PgUp/PgDn | Scroll while focused. |
 | `↑`/`↓` in history | Pick a cleared chat. |
@@ -36,7 +39,7 @@ Answers stream. Each tool appears above the answer as a row like the transcript'
 
 While the answer runs, the last row says what it is doing: `Running shell…` or `Retrying (attempt 2): stream stalled`. A provider error that does not recover appears in the panel.
 
-From 110 columns, the side chat takes the whole right bar; the panel's cards come back when it closes. Below that, it opens as a full-width sheet above the prompt.
+From 110 columns, the side chat takes the whole right bar; the panel's cards come back when it closes. Below that, it opens as a full-width sheet above the prompt, where the mouse does not select or copy.
 
 You can also place it in the [sidebar spec](sidebar.md) as a `sidechat` widget.
 
