@@ -1,4 +1,4 @@
-import { PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
+import { MAX_FRAME_BYTES, PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { JobState, ReviewJob } from "./contracts"
 import type { ReviewState } from "./state"
 
@@ -154,6 +154,23 @@ export function dashboardMetrics(jobs: readonly ReviewJob[], now: number, concur
     tokens24h: tokensSince(jobs, since),
     concurrency,
   }
+}
+
+/** Bytes a status reply's dashboard may take: the frame limit less room for the reply's text and envelope. */
+export const DASHBOARD_MAX_BYTES = MAX_FRAME_BYTES - 32 * 1024
+
+/**
+ * The dashboard cut to `budget` bytes of JSON: the oldest jobs at the end of the list (finished ones, after every live one) go first,
+ * so a long ledger never makes the reply too big to send and leave the page on an old list. `dropped` says how many went.
+ */
+export function fitDashboard(dashboard: PrReviewDashboard, budget = DASHBOARD_MAX_BYTES): { dashboard: PrReviewDashboard; dropped: number } {
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
+  let total = bytes(dashboard)
+  if (total <= budget) return { dashboard, dropped: 0 }
+  const jobs = [...dashboard.jobs]
+  // A job's share of the JSON: itself and the comma that joins it to the list.
+  while (jobs.length && total > budget) total -= bytes(jobs.pop()) + 1
+  return { dashboard: { ...dashboard, jobs }, dropped: dashboard.jobs.length - jobs.length }
 }
 
 /** Throws `RangeError` for a concurrency under 1 and the schema's error for a ledger row the protocol refuses. */
