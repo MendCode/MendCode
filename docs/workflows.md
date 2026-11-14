@@ -420,7 +420,7 @@ Three complete examples live in [`examples/workflows/`](../examples/workflows): 
 | | `/workflows new <name>` writes a commented starter to `workflows/<name>.js` in the data folder; `/workflows convert <plan.json>` writes the script of a JSON plan next to it |
 | | `/workflows budget <id> agents=60 usd=5`, `/workflows update <id> <file.js>`, `/workflows resume <id>` |
 | CLI | `workflow run <file.js\|name> [key=value ... \| --args JSON] [--yes] [--wait]`, `workflow new <name>`, `workflow convert <plan.json>`, `workflow budget <id> --agents N`, `workflow update <id> <file.js>`, `workflow resume <id>` (`--wait` exits 4 when a run pauses at a cap) |
-| Model | the `workflow_script` tool, found with `tool_search`; every call that starts a script asks, in every permission mode, and shows the meta, caps, source hash and the source. `workflow_script` with `help: true` returns the API reference without asking |
+| Model | the `workflow_script` tool, found with `tool_search`; every call that starts a script asks, in every permission mode, and shows the meta, caps, source hash and the source; the one exception is a saved script started by `name` in full access, which starts like any other tool (a script the model writes still asks, and a project's own scripts still need a trusted project). `workflow_script` with `help: true` returns the API reference without asking |
 
 Saved scripts are `workflows/<name>.js` in the extension layers, next to the JSON plans. Layers are user folder, user packages, project, project packages; a later layer wins a name.
 
