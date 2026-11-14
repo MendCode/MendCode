@@ -19,6 +19,8 @@ const DEFAULT_TIMEOUT_MS = 120_000
  */
 export const SHELL_YIELD_MS = 15_000
 const MAX_TIMEOUT_MS = 600_000
+/** How long a command that moved to the background may run (a toolchain download, a full build) before it is stopped. */
+export const YIELDED_TIMEOUT_MS = 30 * 60_000
 const KILL_GRACE_MS = 2_000
 /**
  * A command that writes this much to one stream is stopped: a file has no backpressure the way a pipe had, so a runaway command (`yes`)
@@ -78,7 +80,7 @@ export default defineTool({
       }
     }
 
-    const limit = timeoutMs ?? DEFAULT_TIMEOUT_MS
+    let limit = timeoutMs ?? DEFAULT_TIMEOUT_MS
     const started = Date.now()
     const shellFile = context.shell ?? defaultShell()
     const launch = owner ? { policy: context.shellPolicy, environment: context.environment ?? process.env } : agentShellLaunch({ shell: shellFile, policy: context.shellPolicy, environment: context.environment })
@@ -175,10 +177,11 @@ export default defineTool({
         killTimer ??= setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS)
       }
 
-      const timeout = setTimeout(() => {
+      const onTimeout = () => {
         timedOut = true
         terminate()
-      }, limit)
+      }
+      let timeout = setTimeout(onTimeout, limit)
       const onAbort = () => {
         wasCancelled = true
         // A command that moved to the background is still this turn's: a cancel stops it like any other, and no exit notice follows.
@@ -208,6 +211,12 @@ export default defineTool({
         settled = true
         adopted = { taskId: taken.task.id, feed: taken.feed }
         context.onYield!(taken.task.id)
+        // A build or install that moved to the background gets the background ceiling, unless the model asked for a shorter bound.
+        if (timeoutMs === undefined || timeoutMs >= MAX_TIMEOUT_MS) {
+          clearTimeout(timeout)
+          limit = YIELDED_TIMEOUT_MS
+          timeout = setTimeout(onTimeout, Math.max(1, limit - (Date.now() - started)))
+        }
         const seconds = Math.round((Date.now() - started) / 1_000)
         const note = `[still running after ${seconds} s: moved to the background as ${taken.task.id}. Keep working; when you need its result, shell_output with id ${taken.task.id} and until "exit" waits for it; shell_kill stops it if it is stuck. It stops at its ${limit} ms timeout. Your turn does not end before it does.]`
         resolve({

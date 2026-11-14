@@ -24,6 +24,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A long build or install the model runs, once it moves to the background, may run up to 30 minutes instead of being cut at 10.
+- MendCode no longer closes with an error when the daemon is slow to answer as it opens (a computer short on memory, after an update): it says so and keeps trying.
 - A Claude Code sub-agent that is sent a message after it finished shows its new work in its thread again, instead of staying marked done with nothing more.
 - A sub-agent's thread no longer ends with an empty bullet when its final report repeats its last message.
 - A sub-agent detached with `b` in `/tasks` keeps running when its parent's turn is interrupted, as detaching promises.
