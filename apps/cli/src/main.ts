@@ -683,7 +683,7 @@ if (automation.ok === true) {
     startup = parseStartup(["--cwd", directory!])
   } else {
     client.close()
-    process.exit(code)
+    await (await import("./exit-flushed")).exitFlushed(code)
   }
 }
 
@@ -710,7 +710,7 @@ if (command === "export") {
     process.stdout.write(sessionToMarkdown(history, { ...(summary ? { title: summary.title, directory: summary.directory } : {}), reasoning: flag("reasoning") }))
   }
   client.close()
-  process.exit(0)
+  await (await import("./exit-flushed")).exitFlushed(0)
 }
 
 // `acp`: an Agent Client Protocol agent on stdio for editors (Zed and others). Stdout carries only protocol messages.
