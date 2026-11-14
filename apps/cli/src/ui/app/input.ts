@@ -4,6 +4,7 @@ import type { createPrompt } from "./prompt"
 import type { createMemory } from "./memory"
 import { createKeyTokenizer, type KeyToken } from "../keys"
 import { connectPaste } from "../lazy-pages"
+import { runningSubagents, stopSubagents as stopSessionSubagents } from "./subagent-stop"
 import { composeSubmission, liveAttachments, pastedPaths } from "../../view/attachments"
 import { parseSlash, slashRefusal } from "../../view/commands"
 import { removedAliasHint } from "../../view/slash-aliases"
@@ -376,6 +377,9 @@ export function createInput(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  const subagentsRunning = async () => (await runningSubagents({ send: input.send, sessionId: state.sessionId })) > 0
+  const stopSubagents = () => stopSessionSubagents({ send: input.send, sessionId: state.sessionId })
+
   async function onEscape() {
     if (state.editingScratch) return endScratchEdit()
     if (state.editingGoal) return endGoalEdit()
@@ -400,6 +404,15 @@ export function createInput(ctx: AppContext, actions: {
       report(reply)
       return requestFrame()
     }
+    // The Esc after an interrupt that spared the sub-agents stops them too.
+    if (state.agentStopArmedAt > 0 && now() - state.agentStopArmedAt <= DOUBLE_ESC_MS) {
+      state.agentStopArmedAt = 0
+      state.escArmedAt = 0
+      const stopped = await stopSubagents()
+      state.notice = stopped ? `stopped ${stopped} sub-agent${stopped === 1 ? "" : "s"}` : "no sub-agents running"
+      return requestFrame()
+    }
+    state.agentStopArmedAt = 0
     const turnId = state.transcript.activeTurn
     if (!turnId) {
       // Idle with an empty prompt: Esc twice goes back to an earlier prompt to edit and resend.
@@ -419,7 +432,17 @@ export function createInput(ctx: AppContext, actions: {
       retracting = taking
       return taking
     }
-    const reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId })
+    // Only the turn stops; its sub-agents run on until a third Esc. A daemon older than this terminal refuses the field: it stops both.
+    state.agentStopArmedAt = now()
+    let reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId, spareAgents: true })
+    let spared = reply.ok
+    if (!reply.ok && reply.error.code === "invalid_command") {
+      state.agentStopArmedAt = 0
+      reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId })
+      spared = false
+    }
+    if (spared && await subagentsRunning()) state.notice = "interrupted · sub-agents keep running · esc stops them"
+    else state.agentStopArmedAt = 0
     if (reply.ok && unanswered?.answered) state.notice = "already answered · esc esc to edit"
     if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
     // The interrupt holds the queue; the terminal sends it on, so what was queued runs once the cancelled turn has stopped.

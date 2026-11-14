@@ -293,6 +293,8 @@ export const TurnCancel = lazySchema(() => z.strictObject({
   type: z.literal("turn.cancel"),
   sessionId: SessionId,
   turnId: TurnId,
+  /** Only the turn stops: sub-agents it started keep running (a foreground one goes on in the background and reports when it ends). */
+  spareAgents: z.literal(true).optional(),
 }))
 
 export const RequestResolve = lazySchema(() => z.strictObject({
