@@ -52,6 +52,13 @@ const fail = (code: ErrorCode, message: string): Reply => ({ ok: false, code, me
  * The daemon side of workflows (§3.6). `@mendcode/workflows` is imported, and the service built, only when a
  * `workflow.*` command arrives or the store has a live run at boot (P6: off = no module, no timer, no observer work).
  */
+/**
+ * Whether a live run keeps a new working run out of its directory. A work task in its own worktree (a script's `worktree: true`)
+ * never edits the directory, so it holds nothing, as in the scheduler (`directoryBusy` in @mendcode/workflows).
+ */
+export const holdsDirectory = (run: Pick<WorkflowRun, "state" | "tasks">): boolean =>
+  !["completed", "failed", "stopped"].includes(run.state) && run.tasks.some((task) => task.mode === "work" && !task.isolated)
+
 export function createWorkflowsHost(options: {
   store: WorkflowStorePort & { hasLive(): boolean }
   definitions: WorkflowDefinitionsPort
@@ -275,7 +282,7 @@ export function createWorkflowsHost(options: {
         if (previous) return { ok: true, result: { workflow: summarizeWorkflow(previous) } }
         // A script's agents are not known until it runs: it counts as changing the directory when its source asks for work agents.
         const hasWork = resolved.plan.script ? SCRIPT_WORK.test(resolved.plan.script.source) : resolved.plan.tasks.some((task) => task.kind === "agent" && task.mode === "work" || task.kind === "map" && task.map.taskTemplate.mode === "work")
-        const clash = workflows.list(command.directory).find((run) => !["completed", "failed", "stopped"].includes(run.state) && run.tasks.some((task) => task.mode === "work"))
+        const clash = workflows.list(command.directory).find(holdsDirectory)
         if (hasWork && clash && !resolved.plan.overlapPolicy) return fail("busy", `workflow "${clash.name}" is already changing this directory`)
         const permission = workflowPermission(resolved.plan, command)
         const receipt = resolved.receipt ?? (await savedPlans()).save({ directory: command.directory, plan: resolved.plan, source: "session-generated", saved: false })

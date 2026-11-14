@@ -146,6 +146,11 @@ export const WorkflowAgentTaskSpec = lazySchema(() => z.strictObject({
   allowedTools: WorkflowPermissionPolicy.shape.allowedTools,
   inputs: z.array(WorkflowArtifactSelector).max(8).optional(),
   output: WorkflowOutputContract.optional(),
+  /**
+   * An existing git worktree of the run's repository (not its main checkout) the agent works in: its session, permissions and sandbox
+   * belong to that directory, and as it never edits the run's directory it does not hold that directory's single-writer slot.
+   */
+  cwd: z.string().min(1).max(1024).optional(),
 }))
 export type WorkflowAgentTaskSpec = z.infer<typeof WorkflowAgentTaskSpec>
 
