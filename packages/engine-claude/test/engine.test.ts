@@ -1706,6 +1706,38 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("a message the main agent sends to a running sub-agent shows once in that sub-agent's thread, also from a later turn", async () => {
+    const sendMessage = (id: string) => ({ type: "assistant", message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "SendMessage", input: { to: "a5c8", summary: "fix", message: "caso-87 is part of what is wrong" } }] } })
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (turns === 1) {
+          streamTool(api, 0, "toolu_agent", "Agent", { description: "Office layout", subagent_type: "general-purpose", prompt: "plan it", run_in_background: true })
+          api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a5c8" }] } })
+        } else {
+          api.push(sendMessage("toolu_send"))
+          api.push(sendMessage("toolu_send"))
+        }
+        streamText(api, 1, "ok")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const call = first.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    if (call?.type !== "item.started") throw new Error("no agent call")
+    const second = turnInput({ sessionId: first.input.sessionId })
+    expect(await h.engine.runTurn(second.input)).toEqual({ status: "ok" })
+    const shown = [...first.events, ...second.events, ...late.map((entry) => entry.event)].filter((event) => event.type === "item.completed" && event.meta?.sentToAgent === true)
+    expect(shown).toHaveLength(1)
+    expect(shown[0]).toMatchObject({ text: "caso-87 is part of what is wrong", meta: { agentParent: call.itemId } })
+    h.engine.stop()
+  })
+
   test("a background agent started again by a message after it ended keeps writing to its own thread, and its second end is reported too", async () => {
     const fake = fakeClaude({
       onUser(api) {
