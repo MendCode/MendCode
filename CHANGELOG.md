@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.18-beta.1 - 2026-11-14
+
+Long commands no longer block a turn, Esc Esc spares running sub-agents, Claude Code sub-agents show everything they are told and do, and workflow agents can work side by side in their own worktrees.
+
 ### New
 
 - Workflow scripts can run an agent in a git worktree they made themselves (`agent(prompt, { cwd })`); such agents work in parallel without holding the project directory.
