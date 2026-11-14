@@ -15,6 +15,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- A command the model runs that is still going after 15 seconds moves to the background with its output so far: the model gets control back and can keep working, wait for it or stop it. The turn still waits for it before answering, and it still stops at its timeout or when you cancel.
 - In full access, a saved workflow script started by its name (such as one installed from a package) starts without an approval card; a script the model writes still asks in every mode.
 - Editing a steering message the model already took now says it reads it when the running tool ends and to send a correction instead, rather than "that message already started".
 - A sub-agent that runs while the session goes on is marked `async` instead of `bg` in the agents list and its thread, so it no longer reads as a background command; an engine's own agent listed with the commands reads `agent`.
