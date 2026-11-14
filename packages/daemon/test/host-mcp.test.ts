@@ -94,6 +94,19 @@ describe("native tools bridge for another harness", () => {
     expect(hostInstructions(TOOLS)).not.toContain("/workflows")
   })
 
+  test("a session with MendCode's threads tool reaches the user's other sessions through it, by their titles, not through Claude Code's ListAgents", () => {
+    const threads = { name: "threads", description: "Work with this project's other local sessions", parameters: { type: "object", properties: {} } }
+    const claude = hostInstructions([...TOOLS, threads])
+    expect(claude).toContain("reached with mcp__mendcode__threads")
+    expect(claude).toContain("action=list finds them by title")
+    expect(claude).toContain("Claude Code's ListAgents and SendMessage name only Claude Code processes")
+    expect(claude).toContain("Never tell the user you cannot reach another session before trying threads list")
+    const codex = hostInstructions([...TOOLS, threads], "codex")
+    expect(codex).toContain("reached with mcp__mendcode__threads")
+    expect(codex).not.toContain("ListAgents")
+    expect(hostInstructions(TOOLS)).not.toContain("mcp__mendcode__threads")
+  })
+
   test("Codex is told its tools sit under exec and is never sent to ToolSearch, which it lacks; Claude's text keeps ToolSearch", () => {
     const image = { name: "image_gen", description: "Generate an image", parameters: { type: "object", properties: {} } }
     const codex = hostInstructions([...TOOLS, image], "codex")
