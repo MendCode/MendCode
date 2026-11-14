@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The list of sub-agents and background commands above the prompt shares its rows: when one list is short the other shows more, and the sub-agent you are reading always keeps its row.
 - The assistant can remove an ACP agent you ask it to remove (it proposes the change for your approval) instead of failing and sending you to `/acp`; it also knows API-key providers are removed in `/providers`.
 
 ## v0.0.17 - 2026-11-13
