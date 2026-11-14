@@ -83,7 +83,7 @@ type SpecEntry = { spec: WorkflowTaskSpec; key: string; cwd?: string; stdinBytes
 export const MAX_SCRIPT_TASKS = 250
 const TEXT_LIMIT = 32_000
 const MEMO_LIMIT = 16 * 1024
-const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "model", "effort", "engine", "agent", "retry", "timeoutMinutes", "budget", "detail", "allowedTools"])
+const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "model", "effort", "engine", "agent", "retry", "timeoutMinutes", "budget", "detail", "allowedTools", "cwd"])
 const CHECK_KEYS = new Set(["label", "phase", "timeoutSeconds", "in", "stdin"])
 /** The most text `check(command, { stdin })` writes to the command (UTF-8 bytes). */
 export const CHECK_STDIN_LIMIT = 1_048_576
@@ -149,7 +149,11 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
   }
   const retry = options.retry === undefined ? undefined : typeof options.retry === "number" ? { maxAttempts: options.retry, backoffMs: 0, retryOn: ["transient", "environment", "quality"] } : options.retry
   const worktree = options.worktree === true
-  const identity = { kind: "agent", prompt, schema: options.schema, mode, worktree, model: options.model, effort: options.effort, engine: options.engine, agent: options.agent, allowedTools: options.allowedTools, budget: options.budget }
+  if (options.cwd !== undefined && (typeof options.cwd !== "string" || !options.cwd.startsWith("/") || options.cwd.length > 1024)) return { error: "cwd must be an absolute path (an existing git worktree of this repository)" }
+  if (options.cwd !== undefined && worktree) return { error: "cwd and worktree: true cannot be combined: worktree creates its own checkout" }
+  const cwd = options.cwd as string | undefined
+  // `cwd` is left out of the identity when unset, so the calls of scripts that never use it keep their keys.
+  const identity = { kind: "agent", prompt, schema: options.schema, mode, worktree, model: options.model, effort: options.effort, engine: options.engine, agent: options.agent, allowedTools: options.allowedTools, budget: options.budget, ...(cwd ? { cwd } : {}) }
   const title = clip(label ?? firstLine(prompt), 80)
   return {
     identity,
@@ -157,7 +161,7 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
     label: label ?? title,
     title,
     ...(phase ? { phase } : {}),
-    isolated: worktree,
+    isolated: worktree || cwd !== undefined,
     detail: options.detail === true,
     build: (id: string) => ({
       kind: "agent",
@@ -174,6 +178,7 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
       ...(options.allowedTools !== undefined ? { allowedTools: options.allowedTools } : {}),
       ...(worktree ? { workspace: { mode: "per-run-worktree" } } : {}),
+      ...(cwd ? { cwd } : {}),
       ...(record(options.budget) ? { budget: { ...(options.budget.tokens !== undefined ? { maxTokens: options.budget.tokens } : {}), ...(options.budget.usd !== undefined ? { maxCost: options.budget.usd } : {}) } } : {}),
     }),
   }

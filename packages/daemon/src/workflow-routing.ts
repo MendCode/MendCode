@@ -62,7 +62,18 @@ export function createWorkflowRouter(options: {
     }
     return choice ? usableEffort(choice, options.catalog) : undefined
   }
+  /** An agent's own `cwd`: a git worktree of the run's repository that exists now, never the run's directory or another repository. */
+  async function agentDirectory(run: WorkflowRun, requested: string) {
+    if (!path.isAbsolute(requested) || !existsSync(requested)) throw new Error(`agent cwd ${requested} does not exist`)
+    const target = realpathSync(requested)
+    const listed = (await git(run.directory, ["worktree", "list", "--porcelain"])).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length))
+    const worktrees = listed.flatMap((entry) => (existsSync(entry) ? [realpathSync(entry)] : []))
+    // The first entry is the main checkout: an agent there would edit the user's files, which `cwd` is for avoiding.
+    if (!worktrees.slice(1).includes(target)) throw new Error(`agent cwd ${requested} is not a linked git worktree of ${run.directory} (git worktree list)`)
+    return target
+  }
   async function workspace(run: WorkflowRun, spec: WorkflowTaskSpec, execution: WorkflowTaskExecution) {
+    if (spec.kind === "agent" && spec.cwd) return agentDirectory(run, spec.cwd)
     const mode = run.plan.workspace?.mode.includes("worktree") ? run.plan.workspace.mode : execution.workspace.mode
     if (!mode.includes("worktree")) return execution.directory
     if (execution.directory !== run.directory) {

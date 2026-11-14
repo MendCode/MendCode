@@ -9,8 +9,13 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- Workflow scripts can run an agent in a git worktree they made themselves (`agent(prompt, { cwd })`); such agents work in parallel without holding the project directory.
+
 ### Fixed
 
+- A workflow whose work agents each run in their own worktree no longer keeps other workflows from starting in the same directory.
 - Commands such as `mendcode workflow list --json` and `mendcode export` no longer cut their output short when it goes to a pipe (`| jq`, a script).
 - `mendcode run --offline`, `--tools` and `--exclude-tools` also turn off the provider's own web search and image generation, so a ChatGPT model no longer searches the web in a run that excluded it.
 - `mendcode run` with `--tools`, `--exclude-tools` or `--offline` on a model another engine runs (Claude Code, Codex, pi, an ACP agent) now fails before calling the model instead of running with every tool, since those engines cannot be held to the limits.
