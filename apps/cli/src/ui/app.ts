@@ -259,6 +259,7 @@ export function createApp(input: AppInput) {
     turnState: undefined!,
     openedAt: undefined!,
     escArmedAt: 0,
+    agentStopArmedAt: 0,
     editingScratch: undefined,
     scratchFor: undefined,
     goalPrompt: undefined,

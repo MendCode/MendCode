@@ -333,6 +333,14 @@ The opt-in [thread MCP bridge](thread-mcp.md) offers `delegate_task` inside Clau
 
 Ctrl+X Down opens the first child (or first sibling from a child).
 
+### Esc and sub-agents
+
+Esc Esc stops only the parent's turn. Its sub-agents keep running: a foreground child goes on in the background and wakes the parent when it ends, as `b` would. When any still run, the notice reads `interrupted · sub-agents keep running · esc stops them`.
+
+A third Esc within 5 seconds stops every running sub-agent of the session: its children and, on Claude Code, its background agents. Background shell commands keep running; `/ps` stops those.
+
+`turn.cancel` carries this as `spareAgents: true`; without it (a workflow, a loop, an older terminal) the turn's foreground children stop with it. A child detached with `b` is never stopped by its parent's cancel.
+
 In a child with an empty prompt, Right/Left cycles siblings in v1 ID order and Up returns to the parent; a nonempty draft keeps normal cursor/history keys.
 
 ### Live task tree

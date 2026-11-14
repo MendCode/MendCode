@@ -182,6 +182,34 @@ test("cancelling a foreground parent task also cancels its running child", async
   expect(h.store.turns.list(child.taskId)[0]?.status).toBe("cancelled")
 })
 
+test("a cancel that spares the agents stops the parent's turn and leaves its foreground child running in the background", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Foreground", prompt: "Wait" }), hang] })
+  const parent = await openSession(h)
+  await h.client.send({ type: "user.submit", sessionId: parent, text: "Delegate", attachments: [] })
+  await until(() => h.requests.length === 2)
+  const turnId = h.store.turns.list(parent)[0]!.turnId as TurnId
+  expect((await h.client.send({ type: "turn.cancel", sessionId: parent, turnId, spareAgents: true })).ok).toBe(true)
+  await until(() => h.store.turns.list(parent)[0]?.status === "cancelled")
+  await until(() => list(h, parent)[0]?.background === true)
+  const child = list(h, parent)[0]!
+  expect(child.state).toBe("running")
+  expect(h.store.turns.list(child.taskId)[0]?.status).not.toBe("cancelled")
+})
+
+test("a child detached from /tasks survives its parent's plain cancel", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Foreground", prompt: "Wait" }), hang] })
+  const parent = await openSession(h)
+  await h.client.send({ type: "user.submit", sessionId: parent, text: "Delegate", attachments: [] })
+  await until(() => h.requests.length === 2)
+  const child = list(h, parent)[0]!
+  expect((await h.client.send({ type: "task.status", sessionId: parent, taskId: child.taskId, action: "detach" })).ok).toBe(true)
+  const turnId = h.store.turns.list(parent)[0]!.turnId as TurnId
+  await h.client.send({ type: "turn.cancel", sessionId: parent, turnId })
+  await until(() => h.store.turns.list(parent)[0]?.status === "cancelled")
+  await Bun.sleep(50)
+  expect(list(h, parent)[0]?.state).toBe("running")
+})
+
 test("a child's record keeps what it spent and the files it wrote, summed over its generations", async () => {
   const h = await start({ steps: [callTool("write", { path: "notes.txt", content: "a\n" }), answer("wrote it", { input: 1200, output: 80 }), answer("again", { input: 300, output: 20 })] })
   const parent = await openSession(h)

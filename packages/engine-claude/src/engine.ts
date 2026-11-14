@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
+import { environmentKey, processMcpTurn, realClock, sparesAgents, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import {
   claudeArgs,
   claudePermissionMode,
@@ -956,10 +956,15 @@ export function createClaudeEngine(options: {
           "abort",
           () => {
             turn.interrupted = true
-            // Claude Code's interrupt stops every background agent of the session, this turn's and earlier ones', for good.
-            turn.mapper.stopBackground()
-            for (const mapper of connection.agentTurns) mapper.stopBackground()
-            connection.agentTurns = []
+            // A plain interrupt stops every background agent of the session, this turn's and earlier ones', for good. With
+            // `spare_background_tasks` (the user stopped only the turn) they run on: this turn's agents keep reporting after it ends.
+            // A Claude Code that does not read the field stops them anyway; they then end as it reports them.
+            const spare = sparesAgents(input.signal)
+            if (!spare) {
+              turn.mapper.stopBackground()
+              for (const mapper of connection.agentTurns) mapper.stopBackground()
+              connection.agentTurns = []
+            }
             const stopNow = () => {
               if (settled) return
               turn.mapper.finish("interrupted")
@@ -973,7 +978,7 @@ export function createClaudeEngine(options: {
               clock.setTimer(DRAIN_LIMIT_MS, () => { connection.draining = false })
               stopNow()
             })
-            void control(connection, { subtype: "interrupt" }).catch(() => { grace.cancel(); stopNow() })
+            void control(connection, { subtype: "interrupt", ...(spare ? { spare_background_tasks: true } : {}) }).catch(() => { grace.cancel(); stopNow() })
           },
           { once: true },
         )
