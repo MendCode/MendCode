@@ -460,7 +460,7 @@ async function connect() {
   const local = transportFlags.socketPath || remote ? undefined : await ensureDaemon({ ...daemonOptions, ...(hostSolo ? { solo: true } : {}) })
   if (local?.host) soloHost = local.host
   const socketPath = transportFlags.socketPath ?? local?.socketPath ?? ""
-  const next = createClient({
+  const build = () => createClient({
     ...(remote ? { remote } : local?.tcp ? { localTcp: () => readLocalEndpoint(local.dir) } : { socketPath }),
     // The hosted daemon is reached in memory while it lives; once it stops (/daemon restart) the client falls back to the socket of the daemon that replaces it.
     ...(soloHost ? { loopback: () => (soloHost && !soloHost.stopped ? soloHost.attach : undefined) } : {}),
@@ -478,7 +478,14 @@ async function connect() {
     // A daemon that died (crash, kill) is started again instead of leaving the TUI reconnecting forever.
     ...(remoteAttach ? {} : { beforeReconnect: async () => { await pendingStop; return ensureDaemon(daemonOptions) } }),
   })
-  await next.connect()
+  const { connectPatiently } = await import("./connect-patiently")
+  const next = await connectPatiently({
+    build,
+    onWait: (attempt, error) => {
+      log("WARN", `daemon slow to answer (attempt ${attempt}): ${error instanceof Error ? error.message : String(error)}`)
+      if (attempt === 1) process.stderr.write("mendcode: the daemon is slow to answer (the computer may be short on memory); still trying…\n")
+    },
+  })
   if (fromSession) guardClient(next, process.argv.slice(2))
   if (pure) {
     const info = await next.send({ type: "daemon.info" })
