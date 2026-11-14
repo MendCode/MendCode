@@ -781,6 +781,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   function styledBody(block: Block, width: number): Line[] {
     // Thinking whose text the provider keeps (Claude Code, a Codex item without a summary) has nothing to show: the working row says "Thinking...".
     if (block.kind === "reasoning" && !block.text.trim()) return []
+    // A sub-agent's end that repeats its last text carries only its totals: no empty bullet for it.
+    if (block.kind === "agent_message" && block.status !== "running" && !block.text.trim() && block.meta?.agentEnd === true) return []
     const role = block.kind === "user_message" && !block.notice ? "user" : block.kind === "agent_message" ? "assistant" : block.kind === "tool_call" ? "tool" : "meta"
     // A custom view of the block's slot comes first (docs/views.md); finished blocks are memoised on their whole input.
     const slot = slotOf(block)
@@ -1006,6 +1008,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       if (typeof agentModel === "string") thread.model = agentModel
       own = { ...event, meta }
     }
+    // A message sent to an ended sub-agent starts it again (Claude Code's SendMessage): its new work reopens the thread, until it ends again.
+    if (event.type === "item.started" && thread.ended && !thread.ended.byUser) delete thread.ended
     if (replayed) replayed.set(thread, [...(replayed.get(thread) ?? []), own])
     else thread.transcript.apply(own)
     if (event.type === "item.started" && event.kind === "tool_call") {

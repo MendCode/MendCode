@@ -1706,6 +1706,35 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("a background agent started again by a message after it ended keeps writing to its own thread, and its second end is reported too", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_agent", "Agent", { description: "Report redesign", subagent_type: "general-purpose", prompt: "build it", run_in_background: true })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a694" }] } })
+        streamText(api, 1, "launched")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a694", tool_use_id: "toolu_agent", status: "completed", summary: "first round done", usage: { tool_uses: 1, total_tokens: 10, duration_ms: 5 } })
+    await Bun.sleep(10)
+    expect(late.at(-1)!.event).toMatchObject({ text: "first round done", meta: { agentEnd: true } })
+    // The coordinator's message starts the ended agent again: its new work and its second end still reach its thread.
+    const resumedFrom = late.length
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_use", id: "toolu_edit", name: "Read", input: { file_path: "/work/app/report.py" } }] } })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a694", tool_use_id: "toolu_agent", status: "completed", summary: "second round done", usage: { tool_uses: 2, total_tokens: 20, duration_ms: 9 } })
+    await Bun.sleep(10)
+    const call = late[0]!.event.type === "item.started" ? late[0]!.event.meta?.agentParent : undefined
+    expect(late.slice(resumedFrom).map((entry) => entry.event.type === "item.completed" || entry.event.type === "item.started" ? entry.event.meta?.agentParent : undefined).every((parent) => parent === call)).toBe(true)
+    expect(late.slice(resumedFrom)[0]!.event).toMatchObject({ type: "item.started", meta: { tool: "read: /work/app/report.py" } })
+    expect(late.at(-1)!.event).toMatchObject({ text: "second round done", meta: { agentEnd: true } })
+    h.engine.stop()
+  })
+
   test("a background agent's own long Bash call (Claude Code 2.1.317 reports it as a task owned by the sub-agent) stays in the agent's thread and never becomes a notice for the main agent", async () => {
     const fake = fakeClaude({
       onUser(api) {

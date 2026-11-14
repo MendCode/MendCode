@@ -102,6 +102,39 @@ test("a sub-agent that ended says what it took under its call and is no longer l
   expect(screen(h)).not.toMatch(/[├└] Read a\.txt\s+await\s+read/)
 })
 
+test("a background sub-agent sent a message after it ended works again in its open thread; an end that repeats its last text leaves no empty bullet", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const h = appHarness({
+    dataDir, width: 110, height: 34,
+    reply: (command) => {
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+      if (command.type === "session.children" || command.type === "task.list") return { ok: true, result: { sessions: [], tasks: [] } } as never
+      if (command.type === "background.list") return { ok: true, result: { tasks: [] } } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  const talk = conversation(h.sessionId, h.app.onEvent)
+  const child = (itemId: string, kind: "tool_call" | "agent_message", meta: Record<string, string> = {}) => talk.emit({ type: "item.started", turnId: "turn_1", itemId, kind, meta: { ...meta, agentParent: "item_bg" } })
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg", kind: "tool_call", meta: { tool: "agent Finish the report", subagent: true, agent: "general-purpose", background: true } })
+  talk.emit({ type: "item.completed", itemId: "item_bg", status: "ok", text: "running in the background" })
+  child("item_bg_text", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_bg_text", status: "ok", text: "Report regenerated." })
+  await h.type("\x18\x1b[B")
+  child("item_bg_end", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_bg_end", status: "ok", text: "", meta: { agentParent: "item_bg", agentEnd: true, toolCalls: 3, tokens: 1_000, durationMs: 100 } })
+  h.app.render()
+  expect(screen(h)).toMatch(/Finish the report.*\n.*· done/)
+  expect(screen(h)).not.toMatch(/^\s*[│ ]*\s*•\s*[│ ]*$/m)
+  // The coordinator's message starts it again: the thread is at work, not done.
+  child("item_bg_again", "tool_call", { tool: "read /work/report.py" })
+  h.app.render()
+  expect(screen(h)).not.toMatch(/Finish the report.*\n.*· done/)
+  expect(screen(h)).toMatch(/Finish the report.*\n.*· read \/work\/report\.py/)
+})
+
 test("a click on a sub-agent's row of the strip opens it", async () => {
   const { h } = await chat()
   const rows = h.text()
