@@ -15,19 +15,21 @@ test("no sub-agents, or only ones that ended a while ago, draw nothing", () => {
   expect(stripActive([task({ taskId: "ses_a", state: "completed" })])).toBe(false)
 })
 
-test("under a working line the sub-agents are its tree: what each was asked, await or bg, what it does now and for how long; no spinner of their own", () => {
+test("under a working line the sub-agents are its tree: what each was asked, await or async, what it does now and for how long; no spinner of their own", () => {
   const tasks = [task({ taskId: "ses_a" }), task({ taskId: "ses_b", description: "Implement the settings pane", agent: "general", background: true, createdAt: NOW - 123_000 }), task({ taskId: "ses_c", description: "Rank the feed", agent: "general", background: true, state: "needs_input", createdAt: NOW - 40_000 })]
   const activity = { ses_a: { state: "tool", tool: "read BrowserModel.swift" }, ses_b: { state: "generating" }, ses_c: { state: "waiting_approval", pending: "Run command" } } as const
   const rows = draw(tasks, activity)
   expect(rows).toHaveLength(3)
   expect(rows[0]).toMatch(/^   ├ Review the Swift sources\s+explore\s+await\s+read BrowserModel\.swift\s+1m 12s$/)
-  expect(rows[1]).toMatch(/^   ├ Implement the settings pane\s+general\s+bg\s+thinking\s+2m 3s$/)
-  expect(rows[2]).toMatch(/^   └ Rank the feed\s+general\s+bg\s+needs you: Run command\s+40s$/)
+  expect(rows[1]).toMatch(/^   ├ Implement the settings pane\s+general\s+async\s+thinking\s+2m 3s$/)
+  expect(rows[2]).toMatch(/^   └ Rank the feed\s+general\s+async\s+needs you: Run command\s+40s$/)
+  // A sub-agent that runs on its own is not a background command: `bg` would read as one.
+  for (const row of rows) expect(row).not.toMatch(/\sbg\s/)
   // The columns line up from row to row.
-  expect(new Set(rows.map((row) => row.search(/await|bg {3}/))).size).toBe(1)
+  expect(new Set(rows.map((row) => row.search(/await|async/))).size).toBe(1)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(120)
   // Agents that are all the same kind do not spend a column saying so.
-  expect(draw(tasks.slice(1), activity)[0]).toMatch(/^   ├ Implement the settings pane\s+bg\s+thinking\s+2m 3s$/)
+  expect(draw(tasks.slice(1), activity)[0]).toMatch(/^   ├ Implement the settings pane\s+async\s+thinking\s+2m 3s$/)
 })
 
 test("while the session rests, a head line counts them and names the key that opens one", () => {
@@ -164,9 +166,9 @@ test("background commands join the sub-agents' tree: one block, the head counts 
   const rows = renderAgentsStrip({ tasks, activity: () => ({ state: "generating" }), now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: true, openHint: "ctrl+x ↓ open · /tasks", commands: [{ command: "bun run dev", kind: "command", startedAt: NOW - 673_000 }] }).rows.map((line) => line.map((span) => span.text).join(""))
   expect(rows).toHaveLength(3)
   expect(rows[0]).toMatch(/^   Agents  1 running · 1 command\s+ctrl\+x ↓ open · \/tasks · \/ps$/)
-  expect(rows[1]).toMatch(/^   ├ Corregir catálogo y continuidad visual\s+bg\s+thinking\s+26h 48m$/)
+  expect(rows[1]).toMatch(/^   ├ Corregir catálogo y continuidad visual\s+async\s+thinking\s+26h 48m$/)
   expect(rows[2]).toMatch(/^   └ bun run dev\s+cmd\s+11m 13s$/)
-  expect(rows[1]!.indexOf("bg ")).toBe(rows[2]!.indexOf("cmd"))
+  expect(rows[1]!.indexOf("async")).toBe(rows[2]!.indexOf("cmd"))
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(120)
 })
 
@@ -203,7 +205,7 @@ test("what a sub-agent runs on is a line under its row, in its own colours, and 
   const tight = renderAgentsStrip({ tasks: crowd, run, activity: () => undefined, now: NOW, width: 80, inset: 3, glyphs: glyphs({}), root: false, openHint: "", commands })
   const rows = tight.rows.map((line) => line.map((span) => span.text).join(""))
   expect(rows).toHaveLength(AGENTS_SHOWN + 2)
-  expect(rows[0]).toMatch(/Review the Swift sources\s+bg\s+Opus 5\.5\s+thinking/)
+  expect(rows[0]).toMatch(/Review the Swift sources\s+async\s+Opus 5\.5\s+thinking/)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(80)
 })
 

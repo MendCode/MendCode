@@ -337,7 +337,7 @@ In a child with an empty prompt, Right/Left cycles siblings in v1 ID order and U
 
 ### Live task tree
 
-While the open session has sub-agents, the chat shows them live as a tree hanging from the working line: one row each with what it was asked, `await` (the session waits for it) or `bg` (background), what it is doing now (the tool in flight, `thinking`, `needs you: …`, `queued`, `paused`) and how long it has run.
+While the open session has sub-agents, the chat shows them live as a tree hanging from the working line: one row each with what it was asked, `await` (the session waits for it) or `async` (it runs on its own while the session goes on; not a background command), what it is doing now (the tool in flight, `thinking`, `needs you: …`, `queued`, `paused`) and how long it has run.
 
 The agent's name is a column only when the rows differ in it.
 
