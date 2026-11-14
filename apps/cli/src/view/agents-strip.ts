@@ -83,7 +83,7 @@ export const DETAIL_ROWS = 8
 
 /**
  * The sub-agents of the open session, live, as a tree hanging from the working line: one row each with what it was asked, whether
- * the session waits for it (`await`) or it runs on its own (`bg`), what it is doing now and for how long. The agent's name is a
+ * the session waits for it (`await`) or it runs on its own (`async`), what it is doing now and for how long. The agent's name is a
  * column only when the rows differ in it. Without a working line (`root`: the session rests while they work) a head line counts
  * them and names the key that opens one. Rows carry no spinner: the working line has the only one, so the two never read as one list.
  * What a sub-agent runs on (`run`) is a line of its own under its row while the strip fits in `DETAIL_ROWS`, or the model alone on
@@ -149,7 +149,7 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** The 
       here ? { text: last ? "└▸" : "├▸", fg: subagentColor(task.description), bold: true } : { text: last ? "└ " : "├ ", fg: "muted" },
       ...fit([{ text: truncateEnd(described(task), titleWidth), fg: running || here ? subagentColor(task.description) : "muted", ...(here ? { bold: true } : {}) }], titleWidth),
       ...(agentWidth ? [{ text: `  ${task.agent.slice(0, agentWidth).padEnd(agentWidth)}`, fg: "muted" as const }] : []),
-      ...(modeWidth ? [{ text: `  ${(task.background ? "bg" : "await").padEnd(modeWidth)}`, fg: task.background ? ("muted" as const) : ("accent" as const) }] : []),
+      ...(modeWidth ? [{ text: `  ${(task.background ? "async" : "await").padEnd(modeWidth)}`, fg: task.background ? ("muted" as const) : ("accent" as const) }] : []),
       ...(runWidth ? [{ text: "  " }, ...fit(clip(inline.get(task.taskId) ?? [], runWidth), runWidth)] : []),
       { text: "  " },
       { ...status, text: truncateEnd(status.text, statusWidth) },
@@ -161,13 +161,14 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** The 
     const facts = detail ? runs.get(task.taskId) : undefined
     if (facts) push([pad, ...own(here ? fit([{ text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))], room) : [{ text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))])], task.taskId)
   })
-  // A command has no activity of its own to show: its line, `cmd` (or `bg` for an engine's own agent) and how long it has run.
+  // A command has no activity of its own to show: its line, `cmd` (or `agent` for an engine's own agent) and how long it has run.
+  // A sub-agent is never labelled `bg`: that word reads as a background command, which a sub-agent is not.
   shownCommands.forEach((item, index) => {
     const left: Line = [
       { text: index === shownCommands.length - 1 && !more ? "└ " : "├ ", fg: "muted" },
       ...fit([{ text: truncateEnd(backgroundName(item.command, 200), titleWidth), fg: "body" }], titleWidth),
       ...(agentWidth ? [{ text: `  ${"".padEnd(agentWidth)}` }] : []),
-      ...(modeWidth ? [{ text: `  ${(item.kind === "agent" ? "bg" : "cmd").padEnd(modeWidth)}`, fg: "muted" as const }] : []),
+      ...(modeWidth ? [{ text: `  ${(item.kind === "agent" ? "agent" : "cmd").padEnd(modeWidth)}`, fg: "muted" as const }] : []),
     ]
     push([pad, ...fit(left, room - TIME), ...(ctxWidth ? [{ text: " ".repeat(ctxWidth + 1) }] : []), { text: formatElapsed(input.now - item.startedAt).padStart(9), fg: "muted" }], item.id)
   })

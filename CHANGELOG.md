@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Workflow scripts can run an agent in a git worktree they made themselves (`agent(prompt, { cwd })`); such agents work in parallel without holding the project directory.
 
+### Changed
+
+- A sub-agent that runs while the session goes on is marked `async` instead of `bg` in the agents list and its thread, so it no longer reads as a background command; an engine's own agent listed with the commands reads `agent`.
+
 ### Fixed
 
 - A workflow whose work agents each run in their own worktree no longer keeps other workflows from starting in the same directory.
