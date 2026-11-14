@@ -204,6 +204,22 @@ export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeT
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
 
+/** The names a run's `--tools` and `--exclude-tools` may give a provider-side tool: its own, and that of MendCode's tool that does the same. */
+const HOSTED_NAMES: Record<HostedTool, readonly string[]> = { web_search: ["web_search", "websearch"], image_generation: ["image_generation", "image_gen"] }
+
+/**
+ * Whether a scripted run's limits leave a provider-side tool on. It runs at the provider with no card, so the limits that remove MendCode's
+ * own tools remove it too: `--offline` (both reach the network), an allow-list that names neither of its names, an exclusion that names one.
+ */
+export function hostedWithinLimits(tool: HostedTool, limits: RunLimits | undefined, turnExcluded: readonly string[] = []): boolean {
+  const names = HOSTED_NAMES[tool]
+  const named = (patterns: readonly string[] | undefined) => !!patterns?.some((pattern) => names.some((name) => permissionMatch(name, pattern)))
+  if (limits?.offline) return false
+  if (limits?.activeTools && !named(limits.activeTools)) return false
+  if (limits?.tools && !named(limits.tools)) return false
+  return !named(limits?.excludeTools) && !named(turnExcluded)
+}
+
 type Toolset = { tools: Map<string, Tool>; specs: ToolSpec[]; main: boolean; allowTask: boolean; agent?: AgentProfile; subagents?: Map<string, AgentProfile>; extras?: ProjectTool[]; codeCatalog?: Toolset; codeActive?: Set<string>; /** Set by `withDiscovery`: what is listed and what waits behind `tool_search`. */ catalog?: ToolCatalog }
 
 /** Handled by the engine itself (it needs the loop), offered only when `subagents` is on. */
@@ -1154,9 +1170,10 @@ export function createNativeEngine(options: {
         const hostedRules = policyRules(policy(), agent?.permissionRules, options.sessionRules?.(input.sessionId), projectRulesOf(policy(), options.cwdFor(input.sessionId)))
         const primaryOnly = policy().experimental?.primary_tools ?? []
         /** A provider-side tool runs with no approval card, so this call's own rules decide whether it is offered at all. */
+        const hostedLimits = options.runLimits?.(input.sessionId)
         const hostedAllowed = (name: HostedTool) => {
           const rule = matchingRule(permissionName(name), "*", hostedRules)
-          return !hostedOff.has(name) && rule?.action !== "deny" && rule?.action !== "ask" && (!agent || agentAllows(agent, name)) && !workflowToolDenied(input.workflow?.execution, name, "execute") && !workflowToolAsks(input.workflow?.execution, name, "execute") && (role !== "subagent" || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
+          return !hostedOff.has(name) && hostedWithinLimits(name, hostedLimits, input.turnOptions?.excludeTools) && rule?.action !== "deny" && rule?.action !== "ask" && (!agent || agentAllows(agent, name)) && !workflowToolDenied(input.workflow?.execution, name, "execute") && !workflowToolAsks(input.workflow?.execution, name, "execute") && (role !== "subagent" || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
         }
         // A fork keeps its parent's hosted tools for the shared prefix, less those its own rules refuse (the prefix then differs there).
         const hostedTools = share ? share.last.hostedTools : fork ? callTools.length ? fork.hostedTools.filter(hostedAllowed) : [] : !compound && textKind === "agent_message" && !final ? (options.hostedTools?.() ?? []).filter(hostedAllowed) : []
