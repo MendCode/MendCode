@@ -219,6 +219,19 @@ describe("external directory and doom loop", () => {
 })
 
 
+test("a tool's per-call approval sees the session's permission mode, so a call may ask in every mode but full", async () => {
+  const seen: Array<string | undefined> = []
+  const saved = defineTool({ name: "saved_run", description: "start a saved run", permission: "execute", args: z.object({ name: z.string() }), approvalFor: (_args, context) => (seen.push(context?.mode), context?.mode !== "full"), execute: async () => ({ output: "started", title: "saved_run", isError: false, truncated: false }) })
+  const run = (mode: "full" | "ask") => {
+    const s = scenario([callTool("saved_run", { name: "mend" }), stop("ok")], {}, { tools: [saved] })
+    const t = turn({ text: "go", mode: () => mode, answers: [{ kind: "approve", scope: "once" }] })
+    return s.engine.runTurn(t.input).then(() => t)
+  }
+  expect((await run("full")).asked).toEqual([])
+  expect((await run("ask")).asked).toHaveLength(1)
+  expect(seen).toEqual(["full", "ask"])
+})
+
 test("a scripted run's --offline, --tools and --exclude-tools remove the provider's own web search and image generation too", async () => {
   const hosted = (limits: RunLimits | undefined) => scenario([stop("ok")], {}, { hostedTools: () => ["web_search", "image_generation"], runLimits: () => limits })
   const sent = async (limits: RunLimits | undefined) => {
