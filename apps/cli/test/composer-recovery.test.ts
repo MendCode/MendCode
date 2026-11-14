@@ -244,6 +244,20 @@ describe("edit a queued prompt", () => {
     expect(failing.text().join("\n")).toContain("already started")
   })
 
+  test("a steering message the engine already took says it is with the model until the running tool ends, and how to correct it", async () => {
+    const failing = appHarness({ width: 200, reply: (command) => command.type === "queue.remove" ? { ok: false, error: { code: "target_mismatch", message: "[ACTOR]: queued message not found" } } : undefined })
+    failing.app.applySettings({ onboarded: true })
+    const chat = conversation(failing.sessionId, failing.app.onEvent)
+    const id = ids("queue")
+    chat.emit({ type: "queue.added", queueId: id, text: "no, use the other branch", attachments: [] })
+    chat.emit({ type: "queue.changed", queue: [{ queueId: id, preview: "no, use the other branch", attachments: 0, delivery: "steer" }] })
+    await failing.type(ALT_UP)
+    expect(failing.app.editor.text).toBe("")
+    const shown = failing.text().join("\n")
+    expect(shown).toContain("already handed to the model: it reads it when the running tool ends")
+    expect(shown).not.toContain("that message already started")
+  })
+
   test("a shell line is refused while the prompt holds text, and notices cannot be pulled back", async () => {
     const h = queued()
     const shell = ids("queue")
