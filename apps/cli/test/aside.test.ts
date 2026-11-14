@@ -238,6 +238,12 @@ describe("side chat panel", () => {
       expect(sideChatKeptKey(chat, "x", copy)).toBe(false)
       expect(chat.kept).toBeUndefined()
       expect(copied).toHaveLength(1)
+      // Drawn at another width the kept rows point at other text: the selection is dropped, never copied wrong.
+      select()
+      sideChatRows(chat, 44, 24, "btw", 1_800_000_000_000)
+      expect(chat.kept).toBeUndefined()
+      expect(sideChatKeptKey(chat, "\x03", copy)).toBe(false)
+      expect(copied).toHaveLength(1)
     })
 
     test("a press outside the exchange starts nothing, so the box only takes the keyboard", () => {

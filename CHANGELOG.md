@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.17 - 2026-11-13
+
+The `/btw` side chat can be selected and copied like the transcript, and the workflows page opens however many workflows there are.
+
+### Upgrade notes
+
+- Same code as v0.0.17-beta.1.
+
+## v0.0.17-beta.1 - 2026-11-13
+
+The `/btw` side chat can be selected and copied like the transcript, and the workflows page opens however many workflows there are.
+
 ### New
 
 - The `/btw` side chat can be copied from: drag to select and copy, double or triple click for a word or a line, a `copy` button under each answer, and the transcript's `copy` buttons on code blocks.

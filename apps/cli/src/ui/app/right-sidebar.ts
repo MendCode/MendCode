@@ -843,7 +843,9 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const side = sideChat(ctx)
     if (pointer && currentLayout.right > 0 && side.open && state.rightChatArea && (pointer.point.col >= input.screen.size.width - currentLayout.right || side.selection)) {
       const point = { row: pointer.point.row - state.rightChatArea.top, col: pointer.point.col - (input.screen.size.width - currentLayout.right) }
-      const used = sideChatMouse(side, { kind: pointer.kind, point }, { copy: (copied, label) => ctx.copyText(copied, label), now: now(), copyOnSelect: state.tuiProfile.copyOnSelect === true })
+      // A press in the side chat starts its selection: one kept in the transcript is dropped, so ctrl+c copies what was chosen last.
+      if (pointer.kind === "press" && pointer.point.col >= input.screen.size.width - currentLayout.right) state.selection = undefined
+      const used = sideChatMouse(side,{ kind: pointer.kind, point }, { copy: (copied, label) => ctx.copyText(copied, label), now: now(), copyOnSelect: state.tuiProfile.copyOnSelect === true })
       if (used) {
         requestFrame()
         return true
