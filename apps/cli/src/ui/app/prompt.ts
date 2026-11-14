@@ -176,10 +176,12 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     }
     const reply = await input.send({ type: "attachment.paste", path: rawPath, ...(input.directory ? { directory: input.directory } : {}) })
     if (!reply.ok) {
-      fail(reply.error.message)
+      // A line that is no file stays the text it was, quietly: pasting a path to talk about it is no error. A file the limits refuse
+      // (too big, not a supported type) adds nothing, token or path, and says why.
+      const notFile = /^(not a file|path must be absolute)/.test(reply.error.message.replace(/^\[[A-Z]+\]: /, ""))
+      if (!notFile) fail(reply.error.message)
       requestFrame()
-      // A line that is no file stays the text it was; a file the limits refuse (too big, not a supported type) adds nothing, token or path.
-      return !/^(not a file|path must be absolute)/.test(reply.error.message.replace(/^\[[A-Z]+\]: /, ""))
+      return !notFile
     }
     const result = reply.result as AttachmentPasteResult
     if (result.kind === "image" || result.kind === "document") addAttachment(result.kind === "image" ? { kind: "image", ref: result.attachment, name: result.name, ...(result.width && result.height ? { width: result.width, height: result.height } : {}) } : { kind: "document", ref: result.attachment, name: result.name })
