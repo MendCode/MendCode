@@ -182,6 +182,8 @@ A background sub-agent (`run_in_background`) keeps filling its thread after the 
 
 Its call says `running in the background` instead of Claude Code's note to its model. It stays in the Agents strip, including during later turns, while Claude Code still runs it.
 
+A message sent to an agent that already ended (`SendMessage`) starts it again. Its new work fills the same thread, whose header goes from `done` back to what it is doing, until it reports its next end.
+
 A sub-agent's work never stands for the main agent:
 
 - the working row names the main agent's own step;
