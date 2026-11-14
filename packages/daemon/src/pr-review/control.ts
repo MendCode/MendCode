@@ -1,7 +1,7 @@
 import { PrReviewDashboard, type PrPullRequestState, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { ConfigControl, ConfigControlAction } from "./config-control"
 import { JOB_TRANSITIONS, type JobState, type PlatformControlInput, type PlatformControlResult, type PlatformHandle, type ReviewJob } from "./contracts"
-import { buildDashboard, unresolvedCounts, type DashboardWatchInput } from "./dashboard"
+import { buildDashboard, fitDashboard, unresolvedCounts, type DashboardWatchInput } from "./dashboard"
 import { readReviewState, type ReviewState } from "./state"
 import { holderOf, type release, type takeOver } from "./takeover"
 
@@ -141,9 +141,11 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     // A caller that reads the PRs' state (/today, the reviews page on open) also gets what stays open on each; the 5 s poll reads no state file.
     if (input.pullRequests) dashboard = withUnresolved(dashboard, jobs)
     await pullRequests
-    dashboard = withPullRequests(dashboard)
+    // Within one frame: a long ledger leaves out its oldest finished jobs instead of the whole reply failing.
+    const fitted = fitDashboard(withPullRequests(dashboard))
+    dashboard = fitted.dashboard
     const { running, queued, waiting } = dashboard.metrics
-    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting); at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).${unread.length ? ` Reviewers not read yet (the checkout did not answer in time): ${unread.join(", ")}.` : ""}`, dashboard }
+    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting)${fitted.dropped ? `, ${fitted.dropped} older finished job${fitted.dropped === 1 ? "" : "s"} left out to fit the reply` : ""}; at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).${unread.length ? ` Reviewers not read yet (the checkout did not answer in time): ${unread.join(", ")}.` : ""}`, dashboard }
   }
 
   async function pause(input: PlatformControlInput): Promise<PlatformControlResult> {

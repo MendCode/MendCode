@@ -19,6 +19,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A Claude Code or Codex session asked to tell another session something now finds it among your MendCode sessions by its title and sends the message there, instead of looking only at Claude Code's own processes and giving up.
+- The reviews page keeps refreshing once many pull requests have been reviewed: the oldest finished reviews are left out of the list instead of the refresh failing and the page staying on an old list.
 - Clicking an agent that Claude Code runs in the background, or opening it with ctrl+x ↓, opens its sub-agent thread even when the call that started it is far back in a long session, instead of the background commands card.
 - A workflow whose work agents each run in their own worktree no longer keeps other workflows from starting in the same directory.
 - Commands such as `mendcode workflow list --json` and `mendcode export` no longer cut their output short when it goes to a pipe (`| jq`, a script).
