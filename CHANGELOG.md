@@ -24,6 +24,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A message the session sends to one of its Claude Code sub-agents now shows in that sub-agent's thread, so you can see what it was told and that it is waiting for its next step.
 - Pasting a path that is no file (to talk about it) keeps it as text without leaving a "not a file or directory" error above the prompt.
 - A long build or install the model runs, once it moves to the background, may run up to 30 minutes instead of being cut at 10.
 - MendCode no longer closes with an error when the daemon is slow to answer as it opens (a computer short on memory, after an update): it says so and keeps trying.

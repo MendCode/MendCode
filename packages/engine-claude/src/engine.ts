@@ -538,6 +538,7 @@ export function createClaudeEngine(options: {
       return
     }
     if (agentTask(connection, message)) return
+    if (message.type === "assistant" && !message.parent_tool_use_id) showSentMessages(connection, message)
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
@@ -610,6 +611,20 @@ export function createClaudeEngine(options: {
    * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
    * command as a message and held the queue until Claude Code next answered.
    */
+  /** The main agent's `SendMessage` to a sub-agent, from this turn or an earlier one, shows in that sub-agent's thread. */
+  function showSentMessages(connection: Connection, message: ClaudeMessage) {
+    const content = message.message?.content
+    if (!Array.isArray(content)) return
+    for (const part of content) {
+      if (part?.type !== "tool_use" || part.name !== "SendMessage" || typeof part.id !== "string") continue
+      const args = part.input as { to?: unknown; message?: unknown } | undefined
+      if (typeof args?.to !== "string" || typeof args.message !== "string") continue
+      const sent = { toolUseId: part.id, to: args.to, text: args.message }
+      if (connection.turn?.mapper.sentToAgent(sent)) continue
+      connection.agentTurns.some((mapper) => mapper.sentToAgent(sent))
+    }
+  }
+
   function agentTask(connection: Connection, message: ClaudeMessage): boolean {
     if (message.type !== "system" || typeof message.task_id !== "string") return false
     if (message.subtype === "task_started" && message.owned_by_subagent === true) {
