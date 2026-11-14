@@ -4,7 +4,10 @@ import type { AppContext } from "./context"
 
 export type SessionNavigation = "session.child.first" | "session.child.next" | "session.child.previous" | "session.parent"
 
-export function createSubagents(ctx: AppContext, actions: { switchSession(id: SessionId): Promise<void>; loadPage(name: "tasks"): Promise<void>; loadWorkflows(): Promise<void> }) {
+/** Older history pages a click on an engine's agent may load to find the call that started it, before it settles for the command card. */
+export const AGENT_SEARCH_PAGES = 12
+
+export function createSubagents(ctx: AppContext, actions: { switchSession(id: SessionId): Promise<void>; loadPage(name: "tasks"): Promise<void>; loadWorkflows(): Promise<void>; /** Loads the page of history before the oldest one shown. */ loadEarlier?(): Promise<void> }) {
   const { state, input, fail, requestFrame } = ctx
   const agentView = createAgentView(ctx)
   async function loadTasks() {
@@ -79,7 +82,12 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
       next = action === "session.child.first" ? children[0]?.sessionId : children[(Math.max(0, at) + offset + children.length) % children.length]?.sessionId
     }
     // No child session to open: the session's own sub-agents (an engine's, as Claude Code's) open as a thread.
-    if ((!next || next === current) && action === "session.child.first") return agentView.first()
+    if ((!next || next === current) && action === "session.child.first") {
+      // An engine's agent at work whose call is above the history shown opens first, as the strip lists it.
+      const working = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === current && shell.kind === "agent").at(-1)
+      const thread = working ? await findThread(working.command) : undefined
+      return (thread !== undefined && agentView.show(thread as never)) || agentView.first()
+    }
     if (!next || next === current) return false
     // Only leaving the task drops the way back to /workflows; a failed or no-op move keeps it.
     state.workflowReturn = undefined
@@ -90,11 +98,30 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
    * Opens what a strip row carries: a thread of this session, a child session, or something running in the background (an engine's
    * own agent with no thread, a command), which opens `/ps` on it. Anything else says so instead of doing nothing.
    */
+  /** The item of the session's agent call asked `description` (the newest such call), loading older history while none is shown. */
+  async function findThread(description: string): Promise<string | undefined> {
+    const sessionId = state.sessionId
+    const transcript = () => state.agentRoot ?? state.transcript
+    const named = () => transcript().agentThreads().filter((thread) => thread.description === description).at(-1)?.itemId
+    for (let page = 0; !named() && page < AGENT_SEARCH_PAGES && actions.loadEarlier && state.paging?.more; page++) {
+      const first = state.paging.firstSeq
+      await actions.loadEarlier()
+      if (state.sessionId !== sessionId || state.paging?.firstSeq === first) break
+    }
+    return state.sessionId === sessionId ? named() : undefined
+  }
   async function open(id: string) {
     if (agentView.show(id as never)) return
     if (agentView.open) agentView.close()
     if (id.startsWith("ses_")) return actions.switchSession(id as SessionId)
     const running = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId)
+    // An engine's own agent is a sub-agent: its thread opens, never the command card. Its call may sit above the history shown,
+    // so older pages load (a bounded few) until the call that started it is there.
+    const engineAgent = running.find((shell) => shell.id === id && shell.kind === "agent")
+    if (engineAgent) {
+      const thread = await findThread(engineAgent.command)
+      if (thread && agentView.show(thread as never)) return
+    }
     const at = running.findIndex((shell) => shell.id === id)
     if (at >= 0) { state.psCard = { selected: at }; requestFrame(); return }
     state.notice = "that agent is no longer running"
