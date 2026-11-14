@@ -36,6 +36,8 @@ export type SideChatState = {
   selection?: Selection | undefined
   /** A finished selection kept on screen with `copyOnSelect` off, as the transcript keeps one: ctrl+c copies it, any other key drops it. */
   kept?: Selection | undefined
+  /** The exchange's width when `kept` was made: its rows and columns point at other text once the box is drawn at another width. */
+  keptWidth?: number | undefined
   /** What the last frame drew, so a press in the box turns into text: every line of the exchange and the first one on screen. */
   drawn?: { map: SelectionMap; start: number; shown: number }
   /** The last press in the exchange, to count double and triple clicks. */
@@ -159,6 +161,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   const start = Math.max(0, end - room)
   const map: SelectionMap = { width: inner, bodyTop: 0, bodyBase: 0, body: lines.map(bodyLineOf), promptTop: 0, promptRows: 0, promptFirst: 0, promptInset: 0, promptLines: [] }
   chat.drawn = { map, start, shown: Math.min(room, lines.length - start) }
+  if (chat.kept && chat.keptWidth !== inner) chat.kept = undefined
   const shownSelection = chat.selection ?? chat.kept
   const marks = shownSelection ? bodyHighlight(map, shownSelection) : undefined
   const shownLines = lines.slice(start, end).map((line, index) => {
@@ -236,7 +239,10 @@ export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "dra
   }
   const text = picked ? bodyText(map, picked) : ""
   if (text && input.copyOnSelect) input.copy(text, `${text.length} chars`)
-  else if (text && picked) chat.kept = picked
+  else if (text && picked) {
+    chat.kept = picked
+    chat.keptWidth = map.width
+  }
   return true
 }
 

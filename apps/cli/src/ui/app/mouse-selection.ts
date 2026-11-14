@@ -4,6 +4,7 @@ import { graphemes } from "../../view/editor"
 import { quoteWithComment } from "../../view/quote"
 import { draftRefs } from "../../view/attachments"
 import { offsetForThumb } from "../../view/scroll-chrome"
+import { sideChat } from "./aside"
 import { findLinks } from "../../view/links"
 import { areaAt,belowPrompt, bodyPoint, bodyText, dragEdge, footerRow, footerText, lineSpan, mouseEvent, promptOffsetAt, promptRange, rowText, wordSpan, wrappedRows, wrappedTextAt, type Point, type Selection, type SelectionMap } from "../selection"
 
@@ -154,6 +155,8 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
     }
     if (event.kind === "press") {
       stopAutoscroll()
+      // A press here starts this surface's selection: one kept in the side chat is dropped, so ctrl+c copies what was chosen last.
+      sideChat(ctx).kept = undefined
       // The scrollbar is a control too: a press on the thumb grabs it, a press on the track pages toward it.
       const bar = map.scrollbar
       if (bar && point.col === bar.col && point.row >= bar.top && point.row < bar.top + bar.rows) {
