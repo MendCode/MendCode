@@ -12,9 +12,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The `/btw` side chat shows how to start a new chat and open earlier ones: type `/new` or `/history` in it (or `/btw new`, `/btw history`), named in its header and in an empty chat.
+- The `/btw` side chat reads more easily: your questions stand out, each exchange has room around it, and the panel no longer repeats its name above the box.
 
 ### Fixed
 
+- A Claude sub-agent started before a daemon restart and woken by a message shows its work in its own thread again; before, what it did was not shown or kept, so neither the session nor `/btw` could see it.
 - Restarting or stopping the daemon ends every Claude Code process it ran; one with a background agent could stay alive and keep working beside the new process for the same session.
 
 ## v0.0.18-beta.1 - 2026-11-14

@@ -1728,6 +1728,34 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("a sub-agent launched before the process was replaced and started again by a message opens its own thread instead of being dropped", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        // No Agent call in this process: the agent was launched by an earlier process of the session, and SendMessage starts it again.
+        api.push({ type: "assistant", message: { id: "msg_send", content: [{ type: "tool_use", id: "toolu_send", name: "SendMessage", input: { to: "a704", message: "go on" } }] } })
+        api.push({ type: "system", subtype: "task_started", task_id: "a704", tool_use_id: "toolu_old_agent", task_type: "local_agent", description: "Opus: furnish per PLAN.md", subagent_type: "general-purpose", prompt: "go on" })
+        api.push({ type: "assistant", parent_tool_use_id: "toolu_old_agent", message: { content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/work/app/office_furnish.py" } }] } })
+        streamText(api, 1, "sent")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    const call = turn.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    expect(call).toMatchObject({ kind: "tool_call", meta: { tool: "agent Opus: furnish per PLAN.md", background: true, agent: "general-purpose" } })
+    if (call?.type !== "item.started") throw new Error("no adopted call")
+    const own = turn.events.filter((event) => event.type === "item.started" && event.meta?.agentParent === call.itemId)
+    expect(own.some((event) => event.type === "item.started" && event.meta?.tool === "read: /work/app/office_furnish.py")).toBe(true)
+    // It keeps reporting after the turn: the turn's mapper stays for it.
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a704", tool_use_id: "toolu_old_agent", status: "completed", summary: "furnished", usage: { tool_uses: 3, total_tokens: 10, duration_ms: 5 } })
+    await Bun.sleep(10)
+    expect(late.at(-1)?.event).toMatchObject({ text: "furnished", meta: { agentParent: call.itemId, agentEnd: true } })
+    h.engine.stop()
+  })
+
   test("a message the main agent sends to a running sub-agent shows once in that sub-agent's thread, also from a later turn", async () => {
     const sendMessage = (id: string) => ({ type: "assistant", message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "SendMessage", input: { to: "a5c8", summary: "fix", message: "caso-87 is part of what is wrong" } }] } })
     let turns = 0

@@ -539,6 +539,7 @@ export function createClaudeEngine(options: {
     }
     if (agentTask(connection, message)) return
     if (message.type === "assistant" && !message.parent_tool_use_id) showSentMessages(connection, message)
+    adoptOrphanAgent(connection, message)
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
@@ -611,6 +612,21 @@ export function createClaudeEngine(options: {
    * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
    * command as a message and held the queue until Claude Code next answered.
    */
+  /**
+   * A sub-agent no turn of this process started (launched before a daemon restart, started again by `SendMessage`) is taken by the
+   * running turn: Claude Code's notice that it started opens its thread there instead of its work being dropped.
+   */
+  function adoptOrphanAgent(connection: Connection, message: ClaudeMessage) {
+    const mapper = connection.turn?.mapper
+    if (!mapper || mapper.owns(message) || connection.agentTurns.some((earlier) => earlier.owns(message))) return
+    // Only Claude Code's start notice: a sub-agent record can come before the turn's own Agent call is registered.
+    if (message.type !== "system" || message.subtype !== "task_started" || message.task_type !== "local_agent" || message.owned_by_subagent === true) return
+    const toolUseId = message.tool_use_id
+    if (typeof toolUseId !== "string" || !toolUseId || mapper.knowsToolUse(toolUseId)) return
+    const description = typeof message.description === "string" && message.description.trim() ? message.description.trim() : "resumed sub-agent"
+    mapper.adoptAgent({ toolUseId, description, ...(typeof message.subagent_type === "string" ? { agent: message.subagent_type } : {}) })
+  }
+
   /** The main agent's `SendMessage` to a sub-agent, from this turn or an earlier one, shows in that sub-agent's thread. */
   function showSentMessages(connection: Connection, message: ClaudeMessage) {
     const content = message.message?.content
