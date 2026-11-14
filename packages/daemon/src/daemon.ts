@@ -1298,7 +1298,8 @@ export async function startDaemon(options: DaemonOptions) {
       else engineTasks.delete(sessionId)
       if (tasks.length && stop) engineTaskStops.set(sessionId, stop)
       else engineTaskStops.delete(sessionId)
-      globalSink.append({ type: "session.background.changed", sessionId })
+      // A stopping daemon's engines end their processes after the database closed: nobody is left to tell.
+      try { globalSink.append({ type: "session.background.changed", sessionId }) } catch (error) { if (!(error instanceof RangeError)) throw error }
     },
     continuity: continuity.forSession,
     compound: (sessionId) => compoundCalls.get(sessionId),

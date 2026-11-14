@@ -1287,6 +1287,28 @@ describe("MCP servers changed during a turn", () => {
     expect(reported.at(-1)).toEqual([])
   })
 
+  test("stopping the engine ends every process even when reporting one's background tasks throws (a stopping daemon's closed database)", async () => {
+    const withAgent = () => fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Furnish offices" }] })
+        streamText(api, 0, "started")
+        api.push(result())
+      },
+    })
+    const closes: string[] = []
+    const { engine } = engineWith([withAgent(), withAgent()], {
+      onClose: (sessionId) => void closes.push(sessionId),
+      onBackground: (_sessionId, tasks) => { if (!tasks.length) throw new RangeError("Cannot use a closed database") },
+    })
+    const first = turnInput({ mode: () => "full" })
+    const second = turnInput({ mode: () => "full" })
+    await engine.runTurn(first.input)
+    await engine.runTurn(second.input)
+    engine.stop?.()
+    expect(closes.sort()).toEqual([first.input.sessionId, second.input.sessionId].sort())
+  })
+
   test("an ordinary turn keeps its process; only MCP commands and MCP config files count", async () => {
     const one = fakeClaude({
       onUser(api) {

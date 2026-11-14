@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- Restarting or stopping the daemon ends every Claude Code process it ran; one with a background agent could stay alive and keep working beside the new process for the same session.
+
 ## v0.0.18-beta.1 - 2026-11-14
 
 Long commands no longer block a turn, Esc Esc spares running sub-agents, Claude Code sub-agents show everything they are told and do, and workflow agents can work side by side in their own worktrees.

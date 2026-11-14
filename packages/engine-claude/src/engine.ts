@@ -1082,10 +1082,13 @@ export function createClaudeEngine(options: {
     },
     /** Ends every process; `reason` is what `onClose` reports (a bridged turn's own process ends with its turn). */
     stop(reason = "engine stopped") {
-      for (const isolated of isolatedEngines) isolated.stop(reason)
+      // Every process ends even when a callback throws for one (a daemon stopping has closed its database): one left running goes on
+      // writing beside the process the next daemon starts for the same session.
+      const each = (end: () => void) => { try { end() } catch { /* the next one still ends */ } }
+      for (const isolated of isolatedEngines) each(() => isolated.stop(reason))
       isolatedEngines.clear()
       kept.clear()
-      for (const connection of [...connections.values()]) close(connection, reason)
+      for (const connection of [...connections.values()]) each(() => close(connection, reason))
     },
   }
   return port
