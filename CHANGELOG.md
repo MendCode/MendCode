@@ -14,6 +14,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `mendcode run --offline`, `--tools` and `--exclude-tools` also turn off the provider's own web search and image generation, so a ChatGPT model no longer searches the web in a run that excluded it.
 - `mendcode run` with `--tools`, `--exclude-tools` or `--offline` on a model another engine runs (Claude Code, Codex, pi, an ACP agent) now fails before calling the model instead of running with every tool, since those engines cannot be held to the limits.
 - A Claude Code or Codex session runs the workflows it starts through MendCode, so they show in `/workflows`; it no longer starts Claude Code's own hidden workflow and tells you to watch `/workflows`.
+- A Claude Code session whose background sub-agents are still running can launch sessions on other models in its next turn; it no longer fails with an Authorization error and a request to run `/mcp`.
 - The list of sub-agents and background commands above the prompt shares its rows: when one list is short the other shows more, and the sub-agent you are reading always keeps its row.
 - The assistant can remove an ACP agent you ask it to remove (it proposes the change for your approval) instead of failing and sending you to `/acp`; it also knows API-key providers are removed in `/providers`.
 
