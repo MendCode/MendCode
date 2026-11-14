@@ -300,3 +300,77 @@ describe("shell cancel", () => {
     expect(await Bun.file(`${root}/ran`).exists()).toBe(false)
   })
 })
+
+describe("a foreground command that runs past its yield", () => {
+  const yielding = (port: ReturnType<BackgroundTasks["forSession"]>, extra: { signal?: AbortSignal } = {}) => {
+    const yielded: string[] = []
+    const context = { ...makeContext({ cwd: tempDir(), ...(extra.signal ? { signal: extra.signal } : {}) }), background: port, shellYieldMs: 150, onYield: (id: string) => yielded.push(id) }
+    return { context, yielded }
+  }
+
+  test("moves to the background with its output so far; shell_output reads only the rest and the exit", async () => {
+    const { tasks, exits, nextExit } = registry()
+    const port = tasks.forSession("s1")
+    const { context, yielded } = yielding(port)
+    const exited = nextExit()
+    const result = await shell.execute({ command: "echo early; sleep 0.6; echo late; exit 4" }, context)
+    expect(result.isError).toBe(false)
+    expect(result.output).toStartWith("early\n")
+    expect(result.output).toContain("moved to the background as bg_")
+    expect(result.meta).toMatchObject({ yielded: true, background: true })
+    const id = result.meta!.taskId as string
+    expect(yielded).toEqual([id])
+    await exited
+    const rest = await port.read(id, { waitMs: 0, signal: never, until: "exit" })
+    expect(rest).toMatchObject({ output: "late\n[exit 4]", task: { status: "exited", exitCode: 4 } })
+    expect(exits[0]?.task.id).toBe(id)
+  })
+
+  test("a quick command, the user's own command or a host without onYield never moves", async () => {
+    const { tasks } = registry()
+    const port = tasks.forSession("s1")
+    const quick = await shell.execute({ command: "echo done" }, yielding(port).context)
+    expect(quick.meta).toMatchObject({ exitCode: 0 })
+    expect(quick.meta?.yielded).toBeUndefined()
+    const own = await shell.execute({ command: "sleep 0.4; echo mine" }, { ...yielding(port).context, userInitiated: true })
+    expect(own.output).toBe("mine\n")
+    const { onYield: _, ...noHook } = yielding(port).context
+    const plain = await shell.execute({ command: "sleep 0.4; echo plain" }, noHook)
+    expect(plain.output).toBe("plain\n")
+    expect(port.list()).toHaveLength(0)
+  })
+
+  test("it still stops at its timeout and says so; shell_kill stops it without an exit notice", async () => {
+    const { tasks, exits, nextExit } = registry()
+    const port = tasks.forSession("s1")
+    const exited = nextExit()
+    const slow = await shell.execute({ command: "sleep 30", timeoutMs: 500 }, yielding(port).context)
+    await exited
+    expect(exits[0]).toMatchObject({ task: { id: slow.meta!.taskId, status: "exited", exitCode: -1 } })
+    expect(exits[0]?.tail).toContain("[timed out after 500 ms]")
+    const stuck = await shell.execute({ command: "sleep 30" }, yielding(port).context)
+    port.kill(stuck.meta!.taskId as string)
+    const read = await port.read(stuck.meta!.taskId as string, { waitMs: 5_000, signal: never, until: "exit" })
+    expect(read?.task).toMatchObject({ status: "killed", killedBy: "agent" })
+    await Bun.sleep(50)
+    expect(exits).toHaveLength(1)
+  })
+
+  test("cancelling the turn stops a command that moved, with no exit notice", async () => {
+    const { tasks, exits } = registry()
+    const port = tasks.forSession("s1")
+    const cancel = new AbortController()
+    const moved = await shell.execute({ command: "sleep 30" }, yielding(port, { signal: cancel.signal }).context)
+    cancel.abort()
+    const read = await port.read(moved.meta!.taskId as string, { waitMs: 5_000, signal: never, until: "exit" })
+    expect(read?.task.status).toBe("killed")
+    await Bun.sleep(50)
+    expect(exits).toHaveLength(0)
+  })
+
+  test("with the registry full it stays in the foreground as before", async () => {
+    const { tasks } = registry({ maxRunning: 0 })
+    const result = await shell.execute({ command: "sleep 0.4; echo here" }, yielding(tasks.forSession("s1")).context)
+    expect(result.output).toBe("here\n")
+  })
+})

@@ -94,6 +94,10 @@ function lastPrompt(messages: readonly ModelMessage[]) {
 }
 
 const CONTEXT_PREVIEW_CHARS = 60
+/** Longest wait for one command that moved to the background before the turn answers: above the longest `shell` timeout, which stops it first. */
+const YIELD_WAIT_MS = 11 * 60_000
+/** Output of such a command given to the model when it ends (head and tail kept). */
+const YIELD_REPORT_CHARS = 30_000
 const CONTEXT_LARGEST = 5
 
 function messageChars(message: ModelMessage) {
@@ -488,6 +492,8 @@ export function createNativeEngine(options: {
   continuity?: import("@mendcode/kernel").ContinuityForSession
   /** A session's background shell tasks; without it `shell` cannot run in the background. */
   background?(sessionId: SessionId): BackgroundPort
+  /** How long a foreground `shell` command runs before it moves to the background (the tool's own default when absent; 0 never). */
+  shellYieldMs?(): number | undefined
   /** A session's interactive processes (`shell_session`); without it that tool reports it is unavailable. */
   interactive?(sessionId: SessionId): InteractivePort
   /** Workflows started from this session (the workflow tools); without it they report they are unavailable. */
@@ -879,6 +885,9 @@ export function createNativeEngine(options: {
   }
   /** Early cards of whole calls waiting for their run, by session and call id (`EarlyCard`). */
   const earlyCards = new Map<string, EarlyCard>()
+  /** Foreground commands of a running turn that moved to the background (`shell` yield), by `sessionId:turnId`: the turn waits for them before it ends. */
+  const yieldedTasks = new Map<string, Set<string>>()
+  const turnKey = (input: TurnInput) => `${input.sessionId}:${input.turnId}`
   const earlyKey = (sessionId: SessionId, callId: string) => `${sessionId}\n${callId}`
   function takeEarlyCard(sessionId: SessionId, callId: string) {
     const card = earlyCards.get(earlyKey(sessionId, callId))
@@ -1852,7 +1861,7 @@ export function createNativeEngine(options: {
     }
     let result: ToolResult
     try {
-      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...instructionContext(input.sessionId),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
+      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...instructionContext(input.sessionId),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId), shellYieldMs: options.shellYieldMs?.(), onYield:(taskId: string) => { const key = turnKey(input); yieldedTasks.set(key, (yieldedTasks.get(key) ?? new Set()).add(taskId)) } } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
     } catch (error) {
       if (!parentItemId) throw error
       return finish({ output: input.signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error), title: call.name, isError: true, truncated: false }, input.signal.aborted)
@@ -1954,6 +1963,35 @@ export function createNativeEngine(options: {
    * Model ↔ tools until the model stops. Shared by turns and sub-agent tasks; `persist` saves the
    * history after every step (turns) and is absent for tasks, whose history lives only in the call.
    */
+  /**
+   * Waits for this turn's commands that moved to the background and are still running (`shell` yield), then says how they ended:
+   * the turn's answer is never given while one runs. Undefined when none was still running. Each still stops at its own timeout.
+   */
+  async function awaitYielded(input: TurnInput): Promise<string | undefined> {
+    const ids = yieldedTasks.get(turnKey(input))
+    const port = options.background?.(input.sessionId)
+    if (!ids?.size || !port) return undefined
+    const parts: string[] = []
+    for (const id of [...ids]) {
+      ids.delete(id)
+      const running = port.peek(id, 0)
+      if (running?.task.status !== "running") continue
+      // A card shows what the turn waits for while it waits.
+      const itemId = input.newItemId()
+      input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: `waiting for ${running.task.command.split("\n")[0]!.slice(0, 160)}` } })
+      const read = await port.read(id, { waitMs: YIELD_WAIT_MS, signal: input.signal, until: "exit" })
+      if (!read || input.signal.aborted) {
+        input.emit({ type: "item.completed", itemId, status: "cancelled", text: "" })
+        return undefined
+      }
+      const output = read.output.length > YIELD_REPORT_CHARS ? `${read.output.slice(0, YIELD_REPORT_CHARS / 5)}\n… output omitted …\n${read.output.slice(-(YIELD_REPORT_CHARS * 4) / 5)}` : read.output
+      const status = read.task.status === "running" ? "still running" : read.task.status === "killed" ? `killed (${read.task.killedBy ?? "stopped"})` : `exit ${read.task.exitCode ?? -1}`
+      input.emit({ type: "item.completed", itemId, status: read.task.status === "exited" && read.task.exitCode === 0 ? "ok" : "error", text: `${output.slice(-4_000)}${output ? "\n" : ""}[${status}]` })
+      parts.push(`[${id} \`${read.task.command.slice(0, 200)}\`: ${status}]${output ? `\n${output}` : ""}`)
+    }
+    return parts.length ? `The commands you moved to the background in this turn ended before your answer:\n\n${parts.join("\n\n")}\n\nUse their results and finish.` : undefined
+  }
+
   async function runLoop(input: TurnInput, messages: ModelMessage[], toolset: Toolset, loop: { maxSteps: number; cap?: number; persist?: () => Promise<void>; trackContext: boolean; structured?: { retries: number }; fork?: ForkPrefix | undefined }) {
     let answer = ""
     /** With a required answer format: model steps that ended without a valid `StructuredOutput` call. */
@@ -2088,6 +2126,14 @@ export function createNativeEngine(options: {
       }
       if (input.signal.aborted || reply.toolCalls.length === 0) {
         for (const call of reply.toolCalls) closeEarly(call, "cancelled", "")
+        // A command that moved to the background in this turn is still the turn's: the answer waits for it and sees how it ended.
+        const ended = !input.signal.aborted && !final ? await awaitYielded(input) : undefined
+        if (ended) {
+          messages.push({ role: "user", content: ended })
+          await loop.persist?.()
+          continue
+        }
+        yieldedTasks.delete(turnKey(input))
         // Before a turn that edited files ends, the advisor signs off once; revise/stop buys exactly one more step.
         const last = messages[messages.length - 1]
         const review = !input.signal.aborted && !final && !loop.structured && step + 1 < maxSteps && last?.role === "assistant"
