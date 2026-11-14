@@ -64,6 +64,23 @@ describe("/btw", () => {
     expect(text()).toContain("Port 3000")
   })
 
+  test("the side chat says how to start a new chat and open earlier ones, and /new and /history typed in it do so", async () => {
+    const { app, sent, text, key } = harness((command) => (command.type === "session.aside.get" && command.history ? { ok: true, result: { history: [] } } : undefined))
+    await app.onInput("/btw")
+    await key("\r")
+    expect(text()).toContain("/new · /history")
+    expect(text()).toContain("/new starts a new chat,")
+    expect(text()).toContain("/history opens the earlier ones.")
+    for (const char of "/new") await key(char)
+    await key("\r")
+    expect(sent.some((command) => command.type === "session.aside.clear")).toBe(true)
+    expect(sent.some((command) => command.type === "session.aside")).toBe(false)
+    for (const char of "/history") await key(char)
+    await key("\r")
+    expect(sent.some((command) => command.type === "session.aside.get" && command.history === true)).toBe(true)
+    expect(text()).toContain("No earlier side chats")
+  })
+
   test("typing goes on in the prompt under the card", async () => {
     const { app, text, key } = harness((command) => (command.type === "session.aside" ? { ok: true, result: { text: "yes" } } : undefined))
     await app.onInput("/btw ok?")

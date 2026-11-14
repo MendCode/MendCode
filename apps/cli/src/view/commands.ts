@@ -113,7 +113,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "stop", group: "session", aliases: [], summary: "Stop the running turn and sub-agents" },
   { name: "memory", group: "context", aliases: ["mem"], summary: "Review saved memories" },
   { name: "dream", group: "context", aliases: [], summary: "Propose memories" },
-  { name: "btw", group: "agents", aliases: [], summary: "Open a side chat" },
+  { name: "btw", group: "agents", aliases: [], summary: "Open a side chat (new, history)" },
   { name: "fetch", group: "more", aliases: [], summary: "Show project and MendCode details" },
   { name: "setup", group: "setup", aliases: [], summary: "Configure setup and health checks" },
   { name: "settings", group: "setup", aliases: ["config"], summary: "Edit saved settings" },

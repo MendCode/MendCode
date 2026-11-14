@@ -135,7 +135,7 @@ export function sideContextText(thread: AsideThread, room = Infinity): string {
 
 /** The earlier side chats, one row each: when, the model, and the first question. */
 function historyLines(chat: SideChatState, inner: number, now: number): Line[] {
-  if (!chat.history.length) return renderMarkdown("No earlier side chats. `/btw clear` keeps the current one here.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const })))
+  if (!chat.history.length) return renderMarkdown("No earlier side chats. `/new` keeps the current one here.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const })))
   return chat.history.map((entry, index) => {
     const question = entry.messages.find((message) => message.role === "user")?.text.replace(/\s+/g, " ") ?? ""
     const picked = index === chat.pick
@@ -151,7 +151,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   if (chat.view === "chat") {
     if (chat.thread.busy) lines.push([{ text: `• ${chat.thread.status ?? "thinking…"}`, fg: chat.thread.status?.startsWith("Retrying") ? "warning" : "muted" }])
     if (chat.thread.error) lines.push(...renderMarkdown(chat.thread.error, inner).map((line) => line.map((span) => ({ ...span, fg: "error" as const }))))
-    if (!lines.length) lines.push(...renderMarkdown("Ask something about this session without interrupting it.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const }))))
+    if (!lines.length) lines.push(...renderMarkdown("Ask something about this session without interrupting it. `/new` starts a new chat, `/history` opens the earlier ones.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const }))))
   }
   // A short sheet shows the end of the last answer, not the blank row after it.
   while (lines.length > 1 && lines[lines.length - 1]!.length === 0) lines.pop()
@@ -173,7 +173,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   const shown = earlier ?? chat.thread
   const model = shown.model ? ` · ${shown.model}` : ""
   const heading = chat.view === "chat" ? title : `${title} · ${chat.view === "list" ? "history" : `earlier ${timeAgo(now, earlier?.at ?? now)}`}`
-  const hints = (chat.view !== "chat" ? [chat.view === "list" ? "↑↓ pick · enter open · esc back" : "pgup/pgdn · esc back", "esc back"] : chat.focused ? ["esc chat · ctrl+] close · /btw clear", "esc chat · ctrl+] close", "ctrl+] close"] : ["ctrl+] type · alt+] close", "ctrl+] type"]).map(keyText)
+  const hints = (chat.view !== "chat" ? [chat.view === "list" ? "↑↓ pick · enter open · esc back" : "pgup/pgdn · esc back", "esc back"] : chat.focused ? ["/new · /history · esc chat · ctrl+] close", "/new · /history · ctrl+] close", "/new · /history", "ctrl+] close"] : ["ctrl+] type · alt+] close", "ctrl+] type"]).map(keyText)
   // The name keeps the model beside it: the keys shrink first, and the model moves to the next row only when even the shortest keys leave no room.
   const keys = hints.find((hint) => textWidth(heading) + textWidth(model) + 2 + textWidth(hint) <= inner) ?? hints.find((hint) => textWidth(heading) + 2 + textWidth(hint) <= inner) ?? ""
   const named = textWidth(heading) + textWidth(model) + 2 + textWidth(keys) <= inner ? model : ""
@@ -258,6 +258,9 @@ export function sideChatKeptKey(chat: SideChatState, key: string, copy: (text: s
   return true
 }
 
+/** Commands typed in the side chat's own input, by what `/btw` does for them. */
+const SIDE_COMMANDS: Record<string, "clear" | "history"> = { "/new": "clear", "/clear": "clear", "/history": "history" }
+
 export function createAside(ctx: AppContext) {
   const { input, state, requestFrame, now } = ctx
 
@@ -284,7 +287,7 @@ export function createAside(ctx: AppContext) {
       return requestFrame()
     }
     chat.open = true
-    if (question === "clear") {
+    if (question === "clear" || question === "new") {
       chat.serial++
       const reply = await input.send({ type: "session.aside.clear", sessionId: state.sessionId })
       chat.thread = reply.ok ? { messages: [], busy: false } : { ...chat.thread, error: reply.error.message }
@@ -357,7 +360,12 @@ export function createAside(ctx: AppContext) {
     else if (key === "\x1b") chat.focused = false
     else if (key === "\r") {
       const draft = chat.draft.trim()
-      if (draft && !chat.thread.busy) {
+      // Typed in the side chat itself: `/new` (or `/clear`) starts a new chat, `/history` lists the earlier ones.
+      const command = SIDE_COMMANDS[draft.toLowerCase()]
+      if (command) {
+        chat.draft = ""
+        void askAside(command)
+      } else if (draft && !chat.thread.busy) {
         chat.draft = ""
         void askAside(draft)
       }

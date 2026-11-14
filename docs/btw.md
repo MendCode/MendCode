@@ -12,8 +12,10 @@ Tier: balanced and full; minimalist does not list the command.
 | Command | Does |
 |---|---|
 | `/btw` | Open ready to type, with the last conversation, or close it. |
-| `/btw clear` | Stop a running answer, delete its side session and clear the panel. Keep the cleared chat for `/btw history`. |
-| `/btw history` | List cleared side chats, newest first: up to 10 per session, each with its last 40 entries. |
+| `/btw new` or `/btw clear` | Start a new side chat: stop a running answer, delete its side session and clear the panel. Keep the old chat for `/btw history`. |
+| `/btw history` | List earlier side chats, newest first: up to 10 per session, each with its last 40 entries. |
+
+Inside the side chat, type `/new` (or `/clear`) to start a new chat and `/history` to open the earlier ones. The panel's header names both while you type in it, and an empty chat says so too.
 
 ### Keys and focus
 
