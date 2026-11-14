@@ -33,7 +33,7 @@ export function agentThreadHeader(input: { thread: AgentThread; index: number; c
     { text: thread.agent, fg: "muted" },
     // `claude-sonnet-4-5-20250929` reads as `claude-sonnet-4-5`: the snapshot date says nothing here.
     ...(thread.model ? [{ text: thread.model.replace(/-\d{8}$/, ""), fg: "muted" as const }] : []),
-    { text: thread.background ? "bg" : "await", fg: thread.background ? "muted" : "accent" },
+    { text: thread.background ? "async" : "await", fg: thread.background ? "muted" : "accent" },
     ...(thread.tools ? [{ text: `${thread.tools} tool${thread.tools === 1 ? "" : "s"}`, fg: "muted" as const }] : []),
     ...(elapsed ? [{ text: elapsed, fg: "muted" as const }] : []),
     ...(!thread.running && thread.tokens ? [{ text: `${thread.tokens < 1000 ? thread.tokens : `${Math.round(thread.tokens / 1000)}k`} tokens`, fg: "muted" as const }] : []),
