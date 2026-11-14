@@ -102,6 +102,7 @@ import { createCommandExecution } from "./command-execution"
 import { createInlineShellTable, type InlineShell } from "./inline-shell"
 import { expandMcpMentions, expandMcpPrompt, type McpContentPort } from "./mcp-content"
 import { createRunLimitsStore, reviewIneligible, type RunLimitsStore } from "./run-limits"
+import { limitsTools } from "./run-limit-guard"
 import { createSessionPermissionRules } from "./session-permission-rules"
 import { createGrantStore, type AgentPort, type EngineHooks, type GoalPort, type GrantStore, type SecretsPort } from "@mendcode/engine-native"
 import { createGoalPrompts } from "./goal-prompts"
@@ -4714,7 +4715,11 @@ export async function startDaemon(options: DaemonOptions) {
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
         if (command.addDirs && connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: extra directories are set on the machine that runs the commands" })
         const { id: _id, clientId: _client, type: _type, sessionId: _session, ...patch } = command
-        return reply(connection, command.id, { ok: true, result: { limits: runLimits.configure(command.sessionId, patch) } })
+        const limits = runLimits.configure(command.sessionId, patch)
+        // Tool limits a client set are marked, so an engine that would ignore them never runs the session (run-limit-guard.ts).
+        const requested = limitsTools(limits)
+        const { requestedTools: _requested, ...shown } = requested === (limits.requestedTools === true) ? limits : runLimits.configure(command.sessionId, { requestedTools: requested || null })
+        return reply(connection, command.id, { ok: true, result: { limits: shown } })
       }
       case "permissions.list":
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })

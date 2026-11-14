@@ -30,6 +30,11 @@ export type RunLimits = {
   appendSystemPrompt?: string
   /** An extension's `setActiveTools`: only these names (or patterns) stay offered, on top of every other limit. */
   activeTools?: readonly string[]
+  /**
+   * A client asked for these tool limits (`mendcode run --tools/--exclude-tools/--offline`), not the daemon for its own sessions (a PR
+   * review child, a bare sub-agent): such a run fails on an engine that would ignore them (run-limit-guard.ts).
+   */
+  requestedTools?: boolean
 }
 
 type Patch = { [K in keyof RunLimits]?: RunLimits[K] | null | undefined }
