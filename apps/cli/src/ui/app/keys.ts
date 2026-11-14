@@ -5,7 +5,7 @@ import { chipRowAttachments, liveAttachments } from "../../view/attachments"
 import type { createScratch } from "./scratch"
 import type { createGoal } from "./goal"
 import type { createPrompt } from "./prompt"
-import type { createAside } from "./aside"
+import { sideChat, sideChatKeptKey, type createAside } from "./aside"
 import type { createModel } from "./model"
 import type { createAgents } from "./agents"
 import { noteRecent } from "../../view/model-prefs"
@@ -212,6 +212,8 @@ export function createKeys(ctx: AppContext, actions: {
     const quoting = commentChord || leading || globalKey && "action" in globalKey && usesSelection(globalKey.action)
     if (!commentChord && !leading) ctx.comments.noteInput(key)
     if (state.selection && !MOUSE_SGR.test(key) && !quoting && mouseSelection.onKey(key)) return
+    // A selection kept in the side chat (`copyOnSelect` off): ctrl+c copies it there instead of reaching the prompt.
+    if (!MOUSE_SGR.test(key) && sideChatKeptKey(sideChat(ctx), key, (text, label) => ctx.copyText(text, label))) return requestFrame()
     // The comment modes (composing, the list, the reply mode) take their keys here; a key that is not theirs closes the mode and goes on.
     if (state.page === "chat" && !state.palette && ctx.comments.modal() && !pendingPanelRequest() && ctx.comments.key(key)) return requestFrame()
     if (state.returnPrompt && state.page === "chat" && await actions.returnKey(key)) return requestFrame()
