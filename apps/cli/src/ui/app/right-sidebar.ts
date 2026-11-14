@@ -28,7 +28,9 @@ import { statsCard, statsCardParts } from "../../view/stats-card"
 import { readTuiProfile, type TuiProfile } from "../../view/tui-profile"
 import { profilePanel, writeSessionLook } from "./session-look"
 import { actionHint } from "../keymap"
-import { sideChat, sideChatRows } from "./aside"
+import { sideChat, sideChatMouse, sideChatRows } from "./aside"
+import { mouseEvent } from "../selection"
+import { markdownStyleFor } from "../../view/markdown-style"
 import type { AppContext } from "./context"
 import { asciiChrome } from "./glyph-mode"
 import type { Line } from "../theme"
@@ -576,7 +578,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const addChat = (title?: string) => {
       if (chatArea) return
       chatArea = { top: panels.length, height: chatHeight }
-      panels.push(...sideChatRows(chat, width, chatHeight, title, now()))
+      panels.push(...sideChatRows(chat, width, chatHeight, title, now(), markdownStyleFor({ profile: state.tuiProfile, mode: state.mode })))
     }
     if (implicitChat) addChat()
     // A bar shorter than its cards keeps the `high` ones (and drops `low`, then `normal`, first) instead of scrolling past them; without priorities it scrolls.
@@ -836,6 +838,17 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     if (state.page !== "chat" || !(currentLayout.right || currentLayout.bottom && state.tuiProfile.rightSidebar)) return false
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)M$/.exec(key)
     const inBar = !!mouse && currentLayout.right > 0 && Number(mouse[2]) > input.screen.size.width - currentLayout.right
+    // Text in the side chat is selected and copied like the transcript's; a drag that started there keeps it until the release.
+    const pointer = mouseEvent(key)
+    const side = sideChat(ctx)
+    if (pointer && currentLayout.right > 0 && side.open && state.rightChatArea && (pointer.point.col >= input.screen.size.width - currentLayout.right || side.selection)) {
+      const point = { row: pointer.point.row - state.rightChatArea.top, col: pointer.point.col - (input.screen.size.width - currentLayout.right) }
+      const used = sideChatMouse(side, { kind: pointer.kind, point }, { copy: (copied, label) => ctx.copyText(copied, label), now: now(), copyOnSelect: state.tuiProfile.copyOnSelect === true })
+      if (used) {
+        requestFrame()
+        return true
+      }
+    }
     // A click outside the bar gives the keyboard back to the prompt, from the panel and from the side chat; the click itself goes on to what it hit.
     if (mouse && !inBar && Number(mouse[1]) === 0 && (state.rightFocus || sideChat(ctx).focused)) {
       state.rightFocus = false

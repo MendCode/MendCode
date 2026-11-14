@@ -40,6 +40,7 @@ import { renderModelPage } from "../lazy-pages"
 import type { PaletteItem, PaletteOverlay, PaletteState } from "../../view/palette"
 import { pageModel } from "../../view/page-views"
 import { sideChat, sideChatRows, sideInput } from "./aside"
+import { markdownStyleFor } from "../../view/markdown-style"
 import { renderFetchCard } from "../../view/fetch-card"
 import { viewRows } from "./view-rows"
 import { DETAILS_HINT, toastCut, toastPosition, type Toast } from "../../view/toast"
@@ -195,7 +196,7 @@ export function createRender(ctx: AppContext, actions: {
         const sheetHeight = Math.min(Math.floor(height * .55), room)
         if (sheetHeight < 3) return []
         // An open side chat is being typed in and keeps its sheet; the cards give the chat back its rows (`panelNarrow: hide`).
-        return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now()) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
+        return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now(), markdownStyleFor({ profile: state.tuiProfile, mode: state.mode })) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
       } : undefined
       const laid = chatRows(chatCols, height, undefined, bottomPanel, current ? toastView(true, chatCols)[0] : undefined)
       const { rows, cursor, placements, panel } = laid

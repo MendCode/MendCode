@@ -1,6 +1,6 @@
 import type { ExtensionLayer } from "@mendcode/packages"
 import path from "node:path"
-import { redactSecrets, summarizeWorkflow, WORKFLOW_PERMISSION_RANK,type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
+import { MAX_FRAME_BYTES, redactSecrets, summarizeWorkflow, WORKFLOW_PERMISSION_RANK, type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
 import type { CheckRunner } from "@mendcode/loops"
 import type { WorkflowPort } from "@mendcode/tools"
 import type { ScriptHostPort, ScriptJournalPort, ScriptMergePort, WorkflowDefinitionsPort, WorkflowService, WorkflowStorePort } from "@mendcode/workflows"
@@ -287,7 +287,17 @@ export function createWorkflowsHost(options: {
       // Reads need no service when nothing was ever started: the store has the rows.
       if (command.type === "workflow.list") {
         const runs = service ? service.list(command.directory) : options.store.all().filter((run) => !command.directory || run.directory === command.directory)
-        return { ok: true, result: { workflows: runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, command.limit ?? runs.length).map(summarizeWorkflow) } }
+        const newest = runs.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, command.limit ?? runs.length).map(summarizeWorkflow)
+        // Every project's runs together outgrow one frame: the newest that fit are sent and the rest are counted, never an error.
+        let room = MAX_FRAME_BYTES - 8_192
+        let fits = 0
+        for (const summary of newest) {
+          const size = Buffer.byteLength(JSON.stringify(summary)) + 1
+          if (size > room) break
+          room -= size
+          fits++
+        }
+        return { ok: true, result: { workflows: newest.slice(0, fits), ...(fits < newest.length ? { omitted: newest.length - fits } : {}) } }
       }
       if (command.type === "workflow.get") {
         const run = service ? service.get(command.workflowId) : options.store.all().find((entry) => entry.workflowId === command.workflowId)

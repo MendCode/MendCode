@@ -108,6 +108,32 @@ describe("workflows in the daemon", () => {
     await until(() => daemon.store.workflows.all().find((entry) => entry.workflowId === run.workflowId)?.state === "completed")
   })
 
+  test("listing every project's runs sends the newest that fit one frame and counts the rest, never an oversized reply", async () => {
+    const dir = tempDir()
+    const project = tempDir()
+    const ids = createIdFactory()
+    const store = openStore({ dir, now: () => Date.now() })
+    const rootSessionId = ids("session")
+    store.createSession({ id: rootSessionId, directory: project, title: "workflow · big" })
+    // Many tasks with full titles, as a long workflow has: the 50 runs a store keeps pass the 256 KB frame together.
+    const tasks = Array.from({ length: 32 }, (_, index) => ({ kind: "agent", id: `t${index}`, title: `Task ${index} ${"x".repeat(70)}`, prompt: "p", mode: "read" }))
+    const saved: Array<WorkflowSummary["workflowId"]> = []
+    for (let index = 0; index < 50; index++) {
+      const run = createRun({ workflowId: ids("workflow"), plan: WorkflowPlan.parse(plan({ name: `big ${index}`, tasks })), planHash: "0".repeat(64), directory: project, permission: "ask", rootSessionId, at: 1_000 + index })
+      store.workflows.save({ ...run, state: "completed", endedAt: 2_000 + index, updatedAt: 2_000 + index })
+      saved.push(run.workflowId)
+    }
+    store.close()
+    const { client } = await boot(dir)
+    const reply = await client.send({ type: "workflow.list" } as never)
+    expect(reply.ok).toBe(true)
+    const result = (reply.ok ? reply.result : undefined) as { workflows: WorkflowSummary[]; omitted?: number }
+    expect(result.workflows.length).toBeGreaterThan(0)
+    expect(result.omitted).toBeGreaterThan(0)
+    expect(result.omitted).toBe(50 - result.workflows.length)
+    expect(result.workflows.map((run) => run.workflowId)).toEqual(saved.slice().reverse().slice(0, result.workflows.length))
+  })
+
   test("the applied permission never exceeds what the user granted", () => {
     expect(appliedPermission("full", "edits")).toBe("edits")
     expect(appliedPermission("ask", "full")).toBe("ask")
