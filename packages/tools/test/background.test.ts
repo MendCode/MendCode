@@ -356,6 +356,18 @@ describe("a foreground command that runs past its yield", () => {
     expect(exits).toHaveLength(1)
   })
 
+  test("a moved command with the default or the largest timeout may run 30 minutes; a shorter timeout the model chose stays", async () => {
+    const { tasks } = registry()
+    const port = tasks.forSession("s1")
+    const build = await shell.execute({ command: "sleep 30", timeoutMs: 600_000 }, yielding(port).context)
+    expect(build.output).toContain("It stops at its 1800000 ms timeout.")
+    const plain = await shell.execute({ command: "sleep 30" }, yielding(port).context)
+    expect(plain.output).toContain("It stops at its 1800000 ms timeout.")
+    const bounded = await shell.execute({ command: "sleep 30", timeoutMs: 90_000 }, yielding(port).context)
+    expect(bounded.output).toContain("It stops at its 90000 ms timeout.")
+    for (const moved of [build, plain, bounded]) port.kill(moved.meta!.taskId as string)
+  })
+
   test("cancelling the turn stops a command that moved, with no exit notice", async () => {
     const { tasks, exits } = registry()
     const port = tasks.forSession("s1")
