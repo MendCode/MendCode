@@ -35,7 +35,9 @@ The role is the `advisor` entry of `models` in settings. It works per profile an
 
 ## When it is consulted
 
-The main agent has an `advisor` tool and calls it when it decides to (its description asks for exactly the three moments below). On top of that, the engine consults it itself at three checkpoints. These need no model to decide: they are comparisons the engine already makes.
+The main agent has an `advisor` tool. It calls it only when you ask for the advisor, or when the project's instructions (`AGENTS.md`, `CLAUDE.md` and the like) say to consult it, and it calls it before the work in question: before choosing an approach or making the edits, not to sign off at the end of a turn.
+
+The engine can also consult it on its own at three checkpoints. None is on by default; list the ones you want in `advisor.checkpoints`. They need no model to decide: they are comparisons the engine already makes.
 
 | checkpoint | when | what happens with the verdict |
 |---|---|---|
@@ -104,7 +106,7 @@ Each consultation is a usage event under the advisor's model, so `/usage` counts
 
 | setting (`advisor` in settings) | default | range |
 |---|---|---|
-| `checkpoints` | `["plan", "repeat_error", "completion"]` | any subset; empty leaves only the agent's own calls |
+| `checkpoints` | `[]` | any subset of `plan`, `repeat_error`, `completion`; empty leaves only the agent's own calls |
 | `maxCallsPerTurn` | 3 | 1–10 |
 | `maxCallsPerSession` | 20 | 1–200 |
 | `maxBriefTokens` | 24000 | 4000–100000 |

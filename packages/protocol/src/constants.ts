@@ -67,7 +67,8 @@ export type ModelRole = (typeof MODEL_ROLES)[number]
 export const ADVISOR_CHECKPOINTS = ["plan", "repeat_error", "completion"] as const
 export type AdvisorCheckpoint = (typeof ADVISOR_CHECKPOINTS)[number]
 /** Advisor caps when the `advisor` setting leaves them out. Briefs are measured in tokens of 4 characters. */
-export const ADVISOR_DEFAULTS = { checkpoints: [...ADVISOR_CHECKPOINTS] as AdvisorCheckpoint[], maxCallsPerTurn: 3, maxCallsPerSession: 20, maxBriefTokens: 24_000 }
+/** No checkpoint by default: the advisor is consulted when the user or the project's instructions ask for it, before the work; `advisor.checkpoints` opts in. */
+export const ADVISOR_DEFAULTS = { checkpoints: [] as AdvisorCheckpoint[],maxCallsPerTurn: 3, maxCallsPerSession: 20, maxBriefTokens: 24_000 }
 /**
  * Every reasoning level a model may offer. `max` is the top level some catalogs list (DeepSeek, GLM, the Codex catalog's
  * gpt-6 models) and `none` turns thinking off where the catalog offers that; both were added after the first five, so

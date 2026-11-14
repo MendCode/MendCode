@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The `/btw` side chat shows how to start a new chat and open earlier ones: type `/new` or `/history` in it (or `/btw new`, `/btw history`), named in its header and in an empty chat.
+- The advisor is no longer consulted on its own at the end of a turn. The agent asks it only when you or the project's instructions say so, before the work rather than after; `advisor.checkpoints` turns the automatic consultations back on.
 - The `/btw` side chat reads more easily: your questions stand out, each exchange has room around it, and the panel no longer repeats its name above the box.
 
 ### Fixed
