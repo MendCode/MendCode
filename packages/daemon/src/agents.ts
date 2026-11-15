@@ -33,11 +33,12 @@ const toInfo = (agent: FoundAgent): AgentInfo => ({
   ...(agent.deny ? { deny: agent.deny } : {}),
   ...(agent.permission ? { permission: agent.permission } : {}),
   ...(agent.permissionRules ? { permissionRules: agent.permissionRules } : {}),
+  ...(agent.bot ? { bot: { ...agent.bot, origin: agent.bot.origin } } : {}),
   trusted: agent.trusted,
 })
 
 const toProfile = (agent: FoundAgent): AgentProfile => {
-  const { file: _file, source: _source, pkg: _pkg, trusted: _trusted, hidden: _hidden, disable: _disable, color: _color, ...profile } = agent
+  const { file: _file, source: _source, pkg: _pkg, trusted: _trusted, hidden: _hidden, disable: _disable, color: _color, bot: _bot, ...profile } = agent
   return profile
 }
 
@@ -59,6 +60,8 @@ export function createAgentRegistry(options: {
   select?(sessionId: SessionId, name: string): void
   /** Whether a model id is in the catalog: the `model` of a Claude agent file applies only then. */
   modelExists?(id: string): boolean
+  /** Experimental bots: the memory a bot's turn adds to its prompt in `directory`; absent while the flag is off. */
+  botMemory?(name: string, directory: string): string
 }) {
   const found = (directory: string) => {
     const result = readLayerAgents(options.layers(directory), { projectTrusted: options.isTrusted(directory), modelExists: options.modelExists })
@@ -106,7 +109,11 @@ export function createAgentRegistry(options: {
       if (!directory) return undefined
       const name = override ?? options.selected(sessionId) ?? "build"
       const agent = usable(directory).find((candidate) => candidate.name === name && (override || options.isChild?.(sessionId) || candidate.mode !== "subagent"))
-      if (agent) return { ...toProfile(agent), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+      if (agent) {
+        const profile = toProfile(agent)
+        const memory = agent.bot && agent.source === "user" ? options.botMemory?.(agent.name, directory) : undefined
+        return { ...profile, ...(memory ? { prompt: `${profile.prompt}\n\n${memory}` } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+      }
       if (name === "plan" && !disabled(directory, name)) return { name: "plan", description: "Plan mode", mode: "primary", prompt: "", permission: "plan" }
       return override || options.isChild?.(sessionId) ? BUILTIN_SUBAGENTS.find((agent) => agent.name === name && !disabled(directory, name)) : undefined
     },

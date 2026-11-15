@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- Experimental bots (`/experimental bots on`): an agent with a name, a look and its own memory that you send to work in any folder. `/bot new`, `/bot list`, `/bot edit` and `/bot duplicate` make and manage them, and `/bot memory` teaches one.
+
 ### Changed
 
 - The `/btw` side chat shows how to start a new chat and open earlier ones: type `/new` or `/history` in it (or `/btw new`, `/btw history`), named in its header and in an empty chat.

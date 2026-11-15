@@ -12,16 +12,16 @@ import { PackageAuthorManifest } from "./package-authoring"
 import { z } from "zod"
 import { CompoundPricing } from "./compound"
 import { QuotaSnapshot, SessionEvent } from "./events"
-import { ADVISOR_CHECKPOINTS, AGENT_MODES, EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
+import { ADVISOR_CHECKPOINTS, AGENT_MODES, BOT_COLORS, BOT_SHAPES,EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
 import { FEATURE_IDS, TIERS } from "./tier-data"
 import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data"
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
-import { BlobRef, ItemId, MemoryId, SessionId, TurnId } from "./ids"
+import { BlobRef, ClientId, CommandId, ItemId, MemoryId, SessionId, TurnId } from "./ids"
 import { ForegroundState } from "./states"
 import { DEFAULT_AREA, AREA_NAME } from "./areas"
 import { ImageGenerationSettings } from "./image-generation"
 import { VoiceSettings } from "./voice"
-import { lazySchema } from "./lazy"
+import { lazySchema, lazyValue } from "./lazy"
 import { SessionDraft, SessionLifecycle } from "./session-lifecycle"
 
 /**
@@ -717,6 +717,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
     /** Opt-in network: the Git page's push, create pull request and PR tab run git and gh on this machine, each after a confirmation card. */
     git_actions: z.boolean().optional(),
     openTelemetry: z.boolean().optional(),
+    /** Opt-in: agents with a `bot:` block are bots (`/bot`, `bot.list`), each with its own memory (docs/agents.md). */
+    bots: z.boolean().optional(),
   }).optional(),
   permissionReviewerRole: z.enum(MODEL_ROLES).optional(),
   /** Caps and checkpoints of the advisor; the advisor runs only when the `advisor` model role is set (docs/advisor.md). */
@@ -1365,6 +1367,8 @@ export const AgentInfo = lazySchema(() => z.strictObject({
   permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
   permissionRules: z.array(PermissionRule).max(500).optional(),
   trusted: z.boolean(),
+  /** Set when the agent file has a `bot:` block (experimental bots). */
+  bot: BotIdentity.optional(),
   hidden: z.boolean().optional(),
   disable: z.boolean().optional(),
   color: AgentConfig.shape.color,
@@ -1479,3 +1483,110 @@ export type DiagnosticsReport = {
 }
 
 export { InteractionReport, MemorySideChatResponse } from "./interaction-http"
+
+/*
+ * Experimental bots (`experimental.bots`, docs/agents.md): an agent file with a `bot:` block. Every `bot.*` command answers
+ * `forbidden` while the flag is off. The shape and color lists are held equal to the ones the agent file parser reads by a
+ * test. Everything is built on first use, and it lives here (not in a module of its own) so start-up loads no extra module.
+ */
+const botName = lazyValue(() => z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/))
+
+const botParts = lazyValue(() => {
+  const state = z.enum(["working", "waiting", "idle", "problem"])
+  const identity = z.strictObject({
+    shape: z.enum(BOT_SHAPES).optional(),
+    color: z.enum(BOT_COLORS).optional(),
+    avatar: z.string().min(1).max(4096).optional(),
+    /** `mendcode` for a bot made here, else the id of the connector that owns it. */
+    origin: z.string().min(1).max(64),
+  })
+  const session = z.strictObject({
+    sessionId: SessionId,
+    title: z.string().max(200),
+    /** The session's own status (`running`, `waiting_for_input`, `failed`, `idle`, …), as `session.get` reports it. */
+    status: z.string(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  /** One bot's sessions in one project directory. Several folders at once are several groups. */
+  const project = z.strictObject({ directory: z.string().max(4096), state, sessions: z.array(session) })
+  const info = z.strictObject({
+    name: botName(),
+    description: z.string(),
+    identity,
+    model: z.string().optional(),
+    permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
+    file: z.string(),
+    /** From its sessions: `waiting` (an approval or a question is open) over `working` over `problem` (a session failed) over `idle`. */
+    state,
+    projects: z.array(project),
+  })
+  /** A bot that lives in another app and reaches MendCode through a connector (no connector ships yet: the list is empty). */
+  const external = z.strictObject({
+    /** The connector's id. */
+    origin: z.string().min(1).max(64),
+    id: z.string().min(1).max(200),
+    name: z.string().min(1).max(100),
+    description: z.string().max(300).optional(),
+    identity: identity.optional(),
+    state,
+  })
+  const report = z.strictObject({
+    bots: z.array(info),
+    external: z.array(external),
+    problems: z.array(z.strictObject({ file: z.string(), message: z.string() })),
+  })
+  return { state, identity, session, project, info, external, report }
+})
+type BotParts = ReturnType<typeof botParts>
+
+export const BotIdentity = lazySchema(() => botParts().identity)
+export type BotIdentity = z.infer<BotParts["identity"]>
+export type BotState = z.infer<BotParts["state"]>
+export type BotSession = z.infer<BotParts["session"]>
+export type BotProject = z.infer<BotParts["project"]>
+export type BotInfo = z.infer<BotParts["info"]>
+export type ExternalBotInfo = z.infer<BotParts["external"]>
+export const BotListReport = lazySchema(() => botParts().report)
+export type BotListReport = z.infer<BotParts["report"]>
+
+const botBase = { id: CommandId, clientId: ClientId }
+
+/** Read-only. Ack: `BotListReport`. */
+export const BotList = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.list") }))
+
+/**
+ * Writes `~/.mendcode/agents/<name>.md` with a `bot:` block and `permission: smart`. With `generate` the configured model writes
+ * the name (when absent), when-to-use text and prompt from `description`; any failure falls back to the plain template.
+ * Ack: `AgentCreateReport`.
+ */
+export const BotCreate = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.create"),
+  directory: z.string().min(1).max(4096),
+  name: botName().optional(),
+  description: z.string().trim().min(1).max(300),
+  generate: z.boolean().optional(),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+  shape: z.enum(BOT_SHAPES).optional(),
+  color: z.enum(BOT_COLORS).optional(),
+}))
+
+/** Copies a bot's file under a new name. Ack: `AgentCreateReport`. */
+export const BotDuplicate = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.duplicate"), name: botName(), newName: botName() }))
+
+/** Without `text`, the bot's file as written. With `text`, the file is checked as an agent and replaced. Ack: `{ file, text, saved }`. */
+export const BotFile = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.file"), name: botName(), text: z.string().max(40_000).optional() }))
+
+/**
+ * A bot's own memory: one global file and one per project directory (`project` needs `directory`). `list` answers both texts,
+ * `add` appends a line, `clear` empties one. Ack: `{ global, project? }`.
+ */
+export const BotMemory = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.memory"),
+  name: botName(),
+  op: z.enum(["list", "add", "clear"]),
+  scope: z.enum(["global", "project"]).optional(),
+  directory: z.string().min(1).max(4096).optional(),
+  text: z.string().trim().min(1).max(2_000).optional(),
+}))

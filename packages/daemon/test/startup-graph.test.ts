@@ -44,7 +44,10 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "restart-drain", "reply-language",
     // Memory review loads at the first turn with generation on, a waiting job or the Extraction tab.
     "memory-extraction",
+    // Experimental bots (off by default): the service loads with the first bot command, the memory reader with the first turn that runs with the flag on.
+    "bot-service", "bot-memory",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
+  for (const file of ["apps/cli/src/ui/app/bots.ts", "apps/cli/src/view/bot.ts"]) expect(inputs.has(file), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
   // /profiles and what it names of an override (labels, groups, summaries) load with the page.

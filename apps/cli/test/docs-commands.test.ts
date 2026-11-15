@@ -91,7 +91,7 @@ describe("docs commands: what this install offers", () => {
     const seen = new Set<string>()
     for (const tier of TIERS) for (const name of [...groups((await docs({ settings: { tier } })).live).values()].flat()) seen.add(name)
     const rows = new Set(SLASH_COMMANDS.filter((command) => command.setting).map((command) => command.name))
-    for (const command of SLASH_COMMANDS) if (!rows.has(command.name)) expect([command.name, seen.has(command.name) || !!command.feature]).toEqual([command.name, true])
+    for (const command of SLASH_COMMANDS) if (!rows.has(command.name)) expect([command.name, seen.has(command.name) || !!command.feature || !!command.flag]).toEqual([command.name, true])
     const { live } = await docs({ settings: { tier: "full", features: { mcp: true, subagents: true, packages: true } } })
     const text = live.filter((line) => /^(?:session|context|code|agents|setup|look|more): /.test(line)).join("\n")
     for (const pair of ["changes=diff", "sessions=resume", "settings=config", "quit=exit=q", "help=?", "mcps=mcp", "find=search", "workflows=wf"]) expect(text).toContain(pair)

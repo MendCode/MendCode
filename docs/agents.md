@@ -627,6 +627,47 @@ are local only and never read-only remote commands.
 
 Frames: `bun scripts/render-frames.ts .agents-frames/B66 --b66 100x30 180x50`.
 
+## Bots (experimental)
+
+A bot is an agent with an identity: a name, a shape and color, its own memory, and a place you send it to work. It is off until you run `/experimental bots on`; with the flag off nothing about it loads, `/bot` is not in the menu and its commands answer `forbidden`.
+
+A bot is the same file as any agent, with a `bot:` block, and it lives in your own `~/.mendcode/agents/` (a bot is global, so a project's `.mendcode/agents/` file keeps working as an agent and its block is ignored, with a note under `problems`):
+
+```markdown
+---
+description: A calm reviewer
+mode: primary
+permission: smart         # a new bot starts at smart: it edits inside the project, and asks before deleting, secrets, sudo
+bot:
+  shape: circle           # circle | square | diamond | triangle | hexagon (absent: made from the name)
+  color: success          # a theme role: primary | secondary | accent | success | warning | error | info (not hex; absent: made from the name)
+  avatar: ~/faces/calm.png  # optional image path
+  origin: mendcode        # mendcode (the default) or the id of the connector that owns the bot
+---
+You review gently…
+```
+
+| command | does |
+|---|---|
+| `/bot` or `/bot list` | the bots, their state (working, waiting for you, idle, problem) and the folders they work in |
+| `/bot new <name> [description]` | makes the file; with a description the model writes the when-to-use text and the prompt (the plain template when that fails), and the words "green", "red", "square"… pick the color and shape |
+| `/bot new -d <description>` | the same, with the model choosing the name: `/bot new -d a calm green reviewer` |
+| `/bot edit <name>` | opens the file in `$VISUAL` / `$EDITOR`; a change is checked as an agent file and saved, a broken one is refused and nothing is written |
+| `/bot duplicate <name> <new>` | copies the file under a new name (the memory is not copied) |
+| `/bot memory <name> [add\|clear] [--project] [text]` | shows, adds to or clears what the bot remembers |
+
+All of them end in the same file, so writing it by hand is the same bot. Run a bot in a folder with `/agent <name>` in a session of that folder: it is an ordinary session, so several folders at once are several sessions.
+
+### What `bot.list` answers
+
+`bot.list` (owner only, local) answers `{ bots, external, problems }`. Each bot carries its identity, model, permission cap, file, a `state` and its sessions grouped by project directory (`projects`: `{ directory, state, sessions }`). A state comes from the sessions' own status, the same one `session.get` reports: `waiting` while any session waits on an approval or a question, else `working` while one runs, else `problem` when a session's last turn failed, else `idle`. `external` is the slot for bots that live in another app: a connector (`DaemonOptions.botConnectors`, each `{ id, list() }`) fills it, and a connector that fails is reported under `problems`. No connector ships yet.
+
+### Bot memory
+
+A bot has one memory for everywhere and one per project directory. They are plain text files under `<data dir>/bots/<name>/` (`memory.md` and `projects/<hash>.md`, at most 8,000 bytes each, secrets redacted when added). While the flag is on, a turn of that bot (and only that bot) adds both to its system prompt under `# Bot memory`, marked as notes it kept rather than instructions. The files are read at each turn, so `/bot memory <name> add` applies to the next one.
+
+Gap: the daemon's memory store (`/memory`, Dream, extraction, the graph) knows three scopes, user, project and session, and the user scope only separates areas. A bot's own scope would need an owner column, scope filters in every listing and search, and a decision for Dream and extraction. That is a larger change than this first step, so bot memory is outside `/memory`: it has no pending review, no graph and no extraction.
+
 ## Implementation
 
 Ported from v1 (`agent/agent.ts`, `.mendcode/agent/*.md`) onto v2's extension layers.

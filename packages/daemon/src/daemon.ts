@@ -386,6 +386,8 @@ export type DaemonOptions = RemoteListenerOptions & {
    * Clients that come from a session's shell are recognised either way.
    */
   agentOrigin?: { descendants?: boolean }
+  /** Experimental bots: apps whose bots `bot.list` shows in `external` (bot-service.ts). None ships yet. */
+  botConnectors?: readonly import("./bot-service").BotConnector[]
   /**
    * Where other programs keep this user's chats, for `threads` (thread-foreign.ts): Codex and Claude Code homes and the previous
    * MendCode's database. Absent: `threads` knows only this daemon's sessions, which is what a private data directory gets.
@@ -982,6 +984,8 @@ export async function startDaemon(options: DaemonOptions) {
     ...(options.complete ? { complete: ({ sessionId, ...request }: { system: string; prompt: string; signal: AbortSignal; sessionId?: string }) => completeBudgeted!({ ...request, auxiliary: { role: "hook", ...(sessionId && store.hasSession(sessionId as SessionId) ? { sessionId: sessionId as SessionId } : {}) } }) } : {}),
   })
   const pluginMetadata = createPluginMetadata(options.dir)
+  /** Experimental bots: loaded by the first turn that runs with `experimental.bots` on (see `runTurn`). */
+  let botMemoryModule: typeof import("./bot-memory") | undefined
   /** Custom agents (`agents/*.md` of every layer); project ones follow the directory's trust, like custom tools. */
   const agents = createAgentRegistry({
     layers: resourceLayersFor,
@@ -997,6 +1001,7 @@ export async function startDaemon(options: DaemonOptions) {
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
     select: (sessionId, name) => store.setSessionAgent(sessionId, name === "build" ? undefined : name),
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
+    botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
   })
   /** Pre-change copies of the files a turn's write/edit/apply_patch calls touch, so `session.undo` can put them back. */
   const snapshots = createTurnSnapshots({ store })
@@ -1447,7 +1452,9 @@ export async function startDaemon(options: DaemonOptions) {
   const engine: typeof rawEngine = {
     ...rawEngine,
     async runTurn(turn) {
-      const unread = !turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
+      // Experimental bots: the memory reader loads at the first turn with the flag on, never otherwise.
+      if (botsOn()) botMemoryModule ??= await import("./bot-memory")
+      const unread =!turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
         loopNotes.delete(turn.sessionId)
         const { foldRunNotices } = await import("@mendcode/loops")
@@ -3285,6 +3292,14 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** The Git page's push, create pull request and PR tab run git and gh on the network: off unless `experimental.git_actions` is on (docs/git.md). */
   const gitActionsOn = () => effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.git_actions === true
+  /** Experimental bots (docs/agents.md): off unless `experimental.bots` is on. */
+  function botsOn() { return !options.safeMode && store.settings.get().experimental?.bots === true }  /** The model's draft of an agent from a description (`agent.create` and `bot.create` with `generate`); any failure is a `fallback` for the plain template. */
+  async function generateAgentOutcome(command: { directory: string; model?: string | undefined; name?: string | undefined; description: string }, signal: AbortSignal | undefined) {
+    const listed = agents.report({ directory: canonicalDir(command.directory) }).agents
+    const model = command.model ? { model: command.model } : options.models?.selectable ? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), command.directory), catalog: options.models }) : undefined
+    const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted && ((request) => completeBudgeted({ ...request, auxiliary: { role: "agentGenerate", directory: canonicalDir(command.directory) } })), description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal })
+    return { ...("content" in result && result.content ? { generated: result.content } : {}), ...(result.fallback ? { fallback: result.fallback } : {}), calledProvider: result.calledProvider }
+  }
   /** A line in the session's transcript that says what the Git page did: an event of the log, never a model turn. */
   const gitNote = (sessionId: SessionId | undefined, groupId: string, text: string) => {
     if (sessionId && store.hasSession(sessionId)) sessionSink.append({ type: "session.orchestration", sessionId, groupId: `git:${groupId}`.slice(0, 64), text: redactSecrets(text).text.slice(0, 1000) })
@@ -3537,6 +3552,10 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.rejected) return
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
     if ((connection.remoteAddress || connection.peer) && command.type.startsWith("memory.")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: memory is local only" })
+    if (command.type.startsWith("bot.")) {
+      if ((connection.remoteAddress || connection.peer) && command.type !== "bot.list") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: making, editing and teaching bots is local only" })
+      if (!botsOn()) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: bots are off: turn them on with /experimental bots on" })
+    }
     if (connection.peer?.readOnly && !isReadOnlyCommand(command.type)) {
       return send(connection, { v: PROTOCOL_VERSION, kind: "error", id: command.id, error: { code: "forbidden", message: "read-only token" } })
     }
@@ -6043,13 +6062,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "agent.create": {
         if (connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Agent creation is local only" })
         try {
-          const listed = agents.report({ directory: canonicalDir(command.directory) }).agents
-          let outcome: Parameters<typeof createAgentFile>[2]
-          if (command.generate) {
-            const model = command.model ? { model: command.model } : options.models?.selectable ? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), command.directory), catalog: options.models }) : undefined
-            const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted && ((request) => completeBudgeted({ ...request, auxiliary: { role: "agentGenerate", directory: canonicalDir(command.directory) } })), description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal: connection.signal })
-            outcome = { ...(result.content ? { generated: result.content } : {}), ...(result.fallback ? { fallback: result.fallback } : {}), calledProvider: result.calledProvider }
-          }
+          const outcome = command.generate ? await generateAgentOutcome(command, connection.signal) : undefined
           const created = await createAgentFile(options.dir, command, outcome)
           const loaded = agents.report({ directory: canonicalDir(command.directory) }).agents.find((agent) => agent.file === created.file)
           return reply(connection, command.id, { ok: true, result: { ...created, ...(loaded ? { agent: loaded } : {}) } })
@@ -6083,6 +6096,33 @@ export async function startDaemon(options: DaemonOptions) {
           } } })
           return reply(connection, command.id, { ok: true, result: { agent, ...result, sessionId, tool: command.tool, input: command.params ?? {}, callsProviders: command.tool === "task" } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: String(error).slice(0, 4000) }) }
+      }
+      case "bot.list":
+      case "bot.create":
+      case "bot.duplicate":
+      case "bot.file":
+      case "bot.memory": {
+        const service = await import("./bot-service")
+        const context: import("./bot-service").BotContext = {
+          dir: options.dir,
+          agents: () => agents.report({ directory: options.dir }),
+          sessions: (name) => sessionAutomation.list({ agent: name, roots: true, limit: 100 }),
+          connectors: () => options.botConnectors ?? [],
+        }
+        try {
+          switch (command.type) {
+            case "bot.list": return reply(connection, command.id, { ok: true, result: await service.listBots(context) })
+            case "bot.create": {
+              const outcome = command.generate ? await generateAgentOutcome(command, connection.signal) : undefined
+              const created = await service.createBot({ dir: options.dir, command, ...(outcome ? { outcome } : {}), exists: (name) => context.agents().agents.some((agent) => agent.name === name), write: createAgentFile })
+              const loaded = agents.report({ directory: options.dir }).agents.find((agent) => agent.file === created.file)
+              return reply(connection, command.id, { ok: true, result: { ...created, ...(loaded ? { agent: loaded } : {}) } })
+            }
+            case "bot.duplicate": return reply(connection, command.id, { ok: true, result: await service.duplicateBot(context, command) })
+            case "bot.file": return reply(connection, command.id, { ok: true, result: await service.botFile(context, command) })
+            case "bot.memory": return reply(connection, command.id, { ok: true, result: service.botMemory(context, command) })
+          }
+        } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       }
       case "agents.list":
       case "session.agent.set": {

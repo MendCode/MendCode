@@ -9,6 +9,8 @@ export type SlashCommand = {
   name: string
   group: SlashGroupId
   feature?: FeatureId
+  /** An experimental flag that must be on for the menu and the docs to offer the command (`/bot` and `experimental.bots`). Typing it while the flag is off says how to turn it on. */
+  flag?: string
   setting?: string
   aliases: string[]
   /** Older names that still run the command; not listed in the menu, the help or the docs. */
@@ -34,6 +36,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "view", group: "look", setting: "presentation", aliases: [], summary: "Change view" },
   { name: "model", group: "setup", aliases: ["models"], summary: "Switch model" },
   { name: "agent", group: "agents", aliases: [], summary: "Switch session agent" },
+  { name: "bot", group: "agents", flag: "bots", aliases: [], summary: "Manage bots (experimental)" },
   { name: "connect", group: "setup", aliases: [], summary: "Connect an API-key provider" },
   { name: "providers", group: "setup", aliases: ["provider"], summary: "Manage API-key providers" },
   { name: "permissions", group: "setup", aliases: ["perm"], summary: "Manage permissions and grants" },
@@ -198,7 +201,7 @@ export function runsOnSelect(command: SlashCommand) {
   return command.custom !== true && command.ext !== true && !ARGUMENT_COMMANDS.has(command.name)
 }
 
-const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "language", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
+const OPTIONAL_ARGUMENTS = new Set(["bot", "limit","daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "language", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
 export function takesArguments(command: SlashCommand) {
   return command.name === "panel" || !runsOnSelect(command) || OPTIONAL_ARGUMENTS.has(command.name)
 }
@@ -233,6 +236,11 @@ export function tierListed(command: Pick<SlashCommand, "name" | "feature" | "ext
   if (slashTier(command.name) === "minimalist") return true
   if (prefs.find((entry) => entry.name === command.name)?.hidden === false) return true
   return command.feature !== undefined && settings.features?.[command.feature] === true
+}
+
+/** Whether the menu and the docs offer the command: its feature, if it has one, and its experimental flag, if it has one, are on. */
+export function commandOffered(command: Pick<SlashCommand, "feature" | "flag">, settings: TierSettings): boolean {
+  return (!command.feature || featureState(settings, command.feature).on) && (!command.flag || (settings.experimental as Record<string, unknown> | undefined)?.[command.flag] === true)
 }
 
 /** The whole catalog for the command editor: every command, those the tier does not list marked `tierHidden` so the editor can show and flip them. */

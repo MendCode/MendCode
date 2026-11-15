@@ -118,8 +118,13 @@ export const EXPERIMENTAL_FLAGS = [
   { id: "git_actions", summary: "Push the branch and create a pull request from the Git page, and read its PR tab, through your own git and gh logins", doc: "docs/git.md" },
   { id: "continue_loop_on_deny", summary: "Keep a loop running after a denied tool call", doc: "docs/permissions.md" },
   { id: "openTelemetry", summary: "Export spans through OTLP when an endpoint is configured", doc: "docs/tracing.md" },
+  { id: "bots", summary: "Agents with a name, a look and their own memory that you send to work in any folder (/bot)", doc: "docs/agents.md" },
 ] as const
 export type ExperimentalFlag = (typeof EXPERIMENTAL_FLAGS)[number]["id"]
+
+/** Experimental bots (docs/agents.md): the shapes and theme colors a bot's `bot:` block may name. The agent file parser keeps its own copy; a test holds them equal. */
+export const BOT_SHAPES = ["circle", "square", "diamond", "triangle", "hexagon"] as const
+export const BOT_COLORS = ["primary", "secondary", "accent", "success", "warning", "error", "info"] as const
 
 /** `session.events`: the window size when `limit` is absent, and the most a client may ask for. */
 export const EVENTS_PAGE_DEFAULT = 200
