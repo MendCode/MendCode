@@ -17,6 +17,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The left and right arrows between sub-agent chats move only between the sub-agents that are still working, not through the finished ones.
 - A Claude sub-agent started before a daemon restart and woken by a message shows its work in its own thread again; before, what it did was not shown or kept, so neither the session nor `/btw` could see it.
 - Restarting or stopping the daemon ends every Claude Code process it ran; one with a background agent could stay alive and keep working beside the new process for the same session.
 

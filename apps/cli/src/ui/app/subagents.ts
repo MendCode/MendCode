@@ -4,6 +4,9 @@ import type { AppContext } from "./context"
 
 export type SessionNavigation = "session.child.first" | "session.child.next" | "session.child.previous" | "session.parent"
 
+/** Session statuses of a child that is still alive: running, or held for an answer or an approval. */
+const WORKING_STATUSES: ReadonlySet<string> = new Set(["running", "waiting_for_input", "waiting_for_approval"])
+
 /** Older history pages a click on an engine's agent may load to find the call that started it, before it settles for the command card. */
 export const AGENT_SEARCH_PAGES = 12
 
@@ -75,11 +78,16 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
       const listed = await input.send({ type: "session.children", sessionId: parent })
       if (current !== state.sessionId) return false
       if (!listed.ok) { fail(listed.error.message); return false }
-      const children = (listed.result?.sessions as SessionDetail[] | undefined) ?? []
-      children.sort((a, b) => a.sessionId.localeCompare(b.sessionId))
-      const at = children.findIndex((child) => child.sessionId === current)
-      const offset = action === "session.child.previous" ? 1 : -1
-      next = action === "session.child.first" ? children[0]?.sessionId : children[(Math.max(0, at) + offset + children.length) % children.length]?.sessionId
+      const siblings = (listed.result?.sessions as SessionDetail[] | undefined) ?? []
+      siblings.sort((a, b) => a.sessionId.localeCompare(b.sessionId))
+      if (action === "session.child.first") next = siblings[0]?.sessionId
+      else {
+        // The arrows cycle only the children still working; finished ones stay reachable through the other routes.
+        const children = siblings.filter((child) => WORKING_STATUSES.has(child.status))
+        const at = children.findIndex((child) => child.sessionId === current)
+        const offset = action === "session.child.previous" ? 1 : -1
+        next = children[at < 0 ? 0 : (at + offset + children.length) % children.length]?.sessionId
+      }
     }
     // No child session to open: the session's own sub-agents (an engine's, as Claude Code's) open as a thread.
     if ((!next || next === current) && action === "session.child.first") {
