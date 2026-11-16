@@ -1037,6 +1037,7 @@ export function createApp(input: AppInput) {
   const find = createFind(ctx, { chatWidth: () => transcriptWidth() })
   const inline = createInline(ctx)
   const { onKey, runKeyAction } = createKeys(ctx, {
+    changeProfile: (patch) => changeProfile(patch),
     openPathInView: () => filePick.run(),
     changesClick,
     gitClick: git.gitClick,

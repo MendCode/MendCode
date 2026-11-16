@@ -650,3 +650,63 @@ describe("single writer (A11)", () => {
     expect(readdirSync(dir).includes("mendd.lock")).toBe(false)
   })
 })
+
+describe("where a session and its messages come from", () => {
+  const added = (store: ReturnType<typeof openStore>, sessionId: SessionId, text: string, extra: Record<string, unknown> = {}) =>
+    store.sessionSink.append({ type: "queue.added", sessionId, queueId: ids("queue"), text, attachments: [], ...extra } as never)
+
+  test("the creator is kept and listed; a caller that names none is auto and an import records none", () => {
+    const store = openStore({ dir: tempDir() })
+    const typed = ids("session")
+    const unnamed = ids("session")
+    const imported = ids("session")
+    store.createSession({ id: typed, directory: "/repo", title: "a", origin: "tui" })
+    store.createSession({ id: unnamed, directory: "/repo", title: "b" })
+    store.createSession({ id: imported, directory: "/repo", title: "c", origin: null })
+    const byId = new Map(store.listSessions({}).map((session) => [session.sessionId, session]))
+    expect(byId.get(typed)?.origin).toBe("tui")
+    expect(byId.get(unnamed)?.origin).toBe("auto")
+    expect(byId.get(imported)).not.toHaveProperty("origin")
+    expect(store.sessionSummary(typed)?.origin).toBe("tui")
+    expect(store.readAfter(typed, 0)[0]).toMatchObject({ type: "session.created", origin: "tui" })
+    store.close()
+  })
+
+  test("only a message a person typed sets lastHumanAt, to its time; scripts, agents, notices and shell lines from them do not", () => {
+    let now = 1_000
+    const store = openStore({ dir: tempDir(), now: () => now })
+    const sessionId = ids("session")
+    store.createSession({ id: sessionId, directory: "/repo", title: "t", origin: "cli" })
+    added(store, sessionId, "from a script", { origin: "cli" })
+    added(store, sessionId, "from a peer", { origin: "agent" })
+    added(store, sessionId, "from the daemon", { origin: "auto" })
+    added(store, sessionId, "a notice", { origin: "tui", notice: true })
+    added(store, sessionId, "an old row")
+    expect(store.sessionSummary(sessionId)).not.toHaveProperty("lastHumanAt")
+    now = 5_000
+    added(store, sessionId, "typed", { origin: "tui" })
+    now = 6_000
+    added(store, sessionId, "from a script again", { origin: "cli" })
+    expect(store.sessionSummary(sessionId)?.lastHumanAt).toBe(5_000)
+    expect(store.listSessions({})[0]?.lastHumanAt).toBe(5_000)
+    store.close()
+  })
+
+  test("a database from before origins gains the columns and its sessions read as unknown", () => {
+    const dir = tempDir()
+    const sessionId = ids("session")
+    const first = openStore({ dir })
+    first.createSession({ id: sessionId, directory: "/repo", title: "old", origin: null })
+    first.close()
+    const raw = new Database(path.join(dir, "mendd.db"))
+    raw.run("ALTER TABLE sessions DROP COLUMN origin")
+    raw.run("ALTER TABLE sessions DROP COLUMN last_human_at")
+    raw.close()
+    const store = openStore({ dir })
+    const summary = store.sessionSummary(sessionId)
+    expect(summary).toBeDefined()
+    expect(summary).not.toHaveProperty("origin")
+    expect(summary).not.toHaveProperty("lastHumanAt")
+    store.close()
+  })
+})

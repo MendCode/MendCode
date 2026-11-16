@@ -219,6 +219,8 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "promptStatus": "off",
   "sidebar": "auto",
   "sidebarProjects": "auto",
+  "sidebarProjectsFrom": "you",
+  "sidebarHiddenProjects": [],
   "sidebarPreviewCount": 5,
   "sidebarProjectCount": 0,
   "sidebarRecentDays": 7,
@@ -377,6 +379,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "hidden"
   ],
   "sidebarProjects": ["auto", "folder", "all"],
+  "sidebarProjectsFrom": ["you", "all"],
   "sidebarLayout": ["projects-first", "bots-first", "icons-only", "scratch"],
   "promptStatus": ["off", "border"],
   "scrollbar": ["auto", "always", "off"],
@@ -473,7 +476,8 @@ export function tuiProblems(raw: unknown): string[] {
     else if (typeof value === "string" && (value.length > (key === "customAscii" ? 16000 : 4096) || /[\x1b\x00]/.test(value))) problems.push(`${key}: invalid terminal text`)
     else if (key === "draftRetentionDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 3650)) problems.push("draftRetentionDays: expected integer 0..3650")
     else if (key === "sidebarWidth" && (!Number.isInteger(value) || Number(value) !== 0 && (Number(value) < 32 || Number(value) > 80))) problems.push("sidebarWidth: expected 0 (automatic) or an integer 32..80")
-    else if (key === "sidebarPreviewCount" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("sidebarPreviewCount: expected integer 1..50")
+    else if (key === "sidebarHiddenProjects" && ((value as unknown[]).length > 200 || (value as unknown[]).some((name) => typeof name !== "string" || name.length < 1 || name.length > 4096 || /[\x00-\x1f\x7f]/.test(name)))) problems.push("sidebarHiddenProjects: expected up to 200 folder paths")
+    else if (key === "sidebarPreviewCount" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("sidebarPreviewCount: expected integer 1..50")
     else if (key === "sidebarProjectCount" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 30)) problems.push("sidebarProjectCount: expected integer 0..30 (0 fills the height)")
     else if (key === "sidebarRecentDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 365)) problems.push("sidebarRecentDays: expected integer 0..365 (0 lists every age)")
     else if (key === "wheelLines" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")

@@ -120,3 +120,26 @@ describe("/customize panel at start", () => {
     } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })
+
+describe("/customize: whose projects, and the ones hidden", () => {
+  test("projects from is a choice row under the sidebar rows: you, all", () => {
+    expect(rowShown("sidebarProjectsFrom", DEFAULT_TUI_PROFILE, {})).toBe(true)
+    expect(CUSTOMIZE_ROWS.indexOf("sidebarProjectsFrom")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarRecentDays") + 1)
+    expect(press("sidebarProjectsFrom", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjectsFrom: "all" } })
+    expect(press("sidebarProjectsFrom", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjectsFrom: "all" }).action).toEqual({ type: "set", patch: { sidebarProjectsFrom: "you" } })
+  })
+
+  test("hidden projects lists them: left and right pick one, Enter unhides it and nothing else", () => {
+    const profile = { ...DEFAULT_TUI_PROFILE, sidebarHiddenProjects: ["/a", "/b", "/c"] }
+    expect(CUSTOMIZE_ROWS.indexOf("sidebarHiddenProjects")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarProjectsFrom") + 1)
+    expect(press("sidebarHiddenProjects", RIGHT, profile).state.hidden).toBe(1)
+    expect(press("sidebarHiddenProjects", "\x1b[D", profile).state.hidden).toBe(2)
+    expect(press("sidebarHiddenProjects", "\r", profile).action).toEqual({ type: "set", patch: { sidebarHiddenProjects: ["/b", "/c"] } })
+    expect(press("sidebarHiddenProjects", "\r", profile, { ...at("sidebarHiddenProjects"), hidden: 2 } as never).action).toEqual({ type: "set", patch: { sidebarHiddenProjects: ["/a", "/b"] } })
+  })
+
+  test("with nothing hidden the row does nothing", () => {
+    expect(press("sidebarHiddenProjects", "\r").action).toEqual({ type: "none" })
+    expect(press("sidebarHiddenProjects", RIGHT).action).toEqual({ type: "none" })
+  })
+})

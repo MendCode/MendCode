@@ -15,6 +15,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The Settled shelf shows 10 sessions and `+ N more` adds 25 each time; a session whose PR is merged or closed settles by itself and comes back on new activity.
 - The left list shows only sessions from the last 7 days, with the open, working, waiting and pinned ones always there; a `+ N older` row opens the rest. `/customize` › Top & side › Recent days sets the window (0 lists every age).
 - The left list fills its height with projects instead of stopping at six; `Projects shown` still caps it when you set a number.
+- MendCode now records who created each session and who sent each message: you in the terminal or web UI, the command line, another agent, or the daemon itself (loops, workflows, the PR reviewer). Sessions show it as `origin` and `lastHumanAt` in `session.list`.
+- The all-projects list shows the projects you typed in by default; folders where only tools worked wait behind `+ N more projects`. `/customize` › Top & side › Projects from switches it to `all`.
+- `x` on a project's row in the left list hides it, and `/customize` › Top & side › Hidden projects brings it back.
 
 ### Fixed
 

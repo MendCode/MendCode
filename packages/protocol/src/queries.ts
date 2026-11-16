@@ -17,7 +17,7 @@ import { FEATURE_IDS, TIERS } from "./tier-data"
 import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data"
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
 import { BlobRef, ClientId, CommandId, ItemId, MemoryId, SessionId, TurnId } from "./ids"
-import { ForegroundState } from "./states"
+import { ForegroundState, SessionOrigin } from "./states"
 import { DEFAULT_AREA, AREA_NAME } from "./areas"
 import { ImageGenerationSettings } from "./image-generation"
 import { VoiceSettings } from "./voice"
@@ -42,6 +42,10 @@ export const SessionSummary = lazySchema(() => z.strictObject({
   updatedAt: z.number().int().nonnegative(),
   lastSeq: z.number().int().nonnegative(),
   detached: z.boolean().optional(),
+  /** Who created the session (docs/sessions.md); absent on sessions made before it was recorded. */
+  origin: SessionOrigin.optional(),
+  /** When the latest message typed by a person (origin `tui`) arrived; absent when none was recorded. */
+  lastHumanAt: z.number().int().nonnegative().optional(),
   /** Foreground state if the session has a live actor, otherwise "idle". */
   state: ForegroundState,
   queued: z.number().int().nonnegative(),

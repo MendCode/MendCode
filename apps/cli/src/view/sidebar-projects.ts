@@ -76,7 +76,17 @@ export function createProjectProbe({ home, tmpRoots, inspect, onChange }: { home
   }
 }
 
-type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Partial<Pick<SessionSummary, "lifecycle" | "lastSeq" | "state" | "queued">>
+type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Partial<Pick<SessionSummary, "lifecycle" | "lastSeq" | "state" | "queued" | "origin" | "lastHumanAt">>
+
+/** Whose projects the all-projects list shows: `you`, the ones where a person typed; `all`, every one. */
+export type SidebarProjectsFrom = "you" | "all"
+
+/**
+ * Whether a session counts as a person's work. A message typed in the terminal UI left `lastHumanAt`; a session with no
+ * recorded origin was made before origins were kept, and is taken as a person's so nothing disappears on the day this lands
+ * (the folder can still be hidden by hand). One made by a script, an agent or the daemon without a typed message is not.
+ */
+export const humanSession = (session: Pick<Ranked, "origin" | "lastHumanAt">) => session.lastHumanAt !== undefined || session.origin === undefined
 
 /** A project already ranked keeps its place while its latest activity moves less than this: a streaming turn does not shuffle the list. */
 export const SETTLE_MS = 60_000
@@ -88,19 +98,23 @@ export const SETTLE_MS = 60_000
  * projects" row. `stamps` remembers each folder's rank time between frames, so a folder takes a new place only when its latest
  * activity moved by `SETTLE_MS` or more. `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
  */
-export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible, stamps }: { sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean; stamps?: Map<string, number> }): { shown: string[]; rest: string[] } {
-  const facts = new Map<string, { latest: number; recent: number; busy: boolean; fresh: boolean }>()
+export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible, stamps, from = "all", hidden }: { /** `you`: a project with no session a person typed in (see `humanSession`) waits in `rest` unless it is opened or has a session working or waiting. Default `all`. */ from?: SidebarProjectsFrom; /** Folders the user hid by hand: never listed, `rest` included, except the opened one. */ hidden?: ReadonlySet<string>; sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean; stamps?: Map<string, number> }): { shown: string[]; rest: string[] } {
+  const facts = new Map<string, { latest: number; recent: number; busy: boolean; fresh: boolean; human: boolean }>()
   for (const session of sessions) {
     const directory = session.directory
+    if (hidden?.has(directory) && directory !== opened) continue
     const at = session.updatedAt
     // A folder used in the last day is a project whether or not it is a git root, and stays listed after the opened folder moves on.
     const fresh = directory !== opened && !isProject(directory) && eligible?.(directory) === true && now - at <= FRESH_MS
     if (directory !== opened && !isProject(directory) && !fresh) continue
-    const fact = facts.get(directory) ?? { latest: 0, recent: 0, busy: false, fresh: false }
+    const fact = facts.get(directory) ?? { latest: 0, recent: 0, busy: false, fresh: false, human: false }
     fact.latest = Math.max(fact.latest, at)
     if (now - at <= RECENT_MS) fact.recent++
     if (busy(session)) fact.busy = true
-    if (fresh) fact.fresh = true
+    const human = humanSession(session)
+    if (human) fact.human = true
+    // A folder used today only by tools is not forced onto the list of the projects you typed in.
+    if (fresh && (from === "all" || human)) fact.fresh = true
     facts.set(directory, fact)
   }
   if (stamps) for (const [directory, fact] of facts) {
@@ -108,7 +122,7 @@ export function rankProjects({ sessions, opened, now, count, busy, isProject, el
     if (held !== undefined && fact.latest >= held && fact.latest - held < SETTLE_MS) fact.latest = held
     else stamps.set(directory, fact.latest)
   }
-  if (!facts.has(opened)) facts.set(opened, { latest: 0, recent: 0, busy: false, fresh: false })
+  if (!facts.has(opened)) facts.set(opened, { latest: 0, recent: 0, busy: false, fresh: false, human: true })
   const byRank = (a: string, b: string) => facts.get(b)!.latest - facts.get(a)!.latest || facts.get(b)!.recent - facts.get(a)!.recent || a.localeCompare(b)
   const ranked = [...facts.keys()].sort(byRank)
   // The opened and busy folders, and the ones listed only because they were used today, show past the cap; the others fill it in rank order.
@@ -116,6 +130,7 @@ export function rankProjects({ sessions, opened, now, count, busy, isProject, el
   const shown = new Set(always)
   for (const directory of ranked) {
     if (shown.size >= count) break
+    if (from === "you" && !facts.get(directory)!.human) continue
     shown.add(directory)
   }
   return { shown: ranked.filter((directory) => shown.has(directory)), rest: ranked.filter((directory) => !shown.has(directory)) }

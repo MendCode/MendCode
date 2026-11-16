@@ -7,7 +7,7 @@ import { relativeTime, truncateEnd } from "./session-list"
 import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
 import { elapsedLabel, prSpans } from "./sidebar-marks"
-import { FRESH_MS, rankProjects } from "./sidebar-projects"
+import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
 import type { SidebarSection } from "./tui-profile"
 import { lineWidth, wrap } from "./wrap"
 
@@ -18,7 +18,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "since" | "pending" | "pendingKind">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -40,7 +40,7 @@ export type MultiInput = {
    * Which folders are projects and how many show: absent, every folder with a session is listed (no cap). `canonical` names a
    * linked worktree by its main repo, so its sessions list under it.
    */
-  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; /** Path-only check (no disk): a folder used in the last day lists as a project even when it is no git root. */ eligible?(directory: string): boolean; /** The most projects listed before `+ N more projects`; 0 fills the sidebar's height. */ count: number }
+  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; /** Path-only check (no disk): a folder used in the last day lists as a project even when it is no git root. */ eligible?(directory: string): boolean; /** The most projects listed before `+ N more projects`; 0 fills the sidebar's height. */ count: number; /** `sidebarProjectsFrom`: `you` lists the projects a person typed in first; absent, `all`. */ from?: SidebarProjectsFrom; /** `sidebarHiddenProjects` as a set of canonical folders; never listed, the opened one apart. */ hidden?: ReadonlySet<string> }
   /** Days of activity a project's list reaches back; older sessions wait behind `+ N older`. Absent, `DEFAULT_RECENT_DAYS`; 0 lists every age. */
   recentDays?: number
   /** Each project's rank time, kept between frames (see `rankProjects`); absent, every frame ranks from scratch. */
@@ -142,7 +142,7 @@ const preview = (list: readonly MultiSession[], limit: number, keep: (session: M
 function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): { shown: string[]; rest: string[] } {
   if (input.scope === "folder") return { shown: [input.directory], rest: [] }
   const listed = input.sessions.filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
-  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count || Number.POSITIVE_INFINITY, busy: busy as never, ...(input.rankStamps ? { stamps: input.rankStamps } : {}), isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}) })
+  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count || Number.POSITIVE_INFINITY, busy: busy as never, ...(input.rankStamps ? { stamps: input.rankStamps } : {}), isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}), ...(input.projects?.from ? { from: input.projects.from } : {}), ...(input.projects?.hidden ? { hidden: input.projects.hidden } : {}) })
 }
 
 /** Every shown group starts open; a fold or an open by hand wins. */
@@ -397,7 +397,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
     if (value === "running") counts.running++
     else if (waitsOnYou(value)) counts.approval++
   }
-  const summary: Line = input.focused ? [{ text: picked !== undefined && isBotId(picked) ? "↵ chat  o page  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
+  const summary: Line = input.focused ? [{ text: picked !== undefined && isBotId(picked) ? "↵ chat  o page  → prompt" : picked !== undefined && isGroupId(picked) ? "↵ fold  x hide  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
     ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
     : [{ text: "← focus", fg: "muted" }]
   const head: Entry[] = input.icons || input.header === false ? [] : [{ line: spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner) }, { line: [] }]

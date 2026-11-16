@@ -7,7 +7,9 @@ import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
 import { readFile, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { isAbsolute, join, resolve } from "node:path"
+import { basename, isAbsolute, join, resolve } from "node:path"
+import type { TuiProfile } from "../../view/tui-profile"
+import { MAX_HIDDEN_PROJECTS } from "../../view/tui-profile"
 import type { PetImage } from "../../pets/decode"
 import type { FaceCapability } from "../../view/bot-face"
 import type { IconFaces } from "../../view/bot-icon"
@@ -288,7 +290,7 @@ export function createSidebarBots(ctx: AppContext) {
       recentDays: state.tuiProfile.sidebarRecentDays,
       rankStamps,
       expanded,
-      projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount },
+      projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount, from: state.tuiProfile.sidebarProjectsFrom, hidden: hiddenSet() },
       visits: noteVisit(),
       projectsExpanded,
       ...over,
@@ -352,6 +354,26 @@ export function createSidebarBots(ctx: AppContext) {
     if (isBotId(id)) return startChat(botName(id), deps)
     state.sidebarFocus = false
     await deps.switchSession(id as SessionId)
+  }
+
+  /** The profile's hidden folders as a set, rebuilt only when the list changes (a frame never builds it). */
+  let hiddenFrom: readonly string[] | undefined
+  let hiddenNow: ReadonlySet<string> = new Set()
+  function hiddenSet(): ReadonlySet<string> {
+    if (hiddenFrom !== state.tuiProfile.sidebarHiddenProjects) { hiddenFrom = state.tuiProfile.sidebarHiddenProjects; hiddenNow = new Set(hiddenFrom) }
+    return hiddenNow
+  }
+
+  /** `x` on a project's row: hides that folder (reversible in /customize › Hidden projects). The opened project always shows, so it is refused. */
+  function hideProject(id: string, deps: { changeProfile(patch: Partial<TuiProfile>): void }) {
+    if (!isGroupId(id)) return
+    const directory = groupDirectory(id)
+    const name = basename(directory) || directory
+    if (directory === openedDirectory()) return say(`${name} is open: it always shows`, "info")
+    const kept = state.tuiProfile.sidebarHiddenProjects.filter((hidden) => hidden !== directory)
+    deps.changeProfile({ sidebarHiddenProjects: [...kept, directory].slice(-MAX_HIDDEN_PROJECTS) })
+    say(`hid ${name} · /customize to bring it back`, "info")
+    requestFrame()
   }
 
   /** `o` on a bot row: its page (chats by folder, edit, memory, delete). */
@@ -436,5 +458,5 @@ export function createSidebarBots(ctx: AppContext) {
   /** `/bot open <name>`: the bot's page, from anywhere. */
   const openNamed = (name: string, deps: SidebarDeps) => openBot(name, deps)
 
-  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, openPage, openNamed, isBot: isBotId, holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, openPage, hideProject, openNamed, isBot: isBotId, holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
 }

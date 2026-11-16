@@ -123,6 +123,8 @@ export function createKeys(ctx: AppContext, actions: {
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]
+  /** Saves a profile change (`x` on a project row hides the project). */
+  changeProfile: (patch: Partial<import("../../view/tui-profile").TuiProfile>) => void
   homeSessions: () => HomeSession[]
   navigateMessage(kind: "next" | "previous" | "last-user"): Promise<void>
   /** `file.open`: the first file path of the selection or the item in view (a list when there are several). */
@@ -448,6 +450,7 @@ export function createKeys(ctx: AppContext, actions: {
           const bot = multi.firstBot()
           if (bot) state.sidebarSelected = bot
         } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
+        else if (multi && key === "x" && stops[index]) multi.hideProject(stops[index]!, actions)
         else if (!multi && stops[index] === SETTLED_MORE && key === "\r") state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
         else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)

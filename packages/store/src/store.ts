@@ -45,6 +45,7 @@ import {
   type ClientId,
   type QueueId,
   type SessionId,
+  type SessionOrigin,
   type TurnId,
 } from "@mendcode/protocol"
 import type { GlobalEventDraft, SessionEventDraft } from "@mendcode/kernel"
@@ -358,7 +359,13 @@ const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set(["session.created", "q
 
 const TERMINAL_TURN_EVENTS =new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
 
-type SessionRow = { id: SessionId; title: string; directory: string; created_at: number; updated_at: number; last_seq: number; parent_id: string | null; archived_at: number | null }
+type SessionRow = { id: SessionId; title: string; directory: string; created_at: number; updated_at: number; last_seq: number; parent_id: string | null; archived_at: number | null; origin: SessionOrigin | null; last_human_at: number | null }
+
+/** The summary fields for who created a session and when a person last typed in it; none for a row that predates them. */
+const originFields = (row: Pick<SessionRow, "origin" | "last_human_at">) => ({
+  ...(row.origin ? { origin: row.origin } : {}),
+  ...(row.last_human_at !== null ? { lastHumanAt: row.last_human_at } : {}),
+})
 
 /** First line of the first message, trimmed to a readable title. */
 export function titleFrom(text: string) {
@@ -384,6 +391,9 @@ function migrate(db: Database) {
   if (!sessions.has("pinned_at")) db.run("ALTER TABLE sessions ADD COLUMN pinned_at INTEGER")
   if (!sessions.has("lifecycle")) db.run("ALTER TABLE sessions ADD COLUMN lifecycle TEXT")
   if (!sessions.has("fanout")) db.run("ALTER TABLE sessions ADD COLUMN fanout TEXT")
+  // Who created the session and when a person last typed in it; null on rows made before they were recorded (docs/sessions.md).
+  if (!sessions.has("origin")) db.run("ALTER TABLE sessions ADD COLUMN origin TEXT")
+  if (!sessions.has("last_human_at")) db.run("ALTER TABLE sessions ADD COLUMN last_human_at INTEGER")
   if (!columns("queue_items").has("kind")) db.run("ALTER TABLE queue_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'message'")
   const memories = columns("memories")
   if (!memories.has("kind")) db.run("ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'new'")
@@ -574,7 +584,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     queueInsert: db.query("INSERT OR REPLACE INTO queue_items(session_id, queue_id, position, text, attachments, kind, authority_text) VALUES (?, ?, 1000000, ?, ?, ?, ?)"),
     queueKeep: db.query("UPDATE queue_items SET position = ? WHERE session_id = ? AND queue_id = ?"),
     setActiveTurn: db.query("UPDATE sessions SET active_turn = ? WHERE id = ?"),
-    insertSession: db.query("INSERT INTO sessions(id, directory, title, parent_id, created_at) VALUES (?, ?, ?, ?, ?)"),
+    insertSession: db.query("INSERT INTO sessions(id, directory, title, parent_id, created_at, origin) VALUES (?, ?, ?, ?, ?, ?)"),
+    markHuman: db.query("UPDATE sessions SET last_human_at = ? WHERE id = ?"),
     insertEvent: db.query("INSERT INTO events(session_id, seq, type, at, payload) VALUES (?, ?, ?, ?, ?)"),
     readAfter: db.query<EventRow, [string, number, number]>(eventsPage("ASC", ">")),
     readBefore: db.query<EventRow, [string, number, number]>(eventsPage("DESC", "<")),
@@ -755,6 +766,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       if (!event.compact && !event.notice) {
         q.bumpPrompt.run(dayOf(event.at), wordCount(event.text))
         q.autoTitle.run(titleFrom(event.text), event.sessionId)
+        if (event.origin === "tui") q.markHuman.run(event.at, event.sessionId)
         recordQueued(event)
       }
     }
@@ -797,14 +809,17 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     return event
   })
 
-  const createSession = db.transaction((input: { id: SessionId; directory: string; title: string; parentId?: SessionId }) => {
-    q.insertSession.run(input.id, input.directory, input.title, input.parentId ?? null, now())
+  /** `origin` is who created the session; a caller that names none is the daemon's own work (`auto`), and `null` records none (an import of older data). */
+  const createSession = db.transaction((input: { id: SessionId; directory: string; title: string; parentId?: SessionId; origin?: SessionOrigin | null }) => {
+    const origin = input.origin === undefined ? "auto" : input.origin
+    q.insertSession.run(input.id, input.directory, input.title, input.parentId ?? null, now(), origin)
     return appendSession({
       type: "session.created",
       sessionId: input.id,
       directory: input.directory,
       title: input.title,
       ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(origin ? { origin } : {}),
     })
   })
 
@@ -931,7 +946,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     importTranscript(input: { id: SessionId; directory: string; title: string; createdAt: number; events: Array<SessionEventDraft & { at: number }>; messages: unknown[]; origin: { sourceSessionId: string; truncated: boolean; sanitized: boolean } }) {
       try {
         db.transaction(() => {
-          q.insertSession.run(input.id, input.directory, input.title, null, input.createdAt)
+          q.insertSession.run(input.id, input.directory, input.title, null, input.createdAt, null)
           appendSession({ type: "session.created", sessionId: input.id, directory: input.directory, title: input.title, imported: input.origin }, input.createdAt)
           for (const { at, ...event } of input.events) appendSession(event as SessionEventDraft, at)
           const insert = db.query("INSERT INTO engine_messages(session_id, engine, idx, payload) VALUES (?, 'native', ?, ?)")
@@ -1628,8 +1643,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         AND NOT EXISTS (SELECT 1 FROM events r WHERE r.session_id = e.session_id AND r.seq > e.seq AND ((r.type IN ('turn.completed', 'turn.failed', 'turn.cancelled', 'turn.interrupted') AND COALESCE(json_extract(e.payload, '$.async'), 0) = 0) OR (r.type = 'server.request.resolved' AND json_extract(r.payload, '$.requestId') = json_extract(e.payload, '$.requestId')))) ORDER BY e.seq DESC LIMIT 100`).all(sessionId).map(ownEvent(sessionId)) as Array<Extract<SessionEvent, { type: "server.request" }>>
     },
     sessionSummary(sessionId: SessionId) {
-      const row = db.query<SessionRow, [string]>("SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at FROM sessions WHERE id = ?").get(sessionId)
-      return row ? { sessionId: row.id, title: row.title, directory: row.directory, createdAt: row.created_at, updatedAt: row.updated_at || row.created_at, lastSeq: row.last_seq, queued: q.queuedCount.get(row.id)?.n ?? 0, ...(row.parent_id ? { parentId: row.parent_id as SessionId } : {}), ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}) } : undefined
+      const row = db.query<SessionRow, [string]>("SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at, origin, last_human_at FROM sessions WHERE id = ?").get(sessionId)
+      return row ? { ...originFields(row), sessionId: row.id, title: row.title, directory: row.directory, createdAt: row.created_at, updatedAt: row.updated_at || row.created_at, lastSeq: row.last_seq, queued: q.queuedCount.get(row.id)?.n ?? 0, ...(row.parent_id ? { parentId: row.parent_id as SessionId } : {}), ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}) } : undefined
     },
     listSessions(options: { limit?: number | undefined; offset?: number | undefined; directory?: string | undefined; roots?: boolean | undefined; since?: number | undefined; search?: string | undefined; find?: string | undefined; agent?: string | undefined; model?: string | undefined; archived?: boolean | undefined; hideEmpty?: boolean | undefined } = {}) {
       const limit = Math.min(options.limit ?? 100, 500)
@@ -1648,7 +1663,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       if (options.find) { where.push("(instr(lower(title), lower(?)) > 0 OR instr(lower(directory), lower(?)) > 0 OR instr(lower(id), lower(?)) > 0)"); values.push(options.find, options.find, options.find) }
       if (options.agent !== undefined) { where.push("COALESCE(agent, CASE WHEN permission_mode = 'plan' THEN 'plan' ELSE 'build' END) = ?"); values.push(options.agent) }
       if (options.model !== undefined) { where.push("substr(model, 1, length(?)) = ?"); values.push(options.model, options.model) }
-      const rows = db.query<SessionRow, Array<string | number>>(`SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at FROM sessions${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, options.offset ?? 0)
+      const rows = db.query<SessionRow, Array<string | number>>(`SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at, origin, last_human_at FROM sessions${where.length ? ` WHERE ${where.join(" AND ")}` : ""} ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`).all(...values, limit, options.offset ?? 0)
       return rows.map((row) => ({
         sessionId: row.id,
         title: row.title,
@@ -1659,6 +1674,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         queued: q.queuedCount.get(row.id)?.n ?? 0,
         ...(row.parent_id ? { parentId: row.parent_id as SessionId } : {}),
         ...(row.archived_at !== null ? { archivedAt: row.archived_at } : {}),
+        ...originFields(row),
       }))
     },
     sessionsWithActiveTurn() {

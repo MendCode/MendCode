@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs"
 import path from "node:path"
-import { AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, AGENT_SHELL_ENV, agentCommandClass, agentRefusal } from "@mendcode/protocol/wire"
+import { AGENT_CALLER_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, AGENT_SHELL_ENV, agentCommandClass, agentRefusal } from "@mendcode/protocol/wire"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
@@ -30,7 +30,16 @@ export function originCapabilities(input: { env: Record<string, string | undefin
   return [...(startedBySession(input) ? [AGENT_ORIGIN_CAPABILITY] : []), ...(limit ? [`${AGENT_LIMIT_CAPABILITY}${limit}`] : [])]
 }
 
-export const quote = (word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
+/**
+ * `caller:agent` when this program runs inside another agent's shell (Claude Code, Codex, or a harness that sets `AI_AGENT`),
+ * so its messages are recorded as an agent's, not a person's (docs/sessions.md). A hint only: it restricts nothing.
+ */
+export function callerCapabilities(env: Record<string, string | undefined>): string[] {
+  const inside = Boolean(env.CLAUDECODE || env.CLAUDE_CODE_ENTRYPOINT || env.CODEX_SANDBOX || env.CODEX_THREAD_ID || env.AI_AGENT)
+  return inside ? [AGENT_CALLER_CAPABILITY] : []
+}
+
+export const quote =(word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
 /** The command as the user would type it; a value that follows a token or key flag is never repeated. */
 export function shownCommand(argv: readonly string[]) {
   return [PROGRAM_NAME, ...argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))].join(" ").slice(0, 400)

@@ -1,4 +1,5 @@
 import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { AGENT_CALLER_CAPABILITY } from "@mendcode/protocol"
 import { claudeAlias, claudeCompactEnv } from "./claude-models"
 import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
@@ -258,7 +259,7 @@ import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
-import { createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
+import { connectionOrigin, createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
 import { createSessionStarter } from "./session-start"
 import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
@@ -324,6 +325,8 @@ type Connection = {
   peer?: { name: string; hash: string; readOnly: boolean }
   /** The client was started by a session's own shell: it reads, and works only inside that session's authority (agent-origin.ts). */
   agent?: AgentOrigin | undefined
+  /** What `hello` said of the client: its name and whether it runs inside another agent's shell (`caller:agent`). Only ever lowers the origin from `cli` to `agent`; see `connectionOrigin`. */
+  client?: { name: string; callerAgent: boolean }
   rejected?: boolean
   /** Loopback TCP local transport: the per-start secret was presented. */
   localAuthed?: boolean
@@ -3832,6 +3835,7 @@ export async function startDaemon(options: DaemonOptions) {
         return connection.socket.end()
       }
       connection.clientId = command.clientId
+      connection.client = { name: command.client.name, callerAgent: command.capabilities.includes(AGENT_CALLER_CAPABILITY) }
       // What the client says of itself can add the agent-origin restriction, never lift the one the socket's peer earned.
       connection.agent ??= peerOrigin.declared(command.capabilities)
       connection.dialogs = !connection.remoteAddress && !connection.peer && command.capabilities.includes(DIALOGS_CAPABILITY)
@@ -3960,7 +3964,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (spare) return reply(connection, command.id, { ok: true, result: { sessionId: spare, reused: true } })
         }
         const id = ids("session")
-        store.createSession({ id, directory: command.directory, title: command.title ?? "", ...(command.parentId ? { parentId: command.parentId } : {}) })
+        store.createSession({ id, directory: command.directory, title: command.title ?? "", origin: connectionOrigin(connection), ...(command.parentId ? { parentId: command.parentId } : {}) })
         // Made on purpose by an API client: never reused, hidden or removed as an empty chat.
         if (!command.reuseEmpty && !command.title) store.emptySessions.markExplicit(id)
         if (command.reuseEmpty && !command.title && !command.choice && !command.agent && !command.parentId) quietEmpties.add(id)
@@ -3994,7 +3998,7 @@ export async function startDaemon(options: DaemonOptions) {
           const first = store.engineMessages.first(command.sessionId, "native") as import("@mendcode/engine-native").ModelMessage | undefined
           const seed = focusedHandoff(first ? [first] : [], safeGoal.text, context, store.limitCheckpoints.get(command.sessionId)?.summary)
           const id = ids("session")
-          store.createSession({ id, directory: source.directory, title: `handoff: ${safeGoal.text}`.slice(0, 200) })
+          store.createSession({ id, directory: source.directory, title: `handoff: ${safeGoal.text}`.slice(0, 200), origin: connectionOrigin(connection) })
           store.handoff.queueContext({ sessionId: id, fromSessionId: command.sessionId, title: "Focused handoff", text: seed })
           store.sessionTree.recordFork({ sessionId: id, parentId: command.sessionId })
           store.setSessionModel(id, store.sessionModel(command.sessionId))
@@ -4013,7 +4017,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (point && !point.ok) return reply(connection, command.id, point)
         const id = ids("session")
         const title = command.title ?? (command.readOnly ? `side: ${source.title || "untitled"}` : `fork: ${source.title || "untitled"}`)
-        store.createSession({ id, directory: source.directory, title: title.slice(0, 200) })
+        store.createSession({ id, directory: source.directory, title: title.slice(0, 200), origin: connectionOrigin(connection) })
         store.meta.set(`session.title.manual:${id}`, "true")
         let branch: ReturnType<typeof store.forkConversation> | undefined
         try {
@@ -4468,12 +4472,12 @@ export async function startDaemon(options: DaemonOptions) {
           // An extension may add text of its own (a file, an environment value): secrets in that are markers too.
           const rewritten = captured(safe.sessionId, routed.text)
           if ("ok" in rewritten) return reply(connection, command.id, rewritten)
-          const result = await actor.handle(rewritten.text === safe.text ? safe : { ...safe, text: rewritten.text }, safe.displayText ?? safe.text)
+          const result = await actor.handle(rewritten.text === safe.text ? safe : { ...safe, text: rewritten.text }, safe.displayText ?? safe.text, connectionOrigin(connection))
           const answer = result.ok && routed.notice ? { ok: true as const, result: { ...result.result, notice: routed.notice } } : result
           if (requestKey && answer.ok) rememberRequest(requestKey, answer)
           return reply(connection, command.id, answer)
         }
-        const result = await actor.handle(safe, safe.type === "user.submit" ? safe.displayText : undefined)
+        const result = await actor.handle(safe, safe.type === "user.submit" ? safe.displayText : undefined, connectionOrigin(connection))
         if (requestKey && result.ok) rememberRequest(requestKey, result)
         if (result.ok && remembered) {
           const settings = store.settings.set(approvalRulePatch({ settings: store.settings.get(), level: remembered.level, directory: canonicalDir(store.sessionDirectory(command.sessionId) ?? process.cwd()), rules: remembered.offer.rules }))

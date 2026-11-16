@@ -13,7 +13,7 @@ import { toolDesignNames, toolDesignOf } from "./tool-design"
 import { TIMESTAMP_PLACES } from "./tui-profile"
 import { overlayRule } from "./status-line"
 import { statusItems } from "./status-items"
-import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_ALIGNS, HOME_INPUTS, LOGO_SIZES, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_LAYOUTS, SIDEBAR_MODES, SIDEBAR_PROJECTS, TABLE_STYLES, normalizeSidebarSections, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
+import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_ALIGNS, HOME_INPUTS, LOGO_SIZES, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_LAYOUTS, SIDEBAR_MODES, SIDEBAR_PROJECTS, SIDEBAR_PROJECTS_FROM, TABLE_STYLES, normalizeSidebarSections, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
 import { IMAGE_MODES } from "../pets/detect"
 import { ALT_LABELS, QUOTA_COLORS, QUOTA_VIEWS, CODE_MAP_CARDS, DIFF_VIEWS, TOOL_DENSITIES, TOOL_LAYOUTS, TOOL_LAYOUT_NAMES, toolLayoutOf, KEY_PROTOCOLS, OPTION_KEYS, COMMENT_CHIP_STYLES, COMMENT_CHIPS, COMMENT_HINTS, COMMENT_KEYS, COMMENT_MODES, COMMENT_SENT_LAYOUTS } from "./tui-profile"
 import { FILE_OPENERS } from "./links"
@@ -44,7 +44,7 @@ import { CUSTOMIZE_ROWS, GROUPS, LABELS, type CustomizeRow } from "./customize-r
 export { CUSTOMIZE_ROWS, GROUPS, LABELS, type CustomizeRow }
 type GroupTitle = (typeof GROUPS)[number]["title"]
 const GROUP_OF = new Map<CustomizeRow, { group: GroupTitle; part: string }>(GROUPS.flatMap((group) => group.parts.flatMap((part) => part.rows.map((row) => [row, { group: group.title, part: part.title }] as const))))
-export type CustomizePageState = { row: number; typing?: string; error?: string; module?: number; view?: number; menu?: SlashEditorState; search?: PageSearch }
+export type CustomizePageState = { row: number; typing?: string; error?: string; module?: number; view?: number; /** The hidden project picked under "Hidden projects". */ hidden?: number; menu?: SlashEditorState; search?: PageSearch }
 
 /** What the page knows besides the profile: the view's mode (the full view draws default footer rows) and an extension that draws the footer. */
 export type CustomizeFacts = { mode?: PresentationMode; footerExtension?: string; /** `experimental.bots` is on: the sidebar's bot rows are listed. */ bots?: boolean }
@@ -167,7 +167,7 @@ const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
   messageRenderer: ["plain", "markdown", "full"], submitScroll: ["bottom", "clear"], presentation: ["auto", "raw", "minimal", "mendcode", "balanced", "full"], reasoning: ["auto", "hidden", "collapsed", "expanded"], toolOutput: ["auto", "collapsed", "expanded"], toolDensity: TOOL_DENSITIES, codeMapCard: CODE_MAP_CARDS, diffView: DIFF_VIEWS,
   logoKind: LOGO_KINDS, logoSize: LOGO_SIZES, homeAlign: HOME_ALIGNS, mascotSize: MASCOT_SIZES, petSize: PET_SIZES, logoFont: LOGO_FONTS, homeLayout: HOME_LAYOUTS, homeInput: HOME_INPUTS, homeRightPanel: HOME_PANELS, density: DENSITIES,
   promptBorder: ["auto", "single", "rounded", "double", "ascii"],
-  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarProjects: SIDEBAR_PROJECTS, sidebarLayout: SIDEBAR_LAYOUTS, sidebarSide: ["left", "right"], panelStart: ["remember", "shown", "hidden"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
+  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarProjects: SIDEBAR_PROJECTS, sidebarProjectsFrom: SIDEBAR_PROJECTS_FROM, sidebarLayout: SIDEBAR_LAYOUTS, sidebarSide: ["left", "right"], panelStart: ["remember", "shown", "hidden"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
 }
 
 /** The widest the label column gets: the longest label, up to 25 cells. */
@@ -300,6 +300,14 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
     const selected = Math.min(state.module ?? 0, modules.length - 1)
     if (key === "\r" || key === " ") return { state, action: { type: "toggleExtension", name: modules[selected]!.name } }
     return { state: { ...state, module: (selected + (backwards ? -1 : 1) + modules.length) % modules.length }, action: NONE }
+  }
+  // The folders hidden from the sidebar by hand: ←→ pick one, Enter brings it back (the list lives in the profile, so no other input).
+  if (row === "sidebarHiddenProjects") {
+    const hidden = profile.sidebarHiddenProjects
+    if (!hidden.length) return { state, action: NONE }
+    const selected = Math.min(state.hidden ?? 0, hidden.length - 1)
+    if (key === "\r" || key === " ") return { state: { ...state, hidden: Math.max(0, Math.min(selected, hidden.length - 2)) }, action: { type: "set", patch: { sidebarHiddenProjects: hidden.filter((_, index) => index !== selected) } } }
+    return { state: { ...state, hidden: (selected + (backwards ? -1 : 1) + hidden.length) % hidden.length }, action: NONE }
   }
   if (row === "pet") return { state, action: key === "\r" ? { type: "pet" } : { type: "set", patch: { pet: profile.pet && profile.pet !== "off" ? "off" : "mend" } } }
   if (row === "reset") return { state, action: key === "\r" ? { type: "reset" } : NONE }
@@ -604,6 +612,7 @@ function rowValue(field: CustomizeRow, profile: TuiProfile, input: CustomizeInpu
   if (field === "viewScaffold") return "enter writes a starter"
   if (field === "slashCommands") return "enter edit"
   if (field === "extensions") return `${input.modules?.length ?? 0} loaded`
+  if (field === "sidebarHiddenProjects") return profile.sidebarHiddenProjects.length ? `${profile.sidebarHiddenProjects.length} hidden · enter unhides` : "none · x on a project hides it"
   if (field === "exportLook") return "enter export"
   if (field === "reset" || field === "capabilityCatalogue") return ""
   if (field === "pet") return profile.pet || input.pet || "off"
@@ -659,6 +668,7 @@ function rowNotes(field: CustomizeRow, profile: TuiProfile, input: CustomizeInpu
     case "activitySound": return [muted(profile.activitySound === "off" ? "Silent" : profile.activitySound === "pulse" ? "Pulse on completion or approval" : "Hum while working; pulse when done")]
     case "views": return [muted("←→ slot · enter on/off · r clears its faults")]
     case "extensions": return [muted("←→ module · enter on/off")]
+    case "sidebarHiddenProjects": return [muted(profile.sidebarHiddenProjects.length ? "←→ project · enter brings it back" : "Press x on a project's row in the sidebar to hide it here")]
     default: return NUMBER_ROWS[field] ? [muted("←→ change · enter type a value")] : []
   }
 }
@@ -737,6 +747,9 @@ export function renderCustomizePage(input: CustomizeInput): Line[] {
             rows.push([{ text: `${here ? "  ›" : "   "} ${view.slot.padEnd(slotWidth)}  ${view.owner.padEnd(ownerWidth)}  `, fg: here ? "primary" : "text" }, { text: [status, timing].filter(Boolean).join(" · "), fg: view.tripped ? "error" : "muted" }])
             if (view.lastError && here) rows.push([{ text: `    ${view.lastError}`, fg: "error" }])
           }
+        }
+        if (field === "sidebarHiddenProjects") for (const [index, directory] of profile.sidebarHiddenProjects.entries()) {
+          rows.push([{ text: `${selected && index === Math.min(state.hidden ?? 0, profile.sidebarHiddenProjects.length - 1) ? "  ›" : "   "} ${truncateEnd(directory, Math.max(8, choicesWidth - 6))}`, fg: "text" }])
         }
         if (field === "extensions") for (const [index, module] of (input.modules ?? []).entries()) {
           rows.push([{ text: `${selected && index === (state.module ?? 0) ? "  ›" : "   "} ${module.enabled ? "on " : "off"} ${module.name}`, fg: module.errors.length ? "error" : "text" }])

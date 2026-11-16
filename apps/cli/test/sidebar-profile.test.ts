@@ -94,3 +94,26 @@ describe("sidebar profile keys", () => {
     expect(sections({ sidebarSections: "none" })).toEqual([])
   })
 })
+
+describe("whose projects the list shows, and the ones hidden by hand", () => {
+  test("sidebarProjectsFrom: you by default, you or all only, and the protocol agrees", () => {
+    expect(DEFAULT_TUI_PROFILE.sidebarProjectsFrom).toBe("you")
+    expect(TUI_DEFAULTS.sidebarProjectsFrom).toBe("you")
+    expect(normalizeTuiProfile({}).sidebarProjectsFrom).toBe("you")
+    expect(normalizeTuiProfile({ sidebarProjectsFrom: "all" }).sidebarProjectsFrom).toBe("all")
+    expect(normalizeTuiProfile({ sidebarProjectsFrom: "everyone" }).sidebarProjectsFrom).toBe("you")
+    expect(tuiProblems({ sidebarProjectsFrom: "all" })).toEqual([])
+    expect(tuiProblems({ sidebarProjectsFrom: "mine" })[0]).toContain("you|all")
+  })
+
+  test("sidebarHiddenProjects: empty by default, strings only, de-duplicated and capped at 200", () => {
+    expect(DEFAULT_TUI_PROFILE.sidebarHiddenProjects).toEqual([])
+    expect(TUI_DEFAULTS.sidebarHiddenProjects).toEqual([])
+    expect(normalizeTuiProfile({ sidebarHiddenProjects: ["/a", 3, "/a", "/b", ""] }).sidebarHiddenProjects).toEqual(["/a", "/b"])
+    expect(normalizeTuiProfile({ sidebarHiddenProjects: "/a" }).sidebarHiddenProjects).toEqual([])
+    expect(normalizeTuiProfile({ sidebarHiddenProjects: Array.from({ length: 300 }, (_, i) => `/p/${i}`) }).sidebarHiddenProjects).toHaveLength(200)
+    expect(tuiProblems({ sidebarHiddenProjects: ["/a"] })).toEqual([])
+    expect(tuiProblems({ sidebarHiddenProjects: [1] })[0]).toContain("sidebarHiddenProjects")
+    expect(tuiProblems({ sidebarHiddenProjects: Array.from({ length: 201 }, (_, i) => `/p/${i}`) })[0]).toContain("200")
+  })
+})

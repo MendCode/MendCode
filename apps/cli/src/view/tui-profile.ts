@@ -40,6 +40,11 @@ export type SidebarMode = (typeof SIDEBAR_MODES)[number]
 /** Whose sessions the left sidebar lists: `auto` is all projects while experimental bots are on and the opened folder otherwise; `folder` and `all` always mean what they say. */
 export const SIDEBAR_PROJECTS = ["auto", "folder", "all"] as const
 export type SidebarProjects = (typeof SIDEBAR_PROJECTS)[number]
+/** Whose projects the all-projects list shows: the ones you typed in, or every one. */
+export const SIDEBAR_PROJECTS_FROM = ["you", "all"] as const
+export type { SidebarProjectsFrom } from "./sidebar-projects"
+import type { SidebarProjectsFrom } from "./sidebar-projects"
+export const MAX_HIDDEN_PROJECTS = 200
 /** Whether the left sidebar lists every project as folding groups for this setting and bots flag. */
 export const sidebarListsAll = (projects: SidebarProjects, botsOn: boolean) => projects === "all" || (projects === "auto" && botsOn)
 /** Experimental bots: the starting layouts of the left sidebar. `icons-only` is a narrow column; `scratch` shows no section until the user adds them. */
@@ -424,6 +429,10 @@ export type TuiProfile = {
   sidebar: SidebarMode
   /** Whose sessions the left sidebar lists: the opened folder's (today's), or every project's as folding groups. */
   sidebarProjects: SidebarProjects
+  /** Which projects that list shows: `you` (default) the ones where a person typed or that work now, `all` every one; the rest sit behind `+ N more projects`. */
+  sidebarProjectsFrom: SidebarProjectsFrom
+  /** Project folders hidden by hand (canonical, at most 200): never listed, the opened folder apart. Unhide in `/customize` › Hidden projects. */
+  sidebarHiddenProjects: string[]
   /** Sessions each project of that list shows before its `+ N more` row (1..50); the open one and the busy ones always show. */
   sidebarPreviewCount: number
   /** Projects that list shows before its `+ N more projects` row (1..30); 0 fills the sidebar's height. The open one and the busy ones always show. */
@@ -672,6 +681,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   promptStatus: "off",
   sidebar: "auto",
   sidebarProjects: "auto",
+  sidebarProjectsFrom: "you",
+  sidebarHiddenProjects: [],
   sidebarPreviewCount: 5,
   sidebarProjectCount: 0,
   sidebarRecentDays: 7,
@@ -1054,6 +1065,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     promptStatus: oneOf(["off", "border"] as const, source.promptStatus) ?? "off",
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,
     sidebarProjects: oneOf(SIDEBAR_PROJECTS, source.sidebarProjects) ?? DEFAULT_TUI_PROFILE.sidebarProjects,
+    sidebarProjectsFrom: oneOf(SIDEBAR_PROJECTS_FROM, source.sidebarProjectsFrom) ?? DEFAULT_TUI_PROFILE.sidebarProjectsFrom,
+    sidebarHiddenProjects: Array.isArray(source.sidebarHiddenProjects) ? [...new Set(source.sidebarHiddenProjects.filter((name): name is string => typeof name === "string" && name.length > 0 && name.length <= 4096))].slice(0, MAX_HIDDEN_PROJECTS) : [],
     sidebarPreviewCount: typeof source.sidebarPreviewCount === "number" && Number.isFinite(source.sidebarPreviewCount) ? Math.max(1, Math.min(50, Math.floor(source.sidebarPreviewCount))) : DEFAULT_TUI_PROFILE.sidebarPreviewCount,
     sidebarProjectCount: typeof source.sidebarProjectCount === "number" && Number.isFinite(source.sidebarProjectCount) ? Math.max(0, Math.min(30, Math.floor(source.sidebarProjectCount))) : DEFAULT_TUI_PROFILE.sidebarProjectCount,
     sidebarRecentDays: typeof source.sidebarRecentDays === "number" && Number.isFinite(source.sidebarRecentDays) ? Math.max(0, Math.min(365, Math.floor(source.sidebarRecentDays))) : DEFAULT_TUI_PROFILE.sidebarRecentDays,

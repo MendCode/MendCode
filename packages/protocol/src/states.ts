@@ -64,6 +64,15 @@ export type ForegroundState = z.infer<typeof ForegroundState>
  */
 export const QueueDelivery = z.enum(["queue", "steer", "restart"])
 export type QueueDelivery = z.infer<typeof QueueDelivery>
+/**
+ * Where a session or one of its messages came from, decided by the daemon from the connection and never taken from the
+ * client's words (docs/sessions.md). `tui`: typed by the user in the terminal UI or an interactive remote client. `cli`: a
+ * command-line subcommand (`mendcode session send`, `run`). `agent`: another agent or a bridge. `auto`: the daemon itself
+ * (loops, workflows, the PR reviewer, dream, sub-agents, synthetic continuations).
+ */
+export const SESSION_ORIGINS = ["tui", "cli", "agent", "auto"] as const
+export const SessionOrigin = z.enum(SESSION_ORIGINS)
+export type SessionOrigin = z.infer<typeof SessionOrigin>
 export const QueueEntryKind = z.enum(["message", "shell", "compact", "notice"])
 export type QueueEntryKind = z.infer<typeof QueueEntryKind>
 

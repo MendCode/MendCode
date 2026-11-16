@@ -32,7 +32,7 @@ import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-c
 import { PROGRAM_NAME } from "@mendcode/program"
 import { sameDir } from "@mendcode/program/data-dir"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
-import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
+import { callerCapabilities, guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
 import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 
@@ -466,7 +466,7 @@ async function connect() {
     ...(soloHost ? { loopback: () => (soloHost && !soloHost.stopped ? soloHost.attach : undefined) } : {}),
     name: "mendcode",
     // The interactive terminal draws extension dialogs; a headless run, ACP or the app server never declares it, so a hook's dialog answers its default there at once.
-    ...(remoteAttach ? {} : { capabilities: [...originCapabilities({ env: process.env, dir: originDir(daemonDataDir) }), ...(startup?.kind === "tui" ? [EXTENSION_DIALOGS_CAPABILITY] : [])] }),
+    ...(remoteAttach ? {} : { capabilities: [...originCapabilities({ env: process.env, dir: originDir(daemonDataDir) }), ...callerCapabilities(process.env), ...(startup?.kind === "tui" ? [EXTENSION_DIALOGS_CAPABILITY] : [])] }),
     trace: traceEnabled,
     onEvent: (event) => (listener ?? app)?.onEvent(event),
     // The daemon pushes the last quota right after the handshake, before the app exists; keep it.

@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { CommandInput, CommandReply } from "@mendcode/protocol"
 import type { SessionSummary } from "@mendcode/protocol"
-import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
+import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_WIDTH } from "../src/view/sidebar"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 
@@ -46,7 +46,7 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
   })
   h.app.applySettings(bots ? { experimental: { bots: true } } : {})
   if (!empty) conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
-  return { ...h, inspected, sessions, current }
+  return { ...h, inspected, sessions, current, dataDir }
 }
 type App = ReturnType<typeof chatApp>
 const side = (h: App) => h.text().map((row) => row.slice(0, SIDEBAR_WIDTH))
@@ -327,5 +327,50 @@ describe("sections are jumpable from the keyboard", () => {
     await h.type(LEFT)
     expect(sidebarText(h)).toContain("tab section")
     expect(sidebarText(h)).toContain("→ prompt")
+  })
+})
+
+describe("the projects you typed in, and hiding one by hand", () => {
+  const tool = (directory: string, title: string, age: number): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW, updatedAt: NOW - age, lastSeq: 0, state: "idle", queued: 0, origin: "agent" }) as SessionSummary
+  const toolOnly = [tool("/repos/x0", "bridge chat", 3 * MINUTE)]
+
+  test("by default a project only tools worked in waits behind the more row, and all lists it", async () => {
+    const you = chatApp({ profile: { sidebarProjectCount: 30 }, extraSessions: toolOnly })
+    await until(you, "▾ app")
+    expect(sidebarText(you)).not.toContain("bridge chat")
+    expect(sidebarText(you)).toMatch(/\+ 1 more projects/)
+    const all = chatApp({ profile: { sidebarProjectCount: 30, sidebarProjectsFrom: "all" }, extraSessions: toolOnly })
+    await until(all, "bridge chat")
+    expect(sidebarText(all)).not.toContain("more projects")
+  })
+
+  test("x on a project row hides it with a one-line notice, and it stays out of the more row too", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await until(h, "▾ site")
+    await h.type(LEFT)
+    await goTo(h, /^› [▾▸] site/)
+    expect(sidebarText(h)).toContain("x hide")
+    await h.type("x")
+    h.app.render()
+    expect(sidebarText(h)).not.toContain("▾ site")
+    expect(h.text().join("\n")).toContain("hid site · /customize to bring it back")
+    expect(readTuiProfile(h.dataDir).sidebarHiddenProjects).toEqual(["/work/site"])
+  })
+
+  test("the opened project cannot be hidden", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await until(h, "▾ app")
+    await h.type(LEFT)
+    await goTo(h, /^› [▾▸] app/)
+    await h.type("x")
+    h.app.render()
+    expect(sidebarText(h)).toContain("▾ app")
+    expect(readTuiProfile(h.dataDir).sidebarHiddenProjects).toEqual([])
+  })
+
+  test("a project hidden in the profile never lists", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30, sidebarHiddenProjects: ["/work/site"] } })
+    await until(h, "▾ app")
+    expect(sidebarText(h)).not.toContain("site")
   })
 })

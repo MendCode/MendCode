@@ -196,3 +196,44 @@ describe("the list the sidebar draws", () => {
     expect(rows).not.toContain("more projects")
   })
 })
+
+describe("whose projects the all-projects list shows", () => {
+  const s = (directory: string, ago: number, extra: Record<string, unknown> = {}) => ({ sessionId: `${directory}:${ago}:${Object.keys(extra).join("")}`, directory, updatedAt: NOW - ago, ...extra })
+  const rank = (sessions: ReturnType<typeof s>[], over: Partial<Parameters<typeof rankProjects>[0]> = {}) => rankProjects({ sessions: sessions as never, opened: "/work/open", now: NOW, count: 10, busy: () => false, isProject: () => true, ...over })
+
+  test("you: a project where a person typed shows; tool-only projects wait behind the more row", () => {
+    const sessions = [s("/p/typed", MINUTE, { origin: "cli", lastHumanAt: NOW - MINUTE }), s("/p/tools", 2 * MINUTE, { origin: "agent" }), s("/p/cli", 3 * MINUTE, { origin: "cli" })]
+    const out = rank(sessions, { from: "you" })
+    expect(out.shown).toEqual(["/p/typed", "/work/open"])
+    expect(out.rest).toEqual(["/p/tools", "/p/cli"])
+  })
+
+  test("all: every project shows as before", () => {
+    const sessions = [s("/p/typed", MINUTE, { origin: "tui", lastHumanAt: NOW }), s("/p/tools", 2 * MINUTE, { origin: "auto" })]
+    expect(rank(sessions, { from: "all" })).toEqual({ shown: ["/p/typed", "/p/tools", "/work/open"], rest: [] })
+  })
+
+  test("you: a session with no recorded origin counts as a person's, so older data is not hidden", () => {
+    expect(rank([s("/p/old", DAY)], { from: "you" }).shown).toEqual(["/p/old", "/work/open"])
+  })
+
+  test("you: a project with a session working or waiting now shows, and so does the opened folder, whoever made them", () => {
+    const sessions = [s("/p/running", DAY, { origin: "auto" }), s("/work/open", DAY, { origin: "auto" }), s("/p/quiet", MINUTE, { origin: "auto" })]
+    const out = rank(sessions, { from: "you", busy: (session) => String(session.directory) === "/p/running" })
+    expect(out.shown).toEqual(["/p/running", "/work/open"])
+    expect(out.rest).toEqual(["/p/quiet"])
+  })
+
+  test("you: a folder used today for tools only is not forced onto the list", () => {
+    const out = rank([s("/new/x", MINUTE, { origin: "agent" })], { from: "you", isProject: () => false, eligible: () => true })
+    expect(out.shown).toEqual(["/work/open"])
+    expect(out.rest).toEqual(["/new/x"])
+  })
+
+  test("a hidden project never shows, not even behind the more row; the opened folder ignores it", () => {
+    const sessions = [s("/p/gone", MINUTE, { lastHumanAt: NOW }), s("/p/kept", 2 * MINUTE, { lastHumanAt: NOW }), s("/work/open", 3 * MINUTE, { lastHumanAt: NOW })]
+    const out = rank(sessions, { from: "all", hidden: new Set(["/p/gone", "/work/open"]) })
+    expect(out.shown).toEqual(["/p/kept", "/work/open"])
+    expect(out.rest).toEqual([])
+  })
+})
