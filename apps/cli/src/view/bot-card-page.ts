@@ -17,7 +17,10 @@ export type BotCardActions = {
   openSession(sessionId: string): Promise<void>
   /** A new session of this bot in `directory`, opened. */
   newSession(directory: string): Promise<void>
+  /** Opens the bot form on this bot. */
   edit(): Promise<void>
+  /** Opens the delete confirmation of this bot. */
+  delete(): Promise<void>
   memory(): Promise<void>
   close(): void
   redraw(): void
@@ -46,13 +49,14 @@ const FACE_MIN_INNER = 40
 const FACE_MIN_HEIGHT = 12
 const FACE_GAP = 2
 
-type Row = { kind: "action"; id: "new" | "edit" | "memory"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
+type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
 type Item = { line: Line; row?: number }
 
 const ACTIONS: ReadonlyArray<Extract<Row, { kind: "action" }>> = [
   { kind: "action", id: "new", label: "New session in a folder", hint: "n" },
   { kind: "action", id: "edit", label: "Edit", hint: "e" },
   { kind: "action", id: "memory", label: "Memory", hint: "m" },
+  { kind: "action", id: "delete", label: "Delete", hint: "d" },
 ]
 const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted", waiting: "warning", problem: "error" }
 const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
@@ -74,6 +78,7 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     if (row.kind === "session") return actions.openSession(row.sessionId)
     if (row.id === "edit") return actions.edit()
     if (row.id === "memory") return actions.memory()
+    if (row.id === "delete") return actions.delete()
     picking = { selected: 0 }
     actions.redraw()
   }
@@ -97,6 +102,7 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     else if (value === "n") return activate(ACTIONS[0]!)
     else if (value === "e") return activate(ACTIONS[1]!)
     else if (value === "m") return activate(ACTIONS[2]!)
+    else if (value === "d") return activate(ACTIONS[3]!)
     else if (value === "\r" || value === " ") return activate(rows[selected]!)
     return actions.redraw()
   }
@@ -174,7 +180,7 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     const body = items.slice(start, start + room).map((item) => fit(item.line, inner))
     // The page's header takes two rows and a margin two cells; a face scrolled out of the window shows no picture.
     if (picture && start === 0) placements?.push({ ...picture, row: 2 })
-    return appearancePage({ title: "Bot", hints: picking ? "↑↓ · ↵ start here · esc back" : "↑↓ · ↵ open · n new · e edit · m memory · esc back", body, width, height })
+    return appearancePage({ title: "Bot", hints: picking ? "↑↓ · ↵ start here · esc back" : "↑↓ · ↵ open · n new · e edit · m memory · d delete · esc back", body, width, height })
   }
 
   return { render, key, setVisible: (visible) => animator?.setVisible(visible), stop: () => animator?.stop() }

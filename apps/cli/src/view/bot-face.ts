@@ -199,9 +199,13 @@ export function botFace({ name, shape, color, state: asked, size, capability, fr
   return { ...result, mode: "image", image: { key, image } }
 }
 
-/** What the terminal can show, from the detection pets already use: images for kitty, iTerm2 and sixel; text for anything else. */
-export function faceCapability({ env, depth, mode = "auto", answers, ascii, avatar, cellPixels, theme }: { env: Record<string, string | undefined>; depth: "truecolor" | "256"; mode?: ImageMode; answers?: { da1?: string }; ascii?: boolean; avatar?: PetImage; cellPixels?: CellPixels; theme?: Pick<Theme, "colors"> }): FaceCapability {
-  const tier = detectImageTier(env, depth, mode, answers)
+/**
+ * What the terminal can show, from the detection pets already use: images for kitty, iTerm2 and sixel; text for anything else. A face is
+ * a picture only where the terminal is known by name (or the user chose a protocol): the device-attributes answer is not read, because a
+ * terminal that lists sixel there may still not draw it, and the face area would stay blank.
+ */
+export function faceCapability({ env, depth, mode = "auto", ascii, avatar, cellPixels, theme }: { env: Record<string, string | undefined>; depth: "truecolor" | "256"; mode?: ImageMode; /** Accepted for callers that pass the host's answers; unused (see above). */ answers?: { da1?: string }; ascii?: boolean; avatar?: PetImage; cellPixels?: CellPixels; theme?: Pick<Theme, "colors"> }): FaceCapability {
+  const tier = detectImageTier(env, depth, mode)
   return { ascii: ascii === true, images: tier === "kitty" || tier === "iterm2" || tier === "sixel", ...(avatar ? { avatar } : {}), ...(cellPixels ? { cellPixels } : {}), ...(theme ? { theme } : {}) }
 }
 

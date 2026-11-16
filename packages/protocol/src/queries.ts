@@ -1574,6 +1574,46 @@ export const BotCreate = lazySchema(() => z.strictObject({
 /** Copies a bot's file under a new name. Ack: `AgentCreateReport`. */
 export const BotDuplicate = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.duplicate"), name: botName(), newName: botName() }))
 
+/**
+ * The bot form's save (`/bot new`, the bot page's Edit). `create` makes `~/.mendcode/agents/<name>.md` (a taken name is refused);
+ * otherwise it rewrites that bot in place, keeping every frontmatter key the form has no field for. The form is a whole snapshot:
+ * a `shape`, `color`, `avatar` or `model` left out is removed, and `description` left out is kept (the plain one on create).
+ * The result must still parse as this bot or nothing is written. Ack: `AgentCreateReport`.
+ */
+export const BotSave = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.save"),
+  name: botName(),
+  create: z.boolean(),
+  description: z.string().trim().min(1).max(300).optional(),
+  /** The personality: the markdown body of the agent file. */
+  prompt: z.string().max(16_000),
+  shape: z.enum(BOT_SHAPES).optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  avatar: z.string().min(1).max(4096).optional(),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+  permission: z.enum(["plan", "ask", "smart", "edits", "full"]),
+}))
+
+/**
+ * What the model would write for a description, without writing it: the form shows it to confirm. Ack: `{ name, description, prompt,
+ * shape?, color?, generation, fallback? }`; a failed generation answers the plain template with `fallback` saying why.
+ */
+export const BotDraft = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.draft"),
+  directory: z.string().min(1).max(4096),
+  name: botName().optional(),
+  description: z.string().trim().min(1).max(300),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+}))
+
+/**
+ * Removes a bot: its agent file and, with `memory`, its memory folder `<data dir>/bots/<name>/`. Its sessions are never touched.
+ * Only a bot in the user's own `agents/` folder. Ack: `{ file, memoryRemoved, sessions }` (the sessions it leaves as plain sessions).
+ */
+export const BotDelete = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.delete"), name: botName(), memory: z.boolean() }))
+
 /** Without `text`, the bot's file as written. With `text`, the file is checked as an agent and replaced. Ack: `{ file, text, saved }`. */
 export const BotFile = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.file"), name: botName(), text: z.string().max(40_000).optional() }))
 

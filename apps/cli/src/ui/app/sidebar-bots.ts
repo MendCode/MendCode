@@ -241,7 +241,11 @@ export function createSidebarBots(ctx: AppContext) {
           refresh()
         },
         async edit() {
-          await (await import("./bots")).runBotCommand(ctx, `edit ${bot.name}`)
+          await (await import("./bots")).runBotCommand(ctx, `edit ${bot.name}`, { from: "bot" })
+          requestFrame()
+        },
+        async delete() {
+          await (await import("./bots")).runBotCommand(ctx, `delete ${bot.name}`, { from: "bot" })
           requestFrame()
         },
         async memory() {

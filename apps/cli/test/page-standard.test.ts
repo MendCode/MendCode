@@ -160,6 +160,7 @@ const PAGES: Record<string, { kind: "list"; search: "box" | "ahead" | "few" } | 
   whatsnew: { kind: "list", search: "box" },
   today: { kind: "list", search: "few" },
   bot: { kind: "list", search: "few" },
+  "bot-form": { kind: "other" },
 }
 
 describe("every page follows the standard", () => {

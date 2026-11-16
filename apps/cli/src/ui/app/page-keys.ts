@@ -169,6 +169,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     if (state.page === "messages" || state.page === "export") return actions.transcriptActionsKey(key)
     if (state.page === "diagnostics") { await actions.diagnosticsKey(key); return }
     if (state.page === "bot") { await state.botCard?.key(key); requestFrame(); return }
+    if (state.page === "bot-form") { await state.botForm?.key(key); requestFrame(); return }
     if (state.page === "worktrees" || state.page === "warp") { await actions.worktreesKey(key); return }
     if (state.page === "compound") { await actions.compoundKey(key); return }
     if (state.page === "ai-config") { await actions.aiConfigKey(key); return }

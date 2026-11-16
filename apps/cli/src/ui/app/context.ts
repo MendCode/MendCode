@@ -145,7 +145,7 @@ export type AppInput = {
   env?: Record<string, string | undefined>
 }
 
-export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today" | "bot"
+export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today" | "bot" | "bot-form"
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
@@ -636,6 +636,8 @@ export type AppState = {
   sidebarBots?: import("./sidebar-bots").SidebarBots
   /** The open bot page (`page: "bot"`): its drawing and keys. */
   botCard?: import("../../view/bot-card-page").BotCard | undefined
+  /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */
+  botForm?: { render(input: { width: number; height: number; ascii: boolean }): import("../theme").Line[]; key(key: string): Promise<void> } | undefined
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined

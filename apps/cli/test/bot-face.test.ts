@@ -240,6 +240,21 @@ describe("fallbacks in order", () => {
     expect(faceCapability({ env: { TERM_PROGRAM: "ghostty" }, depth: "truecolor", ascii: true }).ascii).toBe(true)
   })
 
+  test("a picture is drawn only where the protocol is positively known: Rex and plain xterm-256color get the text face", () => {
+    const rex = { TERM_PROGRAM: "rex", TERM_PROGRAM_VERSION: "0.1.0-preview.19", TERM: "xterm-256color", COLORTERM: "truecolor" }
+    expect(faceCapability({ env: rex, depth: "truecolor", mode: "auto" }).images).toBe(false)
+    expect(faceCapability({ env: { TERM: "xterm-256color", COLORTERM: "truecolor" }, depth: "truecolor" }).images).toBe(false)
+    const face = botFace({ name: "mendy", state: "idle", size: "card", capability: faceCapability({ env: rex, depth: "truecolor" }) })
+    expect(face.mode).toBe("unicode")
+    expect(text(face.lines).join("").trim()).not.toBe("")
+    // A terminal that merely lists sixel in its device attributes is not proof that it draws the picture.
+    expect(faceCapability({ env: rex, depth: "truecolor", answers: { da1: "\x1b[?62;4c" } }).images).toBe(false)
+    // Known by its own name, or chosen by the user.
+    expect(faceCapability({ env: { KITTY_WINDOW_ID: "1", TERM: "xterm-kitty" }, depth: "truecolor" }).images).toBe(true)
+    expect(faceCapability({ env: { TERM_PROGRAM: "iTerm.app", TERM: "xterm-256color" }, depth: "truecolor" }).images).toBe(true)
+    expect(faceCapability({ env: rex, depth: "truecolor", mode: "kitty" }).images).toBe(true)
+  })
+
   test("a placement for the image layer", () => {
     const face = botFace({ name: "ada", state: "talking", size: "card", capability: { images: true } })
     const placement = facePlacement({ face, slot: "bot:ada", row: 3, col: 2 })!

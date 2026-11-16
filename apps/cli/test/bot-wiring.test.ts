@@ -105,7 +105,7 @@ describe("the bot page draws the face", () => {
     const redraw = { frames: 0 }
     const card = createBotCard({
       bot: bot(state), folders: ["/work/app"],
-      actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, memory: async () => {}, close() {}, redraw() {} },
+      actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, delete: async () => {}, memory: async () => {}, close() {}, redraw() {} },
       face: { capability: () => capability, onFrame: () => void redraw.frames++, ...(timers ? { setTimer: timers.set, clearTimer: timers.clear } : {}) },
     })
     return { card, redraw, text: () => lines(card.render({ ...view, ...extra })).join("\n") }
@@ -173,7 +173,7 @@ describe("the face clock exists only while the page is shown", () => {
   }
   const make = (state: BotState, clock: ReturnType<typeof timers>, reducedMotion = false) => createBotCard({
     bot: bot(state), folders: [],
-    actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, memory: async () => {}, close() {}, redraw() {} },
+    actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, delete: async () => {}, memory: async () => {}, close() {}, redraw() {} },
     face: { capability: () => ({}), onFrame() {}, reducedMotion: () => reducedMotion, setTimer: clock.set, clearTimer: clock.clear },
   })
 
@@ -204,7 +204,7 @@ describe("the face clock exists only while the page is shown", () => {
   })
 
   test("without the face option nothing is created at all", () => {
-    const card = createBotCard({ bot: bot("idle"), folders: [], actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, memory: async () => {}, close() {}, redraw() {} } })
+    const card = createBotCard({ bot: bot("idle"), folders: [], actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, delete: async () => {}, memory: async () => {}, close() {}, redraw() {} } })
     card.setVisible(true)
     card.stop()
     expect(lines(card.render({ width: 80, height: 24, now: NOW })).join("\n")).not.toContain("╭")

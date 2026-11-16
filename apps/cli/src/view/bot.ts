@@ -1,13 +1,15 @@
 import type { BotInfo, BotListReport } from "@mendcode/protocol"
 
 /** Experimental bots (docs/agents.md): the words of `/bot` and the text its pages show. Pure, so the daemon-free parts are tested alone. */
-export const BOT_USAGE = "usage: /bot [list] · new <name> [description] · new -d <description> · edit <name> · duplicate <name> <new> · memory <name> [add|clear] [--project] [text]"
+export const BOT_USAGE = "usage: /bot [list] · new [name] · new <name> <description> · new -d <description> · edit <name> · delete <name> · duplicate <name> <new> · memory <name> [add|clear] [--project] [text]"
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 export type BotWords =
   | { kind: "list" }
+  /** The form opens either way; with `generate` the model's draft of `description` fills it first. */
   | { kind: "new"; name?: string; description: string; generate: boolean }
   | { kind: "edit"; name: string }
+  | { kind: "delete"; name: string }
   | { kind: "duplicate"; name: string; newName: string }
   | { kind: "memory"; name: string; op: "list" | "add" | "clear"; project: boolean; text?: string }
   | { kind: "error"; message: string }
@@ -26,14 +28,15 @@ export function parseBotWords(args: string): BotWords {
       return description.length > 300 ? bad(`a description takes at most 300 characters (this one has ${description.length})`) : { kind: "new", description, generate: true }
     }
     const [name, ...text] = rest
-    if (!name) return bad("new needs a name, for example: /bot new calm a calm green reviewer")
+    // No words: an empty form. A name: the form with the name filled in. A description too: the model drafts it (the plain template when that fails) and the form shows the draft.
+    if (!name) return { kind: "new", description: "", generate: false }
     if (!NAME.test(name)) return bad(nameError(name))
     const description = text.join(" ")
     if (description.length > 300) return bad(`a description takes at most 300 characters (this one has ${description.length})`)
-    // A description is written by the model (the plain template when that fails); a bare name makes the plain template without a call.
-    return { kind: "new", name, description: description || `The ${name} bot`, generate: description !== "" }
+    return { kind: "new", name, description, generate: description !== "" }
   }
   if (verb === "edit") return rest.length === 1 && NAME.test(rest[0]!) ? { kind: "edit", name: rest[0]! } : bad("edit needs one bot name")
+  if (verb === "delete") return rest.length === 1 && NAME.test(rest[0]!) ? { kind: "delete", name: rest[0]! } : bad("delete needs one bot name")
   if (verb === "duplicate") {
     if (rest.length !== 2) return bad("duplicate needs the bot's name and the new name")
     const invalid = rest.find((name) => !NAME.test(name))

@@ -13,6 +13,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - The left list can show every project as folding groups (`/customize` › Sidebar projects), and with experimental bots on it also lists the bots with their state, marks a bot's sessions with its icon, opens a bot's page (new session in a folder, edit, memory) and takes a starting layout (projects first, bots first, icons only, from scratch) with sections you order and hide.
 - Experimental bots (`/experimental bots on`): an agent with a name, a look and its own memory that you send to work in any folder. `/bot new`, `/bot list`, `/bot edit` and `/bot duplicate` make and manage them, and `/bot memory` teaches one.
+- Experimental bots have a form: `/bot new`, `/bot edit` and Edit on a bot's page open name, color, shape, face, personality, model and permission with a live face, and nothing is written until Create or Save. `/bot new -d <description>` has the model draft it into the same form to confirm.
+- Experimental bots can be deleted with `/bot delete <name>`, the Delete action (`d`) on a bot's page or the form's Delete button. It asks first (lowercase `y`), removes the agent file, keeps the bot's memory unless you choose to remove it too, and never deletes its sessions.
 - With experimental bots on, a bot's page shows its face beside its details, moving only while the page is open, and where the terminal draws images the left list shows each bot's picture in place of its icon.
 - Experimental bots have a face made from their name (same shape and color every time) that shows whether the bot is sleeping, listening, thinking, talking, waiting or has a problem: a real picture where the terminal shows images (a bot's own `avatar` when it has one), else text, else plain ASCII.
 
@@ -27,6 +29,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A bot's face is a picture only on terminals known to draw images; elsewhere, including terminals that only list sixel support, the page shows the text face instead of an empty area.
 - The left and right arrows between sub-agent chats move only between the sub-agents that are still working, not through the finished ones.
 - A Claude sub-agent started before a daemon restart and woken by a message shows its work in its own thread again; before, what it did was not shown or kept, so neither the session nor `/btw` could see it.
 - Restarting or stopping the daemon ends every Claude Code process it ran; one with a background agent could stay alive and keep working beside the new process for the same session.

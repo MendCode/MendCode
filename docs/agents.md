@@ -650,13 +650,20 @@ You review gently…
 | command | does |
 |---|---|
 | `/bot` or `/bot list` | the bots, their state (working, waiting for you, idle, problem) and the folders they work in |
-| `/bot new <name> [description]` | makes the file; with a description the model writes the when-to-use text and the prompt (the plain template when that fails), and the words "green", "red", "square"… pick the color and shape |
-| `/bot new -d <description>` | the same, with the model choosing the name: `/bot new -d a calm green reviewer` |
-| `/bot edit <name>` | opens the file in `$VISUAL` / `$EDITOR`; a change is checked as an agent file and saved, a broken one is refused and nothing is written |
+| `/bot new [name]` | opens the bot form with the name filled in; nothing is written until Create |
+| `/bot new <name> <description>` or `/bot new -d <description>` | the model drafts the name (when you gave none), the when-to-use text and the personality, and the words "green", "red", "square"… pick the color and shape; the draft opens in the same form to confirm, and nothing is written until Create |
+| `/bot edit <name>` | opens the form on the bot; the name stays, a save that would break the file is refused and nothing is written |
+| `/bot delete <name>` | asks first (lowercase `y` confirms, Enter does not; `m` also removes its memory folder, kept by default; Esc cancels), then removes the agent file. Its sessions and conversations are never deleted: they stay in `/sessions` as normal sessions |
 | `/bot duplicate <name> <new>` | copies the file under a new name (the memory is not copied) |
 | `/bot memory <name> [add\|clear] [--project] [text]` | shows, adds to or clears what the bot remembers |
 
-All of them end in the same file, so writing it by hand is the same bot. Run a bot in a folder with `/agent <name>` in a session of that folder: it is an ordinary session, so several folders at once are several sessions.
+All of them end in the same file, so writing it by hand is the same bot.
+
+### The bot form
+
+`/bot new`, `/bot edit` and Edit (`e`) on a bot's page open one form: name (checked like an agent name; fixed when editing), color and shape (`auto` takes them from the name), face (generated, or the path of a `.png` or `.webp` checked by the avatar rules above), personality (the body of the file; with `$VISUAL` or `$EDITOR` set an "open in $EDITOR" row also edits it there), model (the catalog, or the session's own) and permission (`plan`, `ask`, `smart` by default, `edits`, `full`). A live face above the rows follows the name, shape and color. Tab or ↑↓ move between rows, ←→ change a choice, Enter on a button presses it, Esc discards. A problem shows under its row; nothing is written while one is open. The bot's page also has Delete (`d`) and the form has a Delete button; both ask first as `/bot delete` does.
+
+The form saves with `bot.save` (`create` makes the file and refuses a taken name; otherwise it rewrites that bot, keeping every frontmatter key the form has no row for, and refuses a result that would not parse as this bot). `bot.draft` answers what the model would write for a description without writing it. `bot.delete` removes the agent file in your own `agents/` folder (and with `memory` its `bots/<name>/` folder), refuses anything that is not a bot, and answers how many sessions it left alone. Run a bot in a folder with `/agent <name>` in a session of that folder: it is an ordinary session, so several folders at once are several sessions.
 
 ### What `bot.list` answers
 

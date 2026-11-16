@@ -13,10 +13,13 @@ describe("/bot words", () => {
   test("list, new with and without a description, new -d, edit, duplicate and memory", () => {
     expect(parseBotWords("")).toEqual({ kind: "list" })
     expect(parseBotWords("list")).toEqual({ kind: "list" })
-    expect(parseBotWords("new calm")).toEqual({ kind: "new", name: "calm", description: "The calm bot", generate: false })
+    // No words and a bare name open the form (no model call); a description has the model draft the form first.
+    expect(parseBotWords("new")).toEqual({ kind: "new", description: "", generate: false })
+    expect(parseBotWords("new calm")).toEqual({ kind: "new", name: "calm", description: "", generate: false })
     expect(parseBotWords("new calm a calm green reviewer")).toEqual({ kind: "new", name: "calm", description: "a calm green reviewer", generate: true })
     expect(parseBotWords("new -d a calm green reviewer")).toEqual({ kind: "new", description: "a calm green reviewer", generate: true })
     expect(parseBotWords("edit calm")).toEqual({ kind: "edit", name: "calm" })
+    expect(parseBotWords("delete calm")).toEqual({ kind: "delete", name: "calm" })
     expect(parseBotWords("duplicate calm calm-2")).toEqual({ kind: "duplicate", name: "calm", newName: "calm-2" })
     expect(parseBotWords("memory calm")).toEqual({ kind: "memory", name: "calm", op: "list", project: false })
     expect(parseBotWords("memory calm add --project uses tabs")).toEqual({ kind: "memory", name: "calm", op: "add", project: true, text: "uses tabs" })
@@ -25,8 +28,9 @@ describe("/bot words", () => {
 
   test("what does not parse says why", () => {
     const why = (text: string) => { const parsed = parseBotWords(text); return parsed.kind === "error" ? parsed.message : "" }
-    expect(why("new")).toContain("needs a name")
     expect(why("new Calm Bot")).toContain("is not a bot name")
+    expect(why("delete")).toContain("one bot name")
+    expect(why("delete a b")).toContain("one bot name")
     expect(why("new -d")).toContain("needs a description")
     expect(why(`new calm ${"x".repeat(301)}`)).toContain("at most 300")
     expect(why("edit")).toContain("one bot name")
@@ -85,35 +89,19 @@ describe("/bot in the terminal", () => {
     expect(screen(h)).toContain("bots are off: turn them on with /experimental bots on")
   })
 
-  test("/bot new with a description asks the model; with a bare name it does not; the result says what was written", async () => {
-    const h = app((command) => command.type === "bot.create" ? { ok: true, result: { file: "/d/agents/calm.md", agent: { name: "calm", bot: { shape: "circle", color: "success", origin: "mendcode" } }, generation: command.generate ? "model" : "deterministic", callsProviders: command.generate === true } } : undefined)
-    await h.type("/bot new calm a calm green reviewer\r")
-    expect(h.sentOf("bot.create")[0]).toMatchObject({ name: "calm", description: "a calm green reviewer", generate: true })
-    expect(screen(h)).toContain("bot calm made · circle success · written by the model")
-    await h.type("/bot new plain\r")
-    expect(h.sentOf("bot.create")[1]).toMatchObject({ name: "plain", description: "The plain bot" })
-    expect((h.sentOf("bot.create")[1] as { generate?: boolean }).generate).toBeUndefined()
-    await h.type("/bot new -d a quiet tester\r")
-    expect((h.sentOf("bot.create")[2] as { name?: string }).name).toBeUndefined()
-    expect(h.sentOf("bot.create")[2]).toMatchObject({ description: "a quiet tester", generate: true })
-  })
-
-  test("/bot edit opens the file in the editor and saves only a change", async () => {
-    const seen: string[] = []
-    let next = { ok: true as const, text: "---\ndescription: A calm reviewer\nbot: {}\n---\nChanged", changed: true }
-    const h = app(
-      (command) => command.type === "bot.file" ? { ok: true, result: { file: "/d/agents/calm.md", text: "---\ndescription: A calm reviewer\nbot: {}\n---\nOld", saved: "text" in command } } : undefined,
-      async () => async (request) => { seen.push(`${request.fileName}:${request.text.endsWith("Old")}`); return next },
-    )
+  test("/bot new and /bot edit open the form instead of writing: no bot.create goes out, and a bot that does not exist is named", async () => {
+    const h = app((command) => command.type === "bot.list" ? { ok: true, result: { bots: [bot], external: [], problems: [] } } : command.type === "bot.file" ? { ok: true, result: { file: "/d/agents/calm.md", text: "---\ndescription: A calm reviewer\nbot: {}\n---\nOld", saved: false } } : undefined)
+    await h.type("/bot new calm2\r")
+    expect(h.app.page).toBe("bot-form")
+    expect(h.sentOf("bot.create")).toHaveLength(0)
+    await h.type("\x1b")
     await h.type("/bot edit calm\r")
-    expect(seen).toEqual(["calm.md:true"])
-    expect(h.sentOf("bot.file")).toHaveLength(2)
-    expect(h.sentOf("bot.file")[1]).toMatchObject({ name: "calm", text: next.text })
-    expect(screen(h)).toContain("bot calm saved")
-    next = { ...next, changed: false }
-    await h.type("/bot edit calm\r")
-    expect(h.sentOf("bot.file")).toHaveLength(3)
-    expect(screen(h)).toContain("bot calm unchanged")
+    for (let turn = 0; turn < 40 && h.app.page !== "bot-form"; turn++) await Bun.sleep(5)
+    expect(h.app.page).toBe("bot-form")
+    expect(screen(h)).toContain("Old")
+    await h.type("\x1b")
+    await h.type("/bot edit nobody\r")
+    expect(screen(h)).toContain("no bot named nobody")
   })
 
   test("/bot duplicate and /bot memory send the daemon commands", async () => {

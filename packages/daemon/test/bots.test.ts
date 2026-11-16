@@ -29,7 +29,7 @@ describe("the bots flag", () => {
   test("every bot command is refused while the flag is off, and a bot file is an ordinary agent", async () => {
     const h = await start({ steps: [stop("ok")] }, false)
     put(path.join(h.dir, "agents", "calm.md"), botFile())
-    for (const command of [{ type: "bot.list" }, { type: "bot.create", directory: h.project, description: "x" }, { type: "bot.duplicate", name: "calm", newName: "calm2" }, { type: "bot.file", name: "calm" }, { type: "bot.memory", name: "calm", op: "list" }] as const) {
+    for (const command of [{ type: "bot.list" }, { type: "bot.create", directory: h.project, description: "x" }, { type: "bot.duplicate", name: "calm", newName: "calm2" }, { type: "bot.file", name: "calm" }, { type: "bot.save", name: "calm", create: false, prompt: "x", permission: "smart" }, { type: "bot.draft", directory: h.project, description: "x" }, { type: "bot.delete", name: "calm", memory: false }, { type: "bot.memory", name: "calm", op: "list" }] as const) {
       expect(error(await h.client.send(command as never))).toMatchObject({ code: "forbidden", message: expect.stringContaining("/experimental bots on") })
     }
     const sessionId = await openSession(h)
@@ -249,5 +249,99 @@ describe("a bot's memory", () => {
     await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
     await say(h, sessionId, "hi")
     expect(h.requests[0]!.system).not.toContain("short answers")
+  })
+})
+
+describe("the bot form's commands", () => {
+  const save = (over: Record<string, unknown> = {}) => ({ type: "bot.save", name: "pixel", create: true, prompt: "Calm reviewer, explains briefly.", permission: "smart", ...over }) as never
+  const text = (h: NativeHarness, name = "pixel") => readFileSync(path.join(h.dir, "agents", `${name}.md`), "utf8")
+
+  test("bot.save creates the agent file from the form's fields, and a taken or reserved name is refused", async () => {
+    const h = await start()
+    const made = result<unknown>(await h.client.send(save({ shape: "hexagon", color: "info", model: "gpt-6-luna", permission: "edits" })))
+    expect(AgentCreateReport.safeParse(made).success).toBe(true)
+    const file = path.join(h.dir, "agents", "pixel.md")
+    expect(made).toMatchObject({ file, generation: "deterministic", callsProviders: false })
+    expect(parseAgentFile({ text: text(h), stem: "pixel", file, source: "user" })).toMatchObject({ agent: { name: "pixel", description: "The pixel bot", mode: "primary", model: "gpt-6-luna", permission: "edits", prompt: "Calm reviewer, explains briefly.", bot: { shape: "hexagon", color: "info", origin: "mendcode" } } })
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["pixel"])
+    expect(error(await h.client.send(save())).message).toContain("already")
+    expect(error(await h.client.send(save({ name: "build" }))).message).toContain("already")
+    expect(existsSync(path.join(h.dir, "agents", "build.md"))).toBe(false)
+  })
+
+  test("bot.save on an existing bot rewrites its fields and body, keeps the keys the form has no field for, and removes what the form cleared", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), botFile("  avatar: face.png\n  origin: mendcode\n", "You review.").replace("permission: smart\n", "permission: smart\nmodel: old-model\ntools:\n  - read\n  - grep\neffort: high\n"))
+    const saved = result<unknown>(await h.client.send(save({ name: "calm", create: false, prompt: "You review gently.", color: "warning", permission: "ask" })))
+    expect(AgentCreateReport.safeParse(saved).success).toBe(true)
+    const file = path.join(h.dir, "agents", "calm.md")
+    const after = readFileSync(file, "utf8")
+    expect(parseAgentFile({ text: after, stem: "calm", file, source: "user" })).toMatchObject({ agent: { description: "A calm reviewer", permission: "ask", effort: "high", tools: ["read", "grep"], prompt: "You review gently.", bot: { color: "warning", origin: "mendcode" } } })
+    const agent = (parseAgentFile({ text: after, stem: "calm", file, source: "user" }) as { agent: Record<string, unknown> }).agent
+    expect(agent.model).toBeUndefined()
+    expect((agent.bot as Record<string, unknown>).shape).toBeUndefined()
+    expect((agent.bot as Record<string, unknown>).avatar).toBeUndefined()
+    expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
+  })
+
+  test("bot.save refuses a save that breaks the file, a plain agent and an unknown bot, and writes nothing", async () => {
+    const h = await start()
+    const file = path.join(h.dir, "agents", "calm.md")
+    put(file, botFile())
+    put(path.join(h.dir, "agents", "plain.md"), "---\ndescription: Not a bot\n---\nPlain.")
+    const before = readFileSync(file, "utf8")
+    expect(error(await h.client.send(save({ name: "calm", create: false, prompt: "x".repeat(16_001) }))).code).toBeDefined()
+    expect(readFileSync(file, "utf8")).toBe(before)
+    expect(error(await h.client.send(save({ name: "plain", create: false }))).message).toContain("no bot named plain")
+    expect(error(await h.client.send(save({ name: "nobody", create: false }))).message).toContain("no bot named nobody")
+    expect(readFileSync(path.join(h.dir, "agents", "plain.md"), "utf8")).toContain("Plain.")
+  })
+
+  test("bot.draft answers what the model writes for a description and writes nothing; a failure answers the plain template", async () => {
+    const h = await start({ complete: async () => JSON.stringify({ identifier: "Calm Reviewer", whenToUse: "Use this agent when a diff needs a gentle review.", systemPrompt: "You are a calm reviewer." }) })
+    const draft = result<Record<string, unknown>>(await h.client.send({ type: "bot.draft", directory: h.project, description: "a calm green reviewer" }))
+    expect(draft).toMatchObject({ name: "calm-reviewer", description: "Use this agent when a diff needs a gentle review.", prompt: "You are a calm reviewer.", color: "success", generation: "model" })
+    expect(existsSync(path.join(h.dir, "agents"))).toBe(false)
+    const plain = await start({ complete: async () => "not json" })
+    const fallback = result<Record<string, unknown>>(await plain.client.send({ type: "bot.draft", directory: plain.project, name: "plainer", description: "a red square tester" }))
+    expect(fallback).toMatchObject({ name: "plainer", generation: "deterministic", shape: "square", color: "error", fallback: expect.stringContaining("unusable") })
+    expect(existsSync(path.join(plain.dir, "agents", "plainer.md"))).toBe(false)
+  })
+
+  test("bot.delete removes the agent file, keeps the memory unless asked, and never touches the bot's sessions", async () => {
+    const h = await start({ steps: [stop("ok")] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    put(path.join(h.dir, "agents", "keep.md"), botFile())
+    put(path.join(h.dir, "bots", "calm", "memory.md"), "- Prefers short answers.\n")
+    put(path.join(h.dir, "bots", "keep", "memory.md"), "- Stays.\n")
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+
+    const kept = result<{ file: string; memoryRemoved: boolean; sessions: number }>(await h.client.send({ type: "bot.delete", name: "calm", memory: false }))
+    expect(kept).toEqual({ file: path.join(h.dir, "agents", "calm.md"), memoryRemoved: false, sessions: 1 })
+    expect(existsSync(path.join(h.dir, "agents", "calm.md"))).toBe(false)
+    expect(readFileSync(path.join(h.dir, "bots", "calm", "memory.md"), "utf8")).toContain("short answers")
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["keep"])
+    // The conversation is still there, as an ordinary session.
+    const sessions = result<{ sessions: Array<{ sessionId: string }> }>(await h.client.send({ type: "session.list", limit: 20 })).sessions
+    expect(sessions.some((session) => session.sessionId === sessionId)).toBe(true)
+
+    const wiped = result<{ memoryRemoved: boolean }>(await h.client.send({ type: "bot.delete", name: "keep", memory: true }))
+    expect(wiped.memoryRemoved).toBe(true)
+    expect(existsSync(path.join(h.dir, "bots", "keep"))).toBe(false)
+    expect(existsSync(path.join(h.dir, "bots", "calm"))).toBe(true)
+  })
+
+  test("bot.delete refuses a plain agent, an unknown name, a project's agent and a name that is a path", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "plain.md"), "---\ndescription: Not a bot\n---\nPlain.")
+    put(path.join(h.project, ".mendcode", "agents", "local.md"), botFile())
+    put(path.join(h.dir, "bots", "plain", "memory.md"), "- x\n")
+    for (const name of ["plain", "local", "nobody"]) expect(error(await h.client.send({ type: "bot.delete", name, memory: true })).message).toContain(`no bot named ${name}`)
+    expect(error(await h.client.send({ type: "bot.delete", name: "../agents/plain", memory: true } as never)).code).toBeDefined()
+    expect(existsSync(path.join(h.dir, "agents", "plain.md"))).toBe(true)
+    expect(existsSync(path.join(h.project, ".mendcode", "agents", "local.md"))).toBe(true)
+    expect(existsSync(path.join(h.dir, "bots", "plain", "memory.md"))).toBe(true)
   })
 })

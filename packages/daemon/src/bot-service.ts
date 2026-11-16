@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { BOT_COLORS, BOT_SHAPES, parseAgentFile } from "@mendcode/packages"
 import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotInfo, type BotListReport, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
-import { AGENT_CREATE_PERMISSIONS } from "@mendcode/protocol/wire"
+import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import { canonicalDir } from "@mendcode/tools"
 import type { createAgentFile } from "./agent-create"
 import type { AgentContent } from "./agent-generate"
@@ -149,6 +150,120 @@ export async function botFile(context: BotContext, command: Extract<Command, { t
   await writeFile(staged, command.text, { mode: 0o600 })
   await rename(staged, file)
   return { file, text: command.text, saved: true }
+}
+
+/** A frontmatter split into its top-level blocks (a `key:` line and the indented or blank lines under it) and the body after it. */
+function splitFile(text: string): { blocks: Array<{ key: string; lines: string[] }>; body: string } | undefined {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(text)
+  if (!match) return undefined
+  const blocks: Array<{ key: string; lines: string[] }> = []
+  for (const line of match[1]!.split(/\r?\n/)) {
+    const key = /^([A-Za-z_][\w-]*):/.exec(line)?.[1]
+    if (key !== undefined) blocks.push({ key, lines: [line] })
+    else blocks[blocks.length - 1]?.lines.push(line)
+  }
+  return { blocks, body: text.slice(match[0].length) }
+}
+
+/**
+ * The agent file with the form's fields applied: description (when given), model, permission and the `bot:` block are rewritten,
+ * every other frontmatter block is kept as it was, and the body becomes the personality.
+ */
+export function applyBotFields(text: string, fields: Pick<Extract<Command, { type: "bot.save" }>, "description" | "prompt" | "shape" | "color" | "avatar" | "model" | "permission">): string | undefined {
+  const parts = splitFile(text)
+  if (!parts) return undefined
+  const old = parts.blocks.find((block) => block.key === "bot")
+  const origin = old?.lines.map((line) => /^\s+origin:\s*(\S+)/.exec(line)?.[1]).find(Boolean) ?? "mendcode"
+  const kept = parts.blocks.filter((block) => !["model", "permission", "bot", ...(fields.description !== undefined ? ["description"] : [])].includes(block.key)).flatMap((block) => block.lines)
+  const front = [
+    ...(fields.description !== undefined ? [`description: ${JSON.stringify(fields.description)}`] : []),
+    ...kept,
+    ...(fields.model ? [`model: ${JSON.stringify(fields.model)}`] : []),
+    `permission: ${fields.permission}`,
+    "bot:",
+    ...(fields.shape ? [`  shape: ${fields.shape}`] : []),
+    ...(fields.color ? [`  color: ${fields.color}`] : []),
+    ...(fields.avatar ? [`  avatar: ${JSON.stringify(fields.avatar)}`] : []),
+    `  origin: ${origin}`,
+  ]
+  const body = fields.prompt.trim()
+  return ["---", ...front, "---", body, ""].join("\n")
+}
+
+/** Where a bot's file must be: directly in the user's own `agents/` folder. */
+const ownFile = (context: BotContext, file: string) => path.dirname(path.resolve(file)) === path.join(context.dir, "agents")
+
+/** The form's save: a new bot (a taken name is refused) or an existing one rewritten in place. Nothing is written unless the result is still this bot. */
+export async function saveBot(context: BotContext, command: Extract<Command, { type: "bot.save" }>): Promise<AgentCreateReport> {
+  const checked = (text: string | undefined, file: string) => {
+    if (text === undefined) throw new Error("[BOT]: the file has no frontmatter, so it would stop being a bot")
+    const parsed = parseAgentFile({ text, stem: command.name, file, source: "user" })
+    if ("problem" in parsed) throw new Error(`[BOT]: ${parsed.problem}`)
+    if (!parsed.agent.bot) throw new Error("[BOT]: the file lost its bot: block, so it would stop being a bot")
+    return parsed.agent
+  }
+  const report = (file: string, agent: ReturnType<typeof checked>): AgentCreateReport => {
+    const { prompt: _prompt, ...rest } = agent
+    return { file, agent: { ...rest, trusted: true }, generation: "deterministic", callsProviders: false }
+  }
+  if (command.create) {
+    if (context.agents().agents.some((agent) => agent.name === command.name) || ["build", "plan"].includes(command.name)) throw new Error(`[BOT]: ${command.name} is already an agent name`)
+    const file = path.join(context.dir, "agents", `${command.name}.md`)
+    const description = command.description ?? `The ${command.name} bot`
+    const text = applyBotFields(`---\ndescription: ${JSON.stringify(description)}\nmode: primary\n---\n`, { ...command, prompt: command.prompt.trim() ? command.prompt : description, description })
+    const agent = checked(text, file)
+    await mkdir(path.dirname(file), { recursive: true })
+    try { await writeFile(file, text!, { flag: "wx", mode: 0o600 }) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`[BOT]: agent file already exists: ${file}`)
+      throw error
+    }
+    return report(file, agent)
+  }
+  const found = find(context, command.name)
+  if ("error" in found) throw new Error(found.error)
+  const file = found.agent.file!
+  if (!ownFile(context, file)) throw new Error(`[BOT]: ${command.name} is not in your own agents folder, so it cannot be edited here`)
+  const text = applyBotFields(await readFile(file, "utf8"), { ...command, prompt: command.prompt.trim() ? command.prompt : found.agent.description })
+  const agent = checked(text, file)
+  const staged = `${file}.${process.pid}.tmp`
+  await writeFile(staged, text!, { mode: 0o600 })
+  await rename(staged, file)
+  return report(file, agent)
+}
+
+/** What the model would write for a description, not written: the form shows it to confirm. */
+export function draftBot(input: {
+  command: Extract<Command, { type: "bot.draft" }>
+  outcome?: { generated?: AgentContent; fallback?: string; calledProvider?: boolean }
+  exists(name: string): boolean
+}): { name: string; description: string; prompt: string; shape?: (typeof BOT_SHAPES)[number]; color?: (typeof BOT_COLORS)[number]; generation: "model" | "deterministic"; callsProviders: boolean; fallback?: string } {
+  const { command, outcome } = input
+  const name = outcome?.generated?.name ?? command.name ?? agentName(command.description)
+  if (command.name !== undefined && (input.exists(name) || ["build", "plan"].includes(name))) throw new Error(`[BOT]: ${name} is already an agent name`)
+  const look = lookFromText(command.description)
+  return {
+    name, description: outcome?.generated?.description ?? command.description, prompt: outcome?.generated?.prompt ?? command.description,
+    ...look, generation: outcome?.generated ? "model" : "deterministic", callsProviders: outcome?.calledProvider ?? false, ...(outcome?.fallback ? { fallback: outcome.fallback } : {}),
+  }
+}
+
+/** Removes a bot's agent file, and with `memory` its memory folder. Sessions are only counted: they stay as ordinary sessions. */
+export async function deleteBot(context: BotContext, command: Extract<Command, { type: "bot.delete" }>): Promise<{ file: string; memoryRemoved: boolean; sessions: number }> {
+  const found = find(context, command.name)
+  if ("error" in found) throw new Error(found.error)
+  const file = found.agent.file!
+  if (!ownFile(context, file)) throw new Error(`[BOT]: ${command.name} is not in your own agents folder, so it cannot be deleted here`)
+  const sessions = context.sessions(command.name).length
+  await rm(file, { force: true })
+  let memoryRemoved = false
+  if (command.memory) {
+    const folder = path.join(context.dir, "bots", command.name)
+    if (path.dirname(path.resolve(folder)) === path.join(context.dir, "bots")) {
+      memoryRemoved = existsSync(folder)
+      await rm(folder, { recursive: true, force: true })
+    }
+  }
+  return { file, memoryRemoved, sessions }
 }
 
 export function botMemory(context: BotContext, command: Extract<Command, { type: "bot.memory" }>): { global: string; project?: string } {
