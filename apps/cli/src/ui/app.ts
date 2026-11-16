@@ -94,7 +94,7 @@ import { buildBindings, readKeybindings, type KeybindingFile } from "../extensio
 import type { TranscriptHooks } from "../extensions/hooks"
 import { createEditor } from "../view/editor"
 import { attachmentLabels } from "../view/attachments"
-import { createVim } from "../view/vim"
+import { createLazyVim } from "../view/vim-lazy"
 import { createDraftSync } from "./drafts"
 import { createComments } from "./app/comments"
 import { osc52Copy } from "./osc52"
@@ -611,7 +611,7 @@ export function createApp(input: AppInput) {
     state: appState,
     now,
     editor,
-    vim: createVim(editor),
+    vim: createLazyVim(editor),
     scratchEditor,
     keybindingFile,
     stateLabels: STATE_LABEL,

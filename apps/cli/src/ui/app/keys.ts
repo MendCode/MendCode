@@ -144,6 +144,7 @@ export function createKeys(ctx: AppContext, actions: {
   /** Vim mode applies to the prompt while the setting is on; switching it off drops back to plain insert. */
   function vimOn() {
     if (!state.tuiProfile.vimMode && vim.mode !== "insert") vim.reset()
+    if (state.tuiProfile.vimMode) void vim.load()
     return state.tuiProfile.vimMode
   }
   const vimLive = () => vimOn() && !actions.pendingPanelRequest()

@@ -690,7 +690,7 @@ export type AppContext = {
   scratchEditor: ReturnType<typeof createEditor>
   editor: ReturnType<typeof createEditor>
   /** Modal layer over `editor`, active while the `vimMode` profile setting is on. */
-  vim: import("../../view/vim").Vim
+  vim: import("../../view/vim-lazy").LazyVim
   keybindingFile: KeybindingFile
   stateLabels: Record<ForegroundState, string>
   permissionLabels: Record<PermissionMode, string>
