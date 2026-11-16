@@ -135,7 +135,7 @@ function canonicalized(input: MultiInput): MultiInput {
   return changed ? { ...input, directory, sessions } : input
 }
 
-function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string> } {
+function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>; starts: Array<{ section: SidebarSection; id: string }> } {
   const input = canonicalized(raw)
   const g = input.glyphs ?? glyphs()
   const inner = (input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH) - 1 - PAD_X - 2
@@ -153,7 +153,10 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string> 
   const names = new Map<string, string>()
   const entries: Entry[] = []
   const lead = (id: string): Line => id === input.current ? [{ text: "▌", fg: "primary" }, { text: " " }] : id === picked ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
+  const starts: Array<{ section: SidebarSection; id: string }> = []
+  let inSection: SidebarSection | undefined
   const push = (line: Line, id?: string, picture?: { col: number; at: NonNullable<BotIcon["image"]> }) => {
+    if (id !== undefined && inSection && !starts.some((start) => start.section === inSection)) starts.push({ section: inSection, id })
     const selected = id !== undefined && id === picked
     entries.push({ line, ...(id !== undefined ? { id, lead: lead(id) } : { lead: [{ text: "  " }] }), ...(selected ? { fill: true } : {}), ...(picture ? { picture } : {}) })
   }
@@ -193,6 +196,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string> 
 
   const sections = shown(input)
   for (const section of sections) {
+    inSection = section
     if (section === "bots") {
       const bots = input.bots!
       if (!input.icons) { blankBetween(); heading("Bots", bots.bots.length + bots.external.length) }
@@ -270,7 +274,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string> 
     push([{ text: "Nothing shown", fg: "muted" }])
     if (!input.icons) push([{ text: "/customize › Sidebar sections", fg: "muted" }])
   }
-  return { entries, names }
+  return { entries, names, starts }
 }
 
 /** The ids the keyboard stops on, in drawing order. */
@@ -278,12 +282,16 @@ export function multiStops(input: MultiInput): string[] {
   return build(input).entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : [])
 }
 
+/** The first pickable row of every section that has one, in drawing order: where Tab and Shift+Tab land. */
+export function multiSectionStarts(input: MultiInput): string[] {
+  return build(input).starts.map((start) => start.id)
+}
 /** The sidebar, exactly `input.height` rows by the width of its kind, every row closed by the rule. */
 export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Array<{ row: number; id: string }>; /** The bots' pictures at the sidebar's own row and column; empty unless `faces` was given. */ images: ImagePlacement[] } {
   const g = input.glyphs ?? glyphs()
   const width = input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
   const inner = width - 1 - PAD_X - 2
-  const { entries, names } = build(input)
+  const { entries, names, starts } = build(input)
   const picked = input.focused ? input.selected ?? input.current : undefined
   const unread = new Set(input.unread ?? [])
   // The header's right side counts what works and what waits, over the sessions listed.
@@ -294,7 +302,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
     if (value === "running") counts.running++
     else if (value === "approval") counts.approval++
   }
-  const summary: Line = input.focused ? [{ text: "→ prompt", fg: "muted" }] : counts.running || counts.approval
+  const summary: Line = input.focused ? [{ text: starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
     ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
     : [{ text: "← focus", fg: "muted" }]
   const head: Entry[] = input.icons || input.header === false ? [] : [{ line: spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner) }, { line: [] }]

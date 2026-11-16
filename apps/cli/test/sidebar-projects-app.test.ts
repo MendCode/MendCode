@@ -249,3 +249,54 @@ describe("left and the sub-agents' arrows", () => {
     expect(sidebarText(h)).toContain("→ prompt")
   })
 })
+
+describe("sections are jumpable from the keyboard", () => {
+  const focused = async (profile: Partial<TuiProfile> = { sidebarProjectCount: 3, sidebarPreviewCount: 1 }) => {
+    const h = chatApp({ profile })
+    await until(h, "more projects")
+    await h.type(LEFT)
+    return h
+  }
+
+  test("Tab jumps to the next section's first row and Shift+Tab to the previous one, wrapping at the ends", async () => {
+    const h = await focused()
+    await h.type("\t")
+    expect(picked(h)).toMatch(/calm/)
+    await h.type("\t")
+    expect(picked(h)).toMatch(/^› [▾▸] app/)
+    await h.type("\x1b[Z")
+    expect(picked(h)).toMatch(/calm/)
+    await h.type("\x1b[Z")
+    expect(picked(h)).toMatch(/^› [▾▸] app/)
+  })
+
+  test("up on the first row wraps to the last row and down on the last wraps to the first", async () => {
+    const h = await focused()
+    await h.type("\t\t")
+    expect(picked(h)).toMatch(/^› [▾▸] app/)
+    await h.type(UP)
+    expect(picked(h)).toMatch(/calm/)
+    await h.type(DOWN)
+    expect(picked(h)).toMatch(/^› [▾▸] app/)
+  })
+
+  test("b jumps to the first bot", async () => {
+    const h = await focused()
+    await h.type("b")
+    expect(picked(h)).toMatch(/calm/)
+    await h.type(DOWN)
+    await h.type("b")
+    expect(picked(h)).toMatch(/calm/)
+  })
+
+  test("the header says Tab changes section while the list has focus, and Tab does nothing to the list otherwise", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 3, sidebarPreviewCount: 1 } })
+    await until(h, "more projects")
+    expect(sidebarText(h)).not.toContain("tab section")
+    await h.type("\t")
+    expect(sidebarText(h)).not.toContain("→ prompt")
+    await h.type(LEFT)
+    expect(sidebarText(h)).toContain("tab section")
+    expect(sidebarText(h)).toContain("→ prompt")
+  })
+})

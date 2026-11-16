@@ -183,7 +183,7 @@ describe("the sessions sidebar in the app", () => {
     h.app.render()
     expect(side(h).join("\n")).not.toContain("Put away")
     await h.app.onKey("\x1b[D")
-    await h.app.onKey("\x1b[B")
+    // The open session is the second stop; one down reaches Settled (a second would wrap to the first row).
     await h.app.onKey("\x1b[B")
     await h.app.onKey("\r")
     expect(side(h).join("\n")).toContain("Put away")

@@ -435,8 +435,17 @@ export function createKeys(ctx: AppContext, actions: {
         const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
         const onSettled = !multi && stops[index] === SETTLED_ROW
-        if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (arrow === "\x1b[B" ? 1 : -1)))]
-        else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        // Up from the first row wraps to the last and down from the last to the first.
+        if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
+        else if (multi && (key === "\t" || key === "\x1b[Z")) {
+          // Tab and Shift+Tab land on the first row of the next and the previous section, wrapping; a Shift+Tab inside a section goes to its own first row first.
+          const starts = multi.sectionStarts().map((id) => stops.indexOf(id)).filter((at) => at >= 0)
+          const next = key === "\t" ? starts.find((at) => at > index) ?? starts[0] : starts.findLast((at) => at < index) ?? starts.at(-1)
+          if (next !== undefined) state.sidebarSelected = stops[next]
+        } else if (multi && key === "b") {
+          const bot = multi.firstBot()
+          if (bot) state.sidebarSelected = bot
+        } else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false

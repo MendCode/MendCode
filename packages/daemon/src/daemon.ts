@@ -1001,8 +1001,19 @@ export async function startDaemon(options: DaemonOptions) {
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
     select: (sessionId, name) => store.setSessionAgent(sessionId, name === "build" ? undefined : name),
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
+    botsOn: () => botsOn(),
     botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
   })
+  /**
+   * The model a session's agent names (a bot's `model:`) when the catalog lists it. At turn time the agent's model wins over the session's
+   * (the engine's `choiceFor`), so the daemon routes, checks and reports that one, not the session's. Undefined for a session on no agent.
+   */
+  function agentModelOf(sessionId: SessionId, models: { list(): ModelInfo[] }, override?: string): ModelChoice | undefined {
+    if (!override && !store.sessionAgent(sessionId)) return undefined
+    const profile = agents.port().primary(sessionId, override)
+    if (!profile?.model || !models.list().some((model) => model.id === profile.model)) return undefined
+    return { model: profile.model, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.variant ? { variant: profile.variant } : {}) }
+  }
   /** Pre-change copies of the files a turn's write/edit/apply_patch calls touch, so `session.undo` can put them back. */
   const snapshots = createTurnSnapshots({ store })
   const mflowHooks = createMflowHooks({
@@ -1470,7 +1481,7 @@ export async function startDaemon(options: DaemonOptions) {
         store.meta.set(restrictionKey, String(excluded.includes("threads") && excluded.includes("pr_watch")))
       }
       keepSessionEngine(turn.sessionId, true)
-      const model = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const model = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(model)) return retiredEngineError
       // A recorded notice (`actor.record`, the PR reviewer's news): already in the transcript, answered by no model on any engine. Only
       // the native engine keeps it in its own history; another program's engine is not started for it.
@@ -1571,7 +1582,7 @@ export async function startDaemon(options: DaemonOptions) {
       } finally { lease?.release() }
     },
     async compact(turn) {
-      const selected = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const selected = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(selected)) return retiredEngineError
       if (options.info?.engine !== "native") {
         const model = resolveModel({ role: "compaction", roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
@@ -4275,13 +4286,13 @@ export async function startDaemon(options: DaemonOptions) {
             if (agents.report({ directory }).agents.some((agent) => agent.name === selected && agent.trusted && agent.disable)) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: agent ${selected} is disabled` })
             if (command.attachments?.some((attachment) => attachment.mime.startsWith("image/")) && options.models?.selectable) {
               const catalog = options.models
-              const refusal = imageRefusal(command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog }), catalog)
+              const refusal = imageRefusal(agentModelOf(command.sessionId, catalog, command.selection?.agent) ?? command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog }), catalog)
               if (refusal) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${refusal}` })
             }
             if (command.turnOptions && Object.keys(command.turnOptions).length) {
               // No model call, tool removal and a required answer shape are only honoured by the native engine: Claude Code, ACP and Codex turns would silently ignore them.
               const catalog = options.models ?? { selectable: false, list: () => [], defaults: { model: "engine default" } }
-              const model = command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
+              const model = agentModelOf(command.sessionId, catalog, command.selection?.agent) ?? command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
               if (options.info?.engine !== "native" || modelEngine(model, catalog) || model.model.startsWith("acp:")) return reply(connection, command.id, { ok: false, code: "unsupported", message: "[DAEMON]: per-prompt noReply, tool exclusions and output format need the native engine; this session's model runs on another engine" })
               if (command.turnOptions.format && !structuredValidator(command.turnOptions.format.schema).ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: output format is not a supported JSON Schema" })
             }
@@ -4322,7 +4333,7 @@ export async function startDaemon(options: DaemonOptions) {
           }
         }
         if (peer && safe.type === "user.submit") {
-          const model = safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
+          const model = agentModelOf(safe.sessionId, catalog, safe.selection?.agent) ?? safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
           const key = modelEngine(model, catalog) ?? options.info?.engine
           if (key === "opencode" || key === "cursor" || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
           safe = { ...safe, turnOptions: remoteTurnOptions(safe.turnOptions) }
@@ -6203,6 +6214,8 @@ export async function startDaemon(options: DaemonOptions) {
         const idle = command.type === "session.model.set" && !store.turns.list(command.sessionId).some((turn) => turn.status === "running")
         const rebuilt = switchedTo === "native" && idle ? importForeign(command.sessionId!, resolveModel({ role: "main", session, roles, catalog })) : undefined
         const handoff = rebuilt ? { from: rebuilt.from, to: resolveModel({ role: "main", session, roles, catalog }).model, turns: rebuilt.turns, omitted: rebuilt.omitted, tokens: rebuilt.tokens, rebuilt: true as const } : switchedTo ? portable.preview({ sessionId: command.sessionId!, key: switchedTo }) : undefined
+        // A session on an agent that names a model runs on that one (the engine gives the agent's model priority), so that is the model the report shows as in force.
+        const bound = sessionId && catalog.selectable ? agentModelOf(sessionId, catalog) : undefined
         const listed = modelsReport({ engine: options.info?.engine ?? "unknown", catalog, roles, session, sessionKnown: sessionId !== undefined, resolve: modelResolutions.apply })
         // Where the native engine packs a session on each model under the settings in force; a model another engine runs has none.
         const compactProviders = catalog.selectable ? options.providers?.list(true) ?? [] : []
@@ -6210,7 +6223,7 @@ export async function startDaemon(options: DaemonOptions) {
         // A model's `modelContext` (a window or compaction point made permanent for it) is listed beside the catalog's window.
         const withSetting = (model: ModelInfo) => { const contextSetting = modelContextOf(compactSettings, model); return contextSetting ? { ...model, contextSetting } : model }
         const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = model.engine === "claude" ? Number(claudeCompactEnv({ model: model.id, settings: compactSettings, on: featureOn(compactSettings, "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
-        return reply(connection, command.id, { ok: true, result: { ...listed, models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
+        return reply(connection, command.id, { ok: true, result: { ...listed, ...(bound ? { effective: bound } : {}), models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
       }
       case "reasoning.status": {
         const directory = canonicalDir(command.directory)

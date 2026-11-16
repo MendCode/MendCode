@@ -1,5 +1,5 @@
 import type { BotListReport, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botName, groupDirectory, isBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import { botName, groupDirectory, isBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiSectionStarts, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, type ProjectInspection } from "../../view/sidebar-projects"
 import { sessionMark } from "../../view/sidebar"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
@@ -181,6 +181,10 @@ export function createSidebarBots(ctx: AppContext) {
 
   /** The ids the keyboard stops on, as the last frame drew them. */
   const stops = () => multiStops(model({ height: 0, icons: iconsNow }))
+  /** The first row of every section drawn, for Tab and Shift+Tab. */
+  const sectionStarts = () => multiSectionStarts(model({ height: 0, icons: iconsNow }))
+  /** The first bot's row, which `b` jumps to; undefined while no bot is listed. */
+  const firstBot = () => stops().find(isBotId)
 
   function toggleGroup(id: string) {
     const directory = groupDirectory(id)
@@ -259,5 +263,5 @@ export function createSidebarBots(ctx: AppContext) {
     requestFrame()
   }
 
-  return { live, sessions, draw, stops, activate, holdsArrows, noteActivity: refresh }
+  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, holdsArrows, noteActivity: refresh }
 }

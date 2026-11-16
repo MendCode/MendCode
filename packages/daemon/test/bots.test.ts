@@ -252,6 +252,48 @@ describe("a bot's memory", () => {
   })
 })
 
+describe("a session started with a bot runs as that bot", () => {
+  const modelBot = "---\ndescription: A calm reviewer\nmode: primary\nmodel: gpt-6-luna\npermission: smart\nbot:\n  shape: circle\n  color: success\n---\nYou review calmly."
+
+  test("the first turn carries the bot's name, personality, memory and model, in that order", async () => {
+    const h = await start({ steps: [stop("ok")] })
+    put(path.join(h.dir, "agents", "calm.md"), modelBot)
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "Prefers short answers." })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "quien eres")
+    const system = h.requests[0]!.system as string
+    expect(h.requests[0]!.model).toBe("gpt-6-luna")
+    const at = (text: string) => system.indexOf(text)
+    expect(at("You are calm, a MendCode bot. A calm reviewer")).toBeGreaterThan(-1)
+    expect(at("You review calmly.")).toBeGreaterThan(at("You are calm, a MendCode bot."))
+    expect(at("- Prefers short answers.")).toBeGreaterThan(at("You review calmly."))
+  })
+
+  test("the model report of that session names the bot's model, not the session's default; a plain session keeps its own", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), modelBot)
+    const sessionId = await openSession(h)
+    const before = result<{ effective?: { model: string } }>(await h.client.send({ type: "models.list", sessionId }))
+    expect(before.effective?.model).toBe("script-1")
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    const after = result<{ effective?: { model: string }; session?: { model: string } }>(await h.client.send({ type: "models.list", sessionId }))
+    expect(after.effective?.model).toBe("gpt-6-luna")
+    expect(after.session).toBeUndefined()
+    await h.client.send({ type: "session.agent.set", sessionId, agent: null })
+    expect(result<{ effective?: { model: string } }>(await h.client.send({ type: "models.list", sessionId })).effective?.model).toBe("script-1")
+  })
+
+  test("a bot without a model of its own and a bot with the flag off get no identity line", async () => {
+    const h = await start({ steps: [stop("a")] }, false)
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+    expect(h.requests[0]!.system).not.toContain("a MendCode bot")
+  })
+})
+
 describe("the bot form's commands", () => {
   const save = (over: Record<string, unknown> = {}) => ({ type: "bot.save", name: "pixel", create: true, prompt: "Calm reviewer, explains briefly.", permission: "smart", ...over }) as never
   const text = (h: NativeHarness, name = "pixel") => readFileSync(path.join(h.dir, "agents", `${name}.md`), "utf8")

@@ -62,6 +62,8 @@ export function createAgentRegistry(options: {
   modelExists?(id: string): boolean
   /** Experimental bots: the memory a bot's turn adds to its prompt in `directory`; absent while the flag is off. */
   botMemory?(name: string, directory: string): string
+  /** Experimental bots flag: while on, a bot's turn opens with who it is. */
+  botsOn?(): boolean
 }) {
   const found = (directory: string) => {
     const result = readLayerAgents(options.layers(directory), { projectTrusted: options.isTrusted(directory), modelExists: options.modelExists })
@@ -111,8 +113,12 @@ export function createAgentRegistry(options: {
       const agent = usable(directory).find((candidate) => candidate.name === name && (override || options.isChild?.(sessionId) || candidate.mode !== "subagent"))
       if (agent) {
         const profile = toProfile(agent)
-        const memory = agent.bot && agent.source === "user" ? options.botMemory?.(agent.name, directory) : undefined
-        return { ...profile, ...(memory ? { prompt: `${profile.prompt}\n\n${memory}` } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+        const isBot = agent.bot && agent.source === "user"
+        const memory = isBot ? options.botMemory?.(agent.name, directory) : undefined
+        // A bot knows who it is even when its personality is a few words: the name and description come first, then the personality, then the memory.
+        const identity = isBot && options.botsOn?.() ? `You are ${agent.name}, a MendCode bot.${agent.description ? ` ${agent.description.replace(/[.\s]+$/, "")}.` : ""}` : ""
+        const prompt = [identity, profile.prompt, memory].filter(Boolean).join("\n\n")
+        return { ...profile, ...(identity || memory ? { prompt } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
       }
       if (name === "plan" && !disabled(directory, name)) return { name: "plan", description: "Plan mode", mode: "primary", prompt: "", permission: "plan" }
       return override || options.isChild?.(sessionId) ? BUILTIN_SUBAGENTS.find((agent) => agent.name === name && !disabled(directory, name)) : undefined
