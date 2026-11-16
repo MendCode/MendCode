@@ -19,6 +19,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Clicking an agent that Claude Code runs in the background, or opening it with ctrl+x ↓, opens its sub-agent thread even when the call that started it is far back in a long session, instead of the background commands card.
 - A workflow whose work agents each run in their own worktree no longer keeps other workflows from starting in the same directory.
 - Commands such as `mendcode workflow list --json` and `mendcode export` no longer cut their output short when it goes to a pipe (`| jq`, a script).
 - `mendcode run --offline`, `--tools` and `--exclude-tools` also turn off the provider's own web search and image generation, so a ChatGPT model no longer searches the web in a run that excluded it.

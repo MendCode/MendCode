@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
-import { appHarness, cleanTemps, conversation, tempDir } from "./session-ui-harness"
+import type { SessionEvent } from "@mendcode/protocol"
+import { appHarness, cleanTemps, conversation, ids, tempDir } from "./session-ui-harness"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 
@@ -298,6 +299,59 @@ test("with background commands listed under the sub-agents, a click on the first
   await click(/bun test --watch\s+cmd/)
   expect(screen(h)).toContain("bun test --watch")
   expect(screen(h)).toMatch(/background/i)
+})
+
+test("an engine's agent started above the history shown opens as a sub-agent thread, by click and by ctrl+x ↓, never as the command card", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const sessionId = ids("session")
+  const log: SessionEvent[] = []
+  const talk = conversation(sessionId, (event) => void log.push(event))
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg", kind: "tool_call", meta: { tool: "agent Modo edificio con ascensor", subagent: true, agent: "general-purpose", background: false } })
+  talk.emit({ type: "item.completed", turnId: "turn_1", itemId: "item_bg", status: "ok", text: "running in the background", meta: { tool: "agent Modo edificio con ascensor", subagent: true, agent: "general-purpose", background: true } })
+  talk.emit({ type: "turn.completed", turnId: "turn_1" })
+  const older = log.length
+  // A long session afterwards: the chat opens on these, without the call; the agent keeps working meanwhile.
+  for (let n = 1; n <= 40; n++) talk.exchange(`question ${n}`, `answer ${n}`)
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_child", kind: "tool_call", meta: { tool: "read src/building.ts", agentParent: "item_bg" } })
+  talk.emit({ type: "item.completed", turnId: "turn_1", itemId: "item_child", status: "ok", text: "ok", meta: { tool: "read src/building.ts" } })
+  const page = (events: SessionEvent[], more: boolean) => ({ ok: true as const, window: { events, firstSeq: events[0]!.seq, lastSeq: events.at(-1)!.seq, sessionLastSeq: log.at(-1)!.seq, more } })
+  const opened = async () => {
+    const h = appHarness({
+      dataDir, sessionId, width: 110, height: 34,
+      events: { loadWindow: async () => page(log.slice(older), true), loadBefore: async () => page(log.slice(0, older), false) },
+      reply: (command) => {
+        if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+        if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
+        if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
+        if (command.type === "background.list") return { ok: true, result: { tasks: [{ id: "engine:a6f3", sessionId, command: "Modo edificio con ascensor", status: "running", kind: "agent", startedAt: Date.now() }] } } as never
+        return undefined
+      },
+    })
+    h.app.applySettings({ onboarded: true })
+    await h.app.start()
+    h.app.onGlobal({ type: "session.background.changed", gseq: 2, at: Date.now(), sessionId } as never)
+    await Bun.sleep(5)
+    h.app.render()
+    return h
+  }
+  const byClick = await opened()
+  const rows = byClick.text()
+  const row = rows.findIndex((text) => /Modo edificio con ascensor\s+async/.test(text))
+  expect(row).toBeGreaterThanOrEqual(0)
+  const col = rows[row]!.search(/Modo edificio/) + 4
+  await byClick.type(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
+  await Bun.sleep(5)
+  byClick.app.render()
+  expect(screen(byClick)).toContain("╭─ sub-agent ")
+  expect(screen(byClick)).toMatch(/◆ Modo edificio con ascensor/)
+  expect(screen(byClick)).not.toMatch(/Background|\/ps/)
+  const byKey = await opened()
+  await byKey.type("\x18\x1b[B")
+  await Bun.sleep(5)
+  byKey.app.render()
+  expect(screen(byKey)).toMatch(/◆ Modo edificio con ascensor/)
 })
 
 test("after the daemon restarts, a background sub-agent that ended with the old one leaves the strip: the list is asked again on reconnect", async () => {
