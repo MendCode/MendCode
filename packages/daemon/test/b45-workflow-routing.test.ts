@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
@@ -105,5 +105,34 @@ describe("B45 workflow daemon/client routing", () => {
     run.tasks[0]!.execution = ready
     expect((await router.prepare(run, plan.tasks[0]!, ready)).directory).toBe(ready.directory)
     expect(readFileSync(path.join(ready.directory, "fixture.txt"), "utf8")).toBe("worktree edit")
+  })
+
+  test("an agent's cwd runs it in a linked worktree of the run's repository, and nowhere else", async () => {
+    const directory = temp()
+    const git = async (cwd: string, ...args: string[]) => {
+      const child = Bun.spawn(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "B45", GIT_AUTHOR_EMAIL: "b45@test.local", GIT_COMMITTER_NAME: "B45", GIT_COMMITTER_EMAIL: "b45@test.local" } })
+      const error = await new Response(child.stderr).text()
+      if (await child.exited) throw new Error(error)
+    }
+    await git(directory, "init", "--quiet")
+    writeFileSync(path.join(directory, "fixture.txt"), "original")
+    await git(directory, "add", "fixture.txt")
+    await git(directory, "commit", "--quiet", "-m", "fixture")
+    // The way mend-autopilot makes one per item: a branch and a worktree under .mend/worktrees.
+    const linked = path.join(directory, ".mend", "worktrees", "item-1")
+    await git(directory, "worktree", "add", "--quiet", "-b", "mend/item-1", linked)
+    const other = temp()
+    await git(other, "init", "--quiet")
+    const ids = createIdFactory()
+    const router = createWorkflowRouter({ dir: temp(), catalog, roles: () => ({}), sessionModel: () => undefined, agent: (_directory, name) => ({ name, description: "", mode: "subagent", prompt: "" }) })
+    const routed = async (cwd: string) => {
+      const plan = WorkflowPlan.parse(rawPlan({ tasks: [{ kind: "agent", id: "a", title: "Build", prompt: "Implement the item", mode: "work", cwd }] }))
+      const run = createRun({ workflowId: ids("workflow"), rootSessionId: ids("session"), plan, planHash: "0".repeat(64), directory, permission: "ask", at: 0 })
+      return router.prepare(run, plan.tasks[0]!, taskExecution(run, plan.tasks[0]!))
+    }
+    expect((await routed(linked)).directory).toBe(realpathSync(linked))
+    await expect(routed(directory)).rejects.toThrow("is not a linked git worktree")
+    await expect(routed(other)).rejects.toThrow("is not a linked git worktree")
+    await expect(routed(path.join(directory, "missing"))).rejects.toThrow("does not exist")
   })
 })

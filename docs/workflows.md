@@ -473,6 +473,7 @@ Calls, template substitutions and spreads in `meta` are refused with a line numb
 | `schema` | JSON Schema subset; validates the answer, gives one automatic repair turn in the same session, then rejects |
 | `mode` | `read` is default and cannot change anything; `work` edits, one work agent at a time per directory |
 | `worktree: true` | Isolated checkout per run; not held by the single-writer rule, so work agents can run in parallel |
+| `cwd: "/abs/path"` | The agent works in an existing linked git worktree of the run's repository (one the script made with `git worktree add`, for example): its session, permissions and sandbox belong to that directory. Like `worktree: true` it never edits the run's directory, so it is not held by the single-writer rule, and a run made only of such agents does not keep another run out of the directory. The main checkout, another repository or a missing path fails the call. Not with `worktree: true`. |
 | `model` | Catalog model id |
 | `effort` | Needs `model`; checked against its efforts |
 | `engine` | Engine, described below |
