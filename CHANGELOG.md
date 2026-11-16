@@ -18,6 +18,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Opening a chat from another folder in the left list now moves the terminal to that folder: the footer, the code graph, the branch, the project's lists and the folder a new chat starts in follow it.
+- A chat's age in the list and its place in the ranking move only with real conversation (a message or a turn), not with background bookkeeping; chats bumped before get their real age back.
+- A bot shows as a problem only for ten minutes after one of its chats fails, or until it has newer activity that went well; before, one failed chat kept it red for good.
 - A PR review whose fetch fails because the network or DNS is down now waits for the network instead of spending its attempts, and its notice says what git reported.
 - Opening a chat in another project no longer moves the project groups in the left list: they rank by their latest message activity, and a streaming turn does not shuffle them.
 - A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.

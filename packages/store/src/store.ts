@@ -349,7 +349,14 @@ const wordCount = (text: string) => (text.trim() ? text.trim().split(/\s+/).leng
 const RECLAIM_PAGES_PER_STEP = 2048
 const COPIED_EVENT_TYPES = ["turn.started", "turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed", "item.started", "item.delta", "item.completed", "server.request", "server.request.resolved"].map((type) => `'${type}'`).join(", ")
 
-const TERMINAL_TURN_EVENTS = new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
+/**
+ * The events that are conversation: a session's `updated_at` (its age in the sidebar, its rank in every list) moves only with these.
+ * Bookkeeping appended to a session (limit checkpoints, foreground state, permission, goal, usage, compaction and continuity
+ * records, revisions) never makes a chat look recently used. `turn.interrupted` is the daemon ending a turn at a restart, not activity.
+ */
+const ACTIVITY_EVENT_TYPES: ReadonlySet<string> = new Set(["session.created", "queue.added", "turn.started", "turn.completed", "turn.cancelled", "turn.failed", "turn.retrying", "turn.reverted", "turn.restored", "item.started", "item.delta", "item.completed", "server.request", "server.request.resolved"])
+
+const TERMINAL_TURN_EVENTS =new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
 
 type SessionRow = { id: SessionId; title: string; directory: string; created_at: number; updated_at: number; last_seq: number; parent_id: string | null; archived_at: number | null }
 
@@ -400,6 +407,22 @@ function migrate(db: Database) {
   if (!columns("prompt_history").has("kind")) db.run("ALTER TABLE prompt_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'sent'")
   if (!columns("undo_stack").has("partial")) db.run("ALTER TABLE undo_stack ADD COLUMN partial TEXT")
   clearRecipeCompactionRole(db)
+  restoreSessionAges(db)
+}
+
+/**
+ * Until bookkeeping events stopped moving `updated_at`, a bulk append (a limit checkpoint written to every session at once) gave
+ * hundreds of chats the same recent age. Once: each session's age goes back to the time of its latest conversation event still in its
+ * log. A session whose conversation events are gone from the log keeps what it has; an age is only ever lowered.
+ */
+function restoreSessionAges(db: Database) {
+  if (db.query("SELECT 1 FROM meta WHERE key = 'session-age-restored'").get()) return
+  const types = [...ACTIVITY_EVENT_TYPES].map((type) => `'${type}'`).join(", ")
+  const latest = `(SELECT e.at FROM events e WHERE e.session_id = sessions.id AND e.type IN (${types}) ORDER BY e.seq DESC LIMIT 1)`
+  db.transaction(() => {
+    db.run(`UPDATE sessions SET updated_at = ${latest} WHERE ${latest} < updated_at`)
+    db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('session-age-restored', '1')")
+  })()
 }
 
 /**
@@ -537,7 +560,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
 
   const q = {
     lastSeq: db.query<{ last_seq: number }, [string]>("SELECT last_seq FROM sessions WHERE id = ?"),
-    setSeq: db.query("UPDATE sessions SET last_seq = ?, updated_at = ? WHERE id = ?"),
+    setSeq: db.query("UPDATE sessions SET last_seq = ?1, updated_at = CASE WHEN ?4 THEN ?2 ELSE updated_at END WHERE id = ?3"),
     autoTitle: db.query("UPDATE sessions SET title = ? WHERE id = ? AND title = ''"),
     queuedCount: db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM queue_items WHERE session_id = ?"),
     queueInsert: db.query("INSERT OR REPLACE INTO queue_items(session_id, queue_id, position, text, attachments, kind, authority_text) VALUES (?, ?, 1000000, ?, ?, ?, ?)"),
@@ -695,7 +718,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     deltaFold.fold(event)
     transientEvents.record(event)
     if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled" || event.type === "turn.interrupted") sealedTurns.noteEnd(event.sessionId)
-    q.setSeq.run(event.seq, event.at, event.sessionId)
+    q.setSeq.run(event.seq, event.at, event.sessionId, ACTIVITY_EVENT_TYPES.has(event.type) ? 1 : 0)
     if (event.type === "item.started" && TRACKED_ITEM_KINDS.has(event.kind)) {
       let items = openItems.get(event.sessionId)
       if (!items) openItems.set(event.sessionId, (items = new Map()))
@@ -1501,7 +1524,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           }
           events += rows.length
         }
-        q.setSeq.run(offset, now(), to)
+        q.setSeq.run(offset, now(), to, 1)
         // Revisions can be appended long after their turn. Carry the latest snapshot of each copied item.
         const revisions = db.query<{ payload: string }, [string, string]>("SELECT r.payload FROM message_revisions r WHERE r.session_id = ?1 AND EXISTS (SELECT 1 FROM events_read e WHERE e.session_id = ?2 AND e.type = 'item.started' AND json_extract(e.payload, '$.itemId') = r.item_id)").all(from, to)
         for (const row of revisions) {

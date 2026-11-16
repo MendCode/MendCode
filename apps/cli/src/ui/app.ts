@@ -725,6 +725,7 @@ export function createApp(input: AppInput) {
     endGoalEdit,
     loadEffectiveModel,
     restoreDraft,
+    loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
     loadEarlier,

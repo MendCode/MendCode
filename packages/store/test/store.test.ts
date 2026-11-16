@@ -551,6 +551,65 @@ describe("sessions list and migrations", () => {
   })
 })
 
+describe("a session's age", () => {
+  test("bookkeeping events leave its age and rank where the last conversation put them; a message and a turn move them", () => {
+    let clock = 1_000
+    const store = openStore({ dir: tempDir(), now: () => clock })
+    const [quiet, busy] = [ids("session"), ids("session")]
+    store.createSession({ id: quiet, directory: "/repo", title: "" })
+    clock = 2_000
+    store.createSession({ id: busy, directory: "/repo", title: "" })
+    clock = 3_000
+    store.sessionSink.append({ type: "queue.added", sessionId: quiet, queueId: ids("queue"), text: "hello", attachments: [] })
+    clock = 9_000
+    store.sessionSink.append({ type: "limit.checkpoint", sessionId: busy })
+    store.sessionSink.append({ type: "foreground.state", sessionId: busy, state: "idle" })
+    store.sessionSink.append({ type: "session.permission", sessionId: busy, mode: "ask" })
+    store.sessionSink.append({ type: "limit.checkpoint", sessionId: quiet })
+    const after = store.listSessions()
+    expect(after.map((s) => [s.sessionId, s.updatedAt])).toEqual([[quiet, 3_000], [busy, 2_000]])
+    expect(store.sessionInfo(busy)?.updatedAt).toBe(2_000)
+    clock = 10_000
+    const turnId = ids("turn")
+    store.sessionSink.append({ type: "turn.started", sessionId: busy, turnId, queueId: ids("queue") })
+    expect(store.listSessions().map((s) => [s.sessionId, s.updatedAt])).toEqual([[busy, 10_000], [quiet, 3_000]])
+    store.close()
+  })
+
+  test("a database bumped by bookkeeping gets each age back from its latest conversation event, once", async () => {
+    const dir = tempDir()
+    const [talked, silent] = [ids("session"), ids("session")]
+    let clock = 1_000
+    const first = openStore({ dir, now: () => clock })
+    first.createSession({ id: talked, directory: "/repo", title: "" })
+    first.createSession({ id: silent, directory: "/repo", title: "" })
+    clock = 3_000
+    first.sessionSink.append({ type: "queue.added", sessionId: talked, queueId: ids("queue"), text: "hello", attachments: [] })
+    first.close()
+    const { Database } = await import("bun:sqlite")
+    const raw = new Database(path.join(dir, "mendd.db"))
+    raw.run("UPDATE sessions SET updated_at = 9000")
+    raw.run("DELETE FROM meta WHERE key = 'session-age-restored'")
+    raw.close()
+    const second = openStore({ dir, now: () => clock })
+    expect(Object.fromEntries(second.listSessions().map((s) => [s.sessionId, s.updatedAt]))).toEqual({ [talked]: 3_000, [silent]: 1_000 })
+    second.close()
+  })
+
+  test("a lifecycle write, an archive and a title change do not move it", () => {
+    let clock = 1_000
+    const store = openStore({ dir: tempDir(), now: () => clock })
+    const id = ids("session")
+    store.createSession({ id, directory: "/repo", title: "first" })
+    clock = 50_000
+    store.renameSession(id, "renamed")
+    store.sessionData.set(id, "lifecycle", "{}")
+    store.setSessionArchived(id, true)
+    expect(store.sessionInfo(id)?.updatedAt).toBe(1_000)
+    store.close()
+  })
+})
+
 describe("single writer (A11)", () => {
   test("a second store on the same directory fails fast; after close it can open", () => {
     const dir = tempDir()

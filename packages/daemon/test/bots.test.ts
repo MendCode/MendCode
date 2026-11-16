@@ -110,13 +110,39 @@ describe("bot.list", () => {
     expect(report.problems).toEqual([{ file: "connector:broken", message: "socket closed" }])
   })
 
-  test("the bot state: a waiting session first, then working, then a failure, else idle", () => {
-    expect(botStateOf([])).toBe("idle")
-    expect(botStateOf(["idle", "completed", "cancelled"])).toBe("idle")
-    expect(botStateOf(["completed", "failed"])).toBe("problem")
-    expect(botStateOf(["failed", "running"])).toBe("working")
-    expect(botStateOf(["running", "waiting_for_approval", "failed"])).toBe("waiting")
-    expect(botStateOf(["waiting_for_input"])).toBe("waiting")
+  test("the bot state: a waiting session first, then working, then a recent failure, else idle", () => {
+    const now = 10_000_000
+    const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })
+    expect(botStateOf([], now)).toBe("idle")
+    expect(botStateOf([at("idle"), at("completed"), at("cancelled")], now)).toBe("idle")
+    expect(botStateOf([at("completed", 60_000), at("failed", 30_000)], now)).toBe("problem")
+    expect(botStateOf([at("failed"), at("running")], now)).toBe("working")
+    expect(botStateOf([at("running"), at("waiting_for_approval"), at("failed")], now)).toBe("waiting")
+    expect(botStateOf([at("waiting_for_input")], now)).toBe("waiting")
+  })
+
+  test("a failure shows as a problem for ten minutes, until the bot has newer activity, and then the bot is idle again", () => {
+    const now = 10_000_000
+    const minute = 60_000
+    const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })
+    expect(botStateOf([at("failed", 9 * minute)], now)).toBe("problem")
+    expect(botStateOf([at("failed", 11 * minute)], now)).toBe("idle")
+    // A later turn that went well, in the same chat or another one of the bot, clears it.
+    expect(botStateOf([at("failed", 5 * minute), at("completed", 2 * minute)], now)).toBe("idle")
+    expect(botStateOf([at("completed", 5 * minute), at("failed", 2 * minute)], now)).toBe("problem")
+  })
+
+  test("bot.list reports the failed chat's status but leaves the bot idle once the failure is old", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    const { listBots } = await import("../src/bot-service")
+    const agents = () => ({ directory: h.dir, agents: [{ name: "mendy", description: "d", source: "user", trusted: true, file: "mendy.md", mode: "primary", bot: { shape: "circle", color: "success", origin: "local" } }], problems: [] }) as never
+    const failed = (updatedAt: number) => [{ sessionId: "ses_X", title: "t", directory: "/work", createdAt: 1, updatedAt, lastSeq: 1, queued: 0, status: "failed", permission: "ask" }] as never
+    const now = 50 * 60_000
+    const fresh = await listBots({ dir: h.dir, agents, sessions: () => failed(now - 2 * 60_000), connectors: () => [], now: () => now })
+    expect(fresh.bots[0]).toMatchObject({ state: "problem", projects: [{ state: "problem", sessions: [{ status: "failed" }] }] })
+    const old = await listBots({ dir: h.dir, agents, sessions: () => failed(now - 34 * 60_000), connectors: () => [], now: () => now })
+    expect(old.bots[0]).toMatchObject({ state: "idle", projects: [{ state: "idle", sessions: [{ status: "failed" }] }] })
   })
 })
 

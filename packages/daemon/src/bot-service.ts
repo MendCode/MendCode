@@ -26,12 +26,20 @@ export type BotConnector = {
   list(): Promise<ExternalBotInfo[]>
 }
 
-/** A bot is `waiting` while any session of it waits on the user, else `working`, else `problem` when a session failed, else `idle`. */
-export function botStateOf(statuses: readonly string[]): BotState {
-  if (statuses.some((status) => status.startsWith("waiting_"))) return "waiting"
-  if (statuses.includes("running")) return "working"
-  if (statuses.includes("failed")) return "problem"
-  return "idle"
+/** How long a failed chat keeps its bot in `problem`; a failure is news for a few minutes, not a permanent mark on the bot. */
+export const BOT_PROBLEM_WINDOW_MS = 10 * 60_000
+
+/**
+ * A bot is `waiting` while any session of it waits on the user, else `working`, else `problem` while a session failed within the last
+ * `BOT_PROBLEM_WINDOW_MS` and nothing of the bot has had newer activity that did not fail, else `idle`. A session's `updatedAt` is its
+ * last conversation event, so for a failed chat it is the time of the failure. (The terminal keeps the same rule: view/bot-live.ts.)
+ */
+export function botStateOf(sessions: ReadonlyArray<{ status: string; updatedAt: number }>, now: number): BotState {
+  if (sessions.some((session) => session.status.startsWith("waiting_"))) return "waiting"
+  if (sessions.some((session) => session.status === "running")) return "working"
+  const newestOk = Math.max(0, ...sessions.filter((session) => session.status !== "failed").map((session) => session.updatedAt))
+  const recentFailure = sessions.some((session) => session.status === "failed" && now - session.updatedAt <= BOT_PROBLEM_WINDOW_MS && session.updatedAt >= newestOk)
+  return recentFailure ? "problem" : "idle"
 }
 
 const COLOR_WORDS: ReadonlyArray<readonly [RegExp, (typeof BOT_COLORS)[number]]> = [
@@ -56,6 +64,8 @@ export type BotContext = {
   /** The root sessions that ran as `name`, in every project. */
   sessions(name: string): SessionDetail[]
   connectors(): readonly BotConnector[]
+  /** The clock the failure window reads; the wall clock when absent. */
+  now?(): number
   /** The schedules (loops) owned by `name`; absent when the host has no loops. */
   schedules?(name: string): BotSchedule[]
 }
@@ -64,6 +74,7 @@ const isBot = (agent: AgentsReport["agents"][number]) => agent.bot !== undefined
 
 export async function listBots(context: BotContext): Promise<BotListReport> {
   const report = context.agents()
+  const now = (context.now ?? Date.now)()
   const bots: BotInfo[] = report.agents.filter(isBot).map((agent) => {
     const sessions = context.sessions(agent.name)
     const byProject = new Map<string, SessionDetail[]>()
@@ -76,11 +87,11 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
       ...(agent.permission ? { permission: agent.permission } : {}),
       ...(!agent.permission && agent.permissionRules?.length ? { permissionRules: true } : {}),
       file: agent.file ?? "",
-      state: botStateOf(sessions.map((session) => session.status)),
+      state: botStateOf(sessions, now),
       schedules: context.schedules?.(agent.name) ?? [],
       projects: [...byProject].map(([directory, group]) => ({
         directory,
-        state: botStateOf(group.map((session) => session.status)),
+        state: botStateOf(group, now),
         sessions: group.map((session) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })),
       })).sort((a, b) => a.directory.localeCompare(b.directory)),
     }

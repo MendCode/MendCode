@@ -149,7 +149,7 @@ export function createSidebarBots(ctx: AppContext) {
       if (reply.ok) {
         report = reply.result as BotListReport
         // The answer is older than the pushes that came while it was on its way: they move the new report as they moved the old one.
-        for (const event of during) report = patchBotReport(report, event) ?? report
+        for (const event of during) report = patchBotReport(report, event, now()) ?? report
         botOfSession = botIndex(report)
         for (const id of unknown) if (!botOfSession.has(id)) classified.add(id)
         unknown.clear()
@@ -225,7 +225,7 @@ export function createSidebarBots(ctx: AppContext) {
     if (botsOn() && loadingBots && during.length < DURING_MAX) during.push(event)
     if (!botsOn() || !report) return
     if (botOfSession.has(event.sessionId)) {
-      const next = patchBotReport(report, event)
+      const next = patchBotReport(report, event, now())
       if (next) report = next
     } else if (!held && !classified.has(event.sessionId)) {
       unknown.add(event.sessionId)
