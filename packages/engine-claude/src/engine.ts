@@ -542,7 +542,7 @@ export function createClaudeEngine(options: {
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
       owner.accept(message)
-      if (!owner.hasBackgroundAgents()) connection.agentTurns = connection.agentTurns.filter((mapper) => mapper !== owner)
+      // The mapper stays after its agents end (`MAX_AGENT_TURNS` of them): a message sent to an ended agent starts it again, and its records still go to it.
       if (message.parent_tool_use_id) return
     }
     // The rest of a turn already ended by esc: nothing of it belongs to the next one.

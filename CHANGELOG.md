@@ -24,6 +24,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A Claude Code sub-agent that is sent a message after it finished shows its new work in its thread again, instead of staying marked done with nothing more.
+- A sub-agent's thread no longer ends with an empty bullet when its final report repeats its last message.
 - A sub-agent detached with `b` in `/tasks` keeps running when its parent's turn is interrupted, as detaching promises.
 - A Claude Code or Codex session asked to tell another session something now finds it among your MendCode sessions by its title and sends the message there, instead of looking only at Claude Code's own processes and giving up.
 - The reviews page keeps refreshing once many pull requests have been reviewed: the oldest finished reviews are left out of the list instead of the refresh failing and the page staying on an old list.

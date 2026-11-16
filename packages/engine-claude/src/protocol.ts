@@ -351,6 +351,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const lateAgentMeta = new Map<ItemId, { subagent: true; agent: string; model?: string; background: boolean; tool: string }>()
   /** Background agents of this turn still running, by tool-use id: they report after the turn ends. */
   const backgroundAgents = new Set<string>()
+  /** Agents that reported their end, by tool-use id: a message sent to one starts it again, and it runs in the background until it ends again. */
+  const endedAgents = new Set<string>()
   /** Agent calls whose agent was stopped by an interrupt, by item: Claude Code's own notice of that end comes too late or not at all. */
   const stopped = new Set<ItemId>()
   /** Tools a sub-agent called, by tool-use id. */
@@ -612,6 +614,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       // An agent whose stop was already reported (`stopBackground`) is not ended twice.
       if (stopped.has(parent)) return
       backgroundAgents.delete(String(message.tool_use_id))
+      endedAgents.add(String(message.tool_use_id))
       const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
       const status = message.status === "completed" ? "ok" : message.status === "killed" || message.status === "stopped" ? "cancelled" : "error"
       const itemId = input.newItemId()
@@ -712,6 +715,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     },
     /** Feeds one message; returns the `result` message when the turn ended. */
     accept(message: ClaudeMessage): ClaudeMessage | undefined {
+      const resumed = message.parent_tool_use_id ? String(message.parent_tool_use_id) : message.type === "system" && message.subtype === "task_started" ? String(message.tool_use_id) : undefined
+      if (resumed && endedAgents.delete(resumed)) backgroundAgents.add(resumed)
       if (message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification")) return void onTaskNotice(message)
       if (message.parent_tool_use_id) {
         const parent = agents.get(String(message.parent_tool_use_id))
