@@ -6,6 +6,7 @@ import type { GhRun } from "../src/pr-watch"
 import { gitRun } from "../src/pr-review/context"
 import { MAX_JOB_ATTEMPTS, TRANSIENT_BACKOFF_CAP_MS, TRANSIENT_RETRY_WINDOW_MS } from "../src/pr-review/jobs"
 import { elapsed, failureKind, OUTAGE_BACKOFF_CAP_MS, OUTAGE_LIMIT_MS, SLEEP_GAP_MS } from "../src/pr-review/outage"
+import { gitSaid } from "../src/pr-review/service"
 import { createRepoWatch, type JobOutcome, type RepoWatchJob } from "../src/pr-review/repo-watch"
 
 /**
@@ -74,6 +75,13 @@ describe("what a failure says", () => {
     expect(failureKind("git fetch of pull request #8 failed: fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com")).toBe("transient")
   })
 
+  test("an SSH failure keeps the line that names its cause, so a network outage is not counted as a failed attempt", () => {
+    const ssh = "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
+    expect(failureKind(`[PR_REVIEW]: git fetch of pull request #8 failed${gitSaid(ssh)}`)).toBe("transient")
+    expect(failureKind(`git fetch of pull request #8 failed${gitSaid("ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.")}`)).toBe("transient")
+    expect(gitSaid("fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com\n")).toBe(": fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com")
+    expect(gitSaid(undefined)).toBe("")
+  })
   test("a failed plain git run keeps what git said; a passing one carries nothing extra", async () => {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "pr-gitrun-")))
     try {

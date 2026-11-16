@@ -149,8 +149,8 @@ const hiddenEmpty = (session: MultiSession, input: Pick<MultiInput, "now" | "vis
 const preview = (list: readonly MultiSession[], limit: number, keep: (session: MultiSession) => boolean) => list.filter((session, index) => index < limit || keep(session))
 
 /** The folders to list: the opened one first, then the busy ones, then the most recently used up to the cap; `rest` waits behind the more-projects row. */
-function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): { shown: string[]; rest: string[] } {
-  if (input.scope === "folder") return { shown: [input.directory], rest: [] }
+function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): ReturnType<typeof rankProjects> {
+  if (input.scope === "folder") return { shown: [input.directory], rest: [], all: [input.directory], always: new Set([input.directory]) }
   const listed = input.sessions.filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
   return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count || Number.POSITIVE_INFINITY, busy: busy as never, ...(input.rankStamps ? { stamps: input.rankStamps } : {}), isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}), ...(input.projects?.from ? { from: input.projects.from } : {}), ...(input.projects?.hidden ? { hidden: input.projects.hidden } : {}) })
 }
@@ -312,8 +312,9 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner), row)
       }
     } else if (section === "projects") {
-      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[] } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
-      const directories = input.projectsExpanded ? [...ranked.shown, ...ranked.rest] : ranked.shown
+      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[], all: [input.directory], always: new Set([input.directory]) } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
+      // The expanded list is the whole ranking, newest first: shown and rest joined would put an old opened folder ahead of newer ones.
+      const directories = input.projectsExpanded ? ranked.all : ranked.shown
       const labels = groupLabels(directories)
       if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
       else blankBetween()
@@ -326,7 +327,8 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       let listed = 0
       for (const [at, directory] of directories.entries()) {
         const list = live(projectInput.sessions, directory, input)
-        const forced = directory === input.directory || list.some(ownBusy)
+        // The opened, busy and used-today folders show past the height cut as they do past the count.
+        const forced = directory === input.directory || ranked.always.has(directory) || list.some(ownBusy)
         if (auto && cutAt >= 0 && !forced) continue
         const rollback = entries.length
         listed++

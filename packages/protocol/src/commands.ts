@@ -1989,6 +1989,8 @@ export const IdeOpen = lazySchema(() => z.strictObject({ ...base, type: z.litera
 export const UrlOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("url.open"), url: z.string().max(2048).regex(/^https?:\/\/[\x21-\x7e]+$/i) }))
 /** A generated image's buttons: opens the image (an absolute path to a PNG, JPEG, WebP or GIF file) in the system's viewer, or, with `reveal`, shows it in its folder. Local clients only. */
 export const ImageOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("image.open"), path: z.string().min(2).max(4096).startsWith("/"), reveal: z.boolean().optional() }))
+/** A bot card's "Open in <app>": opens the desktop app the bot's connector named (macOS `open -a`). The name is one plain app name, never a path or an option. Local clients only. */
+export const AppOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("app.open"), app: z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f/-][^\x00-\x1f\x7f/]*$/) }))
 export const ComputerCapture = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.capture"), sessionId: SessionId, input: ComputerCaptureInput }))
 export const ComputerKey = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.key"), sessionId: SessionId, input: ComputerKeyInput }))
 export const ComputerSession = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.session"), sessionId: SessionId, input: ComputerSessionInput }))
@@ -2427,6 +2429,7 @@ export const COMMAND_SCHEMAS = {
   "ide.open": IdeOpen,
   "url.open": UrlOpen,
   "image.open": ImageOpen,
+  "app.open": AppOpen,
   "computer.capture": ComputerCapture,
   "computer.key": ComputerKey,
   "computer.session": ComputerSession,

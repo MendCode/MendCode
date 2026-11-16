@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { glyphSet } from "../src/ui/theme"
 import { createProjectProbe, eligibleDirectory, rankProjects, type ProjectInspection } from "../src/view/sidebar-projects"
-import { renderMultiSidebar, type MultiInput } from "../src/view/sidebar-multi"
+import { groupDirectory, isGroupId, multiStops, renderMultiSidebar, type MultiInput } from "../src/view/sidebar-multi"
 import { plain } from "./session-ui-harness"
 
 const HOME = "/Users/me"
@@ -93,6 +93,13 @@ describe("ranking and the cap", () => {
     expect(out.rest).toEqual([])
   })
 
+  test("the whole ranking stays in activity order when the opened project is older than the ones past the cap", () => {
+    const out = rank([s("/p/a", MINUTE), s("/p/b", 2 * MINUTE), s("/p/c", 3 * MINUTE), s("/work/open", 9 * DAY)], { count: 2 })
+    expect(out.shown).toEqual(["/p/a", "/work/open"])
+    expect(out.rest).toEqual(["/p/b", "/p/c"])
+    expect(out.all).toEqual(["/p/a", "/p/b", "/p/c", "/work/open"])
+  })
+
   test("projects with a working or waiting session show past the cap, at their rank", () => {
     const out = rank([s("/p/a", MINUTE), s("/p/b", 2 * MINUTE), s("/p/busy1", 30 * DAY, "busy1"), s("/p/busy2", 40 * DAY, "busy2")], { count: 2, busy: (session) => String(session.sessionId).startsWith("busy") })
     expect(out.shown).toEqual(["/p/busy1", "/p/busy2", "/work/open"])
@@ -170,6 +177,22 @@ describe("the list the sidebar draws", () => {
     expect(opened.join("\n")).not.toContain("more projects")
   })
 
+  test("the expanded list keeps its groups in activity order, an old opened project last", () => {
+    const old = [{ sessionId: "o1", title: "Old opened", directory: "/work/open", state: "idle", queued: 0, updatedAt: NOW - 9 * DAY }, ...["a", "b", "c"].map((name, index) => ({ sessionId: `${name}1`, title: `${name} chat`, directory: `/p/${name}`, state: "idle", queued: 0, updatedAt: NOW - (index + 1) * MINUTE }))]
+    const groups = (over: Partial<MultiInput>) => text({ sessions: old as never, projects: { isProject: () => true, count: 2 }, ...over }).map((row) => /[▾▸] (\w+)/.exec(row)?.[1]).filter(Boolean)
+    expect(groups({})).toEqual(["a", "open"])
+    expect(groups({ projectsExpanded: true })).toEqual(["a", "b", "c", "open"])
+  })
+
+  test("with the automatic count a folder used today stays listed past the height cut, like a busy one", () => {
+    const crowd = Array.from({ length: 8 }, (_, n) => ({ sessionId: `g${n}`, title: `git chat ${n}`, directory: `/p/g${n}`, state: "idle", queued: 0, updatedAt: NOW - (n + 1) * MINUTE }))
+    const plain1 = { sessionId: "pl", title: "Plain notes", directory: "/work/plain", state: "idle", queued: 0, updatedAt: NOW - 60 * MINUTE }
+    const input = { ...base, sessions: [sessions[0]!, ...crowd, plain1] as never, height: 12, projects: { isProject: (directory: string) => directory !== "/work/plain", eligible: () => true, count: 0 } }
+    const groups = multiStops(input).filter(isGroupId).map(groupDirectory)
+    expect(groups).toContain("/work/plain")
+    expect(groups).not.toContain("/p/g7")
+  })
+
   test("a group the user folded stays folded; a folded group keeps its count", () => {
     const rows = text({ open: new Map([["/p/a", false]]) })
     expect(rows.join("\n")).toContain("▸ a")
@@ -210,7 +233,7 @@ describe("whose projects the all-projects list shows", () => {
 
   test("all: every project shows as before", () => {
     const sessions = [s("/p/typed", MINUTE, { origin: "tui", lastHumanAt: NOW }), s("/p/tools", 2 * MINUTE, { origin: "auto" })]
-    expect(rank(sessions, { from: "all" })).toEqual({ shown: ["/p/typed", "/p/tools", "/work/open"], rest: [] })
+    expect(rank(sessions, { from: "all" })).toMatchObject({ shown: ["/p/typed", "/p/tools", "/work/open"], rest: [] })
   })
 
   test("you: a session with no recorded origin counts as a person's, so older data is not hidden", () => {

@@ -451,8 +451,12 @@ export function createKeys(ctx: AppContext, actions: {
           if (bot) state.sidebarSelected = bot
         } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
         else if (multi && key === "x" && stops[index]) multi.hideProject(stops[index]!, actions)
-        else if (!multi && stops[index] === SETTLED_MORE && key === "\r") state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
-        else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (!multi && stops[index] === SETTLED_MORE && key === "\r") {
+          state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+          // The last page takes the more row away: the selection moves to the first session it revealed, which now stands where the row stood.
+          const next = sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown)
+          if (!next.includes(SETTLED_MORE)) state.sidebarSelected = next[index]
+        } else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false

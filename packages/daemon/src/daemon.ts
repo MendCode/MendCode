@@ -510,6 +510,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   openUrl?(url: string): Promise<void>
   /** Opens an image file in the system's viewer, or shows it in its folder (`image.open`); the system handler by default. */
   openImage?(input: { path: string; reveal?: boolean }): Promise<void>
+  /** Opens a desktop app by name (`app.open`, a bot card's "Open in <app>"); `open -a` on macOS by default. */
+  openApp?(app: string): Promise<void>
   /** The subscription account for `/usage` (name, email, plan); without it the report has no profile. */
   usageProfile?(): Promise<UsageProfile>
   /** A model's public API price (USD per million tokens), for the waste report's dollars: models.dev's, by provider (a subscription by its vendor's API). */
@@ -4411,7 +4413,8 @@ export async function startDaemon(options: DaemonOptions) {
         if (peer && safe.type === "user.submit") {
           const model = agentModelOf(safe.sessionId, catalog, safe.selection?.agent) ?? safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
           const key = modelEngine(model, catalog) ?? options.info?.engine
-          if (key === "opencode" || key === "cursor" || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
+          // The agent's own model counts, not only the submitted one: an agent set to pi or an ACP agent must not start them for a peer.
+          if (key === "pi" || key === "opencode" || key === "cursor" || model.model.startsWith("acp:") || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
           safe = { ...safe, turnOptions: remoteTurnOptions(safe.turnOptions) }
         }
         // Only the submitted text grants resource reads; attached thread/PR/agent context does not.
@@ -5745,6 +5748,13 @@ export async function startDaemon(options: DaemonOptions) {
           await (options.openImage ?? (await import("./open-url")).openImage)({ path: command.path, ...(command.reveal ? { reveal: true } : {}) })
           return reply(connection, command.id, { ok: true, result: { opened: true } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : "Could not open the image" }) }
+      }
+      case "app.open": {
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Opening apps is local only" })
+        try {
+          await (options.openApp ?? (await import("./open-url")).openApp)(command.app)
+          return reply(connection, command.id, { ok: true, result: { opened: true } })
+        } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : "Could not open the app" }) }
       }
       case "session.changes":
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Session file snapshots are local only" })

@@ -155,6 +155,22 @@ describe("ranking, the cap and the more-projects row", () => {
     await until(h, "▾ app")
     expect(side(h).filter((row) => /[▾▸] /.test(row)).length).toBeGreaterThan(6)
   })
+
+  test("the arrow keys stop on every project the sidebar draws, past the first six", async () => {
+    const many = Array.from({ length: 12 }, (_, n) => ({ sessionId: ids("session"), title: `extra ${n}`, directory: `/repos/x${n}`, createdAt: NOW, updatedAt: NOW - (n + 5) * 60 * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
+    const h = chatApp({ extraSessions: many, height: 80 })
+    await until(h, "▾ app")
+    const groups = side(h).filter((row) => /[▾▸] /.test(row)).map((row) => row.replace(/│$/, "").replace(/\s+/g, " ").trim())
+    expect(groups.length).toBeGreaterThan(6)
+    await h.type(LEFT)
+    const reached = new Set<string>()
+    for (let turn = 0; turn < 200 && reached.size < groups.length; turn++) {
+      await h.type("\x1b[B")
+      const row = picked(h)
+      if (row && /[▾▸] /.test(row)) reached.add(row.replace(/^[›▌] /, ""))
+    }
+    for (const group of groups) expect([...reached].some((row) => row.startsWith(group.replace(/\s+\d+( active)?$/, "")))).toBe(true)
+  })
 })
 
 describe("every group opens by default and can be folded", () => {

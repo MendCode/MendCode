@@ -1,7 +1,7 @@
 import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
 import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiSectionStarts, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
-import { sessionMark, sidebarKind } from "../../view/sidebar"
+import { sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
 import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
@@ -256,7 +256,7 @@ export function createSidebarBots(ctx: AppContext) {
   function holdsArrows(): boolean {
     const all = sessions()
     const parent = all.find((session) => session.sessionId === state.sessionId)?.parentId
-    return all.some((session) => (session.parentId === state.sessionId || (parent !== undefined && session.parentId === parent && session.sessionId !== state.sessionId)) && ["running", "approval"].includes(sessionMark(session as never, false)))
+    return all.some((session) => (session.parentId === state.sessionId || (parent !== undefined && session.parentId === parent && session.sessionId !== state.sessionId)) && (mark => mark === "running" || waitsOnYou(mark))(sessionMark(session as never, false)))
   }
 
   /** The sessions this terminal has had open in the last day, with the activity each had when first opened (view/sidebar-multi.ts keeps those that took part since from the empty-session rule). */
@@ -299,6 +299,7 @@ export function createSidebarBots(ctx: AppContext) {
 
   function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean }): { lines: Line[]; hits: Array<{ row: number; id: string }>; images: ImagePlacement[] } {
     iconsNow = options.icons
+    lastFrame = { height: options.height, header: options.header }
     // First show, a show after pushes came while hidden, a flag turned on after this was made, the slow safety refresh: whatever is due.
     pump()
     // The bots' pictures: only with the flag on, bots listed and an image layer; the face modules load on that first frame, the glyphs hold until then.
@@ -308,10 +309,13 @@ export function createSidebarBots(ctx: AppContext) {
     return { lines: drawn.rows, hits: drawn.hits, images: drawn.images }
   }
 
+  /** The height and header of the last frame: the automatic project count depends on both, so the keyboard lists what that frame drew. */
+  let lastFrame: { height: number; header: boolean } | undefined
+  const drawnModel = () => model({ height: lastFrame?.height ?? Number.MAX_SAFE_INTEGER, icons: iconsNow, ...(lastFrame ? { header: lastFrame.header } : {}) })
   /** The ids the keyboard stops on, as the last frame drew them. */
-  const stops = () => multiStops(model({ height: 0, icons: iconsNow }))
+  const stops = () => multiStops(drawnModel())
   /** The first row of every section drawn, for Tab and Shift+Tab. */
-  const sectionStarts = () => multiSectionStarts(model({ height: 0, icons: iconsNow }))
+  const sectionStarts = () => multiSectionStarts(drawnModel())
   /** The first bot's row, which `b` jumps to; undefined while no bot is listed. */
   const firstBot = () => stops().find(isBotId)
 
@@ -447,11 +451,10 @@ export function createSidebarBots(ctx: AppContext) {
     requestFrame()
   }
 
-  /** `open -a <app>` on macOS; elsewhere the page says it cannot. The app's name came from the connector, passed as one argument. */
+  /** The daemon opens the app (`open -a` on macOS; elsewhere it says it cannot): the terminal client starts no process. */
   async function openApp(app: string) {
-    if (process.platform !== "darwin") return say(`open ${app} from your desktop: this system has no app launcher MendCode uses`, "info")
-    const proc = Bun.spawn(["open", "-a", app], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
-    if (await proc.exited !== 0) fail(`${app} did not open`)
+    const reply = await input.send({ type: "app.open", app })
+    if (!reply.ok) fail(reply.error.message.replace(/^\[[A-Z]+\]: /, ""))
   }
 
   /**

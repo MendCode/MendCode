@@ -58,6 +58,11 @@ Experimental bots learn on their own (notes, skills of their own, schedules), se
 - The reviews page keeps every running and waiting review when the list is too long for one reply: it drops older finished reviews first, then the decision logs of live ones.
 - Esc Esc on a message the model has not answered keeps running sub-agents instead of taking it back with them, the third Esc stays with the session you interrupted, and sub-agents that would not stop are reported instead of counted as stopped.
 - A Claude Code background agent that is still working keeps its thread when many later turns start short agents.
+- A remote client can no longer start pi or an ACP agent by choosing an agent whose model is one of them; those engines stay local only.
+- With a sub-agent waiting for your answer or a plan review, the plain arrows keep moving between sub-agents (Alt+arrow enters the list), as they do for one waiting to be approved.
+- Opening the last page of the Settled list in the sessions sidebar selects the first session it shows instead of dropping the selection.
+- In the all-projects sidebar the arrow keys now stop on every project the list draws when the project count is automatic, a folder used in the last day stays listed when the height cuts the list, and the expanded list keeps its projects in activity order.
+- The PR reviewer reads an SSH connection or DNS failure of a git fetch as the network outage it is and waits, instead of counting it as a failed attempt.
 - Experimental bots: duplicating a bot always renames it, a save too large for the agent loader is refused instead of hiding the bot, saves at the same time no longer clash, editing a bot keeps its permission rules and replaces a frontmatter prompt, deleting with its memory keeps the bot if the memory cannot be removed, and `docs commands` lists `/bot` when bots are on.
 - The sidebar's bot states no longer go back to an older state when the bot list answers after a newer push, a custom sessions sidebar view keeps its full width when bots are on, and a bot's picture with a second PNG header is refused.
 

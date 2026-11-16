@@ -123,7 +123,7 @@ describe("one row per session with a state symbol", () => {
 
 describe("the sessions sidebar in the app", () => {
   const asReply = (reply: unknown) => reply as CommandReply
-  function sidebarApp() {
+  function sidebarApp(moreSettled = 0) {
     const h = appHarness({
       width: 160,
       height: 36,
@@ -133,6 +133,7 @@ describe("the sessions sidebar in the app", () => {
           { sessionId: h.sessionId, directory: "/work/app", title: "Open here", createdAt: 0, updatedAt: NOW, lastSeq: 0, state: "idle", queued: 0 },
           { sessionId: "other", directory: "/work/app", title: "Elsewhere", createdAt: 0, updatedAt: NOW, lastSeq: 0, state: "idle", queued: 0 },
           { sessionId: "done", directory: "/work/app", title: "Put away", createdAt: 0, updatedAt: NOW - DAY, lastSeq: 0, state: "idle", queued: 0, archivedAt: NOW },
+          ...Array.from({ length: moreSettled }, (_, n) => ({ sessionId: `old${n}`, directory: "/work/app", title: `Old ${String(n).padStart(2, "0")}`, createdAt: 0, updatedAt: NOW - DAY - n, lastSeq: 0, state: "idle", queued: 0, archivedAt: NOW - n - 1 })),
         ] } })
         : undefined,
     })
@@ -194,6 +195,24 @@ describe("the sessions sidebar in the app", () => {
     await h.app.onKey(`\x1b[<0;6;${settledRow + 1}M`)
     await h.app.onKey(`\x1b[<0;6;${settledRow + 1}m`)
     expect(side(h).join("\n")).not.toContain("Put away")
+  })
+
+  test("Enter on the last + N more row selects the first session it revealed instead of losing the selection", async () => {
+    // One live pair, then 11 settled: the shelf lists 10 and a `+ 1 more` row whose page takes the row away.
+    const h = sidebarApp(10)
+    await Bun.sleep(5)
+    h.app.render()
+    await h.app.onKey("\x1b[D")
+    await h.app.onKey("\x1b[B")
+    await h.app.onKey("\r")
+    const selected = () => side(h).find((line) => /^ › /.test(line))
+    for (let turn = 0; turn < 20 && !selected()?.includes("+ 1 more"); turn++) await h.app.onKey("\x1b[B")
+    expect(selected()).toContain("+ 1 more")
+    await h.app.onKey("\r")
+    h.app.render()
+    expect(side(h).join("\n")).not.toContain("more")
+    expect(selected()).toContain("Old 09")
+    expect(h.sentOf("session.open")).toHaveLength(0)
   })
 })
 

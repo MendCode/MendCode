@@ -98,7 +98,7 @@ export const SETTLE_MS = 60_000
  * projects" row. `stamps` remembers each folder's rank time between frames, so a folder takes a new place only when its latest
  * activity moved by `SETTLE_MS` or more. `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
  */
-export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible, stamps, from = "all", hidden }: { /** `you`: a project with no session a person typed in (see `humanSession`) waits in `rest` unless it is opened or has a session working or waiting. Default `all`. */ from?: SidebarProjectsFrom; /** Folders the user hid by hand: never listed, `rest` included, except the opened one. */ hidden?: ReadonlySet<string>; sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean; stamps?: Map<string, number> }): { shown: string[]; rest: string[] } {
+export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible, stamps, from = "all", hidden }: { /** `you`: a project with no session a person typed in (see `humanSession`) waits in `rest` unless it is opened or has a session working or waiting. Default `all`. */ from?: SidebarProjectsFrom; /** Folders the user hid by hand: never listed, `rest` included, except the opened one. */ hidden?: ReadonlySet<string>; sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean; stamps?: Map<string, number> }): { shown: string[]; rest: string[]; /** Every project in rank order, shown or not: the list opened by the more-projects row. */ all: string[]; /** The opened, busy and used-today folders, which show past any cap. */ always: ReadonlySet<string> } {
   const facts = new Map<string, { latest: number; recent: number; busy: boolean; fresh: boolean; human: boolean }>()
   for (const session of sessions) {
     const directory = session.directory
@@ -133,5 +133,5 @@ export function rankProjects({ sessions, opened, now, count, busy, isProject, el
     if (from === "you" && !facts.get(directory)!.human) continue
     shown.add(directory)
   }
-  return { shown: ranked.filter((directory) => shown.has(directory)), rest: ranked.filter((directory) => !shown.has(directory)) }
+  return { shown: ranked.filter((directory) => shown.has(directory)), rest: ranked.filter((directory) => !shown.has(directory)), all: ranked, always }
 }

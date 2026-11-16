@@ -447,7 +447,7 @@ describe("bot files: the findings of the beta review", () => {
   test("saves of one bot at the same time each write a whole file, and no staging file stays", async () => {
     const h = await start()
     put(calm(h), botFile())
-    const prompts = Array.from({ length: 8 }, (_, n) => `Personality ${n} ${"x".repeat(n * 700)}`)
+    const prompts = Array.from({ length: 8 }, (_, n) => `Personality ${n}${n === 0 ? "" : ` ${"x".repeat(n * 700)}`}`)
     const acks = await Promise.all(prompts.map((prompt) => h.client.send(save({ prompt }))))
     for (const ack of acks) expect(ack.ok).toBe(true)
     const after = readFileSync(calm(h), "utf8")

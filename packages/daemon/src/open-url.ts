@@ -11,6 +11,12 @@ export const openUrl = (url: string) => new Promise<void>((resolve, reject) => {
   child.once("spawn", () => { child.unref(); resolve() })
 })
 
+/** Opens a desktop app by name (`open -a <app>`); only macOS has that launcher. */
+export const openApp = (app: string, run: (program: string, args: string[]) => Promise<void> = launch) => {
+  if (process.platform !== "darwin") return Promise.reject(new Error("[OPEN]: this system has no app launcher MendCode uses"))
+  return run("open", ["-a", app]).catch(() => { throw new Error(`[OPEN]: ${app} did not open`) })
+}
+
 const IMAGE_MAGIC: Array<{ extension: string; matches(bytes: Uint8Array): boolean }> = [
   { extension: "png", matches: (b) => b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 },
   { extension: "jpg", matches: (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff },

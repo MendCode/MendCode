@@ -10,7 +10,7 @@ const reply = (result: unknown) => ({ ok: true, result }) as CommandReply
 const MINUTE = 60_000
 
 /** The app with a bots list and sessions in three folders; `bots: false` is a terminal that never turned the flag on. */
-function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect }: { bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
+function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect, waitingChild }: { /** A sub-agent of the open session that waits on you with this kind of request. */ waitingChild?: "approval" | "question" | "plan"; bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
   const current = ids("session")
   const second = ids("session")
   const elsewhere = ids("session")
@@ -22,6 +22,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
     { sessionId: elsewhere, title: "Other project", directory: "/other/api", createdAt: NOW, updatedAt: NOW, lastSeq: 0, state: "waiting_approval", queued: 0 },
     { sessionId: docs, title: "Docs pass", directory: "/other/api", createdAt: NOW, updatedAt: NOW - 120 * MINUTE, lastSeq: 0, state: "idle", queued: 0 },
     ...more,
+    ...(waitingChild ? [{ sessionId: ids("session"), title: "Sub task", directory: "/work/app", createdAt: NOW, updatedAt: NOW, lastSeq: 0, state: "waiting_approval", pendingKind: waitingChild, queued: 0, parentId: current } as SessionSummary] : []),
   ]
   const report = {
     bots: [
@@ -493,4 +494,27 @@ describe("layouts and widths", () => {
     await until(h, "Bots")
     expect(rowOf(h, "calm")).toBeLessThan(rowOf(h, "Chrome"))
   })
+})
+
+describe("a sub-agent waiting on you keeps the plain arrows for the sub-agents", () => {
+  const marked = (h: App) => side(h).some((row) => /^ › /.test(row))
+  /** Whether a row is selected (›) after the left arrow and one down: the list took the arrows, or the chat kept them. */
+  const afterLeftThenDown = async (h: App, left: string) => {
+    await until(h, "Bots")
+    await Bun.sleep(20)
+    h.app.render()
+    await h.type(left)
+    await h.type("\x1b[B")
+    h.app.render()
+    return marked(h)
+  }
+  test("with no sub-agent the plain left arrow enters the list", async () => {
+    expect(await afterLeftThenDown(chatApp(), "\x1b[D")).toBe(true)
+  })
+  for (const kind of ["approval", "question", "plan"] as const) {
+    test(`a sub-agent waiting with ${kind}: the plain left arrow stays with the chat and Alt+left enters the list`, async () => {
+      expect(await afterLeftThenDown(chatApp({ waitingChild: kind }), "\x1b[D")).toBe(false)
+      expect(await afterLeftThenDown(chatApp({ waitingChild: kind }), "\x1b[1;3D")).toBe(true)
+    })
+  }
 })
