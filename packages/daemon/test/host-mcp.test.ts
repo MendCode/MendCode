@@ -81,6 +81,19 @@ describe("native tools bridge for another harness", () => {
     expect(hostInstructions(TOOLS)).not.toContain("mcp__mendcode__webfetch")
   })
 
+  test("a session with MendCode's workflow tools is told to run workflows there, where /workflows shows them, and not through Claude Code's hidden Workflow tool", () => {
+    const workflow = { name: "workflow_start", description: "Start a workflow", parameters: { type: "object", properties: {} } }
+    const claude = hostInstructions([...TOOLS, workflow])
+    expect(claude).toContain("mcp__mendcode__workflow_start or mcp__mendcode__workflow_script")
+    expect(claude).toContain("show live in /workflows")
+    expect(claude).toContain("never send the user to /workflows for it")
+    expect(claude).toContain('ToolSearch "select:mcp__mendcode__workflow_start,mcp__mendcode__workflow_script"')
+    const codex = hostInstructions([...TOOLS, workflow], "codex")
+    expect(codex).toContain("show live in /workflows")
+    expect(codex).not.toContain("Claude Code's own Workflow")
+    expect(hostInstructions(TOOLS)).not.toContain("/workflows")
+  })
+
   test("Codex is told its tools sit under exec and is never sent to ToolSearch, which it lacks; Claude's text keeps ToolSearch", () => {
     const image = { name: "image_gen", description: "Generate an image", parameters: { type: "object", properties: {} } }
     const codex = hostInstructions([...TOOLS, image], "codex")
