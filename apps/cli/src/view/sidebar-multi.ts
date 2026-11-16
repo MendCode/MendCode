@@ -39,7 +39,11 @@ export type MultiInput = {
    * Which folders are projects and how many show: absent, every folder with a session is listed (no cap). `canonical` names a
    * linked worktree by its main repo, so its sessions list under it.
    */
-  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; /** Path-only check (no disk): a folder used in the last day lists as a project even when it is no git root. */ eligible?(directory: string): boolean; count: number }
+  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; /** Path-only check (no disk): a folder used in the last day lists as a project even when it is no git root. */ eligible?(directory: string): boolean; /** The most projects listed before `+ N more projects`; 0 fills the sidebar's height. */ count: number }
+  /** Days of activity a project's list reaches back; older sessions wait behind `+ N older`. Absent, `DEFAULT_RECENT_DAYS`; 0 lists every age. */
+  recentDays?: number
+  /** Each project's rank time, kept between frames (see `rankProjects`); absent, every frame ranks from scratch. */
+  rankStamps?: Map<string, number>
   /** Sessions this terminal opened, by id: when, and the activity time the session had then. */
   visits?: ReadonlyMap<string, { at: number; updatedAt: number }>
   /** The `+ N more projects` row was opened: the whole ranked list shows, ending in `show fewer`. */
@@ -66,6 +70,10 @@ const MORE_PROJECTS = "projects:"
 const BOT_CHATS = "botchats:"
 const BOT_MORE = "botmore:"
 export const DEFAULT_PREVIEW = 5
+export const DEFAULT_RECENT_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+/** An automatic project count lists at least this many projects, whatever their groups cost in rows. */
+const AUTO_MIN_PROJECTS = 6
 /** Projects other than the opened one preview at most this many sessions. */
 const OTHER_PREVIEW = 3
 /** An untitled session whose log holds no more than this many events (created, permission mode) was opened and left alone. */
@@ -132,7 +140,7 @@ const preview = (list: readonly MultiSession[], limit: number, keep: (session: M
 function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): { shown: string[]; rest: string[] } {
   if (input.scope === "folder") return { shown: [input.directory], rest: [] }
   const listed = input.sessions.filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
-  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count ?? Number.POSITIVE_INFINITY, busy: busy as never, isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}) })
+  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count || Number.POSITIVE_INFINITY, busy: busy as never, ...(input.rankStamps ? { stamps: input.rankStamps } : {}), isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}) })
 }
 
 /** Every shown group starts open; a fold or an open by hand wins. */
@@ -295,8 +303,19 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       const labels = groupLabels(directories)
       if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
       else blankBetween()
-      for (const directory of directories) {
+      // An automatic count fills the height: a group that would not fit is taken back, and with it every plain one after it.
+      const auto = !input.icons && !input.projectsExpanded && input.scope === "all" && input.projects?.count === 0
+      const room = input.height - (input.header === false ? 0 : 2) - 1
+      const ownBusy = (session: MultiSession) => ["running", "approval"].includes(mark(session))
+      const recentMs = (input.recentDays ?? DEFAULT_RECENT_DAYS) > 0 ? (input.recentDays ?? DEFAULT_RECENT_DAYS) * DAY_MS : Number.POSITIVE_INFINITY
+      let cutAt = -1
+      let listed = 0
+      for (const [at, directory] of directories.entries()) {
         const list = live(projectInput.sessions, directory, input)
+        const forced = directory === input.directory || list.some(ownBusy)
+        if (auto && cutAt >= 0 && !forced) continue
+        const rollback = entries.length
+        listed++
         const open = input.icons || isOpen(input, directory)
         const active = list.filter((session) => ["running", "approval"].includes(mark(session))).length
         if (!input.icons) {
@@ -313,17 +332,29 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
           const setting = input.previewCount ?? DEFAULT_PREVIEW
           const limit = directory === input.directory ? setting : Math.min(OTHER_PREVIEW, setting)
           const expanded = !input.icons && input.expanded?.has(directory) === true
-          const rows = input.icons || expanded ? list : preview(list, limit, (session) => session.sessionId === input.current || ["running", "approval"].includes(mark(session)))
+          // Sessions older than the window wait behind the row too; the open, busy and pinned ones show at any age.
+          const keep = (session: MultiSession) => session.sessionId === input.current || ownBusy(session) || session.lifecycle?.pinnedAt !== undefined
+          const recent = input.icons || recentMs === Number.POSITIVE_INFINITY ? list : list.filter((session) => keep(session) || input.now - sessionActivityAt(session as never) <= recentMs)
+          const collapsed = input.icons ? list : preview(recent, limit, keep)
+          const rows = expanded ? list : collapsed
           sessionRows(rows, input.icons ? "" : "  ")
           const hidden = list.length - rows.length
-          if (hidden > 0 || (expanded && list.length > limit)) {
+          if (hidden > 0 || (expanded && list.length > collapsed.length)) {
             const id = `${MORE}${directory}`
-            push([{ text: "    " }, { text: hidden > 0 ? `+ ${hidden} more` : "show less", fg: "muted", bold: id === picked }], id)
+            const older = collapsed.length === recent.length
+            push([{ text: "    " }, { text: hidden > 0 ? `+ ${hidden} ${older ? "older" : "more"}` : "show less", fg: "muted", bold: id === picked }], id)
           }
+        }
+        if (auto && !forced && at >= AUTO_MIN_PROJECTS && entries.length > room) {
+          entries.length = rollback
+          listed--
+          cutAt = at
         }
       }
       // The projects past the cap wait behind one row that opens the whole ranked list (and folds it back).
-      if (!input.icons && ranked.rest.length) push([{ text: "  " }, { text: input.projectsExpanded ? "show fewer" : `+ ${ranked.rest.length} more projects`, fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
+      const waiting = ranked.rest.length + (auto ? directories.length - listed : 0)
+      const foldable = waiting > 0 || (input.projectsExpanded === true && input.projects?.count === 0 && directories.length > AUTO_MIN_PROJECTS)
+      if (!input.icons && foldable) push([{ text: "  " }, { text: input.projectsExpanded ? "show fewer" : `+ ${waiting} more projects`, fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
     } else {
       blankBetween()
       const loose = live(projectInput.sessions, input.directory, input)

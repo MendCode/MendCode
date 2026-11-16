@@ -220,7 +220,8 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sidebar": "auto",
   "sidebarProjects": "auto",
   "sidebarPreviewCount": 5,
-  "sidebarProjectCount": 6,
+  "sidebarProjectCount": 0,
+  "sidebarRecentDays": 7,
   "sidebarLayout": "bots-first",
   "sidebarSections": "",
   "images": "auto",
@@ -473,7 +474,8 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "draftRetentionDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 3650)) problems.push("draftRetentionDays: expected integer 0..3650")
     else if (key === "sidebarWidth" && (!Number.isInteger(value) || Number(value) !== 0 && (Number(value) < 32 || Number(value) > 80))) problems.push("sidebarWidth: expected 0 (automatic) or an integer 32..80")
     else if (key === "sidebarPreviewCount" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("sidebarPreviewCount: expected integer 1..50")
-    else if (key === "sidebarProjectCount" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 30)) problems.push("sidebarProjectCount: expected integer 1..30")
+    else if (key === "sidebarProjectCount" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 30)) problems.push("sidebarProjectCount: expected integer 0..30 (0 fills the height)")
+    else if (key === "sidebarRecentDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 365)) problems.push("sidebarRecentDays: expected integer 0..365 (0 lists every age)")
     else if (key === "wheelLines" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")
     else if (key === "imageWaitSpeed" && (!Number.isInteger(value) || Number(value) < 80 || Number(value) > 5000)) problems.push("imageWaitSpeed: expected integer 80..5000 (milliseconds per frame)")
     else if (key === "imageWaitCanvas" && (!value || Array.isArray(value) || Object.entries(value).some(([field, bound]) => !Object.hasOwn(TUI_DEFAULTS.imageWaitCanvas as object, field) || typeof bound !== "number" || !Number.isFinite(bound)))) problems.push("imageWaitCanvas: expected numbers minWidth, maxWidth, minHeight, maxHeight, heightRatio, paddingX, paddingY")

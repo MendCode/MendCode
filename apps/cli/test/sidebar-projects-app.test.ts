@@ -11,7 +11,7 @@ const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
 const HOME = process.env.HOME ?? "/Users/obed"
 
-const REPOS = ["/work/app", "/other/api", "/work/site", "/repos/r1", "/repos/r2", "/repos/r3", "/repos/r4"]
+const REPOS = ["/work/app", "/other/api", "/work/site", "/repos/r1", "/repos/r2", "/repos/r3", "/repos/r4", ...Array.from({ length: 12 }, (_, n) => `/repos/x${n}`)]
 const NOT_REPOS = ["/work/plain", HOME, `${HOME}/.ssh`, "/tmp/kit-fix-v-1", "/private/tmp/ui4-login--2"]
 
 /** The app with the owner's shape of data: a few repos with a different recency, scratch folders, the home and a hidden one. */
@@ -108,11 +108,11 @@ describe("which projects the sidebar lists", () => {
 })
 
 describe("ranking, the cap and the more-projects row", () => {
-  test("opened first, then the working ones, then the most recent up to the setting; the rest behind one row", async () => {
+  test("by latest activity, the opened and working ones always in; the most recent fill up to the setting; the rest behind one row", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 3 } })
     await until(h, "more projects")
     const groups = side(h).filter((row) => /[▾▸] /.test(row)).map((row) => row.replace(/\s+/g, " ").trim())
-    expect(groups.map((row) => row.slice(2).split(" ")[0])).toEqual(["app", "api", "site"])
+    expect(groups.map((row) => row.slice(2).split(" ")[0])).toEqual(["app", "site", "api"])
     expect(sidebarText(h)).toMatch(/\+ 4 more projects/)
     expect(sidebarText(h)).not.toContain("▾ r1")
   })
@@ -132,8 +132,28 @@ describe("ranking, the cap and the more-projects row", () => {
     expect(h.app.sessionId).toBe(h.current)
   })
 
-  test("the cap is a setting with a default of 6", () => {
-    expect(DEFAULT_TUI_PROFILE.sidebarProjectCount).toBe(6)
+  test("the cap is a setting; the default fills the height", () => {
+    expect(DEFAULT_TUI_PROFILE.sidebarProjectCount).toBe(0)
+  })
+
+  test("switching to a chat of another project moves no group", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await until(h, "▾ api")
+    const order = () => side(h).filter((row) => /[▾▸] /.test(row)).map((row) => row.replace(/\s+/g, " ").trim().slice(2).split(" ")[0])
+    const before = order()
+    await h.type(LEFT)
+    await goTo(h, /repo 4 chat/)
+    await h.type("\r")
+    expect(h.app.sessionId).not.toBe(h.current)
+    h.app.render()
+    expect(order()).toEqual(before)
+  })
+
+  test("with the default count a tall sidebar lists more projects than the old six", async () => {
+    const many = Array.from({ length: 12 }, (_, n) => ({ sessionId: ids("session"), title: `extra ${n}`, directory: `/repos/x${n}`, createdAt: NOW, updatedAt: NOW - (n + 5) * 60 * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
+    const h = chatApp({ extraSessions: many, height: 80 })
+    await until(h, "▾ app")
+    expect(side(h).filter((row) => /[▾▸] /.test(row)).length).toBeGreaterThan(6)
   })
 })
 

@@ -9,8 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- The left list shows only sessions from the last 7 days, with the open, working, waiting and pinned ones always there; a `+ N older` row opens the rest. `/customize` › Top & side › Recent days sets the window (0 lists every age).
+- The left list fills its height with projects instead of stopping at six; `Projects shown` still caps it when you set a number.
+
 ### Fixed
 
+- Opening a chat in another project no longer moves the project groups in the left list: they rank by their latest message activity, and a streaming turn does not shuffle them.
 - A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.
 
 ## v0.0.18-beta.3 - 2026-11-16

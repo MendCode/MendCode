@@ -295,11 +295,13 @@ describe("all projects", () => {
     await until(h, "▾ api")
     expect(sidebarText(h)).toContain("Chrome")
     expect(sidebarText(h)).not.toContain("Client reconnect")
-    expect(side(h)[rowOf(h, "more")]).toMatch(/\+ 1 more +│$/)
+    // Groups rank by activity, not by which one is open: the open project's more row is the one under Chrome.
+    const appMore = (needle: string) => side(h).findIndex((row, index) => index > rowOf(h, "Chrome") && row.includes(needle))
+    expect(side(h)[appMore("more")]).toMatch(/\+ 1 more +│$/)
     // The keyboard: focus the list (on Chrome), one down is the more row.
     await h.type("\x1b[D")
     await h.type("\x1b[B")
-    expect(side(h)[rowOf(h, "more")]).toMatch(/^ › /)
+    expect(side(h)[appMore("more")]).toMatch(/^ › /)
     await h.type("\r")
     expect(sidebarText(h)).toContain("Client reconnect")
     expect(side(h)[rowOf(h, "show less")]).toMatch(/^ › /)
@@ -307,7 +309,7 @@ describe("all projects", () => {
     // The mouse folds it back.
     await h.type(click(8, rowOf(h, "show less")))
     expect(sidebarText(h)).not.toContain("Client reconnect")
-    await h.type(click(8, rowOf(h, "+ 1 more")))
+    await h.type(click(8, appMore("+ 1 more")))
     expect(sidebarText(h)).toContain("Client reconnect")
     expect(h.app.sessionId).toBe(h.ids.current)
   })

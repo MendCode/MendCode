@@ -3,8 +3,8 @@ import { sessionActivityAt } from "./session-label"
 
 /**
  * Which folders the all-projects sidebar groups, and in what order (docs/sidebar.md). A project is a git work tree root (or the
- * opened folder), never the home folder, a hidden folder or a temp folder; the opened one comes first, then the ones with work in
- * progress, then the most recently used up to `sidebarProjectCount`. Pure functions plus one small cache: the disk is asked once
+ * opened folder), never the home folder, a hidden folder or a temp folder; ranked by their latest message activity (never by which one
+ * is open), the opened and busy ones always showing, the rest up to `sidebarProjectCount` or, when that is 0, as many as fit. Pure functions plus one small cache: the disk is asked once
  * per folder, asynchronously, and never while a frame draws.
  */
 
@@ -78,16 +78,21 @@ export function createProjectProbe({ home, tmpRoots, inspect, onChange }: { home
 
 type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Partial<Pick<SessionSummary, "lifecycle" | "lastSeq" | "state" | "queued">>
 
+/** A project already ranked keeps its place while its latest activity moves less than this: a streaming turn does not shuffle the list. */
+export const SETTLE_MS = 60_000
+
 /**
- * The projects to draw: the opened one, then those with a session working or waiting, then the most recently used until `count`
- * (the opened and busy ones count toward it and always show). `rest` keeps the ranking for the "more projects" row.
- * `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
+ * The projects to draw, newest message activity first. The opened folder, the ones with a session working or waiting and the ones
+ * used today always show; the others fill up to `count` in the same order. Which folder is open never moves a group: the rank is
+ * the latest `updatedAt` of its sessions (a new message, not a read, an open or a draft). `rest` keeps the ranking for the "more
+ * projects" row. `stamps` remembers each folder's rank time between frames, so a folder takes a new place only when its latest
+ * activity moved by `SETTLE_MS` or more. `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
  */
-export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible }: { sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean }): { shown: string[]; rest: string[] } {
+export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible, stamps }: { sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean; stamps?: Map<string, number> }): { shown: string[]; rest: string[] } {
   const facts = new Map<string, { latest: number; recent: number; busy: boolean; fresh: boolean }>()
   for (const session of sessions) {
     const directory = session.directory
-    const at = sessionActivityAt(session as never)
+    const at = session.updatedAt
     // A folder used in the last day is a project whether or not it is a git root, and stays listed after the opened folder moves on.
     const fresh = directory !== opened && !isProject(directory) && eligible?.(directory) === true && now - at <= FRESH_MS
     if (directory !== opened && !isProject(directory) && !fresh) continue
@@ -98,13 +103,20 @@ export function rankProjects({ sessions, opened, now, count, busy, isProject, el
     if (fresh) fact.fresh = true
     facts.set(directory, fact)
   }
-  const others = [...facts.keys()].filter((directory) => directory !== opened).sort((a, b) => facts.get(b)!.latest - facts.get(a)!.latest || facts.get(b)!.recent - facts.get(a)!.recent || a.localeCompare(b))
-  // Busy folders, and folders listed only because they were used today, show past the cap: recent use beats it as work in progress does.
-  const working = others.filter((directory) => facts.get(directory)!.busy || facts.get(directory)!.fresh)
-  const shown = [opened, ...working]
-  for (const directory of others) {
-    if (shown.length >= count) break
-    if (!shown.includes(directory)) shown.push(directory)
+  if (stamps) for (const [directory, fact] of facts) {
+    const held = stamps.get(directory)
+    if (held !== undefined && fact.latest >= held && fact.latest - held < SETTLE_MS) fact.latest = held
+    else stamps.set(directory, fact.latest)
   }
-  return { shown, rest: others.filter((directory) => !shown.includes(directory)) }
+  if (!facts.has(opened)) facts.set(opened, { latest: 0, recent: 0, busy: false, fresh: false })
+  const byRank = (a: string, b: string) => facts.get(b)!.latest - facts.get(a)!.latest || facts.get(b)!.recent - facts.get(a)!.recent || a.localeCompare(b)
+  const ranked = [...facts.keys()].sort(byRank)
+  // The opened and busy folders, and the ones listed only because they were used today, show past the cap; the others fill it in rank order.
+  const always = new Set(ranked.filter((directory) => directory === opened || facts.get(directory)!.busy || facts.get(directory)!.fresh))
+  const shown = new Set(always)
+  for (const directory of ranked) {
+    if (shown.size >= count) break
+    shown.add(directory)
+  }
+  return { shown: ranked.filter((directory) => shown.has(directory)), rest: ranked.filter((directory) => !shown.has(directory)) }
 }

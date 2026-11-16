@@ -65,6 +65,8 @@ export function createSidebarBots(ctx: AppContext) {
   const open = new Map<string, boolean>()
   /** The folders whose whole list was opened with the more row; kept in memory only. */
   const expanded = new Set<string>()
+  /** Each project's rank time, so a streaming turn or an opened chat does not reshuffle the project list (see `rankProjects`). */
+  const rankStamps = new Map<string, number>()
   /** Which bot each listed session belongs to, from the last `bot.list`. */
   let botOfSession = new Map<string, string>()
   const classified = new Set<string>()
@@ -283,6 +285,8 @@ export function createSidebarBots(ctx: AppContext) {
       scope: allProjects() ? "all" : "folder",
       open,
       previewCount: state.tuiProfile.sidebarPreviewCount,
+      recentDays: state.tuiProfile.sidebarRecentDays,
+      rankStamps,
       expanded,
       projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount },
       visits: noteVisit(),

@@ -69,16 +69,17 @@ describe("sidebar profile keys", () => {
     expect(tuiProblems({ sidebarPreviewCount: 2.5 })[0]).toContain("1..50")
   })
 
-  test("sidebarProjectCount: 6 by default, normalized into 1..30, and the protocol agrees", () => {
-    expect(normalizeTuiProfile({ sidebar: "auto" }).sidebarProjectCount).toBe(6)
-    expect(DEFAULT_TUI_PROFILE.sidebarProjectCount).toBe(6)
-    expect(TUI_DEFAULTS.sidebarProjectCount).toBe(6)
-    expect(normalizeTuiProfile({ sidebarProjectCount: 0 }).sidebarProjectCount).toBe(1)
+  test("sidebarProjectCount: 0 (automatic) by default, normalized into 0..30, and the protocol agrees", () => {
+    expect(normalizeTuiProfile({ sidebar: "auto" }).sidebarProjectCount).toBe(0)
+    expect(DEFAULT_TUI_PROFILE.sidebarProjectCount).toBe(0)
+    expect(TUI_DEFAULTS.sidebarProjectCount).toBe(0)
+    expect(normalizeTuiProfile({ sidebarProjectCount: 0 }).sidebarProjectCount).toBe(0)
+    expect(normalizeTuiProfile({ sidebarProjectCount: -3 }).sidebarProjectCount).toBe(0)
     expect(normalizeTuiProfile({ sidebarProjectCount: 99 }).sidebarProjectCount).toBe(30)
-    expect(normalizeTuiProfile({ sidebarProjectCount: "x" }).sidebarProjectCount).toBe(6)
+    expect(normalizeTuiProfile({ sidebarProjectCount: "x" }).sidebarProjectCount).toBe(0)
     expect(tuiProblems({ sidebarProjectCount: 12 })).toEqual([])
-    expect(tuiProblems({ sidebarProjectCount: 31 })[0]).toContain("1..30")
-    expect(tuiProblems({ sidebarProjectCount: 0 })[0]).toContain("1..30")
+    expect(tuiProblems({ sidebarProjectCount: 31 })[0]).toContain("0..30")
+    expect(tuiProblems({ sidebarProjectCount: -1 })[0]).toContain("0..30")
   })
 
   test("the layout gives the sections and their order; an explicit list wins; none hides all", () => {

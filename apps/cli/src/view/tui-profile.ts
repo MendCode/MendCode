@@ -426,8 +426,10 @@ export type TuiProfile = {
   sidebarProjects: SidebarProjects
   /** Sessions each project of that list shows before its `+ N more` row (1..50); the open one and the busy ones always show. */
   sidebarPreviewCount: number
-  /** Projects that list shows before its `+ N more projects` row (1..30); the open one and the busy ones always show. */
+  /** Projects that list shows before its `+ N more projects` row (1..30); 0 fills the sidebar's height. The open one and the busy ones always show. */
   sidebarProjectCount: number
+  /** Days of activity a project's session list reaches back (0..365); older sessions wait behind `+ N older`. 0 lists every age. */
+  sidebarRecentDays: number
   /** Experimental bots: the starting layout of the left sidebar; its sections come from `sidebarSections` when that is set. */
   sidebarLayout: SidebarLayout
   /** Experimental bots: the sections shown, in order, as a comma list of projects, bots, sessions; `none` shows nothing, empty takes the layout's own. */
@@ -671,7 +673,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebar: "auto",
   sidebarProjects: "auto",
   sidebarPreviewCount: 5,
-  sidebarProjectCount: 6,
+  sidebarProjectCount: 0,
+  sidebarRecentDays: 7,
   sidebarLayout: "bots-first",
   sidebarSections: "",
   images: "auto",
@@ -1052,7 +1055,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,
     sidebarProjects: oneOf(SIDEBAR_PROJECTS, source.sidebarProjects) ?? DEFAULT_TUI_PROFILE.sidebarProjects,
     sidebarPreviewCount: typeof source.sidebarPreviewCount === "number" && Number.isFinite(source.sidebarPreviewCount) ? Math.max(1, Math.min(50, Math.floor(source.sidebarPreviewCount))) : DEFAULT_TUI_PROFILE.sidebarPreviewCount,
-    sidebarProjectCount: typeof source.sidebarProjectCount === "number" && Number.isFinite(source.sidebarProjectCount) ? Math.max(1, Math.min(30, Math.floor(source.sidebarProjectCount))) : DEFAULT_TUI_PROFILE.sidebarProjectCount,
+    sidebarProjectCount: typeof source.sidebarProjectCount === "number" && Number.isFinite(source.sidebarProjectCount) ? Math.max(0, Math.min(30, Math.floor(source.sidebarProjectCount))) : DEFAULT_TUI_PROFILE.sidebarProjectCount,
+    sidebarRecentDays: typeof source.sidebarRecentDays === "number" && Number.isFinite(source.sidebarRecentDays) ? Math.max(0, Math.min(365, Math.floor(source.sidebarRecentDays))) : DEFAULT_TUI_PROFILE.sidebarRecentDays,
     sidebarLayout: oneOf(SIDEBAR_LAYOUTS, source.sidebarLayout) ?? DEFAULT_TUI_PROFILE.sidebarLayout,
     sidebarSections: normalizeSidebarSections(source.sidebarSections),
     images: oneOf(IMAGE_MODES, source.images) ?? DEFAULT_TUI_PROFILE.images,

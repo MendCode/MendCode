@@ -46,15 +46,37 @@ describe("/customize sidebar rows", () => {
     expect(bad.state.error).toContain("1..50")
   })
 
-  test("the project count row sits next to Sessions per project and steps within 1..30", () => {
+  test("the project count row sits next to Sessions per project: automatic (0), then 1..30", () => {
     expect(rowShown("sidebarProjectCount", DEFAULT_TUI_PROFILE, {})).toBe(true)
     expect(CUSTOMIZE_ROWS.indexOf("sidebarProjectCount")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarPreviewCount") + 1)
-    expect(press("sidebarProjectCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjectCount: 7 } })
+    expect(press("sidebarProjectCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjectCount: 1 } })
+    expect(press("sidebarProjectCount", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjectCount: 7 }).action).toEqual({ type: "set", patch: { sidebarProjectCount: 8 } })
+    expect(press("sidebarProjectCount", "\x1b[D", { ...DEFAULT_TUI_PROFILE, sidebarProjectCount: 1 }).action).toEqual({ type: "set", patch: { sidebarProjectCount: 0 } })
     expect(press("sidebarProjectCount", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjectCount: 30 }).action).toEqual({ type: "set", patch: { sidebarProjectCount: 30 } })
     const open = press("sidebarProjectCount", "\r").state
     const bad = press("sidebarProjectCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "31" })
     expect(bad.action).toEqual({ type: "none" })
-    expect(bad.state.error).toContain("1..30")
+    expect(bad.state.error).toContain("0..30")
+    expect(press("sidebarProjectCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "0" }).action).toEqual({ type: "set", patch: { sidebarProjectCount: 0 } })
+  })
+
+  test("the recent-days row sits under Projects shown: 7 by default, 0 is no limit, steps within 0..365", () => {
+    expect(rowShown("sidebarRecentDays", DEFAULT_TUI_PROFILE, {})).toBe(true)
+    expect(CUSTOMIZE_ROWS.indexOf("sidebarRecentDays")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarProjectCount") + 1)
+    expect(press("sidebarRecentDays", RIGHT).action).toEqual({ type: "set", patch: { sidebarRecentDays: 8 } })
+    expect(press("sidebarRecentDays", "\x1b[D", { ...DEFAULT_TUI_PROFILE, sidebarRecentDays: 1 }).action).toEqual({ type: "set", patch: { sidebarRecentDays: 0 } })
+    expect(press("sidebarRecentDays", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarRecentDays: 365 }).action).toEqual({ type: "set", patch: { sidebarRecentDays: 365 } })
+    const open = press("sidebarRecentDays", "\r").state
+    expect(press("sidebarRecentDays", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "30" }).action).toEqual({ type: "set", patch: { sidebarRecentDays: 30 } })
+    expect(press("sidebarRecentDays", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "366" }).state.error).toContain("0..365")
+  })
+
+  test("the recent-days setting persists through the profile file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "recent-days-"))
+    try {
+      writeTuiProfile(dir, { ...DEFAULT_TUI_PROFILE, sidebarRecentDays: 21 })
+      expect(readTuiProfile(dir).sidebarRecentDays).toBe(21)
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 
   test("choosing a starting layout brings its own sections, dropping a typed list", () => {
