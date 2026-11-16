@@ -15,7 +15,7 @@ import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarStops } from "../../view/sidebar"
+import { projectSessions, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -373,8 +373,9 @@ export function createKeys(ctx: AppContext, actions: {
     }
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
-      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < SIDEBAR_WIDTH) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
+      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
+      else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
       else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
@@ -422,11 +423,13 @@ export function createKeys(ctx: AppContext, actions: {
       }
       if (state.sidebarFocus && !mouse) {
         // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
-        const stops = sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
+        const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
-        const onSettled = stops[index] === SETTLED_ROW
+        const onSettled = !multi && stops[index] === SETTLED_ROW
         if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
         else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
           await actions.switchSession(stops[index]! as typeof state.sessionId)

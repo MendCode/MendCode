@@ -45,6 +45,21 @@ export function sidebarVisible(input: { mode: SidebarMode; width: number; minima
   return input.width >= BREAKPOINTS.wide
 }
 
+/** The narrow icons-only column of the experimental bots sidebar: a margin mark, an icon, a state symbol and the rule. */
+export const ICON_SIDEBAR_WIDTH = 12
+
+/**
+ * How the left sidebar shows at `width` columns. With bots on it can also be the icons-only column, chosen by the layout or
+ * because the width is under the wide breakpoint (the full list needs it) but still has room for the chat; with bots off it is
+ * today's rule: full from wide, else none.
+ */
+export function sidebarKind(input: { mode: SidebarMode; width: number; minimal: boolean; bots: boolean; iconsOnly: boolean }): "none" | "icons" | "full" {
+  if (!sidebarVisible({ mode: input.mode, width: BREAKPOINTS.wide, minimal: input.minimal })) return "none"
+  if (!input.bots) return input.width >= BREAKPOINTS.wide ? "full" : "none"
+  if (input.width < BREAKPOINTS.normal) return "none"
+  return input.iconsOnly || input.width < BREAKPOINTS.wide ? "icons" : "full"
+}
+
 /** Columns left for the chat when the sidebar shows. */
 export const chatColumns = (width: number) => width - SIDEBAR_WIDTH - SIDEBAR_GAP
 
@@ -158,9 +173,9 @@ export function renderSidebar(input: SidebarInput): Line[] {
 }
 
 /** Left sidebar, gap, then the chat padded to `mainWidth`. */
-export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], mainWidth: number, side: "left" | "right" = "left"): Line[] {
+export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], mainWidth: number, side: "left" | "right" = "left", cells = SIDEBAR_WIDTH): Line[] {
   const height = Math.max(main.length, sidebar.length)
-  const blank: Line = [{ text: " ".repeat(SIDEBAR_WIDTH), bg: "panel" }]
+  const blank: Line = [{ text: " ".repeat(cells), bg: "panel" }]
   return Array.from({ length: height }, (_, row): Line => side === "left" ? [...(sidebar[row] ?? blank), { text: " ".repeat(SIDEBAR_GAP) }, ...fit(main[row] ?? [], mainWidth)] : [...fit(main[row] ?? [], mainWidth), { text: " ".repeat(SIDEBAR_GAP) }, ...(sidebar[row] ?? blank)])
 }
 

@@ -36,7 +36,7 @@ export const GROUPS = [
   ] },
   { title: "Top & side", parts: [
     { title: "Top bar", rows: ["showTopbar", "topbarStats", "showSessionTitle", "showProject", "contextBar", "contextStyle", "showDiffLines", "showDiffFiles"] },
-    { title: "Sidebar & panel", rows: ["sidebar", "sidebarSide", "sidebarHeader", "sidebarWidth", "panelNarrow", "panelHeader", "showTasks", "dockJobs"] },
+    { title: "Sidebar & panel", rows: ["sidebar", "sidebarProjects", "sidebarLayout", "sidebarSections", "sidebarSide", "sidebarHeader", "sidebarWidth", "panelNarrow", "panelHeader", "showTasks", "dockJobs"] },
     { title: "Window title", rows: ["terminalTitle", "titleTemplate", "titleActivity"] },
   ] },
   { title: "Input & keys", parts: [
@@ -69,7 +69,7 @@ export const LABELS: Record<CustomizeRow, string> = {
   imageWait: "Wait canvas", imageWaitPreset: "Wait art", imageWaitSpeed: "Frame time (ms)", imageWaitColor: "Wait colour", imageWaitMeta: "Model and size",
   tableStyle: "Table style", headingStyle: "Heading style", markdownCopyHints: "Copy hints", markdownRtl: "Right-to-left", markdownColors: "Markdown colors",
   limitCheckpoint: "Pre-limit checkpoint",
-  activitySound: "Activity sound", promptStatus: "Status line", sidebarWidth: "Right bar width",
+  activitySound: "Activity sound", promptStatus: "Status line", sidebarWidth: "Right bar width", sidebarProjects: "Sidebar projects", sidebarLayout: "Sidebar layout", sidebarSections: "Sidebar sections",
   scrollbarGlyphs: "Scrollbar glyphs", jumpHint: "Jump to latest", jumpText: "Jump text", activityPlacement: "Activity status", activityParts: "Activity parts",
   compactionPanel: "Compaction panel", compactionStyle: "Compaction card", compactionProgress: "Stage progress", compactionScratchpad: "Scratchpad",
   extensions: "UI modules", exportLook: "Export look", views: "Views", viewScaffold: "New view file",

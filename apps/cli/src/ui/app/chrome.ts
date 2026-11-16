@@ -7,7 +7,7 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { reviewActivityView } from "../lazy-pages"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
-import { chatColumns, projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
+import { ICON_SIDEBAR_WIDTH, projectSessions, SETTLED_ROW, SIDEBAR_GAP, SIDEBAR_WIDTH, sidebarKind } from "../../view/sidebar"
 import { SPINNER_FRAMES } from "../../view/tool-card"
 import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
@@ -152,8 +152,24 @@ export function createChrome(ctx: AppContext, actions: {
 
   /** The project's sessions, with hit rows for mouse navigation. */
   function sidebarRows(height: number): Line[] {
+    // Experimental bots, or every project's sessions: a module loaded by the first frame that needs it draws the list; until it is
+    // here the classic list stays (the icons column, which it cannot draw, waits blank).
+    if (multiWanted()) {
+      const multi = state.sidebarBots
+      if (!multi) {
+        void loadSidebarBots()
+        if (sidebarKindNow(input.screen.size.width) === "icons") return Array.from({ length: height }, (): Line => [{ text: " ".repeat(ICON_SIDEBAR_WIDTH), bg: "panel" }])
+      } else {
+        const sessions = multi.sessions()
+        const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader })
+        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id }))
+        state.sidebarImages = drawn.images
+        return drawn.lines
+      }
+    }
     const sessions = projectSessions(state.sessions, input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
     const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader } })
+    state.sidebarImages = undefined
     state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
     return drawn.lines
   }
@@ -626,7 +642,24 @@ export function createChrome(ctx: AppContext, actions: {
   // ─── Sidebar layout ─────────────────────────────────────────────────────────────────────────────────────────────────
 
   const rightWanted = () => panelWanted(state) || fileInSlot(state)
-  const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarVisible({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal" })
+  const botsOn = () => state.settingsNow.experimental?.bots === true
+  /** The left list is drawn by the bots module: bots on, or every project's sessions asked for. */
+  const multiWanted = () => (botsOn() || state.tuiProfile.sidebarProjects === "all") && !ctx.views.hasCustom("sessions.sidebar")
+  const sidebarKindNow = (width: number) => sidebarKind({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal", bots: botsOn(), iconsOnly: botsOn() && state.tuiProfile.sidebarLayout === "icons-only" })
+  const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarKindNow(width) !== "none"
+  /** Columns the left list takes, without the gap: 0 when it does not show. */
+  const sidebarCells = (width: number) => !sidebarShown(width) ? 0 : sidebarKindNow(width) === "icons" ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
+
+  /** Loads the bots module the first time a frame needs it (flag on, or all projects); the next frame draws with it. */
+  let loadingBots = false
+  async function loadSidebarBots() {
+    if (loadingBots) return
+    loadingBots = true
+    try {
+      state.sidebarBots = (await import("./sidebar-bots")).createSidebarBots(ctx)
+    } finally { loadingBots = false }
+    requestFrame()
+  }
 
   /** Columns the chat (transcript, prompt, panels) is laid out in: the screen, less the sidebar when it shows. */
   function chatWidth() {
@@ -634,7 +667,7 @@ export function createChrome(ctx: AppContext, actions: {
     const bar = rightWanted() ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }) : undefined
     if (bar) state.rightBarCollapsed = bar.collapsed
     const right = bar?.cells ? bar.cells + 1 : 0
-    return (sidebarShown(width) ? chatColumns(width) : width) - right
+    return (sidebarShown(width) ? width - sidebarCells(width) - SIDEBAR_GAP : width) - right
   }
 
   /**
@@ -654,5 +687,5 @@ export function createChrome(ctx: AppContext, actions: {
   /** Whether the footer on screen is one the user made, so a pack stands aside (`/footer pack` says so). */
   const footerIsOwn = () => ownFooter(state.shellMode ? undefined : footerSlots(input.screen.size.width - META_MARGIN - PROMPT_MARGIN))
 
-  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
+  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, sidebarCells, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
 }

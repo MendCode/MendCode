@@ -22,6 +22,10 @@ export const unknownStatParts = (text: string): string[] => text.split(",").map(
  */
 export const ACTIVITY_PARTS = ["spinner", "verb", "elapsed", "stalled", "model", "tokens", "tps", "queue", "interrupt", "cache", "hit", "ctx", "think", "calls", "spend", "ttft", "effort", "forecast"] as const
 export type ActivityPart = (typeof ACTIVITY_PARTS)[number]
+/** The sections of the left sidebar (`sidebarSections`, experimental bots): the folders' sessions, the bots, and the sessions that belong to no bot. */
+export const SIDEBAR_SECTION_IDS = ["projects", "bots", "sessions"] as const
+/** The names in `text` (a comma list) that are not sidebar sections; `none` alone is the empty list. */
+export const unknownSidebarSections = (text: string): string[] => text.trim() === "none" ? [] : text.split(",").map((name) => name.trim()).filter((name) => name && !(SIDEBAR_SECTION_IDS as readonly string[]).includes(name))
 /** What the row shows without any setting: `tps` and `queue` are opt-in. */
 export const ACTIVITY_PARTS_DEFAULT = "spinner,verb,elapsed,stalled,model,tokens,interrupt"
 /** How the activity status lays its parts out: `inline` is `⠋ Generating… (2m 53s · ↓ 4.3k tokens)`, `classic` one run of parts with blanks between. */
@@ -213,6 +217,9 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sidebarWidth": 0,
   "promptStatus": "off",
   "sidebar": "auto",
+  "sidebarProjects": "folder",
+  "sidebarLayout": "projects-first",
+  "sidebarSections": "",
   "images": "auto",
   "transcriptImages": true,
   "hyperlinks": true,
@@ -360,6 +367,8 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "always",
     "hidden"
   ],
+  "sidebarProjects": ["folder", "all"],
+  "sidebarLayout": ["projects-first", "bots-first", "icons-only", "scratch"],
   "promptStatus": ["off", "border"],
   "scrollbar": ["auto", "always", "off"],
   "jumpHint": ["right", "center", "left", "off"],
@@ -461,6 +470,7 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "imageWaitArt" && ((value as unknown[]).length > 16 || JSON.stringify(value).length > 200_000 || (value as unknown[]).some((art) => !art || typeof art !== "object" || typeof (art as { name?: unknown }).name !== "string" || !Array.isArray((art as { frames?: unknown }).frames) && typeof (art as { static?: unknown }).static !== "string" && !Array.isArray((art as { static?: unknown }).static)))) problems.push("imageWaitArt: expected up to 16 presets { name, frames | static, fit?, align? }")
     else if (key === "pasteSummaryMinChars" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100000)) problems.push("pasteSummaryMinChars: expected integer 1..100000")
     else if ((key === "statusLeft" || key === "statusRight") && String(value).split(",").some((name) => name.trim() && !["mode", "model", "provider", "reasoning", "variant", "context", "permissionMode", "commandsHint", "agentsHint", "quota"].includes(name.trim()))) problems.push(`${key}: unknown status segment`)
+    else if (key === "sidebarSections" && (unknownSidebarSections(value as string).length || String(value).length > 64)) problems.push(`sidebarSections: expected a comma list of ${SIDEBAR_SECTION_IDS.join(", ")}, none, or empty for the layout's own`)
     else if (key === "activityParts" && (unknownActivityParts(value as string).length || String(value).length > 256)) problems.push(`activityParts: expected a comma list of ${ACTIVITY_PARTS.join(", ")}`)
     else if (key === "activityTokens" && (unknownActivityTokens(value as string).length || String(value).length > 32)) problems.push(`activityTokens: expected a comma list of ${ACTIVITY_TOKEN_PARTS.join(", ")}, or empty`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)

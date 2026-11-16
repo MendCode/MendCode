@@ -9,7 +9,7 @@ import { IMAGE_MODES, type ImageMode } from "../pets/detect"
 import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
-import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
+import { SIDEBAR_SECTION_IDS, unknownSidebarSections, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
 import { DEFAULT_TOOL_DESIGN_NAME, parseMarkdownColors, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
@@ -37,6 +37,32 @@ export const LOGO_SIZES = ["small", "medium", "large"] as const
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
 export type SidebarMode = (typeof SIDEBAR_MODES)[number]
+/** Whose sessions the left sidebar lists: the opened folder's, or all projects as folding groups. */
+export const SIDEBAR_PROJECTS = ["folder", "all"] as const
+export type SidebarProjects = (typeof SIDEBAR_PROJECTS)[number]
+/** Experimental bots: the starting layouts of the left sidebar. `icons-only` is a narrow column; `scratch` shows no section until the user adds them. */
+export const SIDEBAR_LAYOUTS = ["projects-first", "bots-first", "icons-only", "scratch"] as const
+export type SidebarLayout = (typeof SIDEBAR_LAYOUTS)[number]
+export type SidebarSection = (typeof SIDEBAR_SECTION_IDS)[number]
+const LAYOUT_SECTIONS: Record<SidebarLayout, readonly SidebarSection[]> = {
+  "projects-first": ["projects", "bots", "sessions"],
+  "bots-first": ["bots", "projects", "sessions"],
+  "icons-only": ["bots", "projects", "sessions"],
+  scratch: [],
+}
+
+/** A comma list of sidebar sections, once each in the order given; `none` is kept, and anything unusable is empty (the layout's own). */
+export function normalizeSidebarSections(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length > 64 || unknownSidebarSections(raw).length) return ""
+  if (raw.trim() === "none") return "none"
+  return raw.split(",").map((name) => name.trim()).filter((name, index, all) => name && all.indexOf(name) === index).join(",")
+}
+
+/** The sections the sidebar shows, in order: the explicit list when set, else the layout's. */
+export function sidebarSectionsOf(profile: Pick<TuiProfile, "sidebarLayout" | "sidebarSections">): SidebarSection[] {
+  if (profile.sidebarSections === "none") return []
+  return profile.sidebarSections ? profile.sidebarSections.split(",") as SidebarSection[] : [...LAYOUT_SECTIONS[profile.sidebarLayout]]
+}
 
 export const LOGO_KINDS = ["wordmark", "mascot", "both", "custom", "none"] as const
 /** How large a pet mascot is drawn on the home (`pets/home-pet.ts`): 12, 16 or 22 rows; a screen too small for one gets the next smaller. */
@@ -392,6 +418,12 @@ export type TuiProfile = {
   /** `border` draws `READY › model › effort › repo › branch › ctx` in the prompt's top rule and leaves the row under it telemetry only. */
   promptStatus: "off" | "border"
   sidebar: SidebarMode
+  /** Whose sessions the left sidebar lists: the opened folder's (today's), or every project's as folding groups. */
+  sidebarProjects: SidebarProjects
+  /** Experimental bots: the starting layout of the left sidebar; its sections come from `sidebarSections` when that is set. */
+  sidebarLayout: SidebarLayout
+  /** Experimental bots: the sections shown, in order, as a comma list of projects, bots, sessions; `none` shows nothing, empty takes the layout's own. */
+  sidebarSections: string
   images: ImageMode
   /** Images the session produced or received (read image, screenshot, generated, pasted) are drawn in the transcript when `images` finds a protocol. */
   transcriptImages: boolean
@@ -628,6 +660,9 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebarWidth: 0,
   promptStatus: "off",
   sidebar: "auto",
+  sidebarProjects: "folder",
+  sidebarLayout: "projects-first",
+  sidebarSections: "",
   images: "auto",
   transcriptImages: true,
   hyperlinks: true,
@@ -1003,6 +1038,9 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     sidebarWidth: typeof source.sidebarWidth === "number" && Number.isInteger(source.sidebarWidth) && source.sidebarWidth >= 32 && source.sidebarWidth <= 80 ? source.sidebarWidth : 0,
     promptStatus: oneOf(["off", "border"] as const, source.promptStatus) ?? "off",
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,
+    sidebarProjects: oneOf(SIDEBAR_PROJECTS, source.sidebarProjects) ?? DEFAULT_TUI_PROFILE.sidebarProjects,
+    sidebarLayout: oneOf(SIDEBAR_LAYOUTS, source.sidebarLayout) ?? DEFAULT_TUI_PROFILE.sidebarLayout,
+    sidebarSections: normalizeSidebarSections(source.sidebarSections),
     images: oneOf(IMAGE_MODES, source.images) ?? DEFAULT_TUI_PROFILE.images,
     transcriptImages: bool("transcriptImages"),
     hyperlinks: bool("hyperlinks"),

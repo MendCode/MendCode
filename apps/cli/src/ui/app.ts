@@ -1190,6 +1190,7 @@ export function createApp(input: AppInput) {
     sessionTitle: (...args) => sessionTitle(...args),
     paletteItems: (...args) => paletteItems(...args),
     sidebarShown: (...args) => sidebarShown(...args),
+    sidebarCells: (...args) => sidebarCells(...args),
     rightLayout: (width) => { rightBar.ensureData(); return rightBar.layout(width) },
     fileOpen,
     rightRows: rightBar.rightRows,
@@ -1238,7 +1239,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, sidebarCells, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,

@@ -13,7 +13,7 @@ import { toolDesignNames, toolDesignOf } from "./tool-design"
 import { TIMESTAMP_PLACES } from "./tui-profile"
 import { overlayRule } from "./status-line"
 import { statusItems } from "./status-items"
-import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_ALIGNS, HOME_INPUTS, LOGO_SIZES, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_MODES, TABLE_STYLES, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
+import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_ALIGNS, HOME_INPUTS, LOGO_SIZES, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_LAYOUTS, SIDEBAR_MODES, SIDEBAR_PROJECTS, TABLE_STYLES, normalizeSidebarSections, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
 import { IMAGE_MODES } from "../pets/detect"
 import { ALT_LABELS, QUOTA_COLORS, QUOTA_VIEWS, CODE_MAP_CARDS, DIFF_VIEWS, TOOL_DENSITIES, TOOL_LAYOUTS, TOOL_LAYOUT_NAMES, toolLayoutOf, KEY_PROTOCOLS, OPTION_KEYS, COMMENT_CHIP_STYLES, COMMENT_CHIPS, COMMENT_HINTS, COMMENT_KEYS, COMMENT_MODES, COMMENT_SENT_LAYOUTS } from "./tui-profile"
 import { FILE_OPENERS } from "./links"
@@ -47,7 +47,7 @@ const GROUP_OF = new Map<CustomizeRow, { group: GroupTitle; part: string }>(GROU
 export type CustomizePageState = { row: number; typing?: string; error?: string; module?: number; view?: number; menu?: SlashEditorState; search?: PageSearch }
 
 /** What the page knows besides the profile: the view's mode (the full view draws default footer rows) and an extension that draws the footer. */
-export type CustomizeFacts = { mode?: PresentationMode; footerExtension?: string }
+export type CustomizeFacts = { mode?: PresentationMode; footerExtension?: string; /** `experimental.bots` is on: the sidebar's bot rows are listed. */ bots?: boolean }
 
 /** The footer rows that draw the footer now (the user's, a preset's, or the full view's default), or none while one row does. */
 const footerRowsNow = (profile: TuiProfile, facts: CustomizeFacts) => footerRowsOf({ mode: facts.mode ?? "balanced", profile, list: undefined })
@@ -82,7 +82,8 @@ export function rowShown(row: CustomizeRow, profile: TuiProfile, facts: Customiz
   if (row === "activityStates") return profile.activityMascot
   if (row === "imageWaitSpeed") return profile.imageWait !== "static"
   if (part === "Top bar" && row !== "showTopbar") return profile.showTopbar && (row !== "contextStyle" || profile.contextBar !== "off")
-  if (row === "sidebarSide" || row === "sidebarHeader") return profile.sidebar !== "hidden"
+  if (row === "sidebarSide" || row === "sidebarHeader" || row === "sidebarProjects") return profile.sidebar !== "hidden"
+  if (row === "sidebarLayout" || row === "sidebarSections") return facts.bots === true && profile.sidebar !== "hidden"
   if (row === "titleTemplate" || row === "titleActivity") return profile.terminalTitle
   if (row === "pasteSummaryMinChars") return profile.pasteSummary
   if (row === "notifyWhen") return profile.turnNotify !== "off"
@@ -131,6 +132,7 @@ const TEXT_ROWS = new Set<CustomizeRow>(["imageWaitSpeed", "quotaRefresh", "foot
 /** The Comments rows that are typed (numbers, glyphs, the keys, the wording), with what each may hold. */
 const COMMENT_TEXT_ROWS = ["commentHintSeconds", "commentCollapse", "commentMax", "commentMarkGlyph", "commentReplyKeys", "commentTemplate", "commentEntry"] as const
 for (const row of COMMENT_TEXT_ROWS) TEXT_ROWS.add(row)
+TEXT_ROWS.add("sidebarSections")
 const COMMENT_TEXT_MAX: Record<(typeof COMMENT_TEXT_ROWS)[number], number> = { commentHintSeconds: 2, commentCollapse: 2, commentMax: 1, commentMarkGlyph: 2, commentReplyKeys: 4, commentTemplate: 1200, commentEntry: 1200 }
 const COMMENT_TEXT_HELP: Record<(typeof COMMENT_TEXT_ROWS)[number], string> = {
   commentHintSeconds: "Use an integer 1..60",
@@ -162,7 +164,7 @@ const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
   messageRenderer: ["plain", "markdown", "full"], submitScroll: ["bottom", "clear"], presentation: ["auto", "raw", "minimal", "mendcode", "balanced", "full"], reasoning: ["auto", "hidden", "collapsed", "expanded"], toolOutput: ["auto", "collapsed", "expanded"], toolDensity: TOOL_DENSITIES, codeMapCard: CODE_MAP_CARDS, diffView: DIFF_VIEWS,
   logoKind: LOGO_KINDS, logoSize: LOGO_SIZES, homeAlign: HOME_ALIGNS, mascotSize: MASCOT_SIZES, petSize: PET_SIZES, logoFont: LOGO_FONTS, homeLayout: HOME_LAYOUTS, homeInput: HOME_INPUTS, homeRightPanel: HOME_PANELS, density: DENSITIES,
   promptBorder: ["auto", "single", "rounded", "double", "ascii"],
-  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarSide: ["left", "right"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
+  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarProjects: SIDEBAR_PROJECTS, sidebarLayout: SIDEBAR_LAYOUTS, sidebarSide: ["left", "right"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
 }
 
 /** The widest the label column gets: the longest label, up to 25 cells. */
@@ -184,6 +186,7 @@ function textPatch(row: CustomizeRow, text: string, profile: TuiProfile): Partia
   if (row === "draftRetentionDays") return { draftRetentionDays: Number(text) }
   if (row === "wheelLines") return { wheelLines: Number(text) }
   if (row === "sidebarWidth") return { sidebarWidth: Number(text) }
+  if (row === "sidebarSections") return { sidebarSections: normalizeSidebarSections(text) }
   if (row === "markdownColors") return { markdownColors: normalizeMarkdownColors(text) }
   if (row === "footerRows") return { footerRows: parseFooterRowsText(text) }
   if (row === "quotaRefresh") return { quotaRefresh: parseQuotaRefreshText(text) }
@@ -234,6 +237,7 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
       if ((COMMENT_TEXT_ROWS as readonly string[]).includes(row) && state.typing && (tuiProblems(textPatch(row, state.typing, profile)).length || ((row === "commentHintSeconds" || row === "commentCollapse" || row === "commentMax") && !/^\d+$/.test(state.typing)))) return { state: { ...state, error: COMMENT_TEXT_HELP[row as (typeof COMMENT_TEXT_ROWS)[number]] }, action: NONE }
       if (row === "draftRetentionDays" && (!/^\d+$/.test(state.typing) || tuiProblems({ draftRetentionDays: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 0..3650 (0 keeps drafts)" }, action: NONE }
       if (row === "wheelLines" && (!/^\d+$/.test(state.typing) || tuiProblems({ wheelLines: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 1..20" }, action: NONE }
+      if (row === "sidebarSections" && tuiProblems({ sidebarSections: state.typing.trim() }).length) return { state: { ...state, error: "Use projects, bots, sessions in order, none, or leave empty" }, action: NONE }
       if (row === "sidebarWidth" && (!/^\d+$/.test(state.typing) || tuiProblems({ sidebarWidth: Number(state.typing) }).length)) return { state: { ...state, error: "Use 0 (automatic) or an integer 32..80" }, action: NONE }
       if (row === "imageWaitSpeed" && (!/^\d+$/.test(state.typing) || tuiProblems({ imageWaitSpeed: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 80..5000" }, action: NONE }
       if (row === "pasteSummaryMinChars" && tuiProblems({ pasteSummaryMinChars: Number(state.typing) }).length) return { state: { ...state, error: "Use an integer 1..100000" }, action: NONE }
@@ -322,7 +326,8 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
   const list = row === "theme" ? themeNames() : row === "toolDesign" ? toolDesignNames() : CHOICES[row]
   if (list) {
     const next = list[(Math.max(0, list.indexOf(String(value))) + (backwards ? -1 : 1) + list.length) % list.length]!
-    const patch = row === "messageLayout" ? { messageLayout: next, messageMeta: next === "classic" ? "full" : "off", userIcon: next === "classic" ? "●" : "", userLead: next === "classic" ? "" : "›", userLabel: next === "classic", assistantIcon: "", assistantLead: next === "classic" ? "" : "•", assistantLabel: false, userTint: next !== "classic" } : row === "presentation" ? { presentation: next, messageRenderer: next === "raw" ? "plain" : next === "minimal" ? "markdown" : "full", reasoning: next === "raw" ? "expanded" : "collapsed" } : row === "logoFont" ? { logoFont: next, logoText: normalizeLogoText(profile.logoText, next as TuiProfile["logoFont"]) } : { [row]: next }
+    // A starting layout brings its own sections: choosing one drops the list a person typed over the last one.
+    const patch = row === "sidebarLayout" ? { sidebarLayout: next, sidebarSections: "" } : row === "messageLayout" ? { messageLayout: next, messageMeta: next === "classic" ? "full" : "off", userIcon: next === "classic" ? "●" : "", userLead: next === "classic" ? "" : "›", userLabel: next === "classic", assistantIcon: "", assistantLead: next === "classic" ? "" : "•", assistantLabel: false, userTint: next !== "classic" } : row === "presentation" ? { presentation: next, messageRenderer: next === "raw" ? "plain" : next === "minimal" ? "markdown" : "full", reasoning: next === "raw" ? "expanded" : "collapsed" } : row === "logoFont" ? { logoFont: next, logoText: normalizeLogoText(profile.logoText, next as TuiProfile["logoFont"]) } : { [row]: next }
     return { state, action: { type: "set", patch: patch as Partial<TuiProfile> } }
   }
   return { state, action: { type: "set", patch: { [row]: !value } } }
@@ -600,6 +605,7 @@ function rowValue(field: CustomizeRow, profile: TuiProfile, input: CustomizeInpu
   if (field === "footerRows") return profile.footerRows.length ? footerRowsText(profile.footerRows) : "off · one row"
   if (field === "footerText") return Object.keys(profile.footerText).length ? JSON.stringify(profile.footerText) : "none"
   if (field === "sidebarWidth" && profile.sidebarWidth === 0) return "auto"
+  if (field === "sidebarSections") return profile.sidebarSections || "from the layout"
   const value = profile[field as keyof TuiProfile]
   if (typeof value === "boolean") return value ? "on" : "off"
   return String(value || (["theme", "activityStates", "activityMessages", "promptGlyphs", "placeholderText"].includes(field) ? "default" : field === "customAscii" ? "default art" : "none"))

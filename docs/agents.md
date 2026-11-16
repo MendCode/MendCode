@@ -641,7 +641,7 @@ permission: smart         # a new bot starts at smart: it edits inside the proje
 bot:
   shape: circle           # circle | square | diamond | triangle | hexagon (absent: made from the name)
   color: success          # a theme role: primary | secondary | accent | success | warning | error | info (not hex; absent: made from the name)
-  avatar: ~/faces/calm.png  # optional image path
+  avatar: calm.png        # optional .png or .webp (at most 1 MiB, 512 px) in ~/.mendcode/bots/<name>/ or the data dir; shown where the terminal draws images
   origin: mendcode        # mendcode (the default) or the id of the connector that owns the bot
 ---
 You review gently…

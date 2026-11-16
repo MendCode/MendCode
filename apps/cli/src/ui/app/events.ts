@@ -297,7 +297,9 @@ export function createEvents(ctx: AppContext, actions: {
       // Sessions pushed by other terminals join at the top; past the cap the oldest go (the open one stays), and /sessions reads the rest again.
       if (state.sessions.length > PUSHED_SESSIONS_MAX) state.sessions = state.sessions.filter((session, at) => at < PUSHED_SESSIONS_MAX || session.sessionId === state.sessionId)
       state.paletteSessions = state.paletteSessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, title }, event.draft) : session))
-      if (state.page === "sessions" || state.page === "chat" && sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" })) requestFrame()
+      // Bots on or every project listed: the list also holds the bots' states and other folders, which this push may have changed.
+      state.sidebarBots?.noteActivity()
+      if (state.page === "sessions" || state.page === "chat" && (state.sidebarBots?.live() === true || sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" }))) requestFrame()
       return
     }
     if (event.type === "memory.changed") {

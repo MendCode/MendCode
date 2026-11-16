@@ -11,7 +11,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- The left list can show every project as folding groups (`/customize` › Sidebar projects), and with experimental bots on it also lists the bots with their state, marks a bot's sessions with its icon, opens a bot's page (new session in a folder, edit, memory) and takes a starting layout (projects first, bots first, icons only, from scratch) with sections you order and hide.
 - Experimental bots (`/experimental bots on`): an agent with a name, a look and its own memory that you send to work in any folder. `/bot new`, `/bot list`, `/bot edit` and `/bot duplicate` make and manage them, and `/bot memory` teaches one.
+- With experimental bots on, a bot's page shows its face beside its details, moving only while the page is open, and where the terminal draws images the left list shows each bot's picture in place of its icon.
+- Experimental bots have a face made from their name (same shape and color every time) that shows whether the bot is sleeping, listening, thinking, talking, waiting or has a problem: a real picture where the terminal shows images (a bot's own `avatar` when it has one), else text, else plain ASCII.
 
 ### Changed
 

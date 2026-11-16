@@ -58,6 +58,7 @@ const COVERAGE: Record<string, Entry> = {
   "prompt-chrome.ts": { slot: "prompt.frame" },
   "topbar.ts": { slot: "topbar" },
   "sidebar.ts": { slot: "sessions.sidebar" },
+  "sidebar-multi.ts": { allow: "the experimental bots / all-projects form of the left list; an extension view of sessions.sidebar keeps the classic list instead (chrome.ts multiWanted)" },
   "sidebar-cards.ts": { slot: "panel.widget" },
   "panel-card.ts": { slot: "panel.widget" },
   "panel-orbit.ts": { slot: "panel.widget" },

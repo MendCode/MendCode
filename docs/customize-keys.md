@@ -271,6 +271,9 @@ Also `imageWaitArt` and `imageWaitCanvas` are set in the file. See [web and imag
 | Key | Row label |
 |---|---|
 | `sidebar` | Sidebar |
+| `sidebarProjects` | Sidebar projects |
+| `sidebarLayout` | Sidebar layout |
+| `sidebarSections` | Sidebar sections |
 | `sidebarSide` | Sidebar side |
 | `sidebarHeader` | Sidebar header |
 | `sidebarWidth` | Right bar width |

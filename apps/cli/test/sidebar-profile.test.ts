@@ -1,0 +1,38 @@
+import { describe, expect, test } from "bun:test"
+import { TUI_DEFAULTS, tuiProblems } from "@mendcode/protocol/wire"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, sidebarSectionsOf } from "../src/view/tui-profile"
+
+describe("sidebar profile keys", () => {
+  test("a profile written before the keys existed loads unchanged, with today's sidebar", () => {
+    const old = { sidebar: "auto", sidebarSide: "left", sidebarHeader: true, theme: "dark" }
+    const loaded = normalizeTuiProfile(old)
+    expect(loaded).toEqual(normalizeTuiProfile({ ...old, sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" }))
+    expect(loaded).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(DEFAULT_TUI_PROFILE).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
+  })
+
+  test("the protocol's defaults agree with the terminal's and its checks accept only the known values", () => {
+    for (const key of ["sidebarProjects", "sidebarLayout", "sidebarSections"] as const) expect(TUI_DEFAULTS[key]).toBe(DEFAULT_TUI_PROFILE[key])
+    expect(tuiProblems({ sidebarProjects: "all", sidebarLayout: "icons-only", sidebarSections: "bots,projects" })).toEqual([])
+    expect(tuiProblems({ sidebarProjects: "everything" })[0]).toContain("folder|all")
+    expect(tuiProblems({ sidebarLayout: "grid" })[0]).toContain("projects-first|bots-first|icons-only|scratch")
+    expect(tuiProblems({ sidebarSections: "bots,mail" })[0]).toContain("projects, bots, sessions")
+  })
+
+  test("a bad value falls back to the default instead of breaking the profile", () => {
+    expect(normalizeTuiProfile({ sidebarProjects: "x", sidebarLayout: 3, sidebarSections: "bots,mail" })).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(normalizeTuiProfile({ sidebarSections: "bots, projects, bots" }).sidebarSections).toBe("bots,projects")
+    expect(normalizeTuiProfile({ sidebarSections: "none" }).sidebarSections).toBe("none")
+  })
+
+  test("the layout gives the sections and their order; an explicit list wins; none hides all", () => {
+    const sections = (over: Record<string, unknown>) => sidebarSectionsOf(normalizeTuiProfile(over))
+    expect(sections({})).toEqual(["projects", "bots", "sessions"])
+    expect(sections({ sidebarLayout: "bots-first" })).toEqual(["bots", "projects", "sessions"])
+    expect(sections({ sidebarLayout: "icons-only" })).toEqual(["bots", "projects", "sessions"])
+    expect(sections({ sidebarLayout: "scratch" })).toEqual([])
+    expect(sections({ sidebarLayout: "scratch", sidebarSections: "bots" })).toEqual(["bots"])
+    expect(sections({ sidebarSections: "sessions,bots" })).toEqual(["sessions", "bots"])
+    expect(sections({ sidebarSections: "none" })).toEqual([])
+  })
+})

@@ -143,7 +143,7 @@ export type AppInput = {
   env?: Record<string, string | undefined>
 }
 
-export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today"
+export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today" | "bot"
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
@@ -624,10 +624,16 @@ export type AppState = {
   sidebarFocus?: boolean
   sidebarSelected?: string | undefined
   sidebarHits?: Array<{ row: number; sessionId: string }>
+  /** The bots' pictures in the left list, at the list's own rows and columns (empty unless the terminal draws images). */
+  sidebarImages?: import("../image-layer").ImagePlacement[] | undefined
   /** The `updatedAt` each listed session had when the sessions sidebar last showed it as seen; memory only, filled as the list draws. A later one is an unread reply. */
   sidebarSeen?: Map<string, number>
   /** The sidebar's Settled row is unfolded. */
   sidebarSettledOpen?: boolean
+  /** Experimental bots or all projects: the module that draws the left list, there once the first frame that needs it loaded it. */
+  sidebarBots?: import("./sidebar-bots").SidebarBots
+  /** The open bot page (`page: "bot"`): its drawing and keys. */
+  botCard?: import("../../view/bot-card-page").BotCard | undefined
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined

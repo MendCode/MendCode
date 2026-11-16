@@ -6,6 +6,19 @@ Its fixed header names the current preset and `/panel`, including in the narrow 
 
 `/sidebar` only controls the left session list.
 
+## The left list: every project, and bots
+
+By default the left list shows the sessions of the folder you opened. `sidebarProjects: all` (`/customize` › Top & side › Sidebar projects) shows every project instead: each folder is a group, the opened one first and open, the others folded with the number of sessions that work or wait; Enter or a click on a group folds or opens it, on a session opens it.
+
+With `/experimental bots on` the list can also hold the bots. A bot is one row: its icon (a glyph per shape in its theme color, `()` `[]` `<>` `/\` `{}` in ASCII), its name, where it comes from, and its state as a symbol and a word (`● working`, `◌ idle`, `… waiting`, `! problem`). A session a bot runs shows the bot's icon in its project's list. Enter or a click on a bot opens its page: identity, model, permission, its sessions by folder, and `n` new session in a folder, `e` edit, `m` memory. These keys choose the layout (`/customize` › Top & side), and none of them does anything with the flag off:
+
+| Key | Values |
+|---|---|
+| `sidebarLayout` | `projects-first` (the default), `bots-first`, `icons-only` (a narrow column of icons; the picked row's name shows under it) and `scratch` (no section until you add them) |
+| `sidebarSections` | the sections shown and their order, a comma list of `projects`, `bots`, `sessions` (the opened folder's sessions with no bot, shown when `projects` is not); `none` hides all; empty takes the layout's own. Choosing a layout clears it |
+
+With bots on and a terminal from 70 to 109 columns, the list is the icons column; below 70 it does not show. With the flag off and `sidebarProjects: folder` the list is the one described above and nothing else loads.
+
 ## Panel commands
 
 - `/panel <preset>` switches to a curated list; `/panel next` cycles the available presets (skips galaxy outside full tier). `/panel off` hides the panel and retains its list. When your saved panel is a preset with your own changes (see [Your version of a preset](#your-version-of-a-preset)), `/panel <preset>` shows yours; `/panel <preset> default` shows the built-in one.
