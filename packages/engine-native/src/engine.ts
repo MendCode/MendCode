@@ -95,7 +95,7 @@ function lastPrompt(messages: readonly ModelMessage[]) {
 
 const CONTEXT_PREVIEW_CHARS = 60
 /** Longest wait for one command that moved to the background before the turn answers: above the longest `shell` timeout, which stops it first. */
-const YIELD_WAIT_MS = 11 * 60_000
+const YIELD_WAIT_MS = 31 * 60_000
 /** Output of such a command given to the model when it ends (head and tail kept). */
 const YIELD_REPORT_CHARS = 30_000
 const CONTEXT_LARGEST = 5
