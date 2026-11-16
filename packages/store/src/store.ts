@@ -416,12 +416,20 @@ function migrate(db: Database) {
  * log. A session whose conversation events are gone from the log keeps what it has; an age is only ever lowered.
  */
 function restoreSessionAges(db: Database) {
-  if (db.query("SELECT 1 FROM meta WHERE key = 'session-age-restored'").get()) return
   const types = [...ACTIVITY_EVENT_TYPES].map((type) => `'${type}'`).join(", ")
   const latest = `(SELECT e.at FROM events e WHERE e.session_id = sessions.id AND e.type IN (${types}) ORDER BY e.seq DESC LIMIT 1)`
-  db.transaction(() => {
+  if (!db.query("SELECT 1 FROM meta WHERE key = 'session-age-restored'").get()) db.transaction(() => {
     db.run(`UPDATE sessions SET updated_at = ${latest} WHERE ${latest} < updated_at`)
     db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('session-age-restored', '1')")
+  })()
+  // A session whose old events were compacted away still has its turns: its age is the newest of its last conversation event and
+  // its last turn, never older than its creation. Only a bumped age goes down; one with neither keeps what it has.
+  if (db.query("SELECT 1 FROM meta WHERE key = 'session-age-restored-turns'").get()) return
+  const turn = "(SELECT MAX(t.at) FROM turns t WHERE t.session_id = sessions.id)"
+  const real = `MAX(COALESCE(${latest}, 0), COALESCE(${turn}, 0), created_at)`
+  db.transaction(() => {
+    db.run(`UPDATE sessions SET updated_at = ${real} WHERE (${latest} IS NOT NULL OR ${turn} IS NOT NULL) AND ${real} < updated_at`)
+    db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('session-age-restored-turns', '1')")
   })()
 }
 

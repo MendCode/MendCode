@@ -596,6 +596,28 @@ describe("a session's age", () => {
     second.close()
   })
 
+  test("a bumped session whose events were compacted away gets its age back from its last turn, once", async () => {
+    const dir = tempDir()
+    const [turned, silent] = [ids("session"), ids("session")]
+    let clock = 1_000
+    const first = openStore({ dir, now: () => clock })
+    first.createSession({ id: turned, directory: "/repo", title: "" })
+    first.createSession({ id: silent, directory: "/repo", title: "" })
+    clock = 4_000
+    first.sessionSink.append({ type: "turn.started", sessionId: turned, turnId: ids("turn"), queueId: ids("queue") })
+    first.close()
+    const { Database } = await import("bun:sqlite")
+    const raw = new Database(path.join(dir, "mendd.db"))
+    expect(raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM turns").get()!.n).toBeGreaterThan(0)
+    raw.run("DELETE FROM events")
+    raw.run("UPDATE sessions SET updated_at = 9000")
+    raw.run("DELETE FROM meta WHERE key IN ('session-age-restored', 'session-age-restored-turns')")
+    raw.close()
+    const second = openStore({ dir, now: () => clock })
+    expect(Object.fromEntries(second.listSessions().map((s) => [s.sessionId, s.updatedAt]))).toEqual({ [turned]: 4_000, [silent]: 9_000 })
+    second.close()
+  })
+
   test("a lifecycle write, an archive and a title change do not move it", () => {
     let clock = 1_000
     const store = openStore({ dir: tempDir(), now: () => clock })
