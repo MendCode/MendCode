@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.
+
 ## v0.0.18-beta.3 - 2026-11-16
 
 Experimental bots learn on their own: they keep notes, save skills of their own and schedule their own work, see every session, and a new chat with a bot lists nothing until its first message. Chats can start with the right panel hidden. This beta also fixes what review found in the betas before it.

@@ -1527,8 +1527,12 @@ export async function startDaemon(options: DaemonOptions) {
         store.meta.set(restrictionKey, String(excluded.includes("threads") && excluded.includes("pr_watch")))
       }
       keepSessionEngine(turn.sessionId, true)
-      const model = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const agentModel = agentModelOf(turn.sessionId, catalog, turn.selection?.agent)
+      const model = agentModel ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(model)) return retiredEngineError
+      // The engine router reads the turn's selection, else the session's model: a bot whose model runs on another engine (Claude Code,
+      // Codex, pi, an ACP agent) names it in the selection, so the turn goes to that engine and not to the session's.
+      if (agentModel && (modelEngine(agentModel, catalog) || agentModel.model.startsWith("acp:")) && turn.selection?.model?.model !== agentModel.model) turn = { ...turn, selection: { ...turn.selection, model: agentModel } }
       // A recorded notice (`actor.record`, the PR reviewer's news): already in the transcript, answered by no model on any engine. Only
       // the native engine keeps it in its own history; another program's engine is not started for it.
       if (turn.turnOptions?.noReply && turn.authority?.synthetic) {

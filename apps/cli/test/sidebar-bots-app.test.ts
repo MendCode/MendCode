@@ -355,6 +355,18 @@ describe("the bot card", () => {
     expect(h.text().join("\n")).not.toContain("Untitled")
   })
 
+  test("a bot's blank chat names the bot's own model under the prompt, not the session's default", async () => {
+    const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "build", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user" }], problems: [] } } as never : undefined })
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && h.app.page !== "chat"; turn++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    h.app.render()
+    const footer = h.text().at(-1)!
+    expect(footer).toContain("Calm · Sonnet")
+    expect(footer).not.toContain("GPT-6-Luna")
+  })
+
   test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {
     const h = chatApp()
     await onBot(h)
