@@ -200,6 +200,10 @@ describe("the workflow_script tool", () => {
     expect(workflowScriptTool.tier).toBe("balanced")
     expect(workflowScriptTool.approvalFor?.({ script: "x" })).toBe(true)
     expect(workflowScriptTool.approvalFor?.({ help: true })).toBe(false)
+    // Full access: a saved script started by name runs like any tool; a script the model wrote still asks.
+    expect(workflowScriptTool.approvalFor?.({ name: "mend", args: { item: "a" } }, { mode: "full" })).toBe(false)
+    expect(workflowScriptTool.approvalFor?.({ script: "x" }, { mode: "full" })).toBe(true)
+    for (const mode of ["smart", "ask", "edits", undefined]) expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode })).toBe(true)
     expect(workflowScriptTool.permissionFor?.({ help: true })).toBe("read")
     expect(workflowScriptTool.permissionFor?.({ script: "x" })).toBe("execute")
     expect(workflowScriptTool.args.safeParse({}).success).toBe(false)

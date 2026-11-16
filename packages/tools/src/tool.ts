@@ -315,7 +315,7 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   individualApprovalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
   /** `always`, or `approvalFor` per call: the call asks, showing `preview`, in every permission mode and whatever the allow rules or saved grants say. */
   approval?: "always"
-  approvalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
+  approvalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
   /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
   refusalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): string | undefined
   /** The lowest tier that offers this tool to the model (docs/tiers.md); absent means every tier. Ignored while no `tier` is set. */

@@ -42,8 +42,8 @@ export const workflowStartTool = defineTool({
 
 /**
  * Script workflows (a second kind of plan on the same engine). Not a primary tool: its schema reaches the model only after
- * `tool_search` finds it, so it costs no context until it is used. Every call that starts a script asks the user, showing the
- * meta, the declared caps, the source hash and the source, in every permission mode.
+ * `tool_search` finds it, so it costs no context until it is used. A call that starts a script asks the user, showing the meta, the
+ * declared caps, the source hash and the source, in every permission mode, except a saved script started by name in full access.
  */
 export const workflowScriptTool = defineTool({
   name: "workflow_script",
@@ -62,7 +62,9 @@ export const workflowScriptTool = defineTool({
     args: z.record(z.string(), z.unknown()).optional().describe("Arguments the script reads as `args`"),
   }).refine((value) => value.help === true || (value.script !== undefined) !== (value.name !== undefined), { message: "give exactly one of script or name (or help true)" }),
   permissionFor: (args) => (args.help === true ? "read" : "execute"),
-  approvalFor: (args) => args.help !== true,
+  // A script the model writes is new code: the user sees it in every mode. A saved one started by name is code the user installed;
+  // in full access (the user chose to run unattended) it starts like any other tool, still within its caps and the project's trust.
+  approvalFor: (args, context) => args.help !== true && !(context?.mode === "full" && args.name !== undefined && args.script === undefined),
   async preview(args, context) {
     if (args.help === true || !context.workflows) return undefined
     const checked = await context.workflows.preview(scriptInput(args)).catch(() => undefined)
