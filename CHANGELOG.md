@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- The assistant can remove an ACP agent you ask it to remove (it proposes the change for your approval) instead of failing and sending you to `/acp`; it also knows API-key providers are removed in `/providers`.
+
 ## v0.0.17 - 2026-11-13
 
 The `/btw` side chat can be selected and copied like the transcript, and the workflows page opens however many workflows there are.
