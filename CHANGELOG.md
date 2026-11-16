@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Commands such as `mendcode workflow list --json` and `mendcode export` no longer cut their output short when it goes to a pipe (`| jq`, a script).
 - `mendcode run --offline`, `--tools` and `--exclude-tools` also turn off the provider's own web search and image generation, so a ChatGPT model no longer searches the web in a run that excluded it.
 - `mendcode run` with `--tools`, `--exclude-tools` or `--offline` on a model another engine runs (Claude Code, Codex, pi, an ACP agent) now fails before calling the model instead of running with every tool, since those engines cannot be held to the limits.
 - A Claude Code or Codex session runs the workflows it starts through MendCode, so they show in `/workflows`; it no longer starts Claude Code's own hidden workflow and tells you to watch `/workflows`.
