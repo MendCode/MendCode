@@ -13,6 +13,8 @@ const PRINTABLE = /^[^\x00-\x1f\x7f\x1b]+$/
 const SCROLL_KEYS = new Set(["\x1b[5~", "\x1b[6~", "\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[F", "\x1bOF", "\x1b[4~"])
 /** A second Esc inside this window (idle, empty prompt) opens the backtrack picker. */
 export const BACKTRACK_ESC_MS = 2_000
+/** What editing a steering message says once the engine holds it until its running tool ends. */
+export const STEER_TAKEN = "already handed to the model: it reads it when the running tool ends and it can no longer be edited · send a correction as a new message"
 
 /**
  * Getting text back into the prompt: a queued prompt pulled out of the queue, the queue after an interrupt, a search over
@@ -112,7 +114,8 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const refused = refusal(entry)
     if (refused) return say(refused, "warning")
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
-    if (!reply.ok) return reply.error.code === "target_mismatch" ? say("that message already started", "warning") : fail(reply.error.message)
+    // A steering message the engine already took waits for the running tool inside the engine: it cannot be taken back, only answered.
+    if (!reply.ok) return reply.error.code === "target_mismatch" ? say(last.delivery === "steer" ? STEER_TAKEN : "that message already started", "warning") : fail(reply.error.message)
     place([entry!])
     say("queued prompt back in the editor", "success", { quiet: true })
   }
