@@ -1542,7 +1542,7 @@ const botParts = lazyValue(() => {
     /** The schedules the bot made for itself (not cancelled, not finished); the daemon always sends it. */
     schedules: z.array(schedule).optional(),
   })
-  /** A bot that lives in another app and reaches MendCode through a connector (no connector ships yet: the list is empty). */
+  /** A bot that lives in another app and reaches MendCode through a connector (`hermes` is the first; the list is empty without one). */
   const external = z.strictObject({
     /** The connector's id. */
     origin: z.string().min(1).max(64),
@@ -1551,6 +1551,12 @@ const botParts = lazyValue(() => {
     description: z.string().max(300).optional(),
     identity: identity.optional(),
     state,
+    /** The model the bot runs on, as its app reports it. */
+    model: z.string().max(100).optional(),
+    /** The model id that starts a chat with it (`acp:hermes-<profile>`); absent when the connector cannot chat. */
+    chat: z.string().min(1).max(100).optional(),
+    /** The app the bot lives in, as `open -a` names it, for "Open in <app>". */
+    app: z.string().min(1).max(100).optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),

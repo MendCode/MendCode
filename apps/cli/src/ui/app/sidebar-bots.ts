@@ -1,5 +1,5 @@
-import type { BotListReport, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botChatsName, botKey, botMoreName, botName, groupDirectory, isBotChatsId, isBotId, isBotMoreId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiSectionStarts, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
+import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiSectionStarts, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
 import { sessionMark, sidebarKind } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
@@ -352,6 +352,7 @@ export function createSidebarBots(ctx: AppContext) {
     if (isBotChatsId(id)) return toggleBotChats(botChatsName(id))
     if (isBotMoreId(id)) return toggleBotMore(botMoreName(id))
     if (isBotId(id)) return startChat(botName(id), deps)
+    if (isExternalBotId(id)) return startExternalChat(id, deps)
     state.sidebarFocus = false
     await deps.switchSession(id as SessionId)
   }
@@ -379,6 +380,78 @@ export function createSidebarBots(ctx: AppContext) {
   /** `o` on a bot row: its page (chats by folder, edit, memory, delete). */
   async function openPage(id: string, deps: SidebarDeps) {
     if (isBotId(id)) await openBot(botName(id), deps)
+    else if (isExternalBotId(id)) await openExternal(id, deps)
+  }
+
+  /** The bot of another app a row names, from the last list. */
+  function externalOf(id: string) {
+    const named = externalBotOf(id)
+    return named ? report?.external.find((bot) => bot.origin === named.origin && bot.id === named.id) : undefined
+  }
+
+  /** A blank chat in `directory` on the model that reaches the external bot (an ordinary session; the connector's engine carries the turns). */
+  async function createExternalSession(bot: ExternalBotInfo, directory: string): Promise<SessionId | undefined> {
+    if (!bot.chat) return void fail(`${bot.name} cannot be chatted with from here`)
+    const created = await input.send({ type: "session.create", directory, title: "", choice: { model: bot.chat } })
+    const sessionId = created.ok ? created.result?.sessionId : undefined
+    if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    return sessionId as SessionId
+  }
+
+  /** Enter or a click on an external bot: a new chat with it in the folder MendCode is opened in. */
+  async function startExternalChat(id: string, deps: SidebarDeps) {
+    state.sidebarFocus = false
+    const bot = externalOf(id)
+    if (!bot) return say("that bot is gone from the list · /bot list shows them", "warning")
+    const directory = openedDirectory()
+    if (!directory) return say("no folder is open to start the chat in", "warning")
+    const sessionId = await createExternalSession(bot, directory)
+    if (!sessionId) return
+    await deps.switchSession(sessionId)
+    startNewChatPanel(ctx)
+  }
+
+  /** `o` on an external bot: its page (what it runs on, a new chat, and the app it lives in). */
+  async function openExternal(id: string, deps: SidebarDeps) {
+    state.sidebarFocus = false
+    await loadBots()
+    const external = externalOf(id)
+    if (!external) return say("that bot is gone from the list · /bot list shows them", "warning")
+    const { createBotCard, foldersFor } = await import("../../view/bot-card-page")
+    const bot = { name: external.name, description: external.description ?? "", identity: external.identity ?? { origin: external.origin }, ...(external.model ? { model: external.model } : {}), file: "", state: external.state, projects: [] }
+    state.botCard?.stop()
+    const close = () => { card.stop(); if (state.botCard === card) state.botCard = undefined; state.page = "chat"; requestFrame() }
+    const card = createBotCard({
+      bot,
+      folders: foldersFor(bot, [...new Set(sessions().map((session) => session.directory))]),
+      external: { app: external.app },
+      actions: {
+        redraw: requestFrame,
+        close,
+        async openSession() {},
+        async newSession(directory) {
+          const sessionId = await createExternalSession(external, directory)
+          if (!sessionId) return
+          close()
+          await deps.switchSession(sessionId)
+          startNewChatPanel(ctx)
+        },
+        async edit() {},
+        async delete() {},
+        async memory() {},
+        ...(external.app ? { async openApp() { await openApp(external.app!) } } : {}),
+      },
+    })
+    state.botCard = card
+    state.page = "bot"
+    requestFrame()
+  }
+
+  /** `open -a <app>` on macOS; elsewhere the page says it cannot. The app's name came from the connector, passed as one argument. */
+  async function openApp(app: string) {
+    if (process.platform !== "darwin") return say(`open ${app} from your desktop: this system has no app launcher MendCode uses`, "info")
+    const proc = Bun.spawn(["open", "-a", app], { stdout: "ignore", stderr: "ignore", stdin: "ignore" })
+    if (await proc.exited !== 0) fail(`${app} did not open`)
   }
 
   /**
@@ -458,5 +531,5 @@ export function createSidebarBots(ctx: AppContext) {
   /** `/bot open <name>`: the bot's page, from anywhere. */
   const openNamed = (name: string, deps: SidebarDeps) => openBot(name, deps)
 
-  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, openPage, hideProject, openNamed, isBot: isBotId, holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
 }

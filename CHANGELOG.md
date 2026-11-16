@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Experimental bots: with a Hermes Agent running (on its own or inside a desktop app), its profiles show in the sidebar's Bots section with their model; Enter starts a chat with one, `o` opens its page, and the replies come from the real bot.
 - In the session list, a working row shows how long its turn has run, a session waiting for your answer or a plan review has its own mark next to the approval one, and a PR shows its state (`#812 merged`). The selected row also names its branch and worktree.
 - The Settled shelf shows 10 sessions and `+ N more` adds 25 each time; a session whose PR is merged or closed settles by itself and comes back on new activity.
 - The left list shows only sessions from the last 7 days, with the open, working, waiting and pinned ones always there; a `+ N older` row opens the rest. `/customize` › Top & side › Recent days sets the window (0 lists every age).

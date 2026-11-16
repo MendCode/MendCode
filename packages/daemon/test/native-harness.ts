@@ -74,7 +74,7 @@ export function jumpClock(): Clock & { jump(ms: number): void } {
   }
 }
 
-export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; dreamEligible?: (directory: string) => boolean; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[] } = {}) {
+export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; dreamEligible?: (directory: string) => boolean; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[]; botConnectors?: import("../src/daemon").DaemonOptions["botConnectors"] } = {}) {
   const cleanups: Array<() => Promise<void> | void> = []
   const temp = (prefix: string) => {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)))
@@ -103,6 +103,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
     socketPath: path.join(dir, "mendd.sock"),
     log: () => {},
     info: { engine: "native", model: "script-1" },
+    ...(options.botConnectors ? { botConnectors: options.botConnectors } : {}),
     ...(options.http ? { http: { enabled: true }, httpListen: false, defaultDirectory: project } : {}),
     ...(options.mcp ? { mcp: options.mcp } : {}),
     ...(options.extractMemory ? { extractMemory: options.extractMemory } : {}),

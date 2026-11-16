@@ -70,6 +70,16 @@ const MORE = "more:"
 const MORE_PROJECTS = "projects:"
 const BOT_CHATS = "botchats:"
 const BOT_MORE = "botmore:"
+/** A bot of another app (`bot.list` `external`) that a connector can chat with: `xbot:<origin>:<id>`. */
+const EXTERNAL_BOT = "xbot:"
+export const isExternalBotId = (id: string) => id.startsWith(EXTERNAL_BOT)
+export const externalBotId = (bot: { origin: string; id: string }) => `${EXTERNAL_BOT}${bot.origin}:${bot.id}`
+/** The connector and bot an `xbot:` row names (an origin never holds a colon). */
+export function externalBotOf(id: string): { origin: string; id: string } | undefined {
+  const rest = id.slice(EXTERNAL_BOT.length)
+  const colon = rest.indexOf(":")
+  return isExternalBotId(id) && colon > 0 ? { origin: rest.slice(0, colon), id: rest.slice(colon + 1) } : undefined
+}
 export const DEFAULT_PREVIEW = 5
 export const DEFAULT_RECENT_DAYS = 7
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -297,7 +307,9 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         const identity = external.identity ?? { origin: external.origin }
         // An imported bot keeps its glyph: it has no row to pick, so no picture is placed for it.
         const made = botIcon({ name: external.name, shape: identity.shape, color: identity.color, ascii: input.ascii })
-        push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: "muted" }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner))
+        // One a connector can chat with is a row to pick (Enter chats, `o` opens its page); one it cannot stays a plain line.
+        const row = external.chat ? externalBotId(external) : undefined
+        push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner), row)
       }
     } else if (section === "projects") {
       const ranked = input.icons ? { shown: [input.directory], rest: [] as string[] } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
@@ -397,7 +409,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
     if (value === "running") counts.running++
     else if (waitsOnYou(value)) counts.approval++
   }
-  const summary: Line = input.focused ? [{ text: picked !== undefined && isBotId(picked) ? "↵ chat  o page  → prompt" : picked !== undefined && isGroupId(picked) ? "↵ fold  x hide  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
+  const summary: Line = input.focused ? [{ text: picked !== undefined && (isBotId(picked) || isExternalBotId(picked)) ? "↵ chat  o page  → prompt" : picked !== undefined && isGroupId(picked) ? "↵ fold  x hide  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
     ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
     : [{ text: "← focus", fg: "muted" }]
   const head: Entry[] = input.icons || input.header === false ? [] : [{ line: spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner) }, { line: [] }]

@@ -47,6 +47,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     // Experimental bots (off by default): the service loads with the first bot command, the memory reader with the first turn that runs with the flag on.
     // bot-learn (its notes, skills and schedules) loads with the same first turn; bot-tools stays plain schemas.
     "bot-service", "bot-memory", "bot-recall", "bot-learn",
+    // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
+    "bot-hermes",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // Bot faces (text, generated picture, avatar check and frame clock) load when a bot is drawn, never at start.
   for (const file of ["apps/cli/src/ui/app/bots.ts", "apps/cli/src/view/bot.ts", "apps/cli/src/view/bot-face.ts", "apps/cli/src/view/bot-face-image.ts", "apps/cli/src/view/bot-face-anim.ts", "apps/cli/src/view/bot-avatar.ts"]) expect(inputs.has(file), file).toBe(false)

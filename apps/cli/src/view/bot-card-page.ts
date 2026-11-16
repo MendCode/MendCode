@@ -23,6 +23,8 @@ export type BotCardActions = {
   /** Opens the delete confirmation of this bot. */
   delete(): Promise<void>
   memory(): Promise<void>
+  /** An external bot: opens the app it lives in. */
+  openApp?(): Promise<void>
   close(): void
   redraw(): void
 }
@@ -53,7 +55,7 @@ const FACE_MIN_HEIGHT = 16
 const FACE_AT = { row: 4, col: 2 }
 const PAGE_STEP = 10
 
-type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
+type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete" | "app"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
 /** `row` is the index in `rows` of a line the cursor can stand on. */
 type Item = { line: Line; row?: number }
 
@@ -63,6 +65,7 @@ const ACTIONS: ReadonlyArray<Extract<Row, { kind: "action" }>> = [
   { kind: "action", id: "memory", label: "Memory", hint: "m" },
   { kind: "action", id: "delete", label: "Delete", hint: "d" },
 ]
+const OPEN_APP = (app: string): Extract<Row, { kind: "action" }> => ({ kind: "action", id: "app", label: `Open in ${app}`, hint: "o" })
 const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted", waiting: "warning", problem: "error" }
 const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
@@ -80,17 +83,20 @@ const newestFirst = (bot: Pick<BotInfo, "projects">): BotInfo["projects"] => bot
   .map((project) => ({ ...project, sessions: [...project.sessions].sort((a, b) => b.updatedAt - a.updatedAt) }))
   .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0))
 
-export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; folders: readonly string[]; actions: BotCardActions; face?: BotCardFace | undefined }): BotCard {
+/** `external`: a bot of another app (a connector's): only a new chat and, when it names its app, opening that app; edit, memory and delete belong to the app. */
+export function createBotCard({ bot, folders, actions, face, external }: { bot: BotInfo; folders: readonly string[]; actions: BotCardActions; face?: BotCardFace | undefined; external?: { app?: string | undefined } }): BotCard {
+  const actionList: ReadonlyArray<Extract<Row, { kind: "action" }>> = external ? [ACTIONS[0]!, ...(external.app && actions.openApp ? [OPEN_APP(external.app)] : [])] : ACTIONS
   const animator = face ? createFaceAnimator({ onChange: face.onFrame, ...(face.reducedMotion ? { reducedMotion: face.reducedMotion } : {}), ...(face.setTimer ? { setTimer: face.setTimer } : {}), ...(face.clearTimer ? { clearTimer: face.clearTimer } : {}) }) : undefined
   animator?.setState(faceStateOf(bot.state))
   const projects = newestFirst(bot)
-  const rows: Row[] = [...ACTIONS, ...projects.flatMap((project) => project.sessions.map((session): Row => ({ kind: "session", sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })))]
+  const rows: Row[] = [...actionList, ...projects.flatMap((project) => project.sessions.map((session): Row => ({ kind: "session", sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })))]
   let selected = 0
   /** The folder list of "New chat", while it is open. */
   let picking: { selected: number } | undefined
 
   async function activate(row: Row) {
     if (row.kind === "session") return actions.openSession(row.sessionId)
+    if (row.id === "app") return actions.openApp?.()
     if (row.id === "edit") return actions.edit()
     if (row.id === "memory") return actions.memory()
     if (row.id === "delete") return actions.delete()
@@ -121,9 +127,10 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     else if (FIRST.has(value)) selected = 0
     else if (LAST.has(value)) selected = rows.length - 1
     else if (value === "n") return activate(ACTIONS[0]!)
-    else if (value === "e") return activate(ACTIONS[1]!)
-    else if (value === "m") return activate(ACTIONS[2]!)
-    else if (value === "d") return activate(ACTIONS[3]!)
+    else if (value === "o" && external) { const open = actionList.find((action) => action.id === "app"); if (open) return activate(open) }
+    else if (value === "e" && !external) return activate(ACTIONS[1]!)
+    else if (value === "m" && !external) return activate(ACTIONS[2]!)
+    else if (value === "d" && !external) return activate(ACTIONS[3]!)
     else if (value === "\r" || value === " ") return activate(rows[selected]!)
     return actions.redraw()
   }
@@ -137,11 +144,11 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
       folders.forEach((directory, index) => items.push({ line: clip([mark(index === picking!.selected), { text: truncateEnd(directory, Math.max(1, width - 2)), fg: "text", bold: index === picking!.selected }], width), row: index }))
       return items
     }
-    ACTIONS.forEach((action, index) => items.push({ line: spread([mark(selected === index), { text: action.label, fg: "text", bold: selected === index }], [{ text: action.hint, fg: "muted" }], width), row: index }))
-    const total = rows.length - ACTIONS.length
+    actionList.forEach((action, index) => items.push({ line: spread([mark(selected === index), { text: action.label, fg: "text", bold: selected === index }], [{ text: action.hint, fg: "muted" }], width), row: index }))
+    const total = rows.length - actionList.length
     items.push({ line: [] }, { line: [{ text: "Chats", fg: "heading", bold: true }, { text: `  ${total}`, fg: "muted" }] })
-    if (!total) items.push({ line: [{ text: "None yet · enter on the bot in the sidebar starts one", fg: "muted" }] })
-    let index = ACTIONS.length
+    if (!total) items.push({ line: [{ text: external ? "Chats open as normal sessions · /sessions lists them" : "None yet · enter on the bot in the sidebar starts one", fg: "muted" }] })
+    let index = actionList.length
     for (const project of projects) {
       if (!project.sessions.length) continue
       items.push({ line: [{ text: truncateEnd(project.directory, width), fg: "muted" }] })
@@ -175,15 +182,15 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     if (faced) lines.push([{ text: truncateEnd(bot.name, width), fg: "text", bold: true }])
     lines.push([{ text: `${ascii ? asciiMark : unicodeMark} ${bot.state}`, fg: STATE_FG[bot.state] }, { text: `  ${truncateEnd(bot.identity.origin, Math.max(1, width - bot.state.length - 4))}`, fg: "muted" }])
     if (bot.description) lines.push([], ...wrap(bot.description, width).slice(0, 4).map((line): Line => [{ text: line, fg: "muted" }]))
-    lines.push([], [{ text: "Model ", fg: "muted" }, { text: truncateEnd(bot.model ?? "default", Math.max(1, width - 6)), fg: "text" }], [{ text: "Permission ", fg: "muted" }, { text: bot.permission ?? "default", fg: "text" }])
+    lines.push([], [{ text: "Model ", fg: "muted" }, { text: truncateEnd(bot.model ?? "default", Math.max(1, width - 6)), fg: "text" }], ...(external ? [] : [[{ text: "Permission ", fg: "muted" as const }, { text: bot.permission ?? "default", fg: "text" as const }] as Line]))
     return { lines, ...(picture ? { picture } : {}) }
   }
 
   function render({ width, height, now, ascii, theme, placements }: { width: number; height: number; now: number; ascii?: boolean; theme?: Pick<Theme, "colors"> | undefined; placements?: ImagePlacement[] }): Line[] {
     const plainAscii = ascii === true
     const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
-    const summary = `${plainAscii ? asciiMark : unicodeMark} ${bot.state} · ${bot.identity.origin} · ${bot.model ?? "default"} · permission ${bot.permission ?? "default"}`
-    const hints = picking ? "↑↓ select · enter start here · esc back" : "↑↓ select · enter open · n new · e edit · m memory · d delete · esc back"
+    const summary = `${plainAscii ? asciiMark : unicodeMark} ${bot.state} · ${bot.identity.origin} · ${bot.model ?? "default"}${external ? "" : ` · permission ${bot.permission ?? "default"}`}`
+    const hints = picking ? "↑↓ select · enter start here · esc back" : external ? `↑↓ select · enter open · n new${actionList.length > 1 ? " · o open app" : ""} · esc back` : "↑↓ select · enter open · n new · e edit · m memory · d delete · esc back"
     const room = Math.max(0, height - 2)
     const two = width >= TWO_PANELS
     // The list scrolls to keep the cursor in view: its panel shows `room` rows less the box's border and padding.

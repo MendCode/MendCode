@@ -63,6 +63,7 @@ import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDef
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents } from "../../engine-acp/src/agents"
+import { connectorAgents, lazyHermesConnector } from "./bot-connector-agents"
 import { withAcpEngine } from "../../engine-acp/src/router"
 import { createPiConfig, piCapabilities, probePi } from "../../engine-pi/src/config"
 import { withPiEngine } from "../../engine-pi/src/router"
@@ -320,6 +321,7 @@ const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
   dir,
+  extra: connectorAgents,
   displayName: acpAgentName,
   catalogEfforts: (model) => {
     const slash = model.indexOf("/")
@@ -481,6 +483,8 @@ export const daemon = await startDaemon({
   ...(argv.includes("--web") ? { web: (await import("./http-web")).HTTP_WEB } : {}),
   ...(hosting.log ? { log: hosting.log } : {}),
   release: { version: packageJson.version },
+  // Experimental bots: the Hermes connector loads with the first `bot.list` that runs with the flag on, never at start.
+  botConnectors: [lazyHermesConnector({ dir })],
   trace: argv.includes("--trace") || process.env.MENDCODE_TRACE === "1",
   ...(otlp ? { otlp } : {}),
   ...(arg("mflow-listen") ? { mflowListen: arg("mflow-listen")! } : {}),
