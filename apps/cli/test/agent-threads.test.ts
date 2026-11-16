@@ -227,14 +227,14 @@ test("a background sub-agent stays in the strip after its turn, while the daemon
   await Bun.sleep(5)
   h.app.render()
   let text = screen(h)
-  expect(text).toMatch(/Survey the map\s+bg\s+\$ ls \/maps · 1 tool/)
+  expect(text).toMatch(/Survey the map\s+async\s+\$ ls \/maps · 1 tool/)
   expect(text).not.toMatch(/◇ Survey the map\s+agent/)
   running = false
   talk.emit({ type: "turn.completed", turnId: "turn_2" })
   await Bun.sleep(5)
   h.app.render()
   text = screen(h)
-  expect(text).not.toMatch(/Survey the map\s+bg\s+\$ ls/)
+  expect(text).not.toMatch(/Survey the map\s+async\s+\$ ls/)
 })
 
 test("a background sub-agent named only once its call ended still matches the daemon's background work and stays in the strip", async () => {
@@ -261,7 +261,7 @@ test("a background sub-agent named only once its call ended still matches the da
   await Bun.sleep(5)
   h.app.render()
   const text = screen(h)
-  expect(text).toMatch(/Survey the map\s+bg/)
+  expect(text).toMatch(/Survey the map\s+async/)
   expect(text).not.toMatch(/◇ Survey the map\s+agent/)
 })
 
@@ -318,17 +318,17 @@ test("after the daemon restarts, a background sub-agent that ended with the old 
   h.app.applySettings({ onboarded: true })
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).toMatch(/Survey the map\s+async/)
   // The daemon restarts: its new process runs nothing of the old one's, and sends no event about it.
   running = false
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).toMatch(/Survey the map\s+async/)
   h.app.onConnection("reconnecting")
   h.app.onConnection("connected")
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).not.toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).not.toMatch(/Survey the map\s+async/)
 })
 
 test("a background sub-agent esc stopped stays in the strip as stopped by you until /relaunch asks the model to start it again", async () => {
@@ -358,7 +358,7 @@ test("a background sub-agent esc stopped stays in the strip as stopped by you un
   h.app.render()
   // An hour old by the harness clock, far past the moment an ended sub-agent's row normally stays.
   expect(screen(h)).toMatch(/Agents {2}1 stopped by you/)
-  expect(screen(h)).toMatch(/└ Re-verify compar\S*\s+bg\s+stopped by you · \/relaunch\s+5s/)
+  expect(screen(h)).toMatch(/└ Re-verify compar\S*\s+async\s+stopped by you · \/relaunch\s+5s/)
   await h.type("/relaunch\r")
   await Bun.sleep(5)
   const [submit] = h.sentOf("user.submit") as Array<{ text: string }>

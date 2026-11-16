@@ -151,7 +151,7 @@ The working row still says `Thinking...` while such a block is open. The transcr
 Claude Code's own sub-agents (its Agent tool) show like MendCode's. Each working agent gets a row in the Agents strip above the prompt:
 
 - what it was asked and its agent type;
-- `await` or `bg`;
+- `await` or `async`;
 - the tool it is running and how many it has run.
 
 In the `full` tier, the row also names its model. It starts with the requested one (`model: "haiku"` reads `Haiku`), then uses the version named by its first message (`Haiku 5.5`).
@@ -164,7 +164,7 @@ A call naming no model shows none until that message, never the session's own. U
 2. Use `←` `→` to change sibling.
 3. Press `↑` or `ctrl+x ↑` to return to the conversation at the row you left.
 
-The header shows its name in its colour, `2 of 4 · ←→ · ↑ back`, type, `bg` or `await`, activity, tools and time. The thread contains its prompt, each tool call and its report.
+The header shows its name in its colour, `2 of 4 · ←→ · ↑ back`, type, `async` or `await`, activity, tools and time. The thread contains its prompt, each tool call and its report.
 
 A full border in the agent's colour distinguishes the thread from the conversation: `╭─ sub-agent ─╮` over its header, `│` down both sides, `╰─╯` under its view.
 
