@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.18 - 2026-11-16
+
+Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, and Hermes Agent bots on this machine. The left list keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; opening a chat of another folder moves the terminal there.
+
+### Upgrade notes
+
+- Same code as v0.0.18-beta.3.
+
+## v0.0.18-beta.3 - 2026-11-16
+
+Experimental bots learn on their own (notes, skills of their own, schedules), see every session and reach Hermes Agent bots on this machine. The left list keeps projects in place, shows only recent sessions, fills its height, marks what each session waits for, lists the projects you typed in and hides the ones you choose. This beta also fixes what review found in the betas before it.
+
 ### New
 
 - Experimental bots: with a Hermes Agent running (on its own or inside a desktop app), its profiles show in the sidebar's Bots section with their model; Enter starts a chat with one, `o` opens its page, and the replies come from the real bot.
@@ -19,6 +31,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - MendCode now records who created each session and who sent each message: you in the terminal or web UI, the command line, another agent, or the daemon itself (loops, workflows, the PR reviewer). Sessions show it as `origin` and `lastHumanAt` in `session.list`.
 - The all-projects list shows the projects you typed in by default; folders where only tools worked wait behind `+ N more projects`. `/customize` › Top & side › Projects from switches it to `all`.
 - `x` on a project's row in the left list hides it, and `/customize` › Top & side › Hidden projects brings it back.
+- `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
+- Experimental bots learn on their own: a bot can keep a note (`bot_note`), save a skill after a task that worked (`bot_skill`, kept in its own folder, offered only to it, you are asked the first time per skill) and schedule its own work when you say "every day at 9" or "every Monday" (`bot_schedule`, you are asked every time). Each shows in the chat as a short card: Learned, New skill, Scheduled.
+- Loops and bot schedules can wake on chosen weekdays: `weekly mon 09:00` or `weekly mon,thu 09:00 Europe/Madrid`.
+- `bot.list` reports each bot's schedules, so its page can show them.
+
+### Changed
+
+- Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
+- With experimental bots on, a bot sees every session: it lists, searches and reads any of them without the per-session prompt, and its prompt names the sessions running right now in every folder. Plain sessions keep the prompt. A bot's prompt now goes: who it is, personality, skills, memory, recent activity, what is running now, then how to look deeper and learn.
 
 ### Fixed
 
@@ -28,12 +49,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A PR review whose fetch fails because the network or DNS is down now waits for the network instead of spending its attempts, and its notice says what git reported.
 - Opening a chat in another project no longer moves the project groups in the left list: they rank by their latest message activity, and a streaming turn does not shuffle them.
 - A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.
-
-## v0.0.18-beta.3 - 2026-11-16
-
-Experimental bots learn on their own: they keep notes, save skills of their own and schedule their own work, see every session, and a new chat with a bot lists nothing until its first message. Chats can start with the right panel hidden. This beta also fixes what review found in the betas before it.
-
-### Fixed
 
 - Opening `/add-dir` or changing a run limit in a sub-agent that runs without tool limits no longer stops its next turn on Claude Code or Codex.
 - Cancelling a turn now revokes the sub-agent bridge access that turn held, and the access an earlier turn kept for background agents is hidden from output like the current one.
@@ -45,18 +60,6 @@ Experimental bots learn on their own: they keep notes, save skills of their own 
 - A Claude Code background agent that is still working keeps its thread when many later turns start short agents.
 - Experimental bots: duplicating a bot always renames it, a save too large for the agent loader is refused instead of hiding the bot, saves at the same time no longer clash, editing a bot keeps its permission rules and replaces a frontmatter prompt, deleting with its memory keeps the bot if the memory cannot be removed, and `docs commands` lists `/bot` when bots are on.
 - The sidebar's bot states no longer go back to an older state when the bot list answers after a newer push, a custom sessions sidebar view keeps its full width when bots are on, and a bot's picture with a second PNG header is refused.
-
-### New
-
-- `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
-- Experimental bots learn on their own: a bot can keep a note (`bot_note`), save a skill after a task that worked (`bot_skill`, kept in its own folder, offered only to it, you are asked the first time per skill) and schedule its own work when you say "every day at 9" or "every Monday" (`bot_schedule`, you are asked every time). Each shows in the chat as a short card: Learned, New skill, Scheduled.
-- Loops and bot schedules can wake on chosen weekdays: `weekly mon 09:00` or `weekly mon,thu 09:00 Europe/Madrid`.
-- `bot.list` reports each bot's schedules, so its page can show them.
-
-### Changed
-
-- Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
-- With experimental bots on, a bot sees every session: it lists, searches and reads any of them without the per-session prompt, and its prompt names the sessions running right now in every folder. Plain sessions keep the prompt. A bot's prompt now goes: who it is, personality, skills, memory, recent activity, what is running now, then how to look deeper and learn.
 
 ## v0.0.18-beta.2 - 2026-11-15
 
