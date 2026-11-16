@@ -4,7 +4,7 @@ import { createProjectProbe, eligibleDirectory, rankProjects, type ProjectInspec
 import { renderMultiSidebar, type MultiInput } from "../src/view/sidebar-multi"
 import { plain } from "./session-ui-harness"
 
-const HOME = "/Users/obed"
+const HOME = "/Users/me"
 const TMP = ["/tmp", "/private/tmp", "/var/folders/ab/T"]
 const NOW = new Date(2026, 10, 15, 15, 0).getTime()
 const MINUTE = 60_000
@@ -13,12 +13,12 @@ const DAY = 24 * 60 * MINUTE
 describe("which folders can be projects", () => {
   const ok = (directory: string) => eligibleDirectory({ directory, home: HOME, tmpRoots: TMP })
   test("a folder in the work tree counts; the home folder, hidden folders and temp folders never do", () => {
-    expect(ok("/Users/obed/Code/app")).toBe(true)
-    expect(ok("/Users/obed/Code/app/")).toBe(true)
+    expect(ok(`${HOME}/Code/app`)).toBe(true)
+    expect(ok(`${HOME}/Code/app/`)).toBe(true)
     expect(ok(HOME)).toBe(false)
     expect(ok(`${HOME}/`)).toBe(false)
-    expect(ok("/Users/obed/.ssh")).toBe(false)
-    expect(ok("/Users/obed/Code/repos/.claude/skills")).toBe(false)
+    expect(ok(`${HOME}/.ssh`)).toBe(false)
+    expect(ok(`${HOME}/Code/repos/.claude/skills`)).toBe(false)
     expect(ok("/tmp/kit-fix-v-1")).toBe(false)
     expect(ok("/private/tmp/ui4-login--2")).toBe(false)
     expect(ok("/var/folders/ab/T/kit-lite2-v-3")).toBe(false)

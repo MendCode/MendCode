@@ -9,7 +9,7 @@ afterAll(cleanTemps)
 const reply = (result: unknown) => ({ ok: true, result }) as CommandReply
 const MINUTE = 60_000
 const DAY = 24 * 60 * MINUTE
-const HOME = process.env.HOME ?? "/Users/obed"
+const HOME = process.env.HOME ?? "/Users/me"
 
 const REPOS = ["/work/app", "/other/api", "/work/site", "/repos/r1", "/repos/r2", "/repos/r3", "/repos/r4", ...Array.from({ length: 12 }, (_, n) => `/repos/x${n}`)]
 const NOT_REPOS = ["/work/plain", HOME, `${HOME}/.ssh`, "/tmp/kit-fix-v-1", "/private/tmp/ui4-login--2"]
