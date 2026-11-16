@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.18-beta.2 - 2026-11-15
+
+Experimental bots arrive behind `/experimental bots on`: agents with a name, a face, their own memory and a sidebar section, that you send to work in any folder. The sidebar can list every project, and the sub-agent arrows move only between sub-agents still working.
+
 ### New
 
 - Bots in the sidebar: Enter or a click on a bot starts a new chat with it in the folder you opened, `o` (or `/bot open`) opens its page, which now looks and scrolls like the other pages, bots come first by default, a bot's chats fold under it instead of mixing into the project lists, the icon has one space after it, a folder you used today stays listed, and the list follows other terminals live without polling.
