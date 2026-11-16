@@ -9,27 +9,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-### New
-
-- The left list has a search: `/` in the list (or `ctrl+x <` from the chat) finds sessions, projects and bots by name as you type, with the matched letters marked; Enter opens a session, starts a new chat in a project or with a bot, and Esc puts the list back as it was.
-- Experimental bots: the home screen's Agent View lists the bots that are working, waiting for you or in trouble, one row per state with their icons and names and a `+ N more` when they do not all fit; Enter or a click on one opens its latest chat, or its page when it has none. Idle bots are not shown.
-
-### Changed
-
-- In the left list, Enter on a project starts a new chat in that folder and Enter on a bot's `chats` row starts a chat with the bot. Space folds or opens any header; `←` folds an open header and `→` opens a folded one; a click on the ▸/▾ arrow folds, a click on the name does what Enter does.
-
-- Bots of another app (Hermes) list under one foldable row per app (`▸ hermes · 23`), folded unless a bot works or has a chat from the last day. Their chats are listed under the bot like a MendCode bot's, in the left list and on the bot's page.
-
-- A chat with a bot wears the bot's colour on the prompt's rules and lead glyph, and the footer leads with the bot's glyph and name.
-
-### Fixed
-
-- A new chat with a bot shows under the bot's chats from the first message instead of under Projects until a refresh, and starting a chat opens the bot's chats.
-- In the left list, `+ N more projects` and a project's `+ N more` / `+ N older` rows reveal one page of eight per press instead of everything, keep their count for the rest, and put the cursor on the first row that appeared.
-
 ## v0.0.18 - 2026-11-16
 
-Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, and Hermes Agent bots on this machine. The left list keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; opening a chat of another folder moves the terminal there.
+Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.
 
 ### Upgrade notes
 
@@ -53,9 +35,15 @@ Experimental bots learn on their own (notes, skills of their own, schedules), se
 - Experimental bots learn on their own: a bot can keep a note (`bot_note`), save a skill after a task that worked (`bot_skill`, kept in its own folder, offered only to it, you are asked the first time per skill) and schedule its own work when you say "every day at 9" or "every Monday" (`bot_schedule`, you are asked every time). Each shows in the chat as a short card: Learned, New skill, Scheduled.
 - Loops and bot schedules can wake on chosen weekdays: `weekly mon 09:00` or `weekly mon,thu 09:00 Europe/Madrid`.
 - `bot.list` reports each bot's schedules, so its page can show them.
+- The left list has a search: `/` in the list (or `ctrl+x <` from the chat) finds sessions, projects and bots by name as you type, with the matched letters marked; Enter opens a session, starts a new chat in a project or with a bot, and Esc puts the list back as it was.
+- Experimental bots: the home screen's Agent View lists the bots that are working, waiting for you or in trouble, one row per state with their icons and names and a `+ N more` when they do not all fit; Enter or a click on one opens its latest chat, or its page when it has none. Idle bots are not shown.
 
 ### Changed
 
+- In the left list, Enter on a project starts a new chat in that folder and Enter on a bot's `chats` row starts a chat with the bot. Space folds or opens any header; `←` folds an open header and `→` opens a folded one; a click on the ▸/▾ arrow folds, a click on the name does what Enter does.
+- Bots of another app (Hermes) list under one foldable row per app (`▸ hermes · 23`), folded unless a bot works or has a chat from the last day. Their chats are listed under the bot like a MendCode bot's, in the left list and on the bot's page.
+- A chat with a bot wears the bot's colour on the prompt's rules and lead glyph, and the footer leads with the bot's glyph and name.
+- The terminal starts lighter: the vim layer, headless runs, pane integration, export and support output load only when used.
 - Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
 - With experimental bots on, a bot sees every session: it lists, searches and reads any of them without the per-session prompt, and its prompt names the sessions running right now in every folder. Plain sessions keep the prompt. A bot's prompt now goes: who it is, personality, skills, memory, recent activity, what is running now, then how to look deeper and learn.
 
@@ -83,6 +71,8 @@ Experimental bots learn on their own (notes, skills of their own, schedules), se
 - The PR reviewer reads an SSH connection or DNS failure of a git fetch as the network outage it is and waits, instead of counting it as a failed attempt.
 - Experimental bots: duplicating a bot always renames it, a save too large for the agent loader is refused instead of hiding the bot, saves at the same time no longer clash, editing a bot keeps its permission rules and replaces a frontmatter prompt, deleting with its memory keeps the bot if the memory cannot be removed, and `docs commands` lists `/bot` when bots are on.
 - The sidebar's bot states no longer go back to an older state when the bot list answers after a newer push, a custom sessions sidebar view keeps its full width when bots are on, and a bot's picture with a second PNG header is refused.
+- A new chat with a bot shows under the bot's chats from the first message instead of under Projects until a refresh, and starting a chat opens the bot's chats.
+- In the left list, `+ N more projects` and a project's `+ N more` / `+ N older` rows reveal one page of eight per press instead of everything, keep their count for the rest, and put the cursor on the first row that appeared.
 
 ## v0.0.18-beta.2 - 2026-11-15
 
