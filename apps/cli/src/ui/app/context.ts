@@ -120,6 +120,8 @@ export type AppInput = {
   pets?: { dirs: PetDirs; cacheDir: string; images: boolean }
   /** Capability replies a host already has; this client does not probe stdin for image support. */
   imageAnswers?: { da1?: string; cellPixels?: { width: number; height: number } }
+  /** What a folder is for the sidebar's project list (a git work tree, and the main repo of a linked worktree); unset reads the disk. */
+  inspectProject?: (directory: string) => Promise<import("../../view/sidebar-projects").ProjectInspection>
   /**
    * The MendCode data dir (`--dir`). With it the terminal reads `keybindings.json` and loads terminal extensions
    * from `<dir>/extensions` and profiles (plus the project's, when it is trusted); without it, neither.
@@ -143,7 +145,7 @@ export type AppInput = {
   env?: Record<string, string | undefined>
 }
 
-export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today"
+export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew" | "today" | "bot" | "bot-form"
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
@@ -516,6 +518,8 @@ export type AppState = {
   onboarding: { state: import("../../view/onboarding-page").OnboardingState; detected: import("../../view/onboarding-detect").Detected | undefined; loading: boolean; firstRun: boolean; /** The theme in use when the page opened: put back on esc, compared on Enter. */ lookStart: string; /** The profile keys the Look rows move (glyphs, tool cards, diff, prompt, pet) as they were when the page opened: put back on esc, compared on Enter. */ styleStart: Partial<import("../../view/tui-profile").TuiProfile>; /** The tier the installer was asked for, shown as the Tier row's start and applied when the page is left with esc. */ preset?: import("@mendcode/protocol/wire").Tier; /** A sign-in row opened `/connect`: closing it comes back to this page instead of the chat. */ connecting?: boolean } | undefined
   setupAdvanced: boolean
   agentReport: AgentsReport | undefined
+  /** A blank chat opened from a bot's row: it gets the bot's agent when its first message goes, so nothing is listed before. */
+  pendingBot: { sessionId: SessionId; name: string } | undefined
   agentError: string
   agentPicker: AgentPickerState
   themePicker: ThemePickerState
@@ -623,11 +627,27 @@ export type AppState = {
   contextArea?: { from: number; to: number } | undefined
   sidebarFocus?: boolean
   sidebarSelected?: string | undefined
-  sidebarHits?: Array<{ row: number; sessionId: string }>
+  sidebarHits?: Array<{ row: number; sessionId: string; /** The cells of a folding row's ▸/▾ glyph, from the sidebar's left edge. */ fold?: { from: number; to: number } }>
+  /** The bots' pictures in the left list, at the list's own rows and columns (empty unless the terminal draws images). */
+  sidebarImages?: import("../image-layer").ImagePlacement[] | undefined
   /** The `updatedAt` each listed session had when the sessions sidebar last showed it as seen; memory only, filled as the list draws. A later one is an unread reply. */
   sidebarSeen?: Map<string, number>
   /** The sidebar's Settled row is unfolded. */
   sidebarSettledOpen?: boolean
+  /** How many settled sessions the open Settled shelf lists; absent, 10. Its `+ N more` row adds 25. */
+  sidebarSettledShown?: number
+  /** Whether the opened folder is a linked worktree, asked once per folder for the selected row's detail line. */
+  sidebarWorktreeOf?: { directory: string; linked: boolean }
+  /** Experimental bots or all projects: the module that draws the left list, there once the first frame that needs it loaded it. */
+  sidebarBots?: import("./sidebar-bots").SidebarBots
+  /** The left list's search, there once the first `/` (or `sidebar.search`) loaded it. */
+  sidebarSearch?: import("./sidebar-search").SidebarSearch
+  /** Experimental bots: the bots the home's Agent View lists while they work, there once the first home frame with the flag on loaded it. */
+  homeBots?: import("./home-bots").HomeBotsLive
+  /** The open bot page (`page: "bot"`): its drawing and keys. */
+  botCard?: import("../../view/bot-card-page").BotCard | undefined
+  /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */
+  botForm?: { render(input: { width: number; height: number; ascii: boolean; placements?: import("../image-layer").ImagePlacement[] }): import("../theme").Line[]; key(key: string): Promise<void> } | undefined
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined
@@ -670,7 +690,7 @@ export type AppContext = {
   scratchEditor: ReturnType<typeof createEditor>
   editor: ReturnType<typeof createEditor>
   /** Modal layer over `editor`, active while the `vimMode` profile setting is on. */
-  vim: import("../../view/vim").Vim
+  vim: import("../../view/vim-lazy").LazyVim
   keybindingFile: KeybindingFile
   stateLabels: Record<ForegroundState, string>
   permissionLabels: Record<PermissionMode, string>

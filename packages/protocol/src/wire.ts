@@ -26,12 +26,12 @@ export { FOOTER_DEFAULT_PRESET, FOOTER_ROWS_MAX, FOOTER_ROW_SEGMENTS_MAX, FOOTER
 export { PROMPT_MODES, PROMPT_FAMILIES, PROMPT_FOCUS_CHOICES, promptFocusLabel, promptCostLine, promptCostWarning, promptCostOf, type PromptModeCost, type PromptMode, type PromptFamily, type PromptFocusChoice, type PromptFocus, type PromptStatus, type PromptBuildReport } from "./prompt-data"
 export { PLAN_APPLY_PERMISSIONS, PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, PLAN_TURN_NOTES, PLAN_TURN_OFF_NOTE, createPlanTurnNotes, type PlanApplyPermission } from "./plan-review-data"
 export { TOOL_RAIL_DEFAULT, parseToolRail, toolRailProblems, toolRailShown, type ToolRailEntry, DEFAULT_TOOL_DESIGN_NAME, TOOL_DESIGN_NAME, TOOL_DESIGNS_DIR, TIMESTAMP_PLACES } from "./tool-rail-data"
-export { TUI_DEFAULTS, TUI_ENUMS, TUI_OPERATIONS, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, ACTIVITY_TOKEN_PARTS, unknownActivityTokens, unknownActivityParts, STAT_PART_IDS, unknownStatParts, type StatPartId, tuiProblems, type ActivityPart, type TuiOperation, type TuiControlInput, type TuiControlReport } from "./tui-data"
+export { TUI_DEFAULTS, TUI_ENUMS, TUI_OPERATIONS, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, ACTIVITY_TOKEN_PARTS, unknownActivityTokens, unknownActivityParts, SIDEBAR_SECTION_IDS, unknownSidebarSections, STAT_PART_IDS, unknownStatParts, type StatPartId, tuiProblems, type ActivityPart, type TuiOperation, type TuiControlInput, type TuiControlReport } from "./tui-data"
 export { TIERS, TIER_BUNDLES, TIER_BASELINE_TOKENS, MINIMALIST_SLASH, slashTier, FEATURES, FEATURE_IDS, tierIncludes, featureState, featureOn, effectiveSettings, tierRows, tierDiff, isTier, isFeatureId, setBuildChannel, buildChannel, type BuildChannel, type Tier, type TierBundle, type FeatureId, type FeatureSpec, type FeatureState, type TierRow, type TierSettings } from "./tier-data"
 
 export { assembleSchema, createSchemaCatalog, SCHEMA_PAGE_BYTES, SCHEMA_MAX_PAGES, type SchemaCatalog, type SchemaIndex, type SchemaIndexEntry, type SchemaPage } from "./schema-catalog"
 export { isLoopbackHost,parseRemoteAddress, isReadOnlyCommand, READ_ONLY_COMMANDS } from "./remote"
-export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentCommandClass, agentRefusal, capPermission, permissionRank, type AgentCommandClass } from "./agent-origin"
+export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AGENT_CALLER_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentCommandClass, agentRefusal, capPermission, permissionRank, type AgentCommandClass } from "./agent-origin"
 export { approvalRuleOffer, withApprovalRules, type ApprovalRule, type ApprovalRuleOffer, type ApprovalRuleLevel } from "./approval-rule"
 
 export { createIdFactory, ID_PREFIXES } from "./id-factory"
@@ -39,6 +39,8 @@ export { DEFAULT_AREA, AREA_NAME, areaFor, type AreaRule } from "./areas"
 export { findSecrets, redactEventText, redactSecrets, replaceSecretMarkers, replaceSecrets, secretMarker, type Redaction, type SecretFinding } from "./redact"
 export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_30M_MS, CHATGPT_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_30M_MS, thirtyMinuteCacheModel, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, observedCacheLifetime, CACHE_HIT_SHARE, CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_GAP_MS, CACHE_SAMPLE_WINDOW_MS, CACHE_SAMPLE_MIN_PROMPT_TOKENS, type CacheSample, type ObservedCacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
 export {
+  BOT_COLORS,
+  BOT_SHAPES,
   DEFAULT_COMPACT_AT_TOKENS,
   DEFAULT_FOOTER,
   EXPERIMENTAL_FLAGS,

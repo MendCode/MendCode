@@ -15,12 +15,13 @@ import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarStops } from "../../view/sidebar"
+import { projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
+import { autoSettled, SETTLED_FIRST, SETTLED_PAGE } from "../../view/sidebar-marks"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
 import type { AgentsReport } from "@mendcode/protocol"
-import { homeVisibleSessions, type HomeSession } from "../../view/home"
+import { HOME_BOT_PREFIX, homeVisibleSessions, type HomeSession } from "../../view/home"
 import { PERMISSION_MODES, MOUSE_SGR } from "./constants"
 import { rightBarCells } from "../../view/right-bar"
 import { rightClick } from "../selection"
@@ -32,6 +33,9 @@ import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
 import { queuePolicy, userQueue } from "./queue-policy"
 import { fastStep, wheelStep } from "./page-wheel"
+
+/** The arrows of a terminal in application-cursor mode, as the list reads them. */
+const APPLICATION_ARROWS: Record<string, string> = { "\x1bOA": "\x1b[A", "\x1bOB": "\x1b[B", "\x1bOC": "\x1b[C", "\x1bOD": "\x1b[D" }
 
 export function createKeys(ctx: AppContext, actions: {
   slashMenu: ReturnType<typeof import("./slash-menu").createSlashMenu>
@@ -68,6 +72,8 @@ export function createKeys(ctx: AppContext, actions: {
   suggestionPool: ReturnType<typeof createPrompt>["suggestionPool"]
   runSlash: (text: string) => Promise<boolean>
   chatWidth: () => number
+  /** Whether the left list shows at this width (the search draws in it). */
+  sidebarShown: (width: number) => boolean
   /** The columns the transcript's text is laid out in (the chat column less the scrollbar's). */
   transcriptWidth: () => number
   pickApproval: (index: number) => Promise<void>
@@ -119,6 +125,8 @@ export function createKeys(ctx: AppContext, actions: {
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]
+  /** Saves a profile change (`x` on a project row hides the project). */
+  changeProfile: (patch: Partial<import("../../view/tui-profile").TuiProfile>) => void
   homeSessions: () => HomeSession[]
   navigateMessage(kind: "next" | "previous" | "last-user"): Promise<void>
   /** `file.open`: the first file path of the selection or the item in view (a list when there are several). */
@@ -136,6 +144,7 @@ export function createKeys(ctx: AppContext, actions: {
   /** Vim mode applies to the prompt while the setting is on; switching it off drops back to plain insert. */
   function vimOn() {
     if (!state.tuiProfile.vimMode && vim.mode !== "insert") vim.reset()
+    if (state.tuiProfile.vimMode) void vim.load()
     return state.tuiProfile.vimMode
   }
   const vimLive = () => vimOn() && !actions.pendingPanelRequest()
@@ -223,6 +232,8 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "chat" && state.find && await actions.findKey(key)) return
     // The prompt-history search bar takes the keyboard the same way (the wheel and paging keys still scroll).
     if (state.page === "chat" && state.promptSearch && await actions.composer.searchKey(key)) return requestFrame()
+    // The left list's search takes every key but the mouse while it is open (ui/app/sidebar-search.ts).
+    if (state.page === "chat" && state.sidebarSearch?.isOpen() && await state.sidebarSearch.key(key, actions)) return requestFrame()
     if (state.page === "compaction" && state.compactionView?.editing) return pageKey(key)
     const { width, height } = input.screen.size
     // The keymap editor waiting for a key takes ctrl+c too (it is reserved, and says so) instead of quitting.
@@ -373,8 +384,13 @@ export function createKeys(ctx: AppContext, actions: {
     }
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
-      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < SIDEBAR_WIDTH) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
+      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
+      else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+      else if (hit && state.sidebarSearch?.isOpen()) await state.sidebarSearch.activate(hit.sessionId, actions)
+      // The ▸/▾ glyph of a folding row folds it; the rest of the row does what Enter does.
+      else if (hit?.fold && state.sidebarBots?.live() && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) >= hit.fold.from && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
+      else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
       else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
@@ -390,12 +406,15 @@ export function createKeys(ctx: AppContext, actions: {
     if (home) {
       state.homeSelected = undefined
       state.homeHover = undefined
-      await actions.switchSession(home.sessionId as typeof state.sessionId)
+      if (home.sessionId.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(home.sessionId, actions)
+      else await actions.switchSession(home.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     if (click && state.page === "chat" && click.row === 0 && state.contextArea && click.col >= state.contextArea.from && click.col < state.contextArea.to) return requestFrame()
-    if (state.page === "chat" && leader.armedAt === undefined && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
-      const sessions = homeVisibleSessions(actions.homeSessions()).filter((session) => session.id)
+    if (state.page === "chat" && leader.armedAt === undefined && !state.sidebarFocus && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
+      // The sessions the Agent View lists, then the bots drawn under it (experimental bots), in the order they are on screen.
+      const botStops = (state.homeArea?.hits ?? []).filter((hit) => hit.sessionId.startsWith(HOME_BOT_PREFIX)).toSorted((a, b) => a.row - b.row || a.from - b.from).map((hit) => ({ id: hit.sessionId }))
+      const sessions = [...homeVisibleSessions(actions.homeSessions()).filter((session) => session.id).map((session) => ({ id: session.id! })), ...botStops]
       const selected = sessions.findIndex((session) => session.id === state.homeSelected)
       // Down enters the list; up stays the prompt's history until a row is selected.
       if (sessions.length && (key === "\x1b[B" || (key === "\x1b[A" && selected >= 0))) {
@@ -409,28 +428,57 @@ export function createKeys(ctx: AppContext, actions: {
       }
       if (key === "\r" && selected >= 0) {
         state.homeSelected = undefined
-        await actions.switchSession(sessions[selected]!.id as typeof state.sessionId)
+        const chosen = sessions[selected]!.id
+        if (chosen.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(chosen, actions)
+        else await actions.switchSession(chosen as typeof state.sessionId)
         return requestFrame()
       }
     }
     if (state.page === "chat" && sideWidth > 0 && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !suggestions.length && !mentionActive) {
-      const sessions = projectSessions(state.sessions, input.directory ?? "")
-      if (!state.sidebarFocus && (onRight ? key === "\x1b[C" : key === "\x1b[D") && editor.isEmpty()) {
+      const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "")
+      const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
+      // Terminals in application-cursor mode send ESC O A..D for the arrows; the list takes both forms.
+      const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
+      // The key that enters the list. In the multi-project list a session with sub-agents working keeps the plain arrows for them
+      // (session.child.next/previous, and the list shows the hint), and Alt+arrow enters the list instead.
+      const entering = multi?.holdsArrows() ? (onRight ? key === "\x1b[1;3C" || key === "\x1bf" : key === "\x1b[1;3D" || key === "\x1bb") : arrow === (onRight ? "\x1b[C" : "\x1b[D")
+      if (!state.sidebarFocus && entering && editor.isEmpty()) {
         state.sidebarFocus = true
         state.sidebarSelected = state.sessionId
         return requestFrame()
       }
       if (state.sidebarFocus && !mouse) {
         // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
-        const stops = sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown ?? SETTLED_FIRST)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
-        const onSettled = stops[index] === SETTLED_ROW
-        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
-        else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        const onSettled = !multi && stops[index] === SETTLED_ROW
+        // Up from the first row wraps to the last and down from the last to the first.
+        if (key === "/") await openSidebarSearch()
+        else if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
+        else if (multi && (key === "\t" || key === "\x1b[Z")) {
+          // Tab and Shift+Tab land on the first row of the next and the previous section, wrapping; a Shift+Tab inside a section goes to its own first row first.
+          const starts = multi.sectionStarts().map((id) => stops.indexOf(id)).filter((at) => at >= 0)
+          const next = key === "\t" ? starts.find((at) => at > index) ?? starts[0] : starts.findLast((at) => at < index) ?? starts.at(-1)
+          if (next !== undefined) state.sidebarSelected = stops[next]
+        } else if (multi && key === "b") {
+          const bot = multi.firstBot()
+          if (bot) state.sidebarSelected = bot
+        } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
+        else if (multi && key === "x" && stops[index]) multi.hideProject(stops[index]!, actions)
+        // Space folds or opens any header; the arrow toward the list's edge folds an open one and the other opens a folded one (otherwise it returns to the prompt, as before).
+        else if (multi && key === " " && stops[index]) multi.toggleFold(stops[index]!)
+        else if (multi && stops[index] && !multi.isBot(stops[index]!) && ((arrow === (onRight ? "\x1b[C" : "\x1b[D") && multi.foldState(stops[index]!) === "open") || (arrow === (onRight ? "\x1b[D" : "\x1b[C") && multi.foldState(stops[index]!) === "folded"))) multi.toggleFold(stops[index]!)
+        else if (!multi && stops[index] === SETTLED_MORE && key === "\r") {
+          state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+          // The last page takes the more row away: the selection moves to the first session it revealed, which now stands where the row stood.
+          const next = sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown)
+          if (!next.includes(SETTLED_MORE)) state.sidebarSelected = next[index]
+        } else if (onSettled && (key === "\r" || key === " " || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
           await actions.switchSession(stops[index]! as typeof state.sessionId)
-        } else if (key === "\x1b" || (onRight ? key === "\x1b[D" : key === "\x1b[C")) state.sidebarFocus = false
+        } else if (key === "\x1b" || (onRight ? arrow === "\x1b[D" : arrow === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }
     } else state.sidebarFocus = false
@@ -661,8 +709,16 @@ export function createKeys(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** `/` in the focused list or `sidebar.search` from the chat: the list's search, loaded by its first use. */
+  async function openSidebarSearch() {
+    if (state.page !== "chat" || !actions.sidebarShown(input.screen.size.width)) return say("the session list is not shown here · /sidebar or a wider terminal shows it", "info")
+    state.sidebarSearch ??= (await import("./sidebar-search")).createSidebarSearch(ctx)
+    state.sidebarSearch.show()
+  }
+
   /** A keymap action, through the same handlers as the slash commands; a draft in the prompt survives it. */
   async function runKeyAction(action: BindingAction, key?: string) {
+    if (action === "sidebar.search") { await openSidebarSearch(); return requestFrame() }
     if (action === "selection.quote") { mouseSelection.quote(); return requestFrame() }
     // The comment key: with comments off (or `commentKey` set to quote) it keeps its old job of quoting the selection into the prompt.
     // ctrl+g never had that job: it always comments.

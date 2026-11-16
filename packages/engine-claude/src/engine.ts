@@ -83,6 +83,19 @@ type ActiveTurn = {
 
 /** Ended turns per process whose background agents are still followed. */
 const MAX_AGENT_TURNS = 8
+
+/**
+ * The newest `MAX_AGENT_TURNS` mappers, oldest leaving first; a mapper whose agents still run stays while any mapper whose agents ended
+ * can leave instead, so a long-running agent keeps its thread however many short ones come after it.
+ */
+export function retainAgentTurns<T extends { hasBackgroundAgents(): boolean }>(mappers: T[]): T[] {
+  const kept = [...mappers]
+  while (kept.length > MAX_AGENT_TURNS) {
+    const ended = kept.findIndex((mapper) => !mapper.hasBackgroundAgents())
+    kept.splice(ended < 0 ? 0 : ended, 1)
+  }
+  return kept
+}
 /** The id of the `SubagentStart` hook MendCode registers at `initialize` (`subagentContext`). */
 const SUBAGENT_HOOK = "mendcode-subagent-start"
 /** The id of the `PostToolUse` hook MendCode registers at `initialize` (`oneTree`). */
@@ -539,6 +552,7 @@ export function createClaudeEngine(options: {
     }
     if (agentTask(connection, message)) return
     if (message.type === "assistant" && !message.parent_tool_use_id) showSentMessages(connection, message)
+    adoptOrphanAgent(connection, message)
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
@@ -611,6 +625,21 @@ export function createClaudeEngine(options: {
    * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
    * command as a message and held the queue until Claude Code next answered.
    */
+  /**
+   * A sub-agent no turn of this process started (launched before a daemon restart, started again by `SendMessage`) is taken by the
+   * running turn: Claude Code's notice that it started opens its thread there instead of its work being dropped.
+   */
+  function adoptOrphanAgent(connection: Connection, message: ClaudeMessage) {
+    const mapper = connection.turn?.mapper
+    if (!mapper || mapper.owns(message) || connection.agentTurns.some((earlier) => earlier.owns(message))) return
+    // Only Claude Code's start notice: a sub-agent record can come before the turn's own Agent call is registered.
+    if (message.type !== "system" || message.subtype !== "task_started" || message.task_type !== "local_agent" || message.owned_by_subagent === true) return
+    const toolUseId = message.tool_use_id
+    if (typeof toolUseId !== "string" || !toolUseId || mapper.knowsToolUse(toolUseId)) return
+    const description = typeof message.description === "string" && message.description.trim() ? message.description.trim() : "resumed sub-agent"
+    mapper.adoptAgent({ toolUseId, description, ...(typeof message.subagent_type === "string" ? { agent: message.subagent_type } : {}) })
+  }
+
   /** The main agent's `SendMessage` to a sub-agent, from this turn or an earlier one, shows in that sub-agent's thread. */
   function showSentMessages(connection: Connection, message: ClaudeMessage) {
     const content = message.message?.content
@@ -944,7 +973,7 @@ export function createClaudeEngine(options: {
             if (connection.turn === turn) delete connection.turn
             if (turn.mapper.hasBackgroundAgents() && options.onAgentEvent) {
               sink = (event) => options.onAgentEvent?.(connection.sessionId, input.turnId, event)
-              connection.agentTurns = [...connection.agentTurns, turn.mapper].slice(-MAX_AGENT_TURNS)
+              connection.agentTurns = retainAgentTurns([...connection.agentTurns, turn.mapper])
             }
             // New MCP servers need a restart; it waits while a background task runs, as it would end with the process.
             if (connection.reload && connection.background === 0) close(connection, "MCP servers changed")
@@ -1082,10 +1111,13 @@ export function createClaudeEngine(options: {
     },
     /** Ends every process; `reason` is what `onClose` reports (a bridged turn's own process ends with its turn). */
     stop(reason = "engine stopped") {
-      for (const isolated of isolatedEngines) isolated.stop(reason)
+      // Every process ends even when a callback throws for one (a daemon stopping has closed its database): one left running goes on
+      // writing beside the process the next daemon starts for the same session.
+      const each = (end: () => void) => { try { end() } catch { /* the next one still ends */ } }
+      for (const isolated of isolatedEngines) each(() => isolated.stop(reason))
       isolatedEngines.clear()
       kept.clear()
-      for (const connection of [...connections.values()]) close(connection, reason)
+      for (const connection of [...connections.values()]) each(() => close(connection, reason))
     },
   }
   return port

@@ -125,7 +125,8 @@ describe("terminal commands", () => {
     await h.start()
     await h.type("/ping")
     await h.key("\r")
-    await Bun.sleep(5)
+    // The submitted /usage runs after the extension's handler returns (a lazily loaded command); wait for it, not a fixed beat.
+    for (let turn = 0; turn < 200 && h.app.page !== "usage"; turn++) await Bun.sleep(5)
     expect(h.app.page).toBe("usage")
   })
 })

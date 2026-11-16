@@ -8,7 +8,8 @@ import type { createAgents } from "./agents"
 import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
-import { normalizeTuiProfile } from "../../view/tui-profile"
+import { mergeActivity } from "../../view/session-activity"
+import { normalizeTuiProfile, panelStarted } from "../../view/tui-profile"
 import { resolvePanel } from "../../view/sidebar-spec"
 import { profilePanel } from "./session-look"
 import type { FooterSegment } from "@mendcode/protocol/wire"
@@ -203,7 +204,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "tui.changed") {
       // The stored profile changed (customize_ui): only the keys that differ from the stored copy are new, so a profile's layer
       // keeps every other key it holds instead of seeing them all as the user's.
-      const stored = normalizeTuiProfile(event.profile), before = state.profileBase as Record<string, unknown>
+      const stored = panelStarted(normalizeTuiProfile(event.profile)), before = state.profileBase as Record<string, unknown>
       const changed = Object.fromEntries(Object.entries(stored).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])))
       state.profileBase = stored
       state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...changed })
@@ -287,17 +288,14 @@ export function createEvents(ctx: AppContext, actions: {
         void loadAgentShells()
         requestFrame()
       }
-      const { sessionId: id, title, directory, state: localState, updatedAt } = event
-      const known = state.sessions.find((session) => session.sessionId === id)
-      const archived = event.archivedAt === null ? { archivedAt: undefined } : event.archivedAt !== undefined ? { archivedAt: event.archivedAt } : {}
-      // The draft of an untitled session labels it in every list: the push carries it when it appeared, changed its first line or went.
-      state.sessions = known
-        ? state.sessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state: localState, updatedAt, queued: event.queued ?? 0, paused: event.paused === true }, event.draft) : session))
-        : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state: localState, queued: event.queued ?? 0, paused: event.paused === true }, event.draft), ...state.sessions]
+      const { sessionId: id, title } = event
+      // Bots on or every project listed: that list follows the same push (before this terminal's own list takes it, so a new session is still new to it), with no request.
+      state.sidebarBots?.onActivity(event)
+      state.homeBots?.onActivity(event)
       // Sessions pushed by other terminals join at the top; past the cap the oldest go (the open one stays), and /sessions reads the rest again.
-      if (state.sessions.length > PUSHED_SESSIONS_MAX) state.sessions = state.sessions.filter((session, at) => at < PUSHED_SESSIONS_MAX || session.sessionId === state.sessionId)
+      state.sessions = mergeActivity(state.sessions, event, { cap: PUSHED_SESSIONS_MAX, keep: state.sessionId })
       state.paletteSessions = state.paletteSessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, title }, event.draft) : session))
-      if (state.page === "sessions" || state.page === "chat" && sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" })) requestFrame()
+      if (state.page === "sessions" || state.page === "chat" && (state.sidebarBots?.live() === true || sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" }))) requestFrame()
       return
     }
     if (event.type === "memory.changed") {

@@ -254,9 +254,17 @@ export function createWorkflowService(options: {
     return false
   }
 
+  /** The worktrees other live runs have a work task going in (a script's `cwd`). */
+  function busyLanes(run: WorkflowRun): Set<string> {
+    const lanes = new Set<string>()
+    for (const other of runs.values())
+      if (other.workflowId !== run.workflowId) for (const task of other.tasks) if (task.mode === "work" && task.lane && (task.state === "running" || task.state === "needs_input")) lanes.add(task.lane)
+    return lanes
+  }
+
   /** The ready tasks minus script checks still waiting for their stdin (the replay brings it). */
   function startable(run: WorkflowRun, now?: number): string[] {
-    const ready = readyTasks(run, directoryBusy(run), now)
+    const ready = readyTasks(run, directoryBusy(run), now, busyLanes(run))
     return run.script ? ready.filter((taskId) => !scripts.waitingForStdin(run, taskId)) : ready
   }
 

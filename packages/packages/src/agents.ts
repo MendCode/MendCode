@@ -26,12 +26,31 @@ const TOOL_PATTERN = /^[A-Za-z0-9_:.*-]{1,100}$/
 export const MAX_AGENT_FILES = 100
 /** Files read across all layers before precedence picks the winners that `MAX_AGENT_FILES` then caps. */
 const MAX_AGENT_SCANNED = 400
-const MAX_AGENT_BYTES = 32 * 1024
+/** The most an agent file may hold: a larger one is skipped by the loader, so nothing may write one. */
+export const MAX_AGENT_BYTES = 32 * 1024
 const MAX_PROMPT_CHARS = 16_000
 const MAX_TOOL_LIST = 100
 /** Generation and presentation fields shared with the donor's agent files. */
 const ADVANCED_KEYS = ["temperature", "top_p", "color", "steps", "maxsteps", "variant", "options", "disable", "prompt"]
-const KNOWN_KEYS = new Set(["name", "description", "model", "effort", "tools", "deny", "permission", "permissionrules", "mode", "hidden", ...ADVANCED_KEYS])
+const KNOWN_KEYS = new Set(["name", "description", "model", "effort", "tools", "deny", "permission", "permissionrules", "mode", "hidden", "bot", ...ADVANCED_KEYS])
+
+/** Experimental bots (docs/agents.md): the look a bot may take. A face is made from the name when shape or color is absent. */
+export const BOT_SHAPES = ["circle", "square", "diamond", "triangle", "hexagon"] as const
+export type BotShape = (typeof BOT_SHAPES)[number]
+/** Theme color roles, the same names an agent's `color` accepts besides hex; a bot never takes hex. */
+export const BOT_COLORS = ["primary", "secondary", "accent", "success", "warning", "error", "info"] as const
+export type BotColor = (typeof BOT_COLORS)[number]
+/** `mendcode` for a bot made here, else the id of the connector that owns it. */
+export const BOT_LOCAL_ORIGIN = "mendcode"
+/** Built by the first file that has a `bot:` block, not at import: most installs never read one. */
+let botBlock: ReturnType<typeof makeBotBlock> | undefined
+const makeBotBlock = () => z.strictObject({
+  shape: z.enum(BOT_SHAPES).optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  avatar: z.string().min(1).max(4096).optional(),
+  origin: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).default(BOT_LOCAL_ORIGIN),
+})
+export type BotIdentity = { shape?: BotShape | undefined; color?: BotColor | undefined; avatar?: string | undefined; origin: string }
 
 type Json = null | boolean | number | string | Json[] | { [key: string]: Json }
 
@@ -47,6 +66,8 @@ export type AgentDefinition = {
   steps?: number | undefined
   variant?: string | undefined
   options?: Record<string, Json> | undefined
+  /** Present when the file has a `bot:` block: the agent is a bot (global, so only the user's own layers keep it). */
+  bot?: BotIdentity | undefined
   /** A model id of the catalog (`gpt-5.4`, `<provider>:<model>`); the session's own model when absent. */
   model?: string
   effort?: EffortValue
@@ -249,6 +270,12 @@ export function parseAgentFile(input: { text: string; stem: string; file: string
     options: z.record(z.string(), z.json()).refine((value) => Object.keys(value).length <= 32 && JSON.stringify(value).length <= 8000 && !Object.keys(value).some((key) => ["model", "messages", "input", "instructions", "system", "tools", "tool_choice", "stream", "store", "headers", "url", "apiKey", "authorization", "prompt_cache_key"].includes(key))).optional(),
   }).safeParse({ ...Object.fromEntries(["temperature", "top_p", "color", "variant", "hidden", "disable"].filter((key) => data[key] !== undefined).map((key) => [key, data[key]])), ...(data.steps !== undefined || data.maxsteps !== undefined ? { steps: data.steps ?? data.maxsteps } : {}), ...(Object.keys(options).length ? { options } : {}) })
   if (!advanced.success) return { problem: `invalid agent configuration: ${advanced.error.issues.map((issue) => issue.path.join(".") + " " + issue.message).join("; ").slice(0, 300)}` }
+  let bot: BotIdentity | undefined
+  if (data.bot !== undefined) {
+    const block = (botBlock ??= makeBotBlock()).safeParse(data.bot === null ? {} : data.bot)
+    if (!block.success) return { problem: `invalid bot: ${block.error.issues.map((issue) => ["bot", ...issue.path].join(".") + " " + issue.message).join("; ").slice(0, 300)}` }
+    bot = block.data
+  }
   const prompt = (asText(data.prompt) ?? parsed.body).trim()
   if (prompt.length > MAX_PROMPT_CHARS) return { problem: `the prompt is longer than ${MAX_PROMPT_CHARS} characters` }
   return {
@@ -257,6 +284,7 @@ export function parseAgentFile(input: { text: string; stem: string; file: string
       description,
       mode: mode as AgentModeValue,
       ...advanced.data,
+      ...(bot ? { bot } : {}),
       ...(model ? { model } : {}),
       ...(effort ? { effort: effort as EffortValue } : {}),
       ...(tools.list ? { tools: tools.list } : {}),
@@ -325,6 +353,10 @@ export function readLayerAgents(layers: readonly ExtensionLayer[], options: { pr
       // What a converted (Claude) file asked for and this agent cannot do is listed, not lost.
       for (const warning of "warnings" in parsed ? parsed.warnings ?? [] : []) problems.push({ file, message: `warning: ${warning}` })
       const found: FoundAgent = { ...parsed.agent, trusted }
+      if (found.bot && layer.source !== "user") {
+        delete found.bot
+        problems.push({ file, message: "warning: bot ignored: bots are global, so the file belongs in ~/.mendcode/agents" })
+      }
       labels.set(found, layerLabel(layer))
       if (trusted) {
         const previous = effective.get(found.name)

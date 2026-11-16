@@ -27,6 +27,9 @@ const OLD_CHORDS = {
   i: "diagram.open", k: "messages.open", "\x1b[B": "session.child.first", "\x1bOB": "session.child.first", u: "message.undo", "/": "transcript.find", v: "voice.toggle", f: "details.toggle", Y: "block.copy",
 } as const
 
+/** Chords added later for actions that have no alt key; each is a fresh key as well. */
+const OWN_CHORDS = { "<": "sidebar.search" } as const
+
 /** Every default alt binding that had no way in other than the Alt key, and the chord it has now. */
 const NEW_CHORDS: ReadonlyArray<readonly [alt: string, chord: string, action: BindingAction]> = [
   ["alt+q", "w", "selection.comment"],
@@ -50,7 +53,8 @@ const NEW_CHORDS: ReadonlyArray<readonly [alt: string, chord: string, action: Bi
 describe("the ctrl+x chords for the default alt keys", () => {
   test("no chord that existed moved, and every new one is a fresh key", () => {
     for (const [letter, action] of Object.entries(OLD_CHORDS)) expect(LEADER_CHORDS[letter]).toBe(action)
-    const added = Object.keys(LEADER_CHORDS).filter((letter) => !(letter in OLD_CHORDS))
+    for (const [letter, action] of Object.entries(OWN_CHORDS)) expect(LEADER_CHORDS[letter]).toBe(action)
+    const added = Object.keys(LEADER_CHORDS).filter((letter) => !(letter in OLD_CHORDS) && !(letter in OWN_CHORDS))
     expect(added.sort()).toEqual(NEW_CHORDS.map(([, letter]) => letter).sort())
     // The leader also finds a chord by the lowercase of the key: no new letter may catch a key an old chord already answered to.
     for (const letter of added) if (letter.toLowerCase() !== letter) expect(letter.toLowerCase() in OLD_CHORDS).toBe(false)

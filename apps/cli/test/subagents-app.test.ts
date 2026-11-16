@@ -59,6 +59,90 @@ test("three children follow v1 id ordering and the first-child chord uses the cu
   expect(h.subscriptions.at(-1)?.sessionId).toBe(h.first)
 })
 
+type Harness = ReturnType<typeof start>
+const finish = (h: Harness, ...sessionIds: string[]) => { for (const session of h.sessions) if (sessionIds.includes(session.sessionId)) session.status = "completed" }
+const addChild = (h: Harness, status: string) => {
+  const sessionId = ids("session")
+  h.sessions.push({ ...h.sessions[1]!, sessionId, title: `Child ${status}`, createdAt: NOW - 1000, status } as typeof h.sessions[number])
+  return sessionId
+}
+const openFirstChild = async (h: Harness) => { await h.type("/tasks\r"); await h.app.onKey("\r") }
+const current = (h: Harness) => h.subscriptions.at(-1)?.sessionId
+
+test("arrows cycle only the working children when older children have finished, in both directions", async () => {
+  const h = start()
+  const fresh = [addChild(h, "running"), addChild(h, "running")]
+  finish(h, h.first, h.second)
+  await openFirstChild(h)
+  expect(current(h)).toBe(h.first)
+  await h.app.onKey("\x1b[C")
+  const onRight = current(h)!
+  expect(fresh).toContain(onRight)
+  await h.app.onKey("\x1b[C")
+  const secondRight = current(h)!
+  expect(fresh).toContain(secondRight)
+  expect(secondRight).not.toBe(onRight)
+  await h.app.onKey("\x1b[C")
+  expect(current(h)).toBe(onRight)
+  await h.app.onKey("\x1b[D")
+  expect(current(h)).toBe(secondRight)
+  await h.app.onKey("\x1b[D")
+  expect(current(h)).toBe(onRight)
+  expect(h.subscriptions.map((entry) => entry.sessionId)).not.toContain(h.second)
+})
+
+test("a child waiting for input or approval still counts as working", async () => {
+  const h = start()
+  finish(h, h.first, h.second)
+  const waiting = addChild(h, "waiting_for_input")
+  const approval = addChild(h, "waiting_for_approval")
+  await openFirstChild(h)
+  await h.app.onKey("\x1b[C")
+  const reached = current(h)!
+  expect([waiting, approval]).toContain(reached)
+  await h.app.onKey("\x1b[C")
+  expect([waiting, approval].filter((id) => id !== reached)).toContain(current(h)!)
+})
+
+test("with no working child the arrows stay put", async () => {
+  const h = start()
+  finish(h, h.first, h.second)
+  await openFirstChild(h)
+  const before = h.subscriptions.length
+  await h.app.onKey("\x1b[C")
+  await h.app.onKey("\x1b[D")
+  expect(h.subscriptions).toHaveLength(before)
+  expect(current(h)).toBe(h.first)
+})
+
+test("with exactly one working child the arrows reach it from a finished child and stay on it", async () => {
+  const h = start()
+  finish(h, h.first)
+  await openFirstChild(h)
+  await h.app.onKey("\x1b[C")
+  expect(current(h)).toBe(h.second)
+  const before = h.subscriptions.length
+  await h.app.onKey("\x1b[C")
+  await h.app.onKey("\x1b[D")
+  expect(h.subscriptions).toHaveLength(before)
+})
+
+test("when the selected child finishes, the next arrow moves to a working child and up still reaches the parent", async () => {
+  const h = start()
+  const third = addChild(h, "running")
+  await openFirstChild(h)
+  await h.app.onKey("\x1b[C")
+  const selected = current(h)!
+  finish(h, selected)
+  await h.app.onKey("\x1b[C")
+  expect(current(h)).not.toBe(selected)
+  expect([h.first, h.second, third]).toContain(current(h)!)
+  await h.app.onKey("\x1b[D")
+  expect(h.sessions.find((session) => session.sessionId === current(h))!.status).toBe("running")
+  await h.app.onKey("\x1b[A")
+  expect(current(h)).toBe(h.parent)
+})
+
 test("tasks use current selection for detach, wait and cancel, and refresh on child push", async () => {
   const h = start()
   h.setTasks(h.tasks.map((task) => ({ ...task, background: false })))

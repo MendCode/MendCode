@@ -424,6 +424,8 @@ export const WorkflowTask = lazySchema(() => z.strictObject({
   modelId: z.string().max(100).optional(),
   /** Runs in its own worktree: it does not hold the directory's single-writer slot. */
   isolated: z.boolean().optional(),
+  /** A work task in a worktree the script named (`cwd`): that path is its writer lane, so two tasks on one path never run together. */
+  lane: z.string().min(1).max(1024).optional(),
 }))
 export type WorkflowTask = z.infer<typeof WorkflowTask>
 

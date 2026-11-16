@@ -72,6 +72,13 @@ export const AGENT_SHELL_ENV = "MENDCODE_AGENT_SHELL"
  */
 export const AGENT_SHELL_FILE_BLOCKS = 1_125_899_906_842_624
 
+/**
+ * `hello` capability a command-line client sends when it runs inside another agent's shell (Claude Code, Codex...). It grants
+ * nothing and lifts nothing: it only makes the daemon record that client's messages as `agent` instead of `cli`, so a
+ * script or a peer agent never counts as a person typing (docs/sessions.md).
+ */
+export const AGENT_CALLER_CAPABILITY = "caller:agent"
+
 /** `hello` capabilities. `origin:agent`: the client found the session's variable in its environment. `limit:N`: its hard file-size limit in bytes, when it has one. */
 export const AGENT_ORIGIN_CAPABILITY = "origin:agent"
 export const AGENT_LIMIT_CAPABILITY = "limit:"

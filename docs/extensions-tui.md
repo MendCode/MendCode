@@ -487,6 +487,7 @@ Actions:
 | `session.timeline` | `ctrl+x g` |
 | `session.export` | `ctrl+x x` |
 | `sidebar.toggle` | `ctrl+x b` (same as `/sidebar`) |
+| `sidebar.search` | `ctrl+x <` (search the left list's sessions, projects and bots; `/` in the focused list does the same; see `sidebar.md`) |
 | `scratch.edit` | `ctrl+x s` (the dock's scratch note) |
 | `diagram.open` | `ctrl+x i` (the last Mermaid diagram of the session, full screen; same as `/diagram`) |
 | `messages.open` | `ctrl+x k` (Message Actions: copy, revert or fork a message; same as `/messages`; a plain click on the transcript never opens it) |

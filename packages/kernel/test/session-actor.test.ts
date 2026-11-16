@@ -482,3 +482,16 @@ describe("SessionActor", () => {
     expect(h.clock.pendingTimers()).toBe(0)
   })
 })
+
+describe("SessionActor message origin", () => {
+  test("a message carries the origin its caller named, and the daemon's own work is auto", async () => {
+    const { h, actor, sessionId, clientId } = setup()
+    const send = (text: string, origin?: "tui" | "cli" | "agent") => actor.handle({ id: h.ids("command"), clientId, type: "user.submit", sessionId, text, attachments: [] }, undefined, origin)
+    await send("typed", "tui")
+    await send("scripted", "cli")
+    await send("peer", "agent")
+    await send("internal")
+    const added = h.events.filter((event) => event.type === "queue.added")
+    expect(added.map((event) => event.type === "queue.added" && [event.text, event.origin])).toEqual([["typed", "tui"], ["scripted", "cli"], ["peer", "agent"], ["internal", "auto"]])
+  })
+})

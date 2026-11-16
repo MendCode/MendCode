@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 import { wheelStep } from "../src/ui/app/page-wheel"
+import { createBotCard } from "../src/view/bot-card-page"
 import { catalogSearchKey, createMarketplaceState } from "../src/view/marketplace-page"
 import { connectKey, createConnectState } from "../src/view/connect-page"
 import { createCustomizePageState, customizePageKey } from "../src/view/customize-page"
@@ -159,6 +160,8 @@ const PAGES: Record<string, { kind: "list"; search: "box" | "ahead" | "few" } | 
   reviews: { kind: "list", search: "box" }, console: { kind: "list", search: "few" }, share: { kind: "list", search: "few" }, keymap: { kind: "list", search: "few" },
   whatsnew: { kind: "list", search: "box" },
   today: { kind: "list", search: "few" },
+  bot: { kind: "list", search: "few" },
+  "bot-form": { kind: "other" },
 }
 
 describe("every page follows the standard", () => {
@@ -194,9 +197,41 @@ describe("every page follows the standard", () => {
   })
 
   test("every *-page.ts view is a known page", () => {
-    const known = new Set(["acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "sessions", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "today", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "whatsnew", "workflows", "worktrees"])
+    const known = new Set(["bot-card", "acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "sessions", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "today", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "whatsnew", "workflows", "worktrees"])
     const files = readdirSync(join(ROOT, "view")).filter((name) => name.endsWith("-page.ts")).map((name) => name.slice(0, -"-page.ts".length))
     expect(files.filter((name) => !known.has(name))).toEqual([])
+  })
+})
+
+describe("the bot page is a standard list page", () => {
+  const info = { name: "calm", description: "A calm reviewer", identity: { shape: "circle", color: "success", origin: "mendcode" }, file: "/d/calm.md", state: "idle", projects: [{ directory: "/work/app", state: "idle", sessions: [{ sessionId: "s1", title: "Chrome", status: "idle", updatedAt: 0 }] }] } as never
+  const make = () => {
+    const log = { closed: 0, opened: [] as string[] }
+    const card = createBotCard({ bot: info, folders: ["/work/app"], actions: { openSession: async (id) => void log.opened.push(id), newSession: async () => {}, edit: async () => {}, delete: async () => {}, memory: async () => {}, close: () => void log.closed++, redraw() {} } })
+    return { card, log }
+  }
+  const text = (card: ReturnType<typeof make>["card"], width = 100) => card.render({ width, height: 24, now: 0 }).map((line) => line.map((span) => span.text).join(""))
+
+  test("the shared header (title left, keys right, one summary line), a panel list and Esc back", () => {
+    const { card, log } = make()
+    const rows = text(card)
+    expect(rows[0]).toMatch(/^Bot · calm +.*esc back$/)
+    expect(rows[1]).toContain("mendcode")
+    expect(rows[2]).toMatch(/^┌─ /)
+    expect(rows.length).toBe(24)
+    void card.key("\x1b")
+    expect(log.closed).toBe(1)
+  })
+
+  test("the wheel, paging and Home/End move the cursor like every list; Enter acts on the row", async () => {
+    expect(wheelStep({ page: "bot" })).toEqual({ up: "\x1b[A", down: "\x1b[B", repeat: "one" })
+    const { card, log } = make()
+    await card.key("\x1b[F")
+    expect(text(card).some((row) => /›.*Chrome/.test(row))).toBe(true)
+    await card.key("\r")
+    expect(log.opened).toEqual(["s1"])
+    await card.key("\x1b[H")
+    expect(text(card).some((row) => /› New chat/.test(row))).toBe(true)
   })
 })
 

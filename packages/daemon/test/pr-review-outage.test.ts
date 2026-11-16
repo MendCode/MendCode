@@ -3,8 +3,10 @@ import { mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { GhRun } from "../src/pr-watch"
+import { gitRun } from "../src/pr-review/context"
 import { MAX_JOB_ATTEMPTS, TRANSIENT_BACKOFF_CAP_MS, TRANSIENT_RETRY_WINDOW_MS } from "../src/pr-review/jobs"
 import { elapsed, failureKind, OUTAGE_BACKOFF_CAP_MS, OUTAGE_LIMIT_MS, SLEEP_GAP_MS } from "../src/pr-review/outage"
+import { gitSaid } from "../src/pr-review/service"
 import { createRepoWatch, type JobOutcome, type RepoWatchJob } from "../src/pr-review/repo-watch"
 
 /**
@@ -69,6 +71,29 @@ describe("what a failure says", () => {
     for (const reason of [OFFLINE, "dial tcp: lookup api.github.com: no such host", "Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout", "HTTP 502: Bad Gateway (https://api.github.com/graphql)", "HTTP 503: Service Unavailable", "API rate limit exceeded for user ID 1. HTTP 403", "connect ENETUNREACH 140.82.112.6:443", "read: connection reset by peer", "gh timed out after 15 s waiting for GitHub"]) expect(failureKind(reason)).toBe("transient")
     for (const reason of ["GraphQL: Could not resolve to a Repository with the name 'acme/app'. (repository)", "HTTP 404: Not Found (https://api.github.com/repos/acme/app/pulls)", "HTTP 403: Resource not accessible by integration", "none of the git remotes configured for this repository point to a known GitHub host"]) expect(failureKind(reason)).toBe("permanent")
     expect(failureKind("git fetch of pull request #8 failed")).toBe("unknown")
+    // With what git said kept, a fetch that failed on DNS reads as the outage it is.
+    expect(failureKind("git fetch of pull request #8 failed: fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com")).toBe("transient")
+  })
+
+  test("an SSH failure keeps the line that names its cause, so a network outage is not counted as a failed attempt", () => {
+    const ssh = "ssh: Could not resolve hostname github.com: nodename nor servname provided, or not known\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n"
+    expect(failureKind(`[PR_REVIEW]: git fetch of pull request #8 failed${gitSaid(ssh)}`)).toBe("transient")
+    expect(failureKind(`git fetch of pull request #8 failed${gitSaid("ssh: connect to host github.com port 22: Operation timed out\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.")}`)).toBe("transient")
+    expect(gitSaid("fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com\n")).toBe(": fatal: unable to access 'https://github.com/acme/app.git/': Could not resolve host: github.com")
+    expect(gitSaid(undefined)).toBe("")
+  })
+  test("a failed plain git run keeps what git said; a passing one carries nothing extra", async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "pr-gitrun-")))
+    try {
+      const failed = await gitRun(["fetch", "--quiet", path.join(dir, "no-such-remote"), "refs/pull/1/head"], dir)
+      expect(failed.code).not.toBe(0)
+      expect(failed.err).toMatch(/fatal|not a git repository/)
+      const passed = await gitRun(["--version"], dir)
+      expect(passed).toMatchObject({ code: 0 })
+      expect(passed.err).toBeUndefined()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
   test("sleep is wall time the monotonic clock did not see, or far past the expected gap; awake time never counts it", () => {
     expect(elapsed({ wall: 0, mono: 0 }, { wall: 4 * HOUR, mono: 30_000 })).toEqual({ wall: 4 * HOUR, awake: 30_000, slept: true })

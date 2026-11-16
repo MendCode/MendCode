@@ -212,6 +212,23 @@ describe("sessions, pages and reload", () => {
     expect(h.text()).toContain("SIDE Cache bug")
   })
 
+  test("a sessions.sidebar view with bots on and the icons-only layout still gets the full-width column the chat leaves for it", async () => {
+    const temp = scratch()
+    temporary.push(temp)
+    writeTuiProfile(temp.dataDir, { ...DEFAULT_TUI_PROFILE, sidebarLayout: "icons-only" })
+    temp.write("data/extensions/look.ts", extension("look", `api.view("sessions.sidebar", (m) => m.sessions.map((session) => [{ text: "SIDE " + session.title.padEnd(34, "."), action: "open", arg: session.sessionId }]))`))
+    const reply = (command: Record<string, unknown>) => command.type === "session.list" ? { ok: true, result: { sessions: [{ sessionId: ids("session"), title: "Cache bug", directory: temp.project, createdAt: 0, updatedAt: 1_800_000_000_000 - 60_000, lastSeq: 0, state: "idle", queued: 0 }] } } : command.type === "bot.list" ? { ok: true, result: { bots: [], external: [], problems: [] } } : undefined
+    const h = await appHarness({ dataDir: temp.dataDir, directory: temp.project, width: 120, height: 40, reply })
+    await h.start({ onboarded: true, experimental: { bots: true } })
+    h.message("a", "b")
+    await Bun.sleep(5)
+    h.app.render()
+    expect(h.text()).toContain("SIDE Cache bug")
+    // The chat starts to the right of the 38 columns the view draws in, not of the 12 an icon column would take.
+    const chatRow = h.text().split("\n").find((row) => row.includes("› a"))!
+    expect(chatRow.indexOf("› a")).toBeGreaterThanOrEqual(38)
+  })
+
   test("page.status draws the /status page body", async () => {
     const { h } = await app(`api.view("page.status", (m) => [[{ text: "STATUS connected=" + m.connected + " perm=" + m.session.permission }]])`)
     await h.type("/status\r")

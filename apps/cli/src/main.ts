@@ -11,17 +11,14 @@ import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { DEFAULT_DIR, runInherited, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
 import { resolveProcessMode, startsSolo } from "./process-modes"
-import { createHeadlessRun } from "./run"
 import { loadRunOutput, type RunOutput } from "./run-output"
 import { readPipedStdin, STDIN_FIRST_BYTE_MS } from "./run-stdin"
-import { parseStartup, prepareStartup, prepareRunSubmission, STARTUP_USAGE, type Startup } from "./startup"
+import { launchesWithoutCommand, parseStartup, prepareStartup, prepareRunSubmission, STARTUP_USAGE, type Startup } from "./startup"
 import type { createApp as CreateApp } from "./ui/app"
 import type { PresentationMode } from "./view/transcript"
 import { readTuiProfile } from "./view/tui-profile"
 import packageJson from "../package.json"
 import { parseGlobalOptions, cliLogger } from "./global-options"
-import { completionScript } from "./support-output"
-import { sessionToMarkdown } from "./export"
 import { HTTP_USAGE, parseServerCommand } from "./http-cli"
 import type { DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
@@ -31,8 +28,8 @@ import { parseViewCommand, runViewCommand } from "./view-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { sameDir } from "@mendcode/program/data-dir"
-import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
-import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
+import type { PaneChild, PaneFacts } from "./herdr"
+import { callerCapabilities, guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
 import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 
@@ -282,7 +279,7 @@ if (migrate?.isMigrateCommand(argv)) {
 // The subcommand parsers and runners (automation.ts and everything it reaches) load only when there is something to parse: a
 // plain `mendcode` opens the terminal without evaluating them.
 const automationArgv = globalOptions.offline ? [...argv, "--offline"] : argv
-const automationModule = automationArgv.length ? await import("./automation") : undefined
+const automationModule = automationArgv.length && !launchesWithoutCommand(argv) ? await import("./automation") : undefined
 const automation: ParseResult = automationModule?.parseAutomation(automationArgv) ?? { ok: "none" }
 const automationApi = async () => automationModule ?? await import("./automation")
 if (automation.ok === true && automation.command.kind === "storage" && automation.command.offline) {
@@ -378,7 +375,7 @@ if (automation.ok === true && automation.command.kind === "help") {
   process.exit(0)
 }
 if (automation.ok === true && (automation.command.kind === "version" || automation.command.kind === "completion")) {
-  process.stdout.write(automation.command.kind === "version" ? `${(await import("@mendcode/upgrade/releases")).versionLine(CLI_VERSION)}\n` : completionScript(automation.command.shell))
+  process.stdout.write(automation.command.kind === "version" ? `${(await import("@mendcode/upgrade/releases")).versionLine(CLI_VERSION)}\n` : (await import("./support-output")).completionScript(automation.command.shell))
   process.exit(0)
 }
 if (automation.ok === true) {
@@ -466,7 +463,7 @@ async function connect() {
     ...(soloHost ? { loopback: () => (soloHost && !soloHost.stopped ? soloHost.attach : undefined) } : {}),
     name: "mendcode",
     // The interactive terminal draws extension dialogs; a headless run, ACP or the app server never declares it, so a hook's dialog answers its default there at once.
-    ...(remoteAttach ? {} : { capabilities: [...originCapabilities({ env: process.env, dir: originDir(daemonDataDir) }), ...(startup?.kind === "tui" ? [EXTENSION_DIALOGS_CAPABILITY] : [])] }),
+    ...(remoteAttach ? {} : { capabilities: [...originCapabilities({ env: process.env, dir: originDir(daemonDataDir) }), ...callerCapabilities(process.env), ...(startup?.kind === "tui" ? [EXTENSION_DIALOGS_CAPABILITY] : [])] }),
     trace: traceEnabled,
     onEvent: (event) => (listener ?? app)?.onEvent(event),
     // The daemon pushes the last quota right after the handshake, before the app exists; keep it.
@@ -714,7 +711,7 @@ if (command === "export") {
   else {
     const listed = await client.send({ type: "session.list", limit: 500, archived: true })
     const summary = listed.ok ? (listed.result?.sessions as SessionSummary[] | undefined)?.find((s) => s.sessionId === target) : undefined
-    process.stdout.write(sessionToMarkdown(history, { ...(summary ? { title: summary.title, directory: summary.directory } : {}), reasoning: flag("reasoning") }))
+    process.stdout.write((await import("./export")).sessionToMarkdown(history, { ...(summary ? { title: summary.title, directory: summary.directory } : {}), reasoning: flag("reasoning") }))
   }
   client.close()
   await (await import("./exit-flushed")).exitFlushed(0)
@@ -889,7 +886,7 @@ if (startup?.kind === "run") {
       }
     },
   }
-  const run = createHeadlessRun({ client, sessionId: sessionId!, prompt: runPrompt, json: startup.json, ...(compat ? { compat: true } : {}), approve: startup.approve, skipPermissions: startup.skipPermissions, thinking: startup.thinking, hold: runOutput?.hold === true, ...(runOutput ? { finish: (message: string) => runOutput!.finish(message) } : {}), submit: () => client.send(submission!), out, err: process.stderr })
+  const run = (await import("./run")).createHeadlessRun({ client, sessionId: sessionId!, prompt: runPrompt, json: startup.json, ...(compat ? { compat: true } : {}), approve: startup.approve, skipPermissions: startup.skipPermissions, thinking: startup.thinking, hold: runOutput?.hold === true, ...(runOutput ? { finish: (message: string) => runOutput!.finish(message) } : {}), submit: () => client.send(submission!), out, err: process.stderr })
   listener = run
   const subscribed = await client.subscribe(sessionId!, 0)
   if (!subscribed.ok) throw new Error(subscribed.error.message)
@@ -962,12 +959,13 @@ const pets = {
 const draftsSaved = () => Promise.race([Promise.resolve().then(() => app?.saveDrafts()).catch(() => undefined), Bun.sleep(1000)])
 /** Extension helpers end with this process; the runtime already bounds a stuck one to 2 s. */
 /** Inside a herdr or tuios pane, the session's state goes to the multiplexer's sidebar (docs/herdr.md). */
-const pane = herdrPane(process.env)
-const herdr = pane ? createHerdrReporter({ ...pane, program: PROGRAM_NAME, now: Date.now }) : undefined
-const tuiosMetaPane = tuiosPane(process.env)
-const tuiosMeta = tuiosMetaPane ? createTuiosMeta(tuiosMetaPane) : undefined
+const paneKit = process.env.HERDR_PANE_ID || process.env.TUIOS_PANE_ID ? await import("./herdr") : undefined
+const pane = paneKit?.herdrPane(process.env)
+const herdr = pane ? paneKit!.createHerdrReporter({ ...pane, program: PROGRAM_NAME, now: Date.now }) : undefined
+const tuiosMetaPane = paneKit?.tuiosPane(process.env)
+const tuiosMeta = tuiosMetaPane ? paneKit!.createTuiosMeta(tuiosMetaPane) : undefined
 // Sub-agent rows need the pane's agent state, which the herdr report sets (tuios answers herdr's socket in its panes).
-const tuiosChildren = tuiosMetaPane && herdr ? createTuiosChildren(tuiosMetaPane) : undefined
+const tuiosChildren = tuiosMetaPane && herdr ? paneKit!.createTuiosChildren(tuiosMetaPane) : undefined
 const paneReleased = () => Promise.race([(tuiosChildren?.clear() ?? Promise.resolve()).then(() => herdr?.release()), Bun.sleep(300)])
 const extensionsStopped = () => Promise.race([Promise.resolve().then(() => app?.stopExtensions()).catch(() => undefined), Bun.sleep(2_500)])
 let leaving = false
@@ -1005,8 +1003,8 @@ app = createApp({
   platform: process.platform,
   ...(herdr || tuiosMeta ? { paneState: ({ foreground, message, sessionId, facts, children }: { foreground: string; message?: string; sessionId: string; facts: PaneFacts; children: PaneChild[] }) => {
     // A sub-agent waiting on the person holds the pane as blocked too: herdr has no sub-agent rows, so that is how it shows.
-    const childWaits = foreground !== "waiting_approval" ? waitingChild(children) : undefined
-    const reported = herdr?.report({ state: childWaits ? "blocked" : paneState(foreground), sessionId, ...(foreground === "waiting_approval" && message ? { message } : childWaits ? { message: childWaits } : {}) })
+    const childWaits = foreground !== "waiting_approval" ? paneKit!.waitingChild(children) : undefined
+    const reported = herdr?.report({ state: childWaits ? "blocked" : paneKit!.paneState(foreground), sessionId, ...(foreground === "waiting_approval" && message ? { message } : childWaits ? { message: childWaits } : {}) })
     if (tuiosChildren) void (reported ?? Promise.resolve()).then(() => tuiosChildren.sync(sessionId, children))
     void tuiosMeta?.set(facts)
   } } : {}),

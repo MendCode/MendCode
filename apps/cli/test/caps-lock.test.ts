@@ -51,7 +51,7 @@ describe("Caps Lock across the pages", () => {
   const { CAPS_PAGES, foldForPage } = require("../src/ui/app/caps-pages") as typeof import("../src/ui/app/caps-pages")
   const pages = [...readFileSync(new URL("../src/ui/app/context.ts", import.meta.url), "utf8").match(/export type Page = ([^\n]+)/)![1]!.matchAll(/"([a-z-]+)"/g)].map((match) => match[1]!)
   /** Pages left as typed, each for a reason: a text field of its own, capitals tied to no single mode, or not a page of shortcuts. */
-  const AS_TYPED = new Set(["chat", "file", "sessions", "memory", "skills", "variants", "model-picker", "setup", "theme", "extension", "customize", "settings", "connect", "diagram", "sidebar", "memory-assistant", "plan-review", "prompt-mode", "compaction", "agent-commands", "worktrees", "warp", "git-commit", "git-pr", "git-init", "marketplace", "intro", "reviews", "changes", "console", "share", "keymap", "terminal-setup", "tutorial", "stash", "drafts", "mflow"])
+  const AS_TYPED = new Set(["chat", "file", "sessions", "memory", "skills", "variants", "model-picker", "setup", "theme", "extension", "customize", "settings", "connect", "diagram", "sidebar", "memory-assistant", "plan-review", "prompt-mode", "compaction", "agent-commands", "worktrees", "warp", "git-commit", "git-pr", "git-init", "marketplace", "intro", "reviews", "changes", "console", "share", "keymap", "terminal-setup", "tutorial", "stash", "drafts", "mflow", "bot-form"])
   const fake = (page: string) => ({ page, historyState: { editing: false }, queueState: { edit: undefined }, usageState: { weatherInput: undefined }, loopsState: { form: undefined }, acpState: { form: undefined }, environmentPage: undefined }) as never
 
   test("every page is either folded or listed as read as typed", () => {

@@ -85,7 +85,7 @@ export interface AcpAgents {
 }
 
 /** `<dataDir>/acp-agents.json`, cached by modification time so editing it applies to the next turn without a restart. */
-export function createAcpAgents({ dir, catalogEfforts, displayName }: { dir: string; /** The agent's own name ("OpenCode" for `opencode`), from the ACP registry; the id otherwise. */ displayName?(agent: string): string | undefined; /** The levels a catalog names for one of an agent's models (OpenCode's `provider/model` ids are models.dev's), until the agent showed its own. */ catalogEfforts?(model: string): ReasoningEffort[] | undefined }): AcpAgents {
+export function createAcpAgents({ dir, catalogEfforts, displayName, extra }: { dir: string; /** Agents an app's connector offers (experimental bots); the file wins on a name both give. */ extra?(): Readonly<Record<string, AcpAgentConfig>>; /** The agent's own name ("OpenCode" for `opencode`), from the ACP registry; the id otherwise. */ displayName?(agent: string): string | undefined; /** The levels a catalog names for one of an agent's models (OpenCode's `provider/model` ids are models.dev's), until the agent showed its own. */ catalogEfforts?(model: string): ReasoningEffort[] | undefined }): AcpAgents {
   const file = join(dir, ACP_AGENTS_FILE)
   const modelsFile = join(dir, ACP_MODELS_FILE)
   let cached: { stamp: string; loaded: LoadedAcpAgents } | undefined
@@ -108,6 +108,12 @@ export function createAcpAgents({ dir, catalogEfforts, displayName }: { dir: str
   }
 
   function load(): LoadedAcpAgents {
+    const configured = loadFile()
+    const offered = extra?.()
+    return offered && Object.keys(offered).length ? { agents: { ...offered, ...configured.agents }, issues: configured.issues } : configured
+  }
+
+  function loadFile(): LoadedAcpAgents {
     let stamp: string
     try {
       stamp = fileSignature(statSync(file))

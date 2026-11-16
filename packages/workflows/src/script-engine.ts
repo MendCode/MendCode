@@ -126,7 +126,7 @@ export function answerText(answer: string): string {
   return answer.replace(/```(?:TASK_RESULT|WORKFLOW_OUTPUT)\b[\s\S]*?```/g, "").trim()
 }
 
-type AgentCall = { identity: unknown; build(id: string): unknown; mode: "read" | "work"; label: string; title: string; phase?: string; isolated: boolean; detail: boolean }
+type AgentCall = { identity: unknown; build(id: string): unknown; mode: "read" | "work"; label: string; title: string; phase?: string; isolated: boolean; lane?: string; detail: boolean }
 
 function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: string } {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000) return { error: "agent(prompt): the prompt must be 1 to 8000 characters" }
@@ -162,6 +162,7 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
     title,
     ...(phase ? { phase } : {}),
     isolated: worktree || cwd !== undefined,
+    ...(cwd ? { lane: cwd.replace(/\/+$/, "") || "/" } : {}),
     detail: options.detail === true,
     build: (id: string) => ({
       kind: "agent",
@@ -333,13 +334,13 @@ export function createScriptEngine(ctx: Context) {
     })
   }
 
-  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; cwd?: string; stdinBytes?: number }) {
+  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; lane?: string; cwd?: string; stdinBytes?: number }) {
     const routed = spec.kind === "agent" ? { ...(spec.engine ? { engine: spec.engine } : {}), ...(spec.model ? { modelId: spec.model.model } : {}) } : {}
     const entry: SpecEntry = { spec, key, ...(extra.cwd ? { cwd: extra.cwd } : {}), ...(extra.stdinBytes !== undefined ? { stdinBytes: extra.stdinBytes } : {}) }
     write(workflowId, `spec:${spec.id}`, entry)
     specs.set(`${workflowId}/${spec.id}`, entry)
     scriptSpecRegistry.set(workflowId, spec)
-    ctx.update(workflowId, (run) => addScriptTask(run, { id: spec.id, title: spec.title, kind: spec.kind, ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.label ? { label: extra.label } : {}), ...(extra.phase ? { phase: extra.phase } : {}), ...(extra.isolated ? { isolated: true } : {}), ...routed }, ctx.clock.now()))
+    ctx.update(workflowId, (run) => addScriptTask(run, { id: spec.id, title: spec.title, kind: spec.kind, ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.label ? { label: extra.label } : {}), ...(extra.phase ? { phase: extra.phase } : {}), ...(extra.isolated ? { isolated: true } : {}), ...(extra.lane ? { lane: extra.lane } : {}), ...routed }, ctx.clock.now()))
   }
 
   function agentCall(workflowId: WorkflowId, runtime: HostRuntime, id: number, message: Record<string, unknown>) {
@@ -363,7 +364,7 @@ export function createScriptEngine(ctx: Context) {
         runtime.waiters.delete(id)
         return pauseForCap(workflowId, reason)
       }
-      createTask(workflowId, spec.data, key, { mode: normalized.mode, label: normalized.label, ...(normalized.phase ? { phase: normalized.phase } : {}), isolated: normalized.isolated })
+      createTask(workflowId, spec.data, key, { mode: normalized.mode, label: normalized.label, ...(normalized.phase ? { phase: normalized.phase } : {}), isolated: normalized.isolated, ...(normalized.lane ? { lane: normalized.lane } : {}) })
     }
     deliver(workflowId)
   }

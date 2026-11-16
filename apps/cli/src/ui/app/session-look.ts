@@ -1,7 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import type { SidebarWidget } from "@mendcode/protocol"
-import { normalizeTuiProfile, type TuiProfile } from "../../view/tui-profile"
+import { normalizeTuiProfile, panelStarted, type TuiProfile } from "../../view/tui-profile"
 import { panelChoiceOf, presetOf, resolvePanel, type PanelChoice } from "../../view/sidebar-spec"
 import type { AppContext } from "./context"
 
@@ -93,6 +93,17 @@ export function keepSessionLook(ctx: AppContext, patch: Partial<TuiProfile>, pan
   if (!input.dataDir) return
   const saved = writeSessionLook(input.dataDir, state.sessionLook)
   if (!saved.ok) ctx.fail(saved.error)
+}
+
+/** A new chat was just entered: `panelStart` (customize → Sidebar & panel) says whether it opens with the right panel, unless the chat already has a panel choice of its own. */
+export function startNewChatPanel(ctx: AppContext) {
+  const { state } = ctx
+  if (state.sessionLook.get(state.sessionId)?.rightSidebar !== undefined) return
+  const next = panelStarted(state.tuiProfile)
+  if (next === state.tuiProfile) return
+  state.tuiProfile = next
+  state.rightScroll = 0
+  ctx.requestFrame()
 }
 
 /**

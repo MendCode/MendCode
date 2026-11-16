@@ -271,6 +271,8 @@ Ctrl+S opens sessions on an empty home; its queue behavior during chat is unchan
 
 Agent View lists the waiting, looping and working sessions whose folder is the one MendCode runs in (a folder inside it is another project, whose sessions show on its own home). The user's home folder is no exception: opened in `~`, it lists the sessions started in `~`.
 
+With `experimental.bots` on, Agent View ends with a Bots block while at least one bot is not idle: one row per state (`working`, `waiting` for you, `problem`), in that order, each listing the bots in that state as their icon and short name, as many as fit the width, then `+ N more`. Idle bots are not listed, MendCode's bots and those of other apps (Hermes) alike. On a narrow terminal the names go first and the icons stay, then the rest folds into `+ N`. Down from the prompt walks the sessions and then the bots; Enter or a click on a bot opens its most recent chat (the one at work first), or its page when it has none. The block gives way before a session at work does: on a short terminal it loses rows, then disappears. The list is asked once when the home first draws and follows the same pushes as the left sidebar, with no polling.
+
 Sessions that already run or wait for input in other terminals are there from the start, and its spinners and clocks move while one works.
 
 Under Completed, as in v1, come the three most recently finished conversations of the last 30 days (not archived, not sub-agents), with how long ago each ended.

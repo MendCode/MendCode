@@ -33,11 +33,12 @@ const toInfo = (agent: FoundAgent): AgentInfo => ({
   ...(agent.deny ? { deny: agent.deny } : {}),
   ...(agent.permission ? { permission: agent.permission } : {}),
   ...(agent.permissionRules ? { permissionRules: agent.permissionRules } : {}),
+  ...(agent.bot ? { bot: { ...agent.bot, origin: agent.bot.origin } } : {}),
   trusted: agent.trusted,
 })
 
 const toProfile = (agent: FoundAgent): AgentProfile => {
-  const { file: _file, source: _source, pkg: _pkg, trusted: _trusted, hidden: _hidden, disable: _disable, color: _color, ...profile } = agent
+  const { file: _file, source: _source, pkg: _pkg, trusted: _trusted, hidden: _hidden, disable: _disable, color: _color, bot: _bot, ...profile } = agent
   return profile
 }
 
@@ -59,6 +60,18 @@ export function createAgentRegistry(options: {
   select?(sessionId: SessionId, name: string): void
   /** Whether a model id is in the catalog: the `model` of a Claude agent file applies only then. */
   modelExists?(id: string): boolean
+  /** Experimental bots: the memory a bot's turn adds to its prompt in `directory`; absent while the flag is off. */
+  botMemory?(name: string, directory: string): string
+  /** Experimental bots: the recent-activity digest and the hint to search past chats, added to a bot's turn after its memory; absent while the flag is off. */
+  botRecall?(name: string, sessionId: SessionId): string
+  /** The bot's skills index (names and one line each, capped), added after its personality. */
+  botSkills?(name: string): string
+  /** The sessions active right now in every folder (capped), added after the digest. */
+  botOverview?(name: string, sessionId: SessionId): string
+  /** The last lines of a bot's prompt: where to look deeper and how to learn. */
+  botHint?(name: string): string
+  /** Experimental bots flag: while on, a bot's turn opens with who it is. */
+  botsOn?(): boolean
 }) {
   const found = (directory: string) => {
     const result = readLayerAgents(options.layers(directory), { projectTrusted: options.isTrusted(directory), modelExists: options.modelExists })
@@ -106,7 +119,22 @@ export function createAgentRegistry(options: {
       if (!directory) return undefined
       const name = override ?? options.selected(sessionId) ?? "build"
       const agent = usable(directory).find((candidate) => candidate.name === name && (override || options.isChild?.(sessionId) || candidate.mode !== "subagent"))
-      if (agent) return { ...toProfile(agent), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+      if (agent) {
+        const profile = toProfile(agent)
+        const isBot = agent.bot && agent.source === "user"
+        const memory = isBot ? options.botMemory?.(agent.name, directory) : undefined
+        const live = isBot && options.botsOn?.() === true
+        // A bot knows who it is even when its personality is a few words: the name and description come first, then the personality, then the memory.
+        const identity = isBot && options.botsOn?.() ? `You are ${agent.name}, a MendCode bot.${agent.description ? ` ${agent.description.replace(/[.\s]+$/, "")}.` : ""}` : ""
+        // Then what it has been doing in the last day and where to look deeper (bot-recall.ts), after its notes.
+        const recall = live ? options.botRecall?.(agent.name, sessionId) : undefined
+        // Order of a bot's prompt: who it is, its personality, its skills index, its memory, what it did lately, what is active now, how to learn and look deeper.
+        const skills = live ? options.botSkills?.(agent.name) : undefined
+        const overview = live ? options.botOverview?.(agent.name, sessionId) : undefined
+        const hint = live ? options.botHint?.(agent.name) : undefined
+        const prompt = [identity, profile.prompt, skills, memory, recall, overview, hint].filter(Boolean).join("\n\n")
+        return { ...profile, ...(identity || memory || recall || skills || overview || hint ? { prompt } : {}), ...(isBot && options.botsOn?.() ? { botTurn: true as const } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+      }
       if (name === "plan" && !disabled(directory, name)) return { name: "plan", description: "Plan mode", mode: "primary", prompt: "", permission: "plan" }
       return override || options.isChild?.(sessionId) ? BUILTIN_SUBAGENTS.find((agent) => agent.name === name && !disabled(directory, name)) : undefined
     },

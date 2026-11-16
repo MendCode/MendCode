@@ -13,6 +13,7 @@ import { renderHeaderSlot } from "../../view/topbar"
 import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
 import { agentThreadHeader, threadState } from "../../view/agent-thread-header"
 import { parentTitle, viewedAgent } from "./agent-cue"
+import { botAccent } from "./bot-accent"
 import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
@@ -37,7 +38,7 @@ import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
 import { backgroundRows, backgroundName } from "../../view/background-row"
 import { linkRows } from "../../view/links"
-import { homeLook, renderWelcomeReplacement } from "../../view/home"
+import { homeLook, renderWelcomeReplacement, type HomeBots } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
 import { createHomeMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
@@ -133,7 +134,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const plainFrame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
     // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
     const viewed = inlineView || home ? undefined : viewedAgent(state)
-    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : plainFrame
+    // A chat with a bot wears the bot's colour, subtly: the rules and the lead glyph, nothing else (a sub-agent's own colour wins).
+    const accent = inlineView || viewed || !rich ? undefined : botAccent(state, () => ctx.requestFrame())
+    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : accent ? tintFrame(plainFrame, accent.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
     const statusRoom = width - PROMPT_MARGIN * 2 - 6
     const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined
@@ -517,6 +520,13 @@ export function createChatRows(ctx: AppContext, actions: {
     // A pet mascot belongs to the pet companion (full tier): below it, and wherever its picture cannot go, the home keeps the ASCII Mend.
     const mascot = homeMascot.art()
     const profile = state.tuiProfile
+    // Experimental bots: those at work, waiting or in trouble under the Agent View; the module loads here, on the first home frame with the flag on.
+    let botHits: typeof homeHits = []
+    let bots: HomeBots | undefined
+    if (state.settingsNow.experimental?.bots === true && !input.remote && profile.homeRightPanel === "agentManager") {
+      if (state.homeBots) bots = state.homeBots.view({ ascii: asciiGlyphs(), placed: (hits) => { botHits = hits.map((hit) => ({ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.id })) } })
+      else void import("./home-bots").then((loaded) => { state.homeBots ??= loaded.createHomeBots(ctx); ctx.requestFrame() }).catch(() => undefined)
+    }
     const drawn = ctx.views.draw("home", {
       screenHeight: input.screen.size.height,
       root,
@@ -528,8 +538,8 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
-    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}) } })
-    homeHits = drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : []))
+    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}), ...(bots ? { bots } : {}) } })
+    homeHits = [...drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : [])), ...botHits]
     return drawn.lines
   }
 

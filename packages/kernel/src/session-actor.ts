@@ -13,7 +13,7 @@ import type {
   Settings,
   TurnId,
 } from "@mendcode/protocol"
-import type { createIdFactory } from "@mendcode/protocol"
+import type { createIdFactory, SessionOrigin } from "@mendcode/protocol"
 import type { Clock, TimerHandle } from "./clock"
 import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, QueuedMessage, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
 import type { Scope } from "./scope"
@@ -77,7 +77,7 @@ type ActiveTurn = {
 const MAX_AGENT_ITEMS = 500
 
 type Message =
-  | { kind: "command"; command: ActorCommand; authorityText?: string; reply(result: ActorResult): void }
+  | { kind: "command"; command: ActorCommand; authorityText?: string; origin?: SessionOrigin; reply(result: ActorResult): void }
   | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
   | { kind: "pause"; paused: boolean; keepHeld?: boolean; reply(paused: boolean): void }
   | { kind: "restart.release"; reply(released: boolean): void }
@@ -481,7 +481,7 @@ export function createSessionActor(options: SessionActorOptions) {
       if (followUpQueueId && text) {
         // Persist the queue entry before completion. A recovered queue remains held after a restart.
         queue.unshift({ queueId: followUpQueueId, text, attachments: [], alone: true })
-        emit({ type: "queue.added", sessionId, queueId: followUpQueueId, text, attachments: [] })
+        emit({ type: "queue.added", sessionId, queueId: followUpQueueId, text, attachments: [], origin: "auto" })
         emitQueue()
       }
       compactionUpdated(turn, outcome.compacted ? "packed" : "skipped", followUpQueueId, outcome.compacted ? undefined : outcome.note)
@@ -622,7 +622,8 @@ export function createSessionActor(options: SessionActorOptions) {
   const waiting = () => queue.length + sent.length
   const queueFull = (): ActorResult => ({ ok: false, code: "busy", message: `[ACTOR]: the queue already holds ${MAX_QUEUE_ENTRIES} messages; send this one after some of them ran` })
 
-  function onCommand(command: ActorCommand, authorityText?: string): ActorResult {
+  /** `origin`: who sent the message, decided by the daemon from the connection; a caller that names none is the daemon's own work. */
+  function onCommand(command: ActorCommand, authorityText?: string, origin: SessionOrigin = "auto"): ActorResult {
     if (command.sessionId !== sessionId) return { ok: false, code: "unknown_session", message: "[ACTOR]: command for another session" }
     switch (command.type) {
       case "user.submit": {
@@ -642,7 +643,7 @@ export function createSessionActor(options: SessionActorOptions) {
           ? { text: `[while the session was stopped, this happened]\n${waited.map((notice) => notice.text).join("\n\n")}\n\n[the user's message]\n${command.text}`, displayText: command.displayText ?? command.text, authorityText: authorityText ?? command.text }
           : {}
         // Stored first: a message the store refuses (too large once serialized) changes nothing and is answered as refused.
-        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}) }))
+        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}), origin }))
         if (stored) return stored
         for (const notice of waited) queue.splice(queue.indexOf(notice), 1)
         const entry: QueueEntry = { queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}), ...(delivery ? { delivery } : {}) }
@@ -662,7 +663,7 @@ export function createSessionActor(options: SessionActorOptions) {
         if (waiting() >= MAX_QUEUE_ENTRIES) return queueFull()
         const queueId = ids("queue")
         const local = command.local ? { local: true as const } : {}
-        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}) }))
+        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}), origin }))
         if (stored) return stored
         queue.push({ queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}) })
         held = false
@@ -849,7 +850,7 @@ export function createSessionActor(options: SessionActorOptions) {
         // A command always gets its answer: one that throws is refused instead of leaving its caller waiting.
         let result: ActorResult
         try {
-          result = onCommand(message.command, message.authorityText)
+          result = onCommand(message.command, message.authorityText, message.origin)
         } catch (error) {
           result = { ok: false, code: "internal", message: `[ACTOR]: ${error instanceof Error ? error.message : String(error)}` }
         }
@@ -1018,8 +1019,8 @@ export function createSessionActor(options: SessionActorOptions) {
 
   return {
     sessionId,
-    handle(command: ActorCommand, authorityText?: string) {
-      return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), reply }))
+    handle(command: ActorCommand, authorityText?: string, origin?: SessionOrigin) {
+      return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), ...(origin ? { origin } : {}), reply }))
     },
     interrupt(reason: InterruptReason, cause?: InterruptCause) {
       return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))

@@ -1,6 +1,8 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { CommandReply } from "@mendcode/client"
-import { markAnimates, renderSessionSidebar, SETTLED_ROW, SIDEBAR_WIDTH, sessionMark, sidebarStops } from "../src/view/sidebar"
+import { markAnimates, renderSessionSidebar, SETTLED_MORE, SETTLED_ROW, SIDEBAR_WIDTH, sessionMark, sidebarStops } from "../src/view/sidebar"
+import { mergeActivity } from "../src/view/session-activity"
+import { autoSettled } from "../src/view/sidebar-marks"
 import { glyphSet } from "../src/ui/theme"
 import { textWidth } from "../src/view/wrap"
 import { appHarness, cleanTemps, conversation, plain } from "./session-ui-harness"
@@ -56,7 +58,7 @@ describe("one row per session with a state symbol", () => {
     for (const line of out.rows) expect(textWidth(plain(line))).toBe(SIDEBAR_WIDTH)
     const long = plain(lineOf(out, "A title"))
     expect(long).toContain("…")
-    expect(long).toMatch(/… {2,}4m #412 │$/)
+    expect(long).toMatch(/… {2,}4m #412 open │$/)
     expect(plain(lineOf(out, "Short"))).toMatch(/ 3h ↳1 │$/)
     expect(plain(lineOf(out, "Short")).indexOf("Short")).toBe(plain(lineOf(out, "A title")).indexOf("A title"))
     expect(lineOf(out, "#412").find((span) => span.text === " #412")?.fg).toBe("success")
@@ -121,7 +123,7 @@ describe("one row per session with a state symbol", () => {
 
 describe("the sessions sidebar in the app", () => {
   const asReply = (reply: unknown) => reply as CommandReply
-  function sidebarApp() {
+  function sidebarApp(moreSettled = 0) {
     const h = appHarness({
       width: 160,
       height: 36,
@@ -131,6 +133,7 @@ describe("the sessions sidebar in the app", () => {
           { sessionId: h.sessionId, directory: "/work/app", title: "Open here", createdAt: 0, updatedAt: NOW, lastSeq: 0, state: "idle", queued: 0 },
           { sessionId: "other", directory: "/work/app", title: "Elsewhere", createdAt: 0, updatedAt: NOW, lastSeq: 0, state: "idle", queued: 0 },
           { sessionId: "done", directory: "/work/app", title: "Put away", createdAt: 0, updatedAt: NOW - DAY, lastSeq: 0, state: "idle", queued: 0, archivedAt: NOW },
+          ...Array.from({ length: moreSettled }, (_, n) => ({ sessionId: `old${n}`, directory: "/work/app", title: `Old ${String(n).padStart(2, "0")}`, createdAt: 0, updatedAt: NOW - DAY - n, lastSeq: 0, state: "idle", queued: 0, archivedAt: NOW - n - 1 })),
         ] } })
         : undefined,
     })
@@ -183,7 +186,7 @@ describe("the sessions sidebar in the app", () => {
     h.app.render()
     expect(side(h).join("\n")).not.toContain("Put away")
     await h.app.onKey("\x1b[D")
-    await h.app.onKey("\x1b[B")
+    // The open session is the second stop; one down reaches Settled (a second would wrap to the first row).
     await h.app.onKey("\x1b[B")
     await h.app.onKey("\r")
     expect(side(h).join("\n")).toContain("Put away")
@@ -192,5 +195,143 @@ describe("the sessions sidebar in the app", () => {
     await h.app.onKey(`\x1b[<0;6;${settledRow + 1}M`)
     await h.app.onKey(`\x1b[<0;6;${settledRow + 1}m`)
     expect(side(h).join("\n")).not.toContain("Put away")
+  })
+
+  test("Enter on the last + N more row selects the first session it revealed instead of losing the selection", async () => {
+    // One live pair, then 11 settled: the shelf lists 10 and a `+ 1 more` row whose page takes the row away.
+    const h = sidebarApp(10)
+    await Bun.sleep(5)
+    h.app.render()
+    await h.app.onKey("\x1b[D")
+    await h.app.onKey("\x1b[B")
+    await h.app.onKey("\r")
+    const selected = () => side(h).find((line) => /^ › /.test(line))
+    for (let turn = 0; turn < 20 && !selected()?.includes("+ 1 more"); turn++) await h.app.onKey("\x1b[B")
+    expect(selected()).toContain("+ 1 more")
+    await h.app.onKey("\r")
+    h.app.render()
+    expect(side(h).join("\n")).not.toContain("more")
+    expect(selected()).toContain("Old 09")
+    expect(h.sentOf("session.open")).toHaveLength(0)
+  })
+})
+
+describe("T3-style marks on the rows", () => {
+  const pr = (state: string, extra: Record<string, unknown> = {}) => ({ lifecycle: { pr: { number: 812, url: "u", title: "t", state, branch: "feat/sidebar", checkedAt: NOW - DAY, ...extra } } })
+
+  test("a running row counts up from its turn's start; an idle row keeps its age", () => {
+    const out = draw([row("a", "Busy", { state: "tool", since: NOW - (2 * MINUTE + 14_000), updatedAt: NOW - 9 * DAY }), row("b", "Calm", { updatedAt: NOW - 3 * 60 * MINUTE }), row("c", "Busy no start", { state: "tool", updatedAt: NOW - 5 * MINUTE })], { header: false })
+    expect(plain(lineOf(out, "Busy")).trimEnd()).toMatch(/2m14s │$/)
+    expect(plain(lineOf(out, "Calm"))).toMatch(/ 3h │$/)
+    // Without a start time the age shows, as before.
+    expect(plain(lineOf(out, "Busy no start"))).toMatch(/ 5m │$/)
+    const later = draw([row("a", "Busy", { state: "tool", since: NOW - 2 * MINUTE - 14_000 })], { now: NOW + 46_000 })
+    expect(plain(lineOf(later, "Busy"))).toMatch(/3m00s │$/)
+  })
+
+  test("waiting marks differ: approval, question and plan; failure keeps its cross", () => {
+    const out = draw([
+      row("a", "Approve", { state: "waiting_approval", pending: "Run ls", pendingKind: "approval" }),
+      row("b", "Ask", { state: "waiting_approval", pendingKind: "question" }),
+      row("c", "Plan", { state: "waiting_approval", pendingKind: "plan" }),
+      row("d", "Old daemon", { state: "waiting_approval" }),
+      row("e", "Broken", { state: "error" }),
+    ], { blink: true })
+    const mark = (title: string) => { const span = lineOf(out, title).find((span) => span.text.trim() && span.text !== " ")!; return { ...span, text: span.text.trim() } }
+    expect(mark("Approve")).toMatchObject({ text: "?", fg: "warning" })
+    expect(mark("Ask")).toMatchObject({ text: "◎", fg: "info" })
+    expect(mark("Plan")).toMatchObject({ text: "◈", fg: "accent" })
+    expect(mark("Old daemon")).toMatchObject({ text: "?", fg: "warning" })
+    expect(mark("Broken")).toMatchObject({ text: "✗", fg: "error" })
+    expect(sessionMark({ sessionId: "x", title: "", state: "waiting_approval", queued: 0, updatedAt: 0, pendingKind: "question" }, false)).toBe("question")
+    expect(markAnimates("question")).toBe(true)
+    // The header counts every kind that waits for you.
+    expect(plain(out.rows[0]!)).toContain("? 4")
+    // Detail lines say what is asked.
+    const picked = draw([row("b", "Ask", { state: "waiting_approval", pendingKind: "question" })], { current: "b", selected: "b", focused: true })
+    expect(textOf(picked).join("\n")).toContain("asks you a question")
+  })
+
+  test("a PR shows its number and state word in the state colour; the word survives a long title", () => {
+    const out = draw([row("a", "Add sidebar", pr("MERGED")), row("b", "Fix", pr("OPEN")), row("c", "Drop", pr("CLOSED")), row("d", "A very long title that cannot fit in the row at all", pr("MERGED", { number: 99999999 }))], { header: false })
+    expect(plain(lineOf(out, "Add sidebar"))).toMatch(/ #812 merged │$/)
+    expect(lineOf(out, "Add sidebar").find((span) => span.text === " merged")).toMatchObject({ fg: "accent" })
+    expect(lineOf(out, "Fix").find((span) => span.text === " open")).toMatchObject({ fg: "success" })
+    expect(lineOf(out, "Drop").find((span) => span.text === " closed")).toMatchObject({ fg: "error" })
+    const long = plain(lineOf(out, "A very long"))
+    expect(long).toContain("…")
+    expect(long).toMatch(/merged │$/)
+    expect(long).not.toContain("#9999")
+  })
+
+  test("the branch and worktree show on the selected row's detail line only", () => {
+    const sessions = [row("a", "Open one", pr("OPEN")), row("b", "Other one")]
+    const out = draw(sessions, { current: "x", selected: "a", focused: true, folder: { branch: "main", worktree: "wt-x" } })
+    const text = textOf(out).join("\n")
+    expect(text).toContain("feat/sidebar · worktree wt-x")
+    expect(text).not.toContain("main ·")
+    const plainRow = draw(sessions, { current: "x", folder: { branch: "main", worktree: "wt" } })
+    expect(textOf(plainRow).join("\n")).not.toContain("worktree")
+    // The folder's branch belongs to the open session only.
+    const open = draw([row("b", "Other one", { queued: 1 })], { current: "b", selected: "b", focused: true, folder: { branch: "main" } })
+    expect(textOf(open).join("\n")).toContain("main · 1 queued")
+    const other = draw([row("b", "Other one", { queued: 1 })], { current: "x", selected: "b", focused: true, folder: { branch: "main" } })
+    expect(textOf(other).join("\n")).not.toContain("main")
+  })
+
+  test("the Settled shelf shows 10, then `+ N more` reveals 25 at a time", () => {
+    const settled = Array.from({ length: 43 }, (_, n) => row(`s${String(n).padStart(2, "0")}`, `Old thing ${String(n).padStart(2, "0")}`, { archivedAt: 1 }))
+    const first = draw(settled, { settledOpen: true, height: 80 })
+    expect(textOf(first).filter((line) => line.includes("Old thing")).length).toBe(10)
+    expect(textOf(first).join("\n")).toContain("+ 33 more")
+    const page = draw(settled, { settledOpen: true, settledShown: 35, height: 80 })
+    expect(textOf(page).filter((line) => line.includes("Old thing")).length).toBe(35)
+    expect(textOf(page).join("\n")).toContain("+ 8 more")
+    expect(textOf(draw(settled, { settledOpen: true, settledShown: 60, height: 80 })).join("\n")).not.toContain("more")
+    const hits = first.hits.map((hit) => hit.sessionId)
+    expect(hits).toContain(SETTLED_MORE)
+    const ids = settled.map((entry) => entry.sessionId)
+    expect(sidebarStops(settled as never, true)).toEqual([SETTLED_ROW, ...ids.slice(0, 10), SETTLED_MORE])
+    expect(sidebarStops(settled as never, true, 60)).toEqual([SETTLED_ROW, ...ids])
+  })
+})
+
+describe("a merged or closed PR settles its session", () => {
+  const settle = (over: Record<string, unknown>, current = "none") => autoSettled([{ sessionId: "a", state: "idle", queued: 0, updatedAt: NOW - DAY, lifecycle: { pr: { number: 1, url: "u", title: "t", state: "MERGED", branch: "b", checkedAt: NOW - 10 * MINUTE } }, ...over }] as never, current)[0] as { archivedAt?: number }
+
+  test("merged and closed settle; open, running, waiting, queued, pinned and the open session stay", () => {
+    expect(settle({}).archivedAt).toBe(NOW - 10 * MINUTE)
+    expect(settle({ lifecycle: { pr: { number: 1, url: "u", title: "t", state: "CLOSED", branch: "b", checkedAt: NOW - 10 * MINUTE } } }).archivedAt).toBe(NOW - 10 * MINUTE)
+    expect(settle({ lifecycle: { pr: { number: 1, url: "u", title: "t", state: "OPEN", branch: "b", checkedAt: NOW } } }).archivedAt).toBeUndefined()
+    expect(settle({ state: "tool" }).archivedAt).toBeUndefined()
+    expect(settle({ state: "waiting_approval" }).archivedAt).toBeUndefined()
+    expect(settle({ queued: 1 }).archivedAt).toBeUndefined()
+    expect(settle({ lifecycle: { pinnedAt: 1, pr: { number: 1, url: "u", title: "t", state: "MERGED", branch: "b", checkedAt: NOW } } }).archivedAt).toBeUndefined()
+    expect(settle({}, "a").archivedAt).toBeUndefined()
+  })
+
+  test("new activity after the PR check brings it back", () => {
+    expect(settle({ updatedAt: NOW - 5 * MINUTE }).archivedAt).toBeUndefined()
+  })
+
+  test("the settled session lands on the Settled shelf", () => {
+    const sessions = autoSettled([row("a", "Shipped", { lifecycle: { pr: { number: 1, url: "u", title: "t", state: "MERGED", branch: "b", checkedAt: NOW } }, updatedAt: NOW - DAY }), row("b", "Live")] as never, "b")
+    const out = draw(sessions as never, { header: false })
+    expect(textOf(out).join("\n")).toContain("Settled · 1")
+    expect(textOf(out).join("\n")).not.toContain("Shipped")
+  })
+})
+
+describe("the pushed live detail reaches the list", () => {
+  test("since and the kind of request follow each push and go with the turn", () => {
+    const base = [row("a", "One")] as never
+    const push = (extra: Record<string, unknown>) => ({ type: "session.activity", sessionId: "a", directory: "/d", title: "One", state: "tool", updatedAt: NOW, ...extra }) as never
+    const running = mergeActivity(base, push({ since: NOW - 5_000, tool: "Bash" }), { cap: 50, keep: "a" })[0] as { since?: number; tool?: string }
+    expect(running).toMatchObject({ since: NOW - 5_000, tool: "Bash" })
+    const asking = mergeActivity([running] as never, push({ state: "waiting_approval", since: NOW - 5_000, pending: "Pick one", pendingKind: "question" }), { cap: 50, keep: "a" })[0] as { pendingKind?: string }
+    expect(asking.pendingKind).toBe("question")
+    const done = mergeActivity([asking] as never, push({ state: "idle" }), { cap: 50, keep: "a" })[0] as { since?: number; pendingKind?: string }
+    expect(done.since).toBeUndefined()
+    expect(done.pendingKind).toBeUndefined()
   })
 })

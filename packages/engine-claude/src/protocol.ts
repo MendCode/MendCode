@@ -719,6 +719,20 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
      * A message the main agent sent to one of this turn's agents (`SendMessage`, its `toolUseId`): it shows in that agent's thread,
      * which reads it at its next step. False when the agent is not one of this turn's.
      */
+    /**
+     * An agent this process runs that no turn of it started: one launched before the process was replaced (a daemon restart) and
+     * started again by a message. It gets a background call in this turn, so its work fills a thread instead of being dropped.
+     */
+    /** A tool call this turn already showed: its own Agent call, not a sub-agent to adopt. */
+    knowsToolUse: (toolUseId: string) => tools.has(toolUseId) || agents.has(toolUseId),
+    adoptAgent(agent: { toolUseId: string; description: string; agent?: string }) {
+      if (agents.has(agent.toolUseId)) return
+      const itemId = input.newItemId()
+      agents.set(agent.toolUseId, itemId)
+      backgroundAgents.add(agent.toolUseId)
+      input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: `agent ${agent.description}`.slice(0, 200), subagent: true, agent: agent.agent ?? "agent", background: true } })
+      input.emit({ type: "item.completed", itemId, status: "ok", text: "running in the background", meta: { subagent: true, background: true } })
+    },
     sentToAgent(sent: { toolUseId: string; to: string; text: string }): boolean {
       const parent = agentIds.get(sent.to)
       if (!parent) return false

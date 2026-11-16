@@ -107,20 +107,26 @@ export function createThreadMcp(options: {
    * agents was started with an earlier turn's token; the next turn of the same session joins that process, so its token answers for
    * that session's live lease, and never for another session's or past the hour it was issued for.
    */
-  const retired = new Map<string, { sessionId: string; until: number }>()
+  const retired = new Map<string, { sessionId: string; until: number; /** False for a turn that was cancelled: its token is revoked, only still scrubbed from output. */ reusable: boolean }>()
   const RETIRED_MAX = 64
-  function retire(lease: Lease) {
+  function retire(lease: Lease, reusable: boolean) {
     const now = options.clock.now()
     for (const [token, entry] of retired) if (entry.until <= now) retired.delete(token)
     if (lease.born + MAX_MS <= now) return
-    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: lease.born + MAX_MS })
+    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: lease.born + MAX_MS, reusable })
     while (retired.size > RETIRED_MAX) retired.delete(retired.keys().next().value!)
   }
   /** The live lease of the session an ended turn's `bytes` token belonged to, when that token's hour has not run out. */
   function successor(bytes: Buffer): Lease | undefined {
     const entry = [...retired].find(([token]) => bytes.length === token.length && timingSafeEqual(bytes, Buffer.from(token)))?.[1]
-    if (!entry || entry.until <= options.clock.now()) return undefined
+    if (!entry?.reusable || entry.until <= options.clock.now()) return undefined
     return [...leases].reverse().find((lease) => lease.turn.sessionId === entry.sessionId && valid(lease))
+  }
+  /** `text` without the lease's token or any earlier token of its session: a kept process still holds the earlier one and may echo it. */
+  function redact(lease: Lease, text: string): string {
+    let out = text.replaceAll(lease.token, "[redacted]")
+    for (const [token, entry] of retired) if (entry.sessionId === lease.turn.sessionId) out = out.replaceAll(token, "[redacted]")
+    return out
   }
   const valid =(lease: Lease) => leases.has(lease) && !lease.controller.signal.aborted && !lease.turn.signal.aborted && lease.allowed() && options.clock.now() - lease.born < MAX_MS && options.clock.now() - lease.touched < IDLE_MS
 
@@ -163,7 +169,7 @@ export function createThreadMcp(options: {
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
     const name = message.params?.name as Name
     if (typeof name !== "string" || !Object.hasOwn(schemas, name)) return error(-32602, "Unknown tool")
-    const parsed = schemas[name].safeParse(JSON.parse(JSON.stringify(message.params?.arguments ?? {}).replaceAll(lease.token, "[redacted]")))
+    const parsed = schemas[name].safeParse(JSON.parse(redact(lease, JSON.stringify(message.params?.arguments ?? {}))))
     if (!parsed.success) return error(-32602, "Invalid tool arguments")
     const retryId = "clientRequestId" in parsed.data ? parsed.data.clientRequestId : undefined
     const retryKey = typeof retryId === "string" ? `${name}:${retryId}` : undefined
@@ -182,12 +188,12 @@ export function createThreadMcp(options: {
       const result = await lease.run(name, parsed.data, lease.controller.signal)
       if (!valid(lease)) return reply(content("Bridge released or disabled", true))
       const text = result.ok ? result.output : result.message
-      const output = content(text.replaceAll(lease.token, "[redacted]"), !result.ok)
-      if (retryKey) lease.retries.set(retryKey, { digest, result: result.ok ? { ok: true, output: text.replaceAll(lease.token, "[redacted]") } : { ok: false, message: text.replaceAll(lease.token, "[redacted]") } })
+      const output = content(redact(lease, text), !result.ok)
+      if (retryKey) lease.retries.set(retryKey, { digest, result: result.ok ? { ok: true, output: redact(lease, text) } : { ok: false, message: redact(lease, text) } })
       return reply(output)
     } catch (error) {
       // The cause goes back to the engine that called (a limit, an unknown task, a model that does not exist): "failed" alone left it guessing.
-      const cause = (error instanceof Error ? error.message : String(error)).replaceAll(lease.token, "[redacted]").slice(0, 2_000)
+      const cause = redact(lease, error instanceof Error ? error.message : String(error)).slice(0, 2_000)
       return reply(content(cause ? `Thread operation failed: ${cause}` : "Thread operation failed", true))
     }
     finally {
@@ -244,7 +250,7 @@ export function createThreadMcp(options: {
           }
           if (input.receipts && typeof args.clientRequestId === "string") return input.receipts.run({ project: input.receipts.project, owner: input.turn.sessionId, operation: name, requestId: args.clientRequestId, args, execute: async () => {
             const result = await execute()
-            return result.ok ? { ok: true, output: result.output.replaceAll(lease.token, "[redacted]") } : { ok: false, message: result.message.replaceAll(lease.token, "[redacted]") }
+            return result.ok ? { ok: true, output: redact(lease, result.output) } : { ok: false, message: redact(lease, result.message) }
           } })
           const previous = typeof args.clientRequestId === "string" ? lease.retries.get(`${name}:${args.clientRequestId}`) : undefined
           if (previous) return previous.result
@@ -252,7 +258,8 @@ export function createThreadMcp(options: {
         },
         release() {
           if (!leases.delete(lease)) return
-          retire(lease)
+          // A cancelled turn revokes its token; only a turn that ended on its own leaves it for the next turn of the session.
+          retire(lease, !input.turn.signal.aborted)
           controller.abort()
           input.turn.signal.removeEventListener("abort", lease.release)
           expiry.cancel()
@@ -276,7 +283,7 @@ export function createThreadMcp(options: {
         } else {
           args = []
         }
-        const scrub = (text: string) => text.replaceAll(lease.token, "[redacted]")
+        const scrub = (text: string) => redact(lease, text)
         const stream = () => {
           let held = ""
           return {

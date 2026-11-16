@@ -23,6 +23,7 @@ export const CAPS_PAGES: Readonly<Record<string, CapsRule>> = {
   loops: { typing: (state) => state.loopsState.form !== undefined },
   acp: { typing: (state) => state.acpState.form !== undefined },
   whatsnew: { keep: "G", typing: (state) => state.whatsNew?.search.open === true },
+  bot: {},
 }
 
 /** Caps Lock makes `q` arrive as `Q`, in the legacy encoding and in kitty's text field alike, so a capital is not told from shift+letter: on a listed page it reads as the letter, except where the page gives the capital a meaning. */

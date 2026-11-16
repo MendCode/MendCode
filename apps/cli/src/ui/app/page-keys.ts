@@ -168,6 +168,8 @@ export function createPageKeys(ctx: AppContext, actions: {
     }
     if (state.page === "messages" || state.page === "export") return actions.transcriptActionsKey(key)
     if (state.page === "diagnostics") { await actions.diagnosticsKey(key); return }
+    if (state.page === "bot") { await state.botCard?.key(key); requestFrame(); return }
+    if (state.page === "bot-form") { await state.botForm?.key(key); requestFrame(); return }
     if (state.page === "worktrees" || state.page === "warp") { await actions.worktreesKey(key); return }
     if (state.page === "compound") { await actions.compoundKey(key); return }
     if (state.page === "ai-config") { await actions.aiConfigKey(key); return }
@@ -399,7 +401,7 @@ export function createPageKeys(ctx: AppContext, actions: {
       }
     } else if (state.page === "customize" || state.page === "settings" && state.settingsPageState.tui) {
       const modules = [...new Set([...(state.ext?.loaded ?? []).filter((entry) => entry.tui).map((entry) => entry.name), ...(state.ext?.problems ?? []).map((problem) => problem.extension)])].map((name) => ({ name, enabled: !state.tuiProfile.disabledUiExtensions.includes(name), errors: [] }))
-      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state), { mode: state.mode, ...(state.ext?.slotOwner("footer.replace") ? { footerExtension: state.ext.slotOwner("footer.replace")! } : {}) })
+      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state), { mode: state.mode, ...(state.ext?.slotOwner("footer.replace") ? { footerExtension: state.ext.slotOwner("footer.replace")! } : {}), ...(state.settingsNow.experimental?.bots === true ? { bots: true } : {}) })
       state.customizeState = result.state
       const { action } = result
       if (action.type === "close") state.page = "chat"

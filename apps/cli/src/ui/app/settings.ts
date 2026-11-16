@@ -16,7 +16,7 @@ import { registerFooterPacks } from "../../view/footer-pack"
 import type { ThemesReport } from "@mendcode/protocol"
 import type { Settings, PermissionMode } from "@mendcode/protocol"
 import { featureOn } from "@mendcode/protocol/wire"
-import { readTuiProfile, normalizeTuiProfile, writeTuiProfile, type TuiProfile } from "../../view/tui-profile"
+import { readTuiProfile, normalizeTuiProfile, panelStarted, writeTuiProfile, type TuiProfile } from "../../view/tui-profile"
 import { keepSessionLook } from "./session-look"
 import { ACCESSIBLE_LOOK, NORMAL_LOOK } from "../../view/accessible"
 import { createProfileLayers } from "./profile-layers"
@@ -173,7 +173,7 @@ export function createSettings(ctx: AppContext, actions: {
     const held = new Set(stored ? profileLayers.userChanged({ ...patch, ...coupling }) : [])
     const own = Object.fromEntries(Object.entries({ ...patch, ...coupling }).filter(([key]) => !held.has(key))) as Partial<TuiProfile>
     state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...patch, ...coupling })
-    if (stored) state.profileBase = normalizeTuiProfile({ ...state.profileBase, ...own })
+    if (stored) state.profileBase = panelStarted(normalizeTuiProfile({ ...state.profileBase, ...own }))
     if (options.session) keepSessionLook(ctx, { ...patch, ...coupling }, options.panel)
     configureKeyLabels({ setting: state.tuiProfile.altLabel })
     input.screen.setKeyboard?.(keyboardWanted(state.tuiProfile.keyProtocol, input.platform))

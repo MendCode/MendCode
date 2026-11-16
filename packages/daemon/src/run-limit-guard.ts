@@ -1,6 +1,6 @@
 import type { ModelChoice, SessionId } from "@mendcode/protocol"
 import type { EnginePort } from "@mendcode/kernel"
-import type { RunLimits } from "./run-limits"
+import type { RunLimits, RunLimitsStore } from "./run-limits"
 
 /** A scripted run's limits on what the model may use: an allow-list, exclusions, or no network. */
 export const limitsTools = (limits: Pick<RunLimits, "tools" | "excludeTools" | "offline"> | undefined): boolean =>
@@ -30,4 +30,20 @@ export function withRunLimitGuard(input: {
       return input.base.runTurn(turn)
     },
   }
+}
+
+const TOOL_LIMIT_FIELDS = ["tools", "excludeTools", "offline"] as const
+
+/**
+ * Applies a `session.run.configure` patch and returns the limits to show the client. A patch that sets tool limits marks them as
+ * client-requested; a patch that leaves them alone (reading `/add-dir`, a new `maxSteps`) keeps the mark as it was, so the daemon's own
+ * exclusions on a bare child are never turned into limits a client asked for.
+ */
+export function configureRunLimits(store: RunLimitsStore, sessionId: SessionId, patch: Parameters<RunLimitsStore["configure"]>[1]): RunLimits {
+  const limits = store.configure(sessionId, patch)
+  const touched = TOOL_LIMIT_FIELDS.some((field) => patch[field] !== undefined)
+  const requested = touched ? limitsTools(limits) : limits.requestedTools === true
+  const marked = requested === (limits.requestedTools === true) ? limits : store.configure(sessionId, { requestedTools: requested || null })
+  const { requestedTools: _requested, ...shown } = marked
+  return shown
 }

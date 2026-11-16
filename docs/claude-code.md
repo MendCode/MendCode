@@ -182,6 +182,8 @@ A background sub-agent (`run_in_background`) keeps filling its thread after the 
 
 Its call says `running in the background` instead of Claude Code's note to its model. It stays in the Agents strip, including during later turns, while Claude Code still runs it.
 
+A sub-agent launched before the daemon restarted, and started again later by a message, gets a new thread in the turn that woke it, named by the agent's description, and its work shows there as it runs.
+
 A message the main agent sends to a sub-agent (`SendMessage`) shows in that sub-agent's thread as soon as it is sent. A running agent reads it at its next step; Claude Code does not cut a step short, so during a long step (such as the agent summarizing its own history) the message waits.
 
 A message sent to an agent that already ended starts it again. Its new work fills the same thread, whose header goes from `done` back to what it is doing, until it reports its next end.

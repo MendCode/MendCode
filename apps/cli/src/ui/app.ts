@@ -94,13 +94,13 @@ import { buildBindings, readKeybindings, type KeybindingFile } from "../extensio
 import type { TranscriptHooks } from "../extensions/hooks"
 import { createEditor } from "../view/editor"
 import { attachmentLabels } from "../view/attachments"
-import { createVim } from "../view/vim"
+import { createLazyVim } from "../view/vim-lazy"
 import { createDraftSync } from "./drafts"
 import { createComments } from "./app/comments"
 import { osc52Copy } from "./osc52"
 import { createPromptStash } from "./prompt-stash"
 import { placeholderFor, shellPlaceholderFor } from "../view/prompt-chrome"
-import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile } from "../view/tui-profile"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, panelStarted, readTuiProfile } from "../view/tui-profile"
 import { recoverProfile, profileFile } from "@mendcode/program/profile-history"
 import { ACCESSIBLE_LOOK } from "../view/accessible"
 import { homeTip } from "../view/home-tips"
@@ -333,6 +333,7 @@ export function createApp(input: AppInput) {
     onboarding: undefined,
     setupAdvanced: false,
     agentReport: undefined,
+    pendingBot: undefined,
     agentError: "",
     agentPicker: { selected: 0 },
     themePicker: { query: "", selected: 0 },
@@ -466,6 +467,8 @@ export function createApp(input: AppInput) {
     appState.reducedMotion = true
     appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...(appState.tuiProfile.accessible ? {} : ACCESSIBLE_LOOK) })
   }
+  // `panelStart` decides whether a new terminal opens the right panel (a session's own /panel choice, below, still wins).
+  appState.tuiProfile = panelStarted(appState.tuiProfile)
   appState.profileBase = { ...appState.tuiProfile }
   // What slash commands showed or hid in each session is that session's (session-look.ts): the one this terminal opens on gets its own back.
   appState.sessionLook = input.profile ? new Map() : readSessionLook(input.dataDir)
@@ -608,7 +611,7 @@ export function createApp(input: AppInput) {
     state: appState,
     now,
     editor,
-    vim: createVim(editor),
+    vim: createLazyVim(editor),
     scratchEditor,
     keybindingFile,
     stateLabels: STATE_LABEL,
@@ -722,6 +725,7 @@ export function createApp(input: AppInput) {
     endGoalEdit,
     loadEffectiveModel,
     restoreDraft,
+    loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
     loadEarlier,
@@ -1033,6 +1037,7 @@ export function createApp(input: AppInput) {
   const find = createFind(ctx, { chatWidth: () => transcriptWidth() })
   const inline = createInline(ctx)
   const { onKey, runKeyAction } = createKeys(ctx, {
+    changeProfile: (patch) => changeProfile(patch),
     openPathInView: () => filePick.run(),
     changesClick,
     gitClick: git.gitClick,
@@ -1068,6 +1073,7 @@ export function createApp(input: AppInput) {
     suggestionPool,
     runSlash: (...args) => runSlash(...args),
     chatWidth: (...args) => chatWidth(...args),
+    sidebarShown: (...args) => sidebarShown(...args),
     transcriptWidth: () => transcriptWidth(),
     pickApproval: (...args) => pickApproval(...args),
     pickQuestion: (...args) => pickQuestion(...args),
@@ -1190,6 +1196,7 @@ export function createApp(input: AppInput) {
     sessionTitle: (...args) => sessionTitle(...args),
     paletteItems: (...args) => paletteItems(...args),
     sidebarShown: (...args) => sidebarShown(...args),
+    sidebarCells: (...args) => sidebarCells(...args),
     rightLayout: (width) => { rightBar.ensureData(); return rightBar.layout(width) },
     fileOpen,
     rightRows: rightBar.rightRows,
@@ -1238,7 +1245,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, sidebarCells, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,
@@ -1434,6 +1441,9 @@ export function createApp(input: AppInput) {
       // A watch belongs to the connection, so a reconnect asks again.
       if (back && appState.statusLoaded) watchStatus()
       if (back) void tuiControl.register()
+      // Pushes may have been missed while the connection was down: the bots and other-folder lists are asked for whole.
+      if (back) appState.sidebarBots?.resync()
+      if (back) appState.homeBots?.resync()
       if (back) void reconcileDaemon()
       if (back) void verifySession().catch(() => undefined)
       // A new daemon has none of the old one's background work (an engine's agents ended with its process): the list is asked again.

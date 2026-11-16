@@ -148,7 +148,7 @@ export type AgentThread = {
   /** The model it runs on, when its engine says (Claude Code's sub-agents do), or until then the one its call asked for; never its parent's. */
   model?: string
 }
-type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last?: string; model?: string; ended?: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser?: true } }
+type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
 
 export type ImageRow = { sha256: string; index: number; row: number; rows: number; cols: number; col: number }
 
@@ -186,7 +186,7 @@ const GUTTER = 2
 /** How little of a tool card the full view shows: one row (`line`) or a short preview capped by kind (`brief`). */
 type ToolDensity = "line" | "brief"
 /** Calls whose card is a plan, a question or a lookup the reader acts on: the full view's density leaves them as they are. */
-const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code"])
+const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code", "bot_note", "bot_skill", "bot_schedule"])
 const DEFAULT_REASONING_ROWS = 7
 /**
  * Blocks laid out at first: the newest ones. Already loaded older blocks are laid out when the reader reaches
@@ -999,7 +999,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       // A thread opened after the view changed starts the way the conversation reads now.
       const transcript = createTranscript({ ...options, mode })
       if (appearanceChanged) transcript.setAppearance({ ...appearance, reasoning: reasoningVisibility, toolOutput })
-      threads.set(parent, (thread = { transcript, tools: 0 }))
+      threads.set(parent, (thread = { transcript, tools: 0, last: undefined, model: undefined, ended: undefined }))
     }
     // The thread reads the item as one of its own: without the mark, which would send it to a thread of the thread.
     let own: SessionEvent = event
@@ -1009,7 +1009,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       own = { ...event, meta }
     }
     // A message sent to an ended sub-agent starts it again (Claude Code's SendMessage): its new work reopens the thread, until it ends again.
-    if (event.type === "item.started" && thread.ended && !thread.ended.byUser) delete thread.ended
+    if (event.type === "item.started" && thread.ended && !thread.ended.byUser) thread.ended = undefined
     if (replayed) replayed.set(thread, [...(replayed.get(thread) ?? []), own])
     else thread.transcript.apply(own)
     if (event.type === "item.started" && event.kind === "tool_call") {
@@ -1018,7 +1018,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     }
     if (event.type === "item.completed" && event.meta?.agentEnd === true) {
       const count = (value: unknown) => (typeof value === "number" ? value : 0)
-      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), ...(event.meta.stoppedBy === "user" ? { byUser: true as const } : {}) }
+      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), byUser: event.meta.stoppedBy === "user" }
     }
     cache.delete(parent)
     invalidateCounts()
@@ -1300,8 +1300,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     // takes the events it has not seen through its own prepend.
     for (const thread of threads.values()) {
       thread.tools = 0
-      delete thread.last
-      delete thread.ended
+      thread.last = undefined
+      thread.ended = undefined
     }
     replayed = new Map()
     try {

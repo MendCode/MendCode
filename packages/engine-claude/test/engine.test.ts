@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1287,6 +1287,28 @@ describe("MCP servers changed during a turn", () => {
     expect(reported.at(-1)).toEqual([])
   })
 
+  test("stopping the engine ends every process even when reporting one's background tasks throws (a stopping daemon's closed database)", async () => {
+    const withAgent = () => fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Furnish offices" }] })
+        streamText(api, 0, "started")
+        api.push(result())
+      },
+    })
+    const closes: string[] = []
+    const { engine } = engineWith([withAgent(), withAgent()], {
+      onClose: (sessionId) => void closes.push(sessionId),
+      onBackground: (_sessionId, tasks) => { if (!tasks.length) throw new RangeError("Cannot use a closed database") },
+    })
+    const first = turnInput({ mode: () => "full" })
+    const second = turnInput({ mode: () => "full" })
+    await engine.runTurn(first.input)
+    await engine.runTurn(second.input)
+    engine.stop?.()
+    expect(closes.sort()).toEqual([first.input.sessionId, second.input.sessionId].sort())
+  })
+
   test("an ordinary turn keeps its process; only MCP commands and MCP config files count", async () => {
     const one = fakeClaude({
       onUser(api) {
@@ -1703,6 +1725,34 @@ describe("claude engine background tasks", () => {
     ])
     expect(late[0]!.event).toMatchObject({ meta: { tool: "read: /work/app/Cargo.toml" } })
     expect(late[3]!.event).toMatchObject({ text: "T7 done", meta: { agentEnd: true } })
+    h.engine.stop()
+  })
+
+  test("a sub-agent launched before the process was replaced and started again by a message opens its own thread instead of being dropped", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        // No Agent call in this process: the agent was launched by an earlier process of the session, and SendMessage starts it again.
+        api.push({ type: "assistant", message: { id: "msg_send", content: [{ type: "tool_use", id: "toolu_send", name: "SendMessage", input: { to: "a704", message: "go on" } }] } })
+        api.push({ type: "system", subtype: "task_started", task_id: "a704", tool_use_id: "toolu_old_agent", task_type: "local_agent", description: "Opus: furnish per PLAN.md", subagent_type: "general-purpose", prompt: "go on" })
+        api.push({ type: "assistant", parent_tool_use_id: "toolu_old_agent", message: { content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/work/app/office_furnish.py" } }] } })
+        streamText(api, 1, "sent")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    const call = turn.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    expect(call).toMatchObject({ kind: "tool_call", meta: { tool: "agent Opus: furnish per PLAN.md", background: true, agent: "general-purpose" } })
+    if (call?.type !== "item.started") throw new Error("no adopted call")
+    const own = turn.events.filter((event) => event.type === "item.started" && event.meta?.agentParent === call.itemId)
+    expect(own.some((event) => event.type === "item.started" && event.meta?.tool === "read: /work/app/office_furnish.py")).toBe(true)
+    // It keeps reporting after the turn: the turn's mapper stays for it.
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a704", tool_use_id: "toolu_old_agent", status: "completed", summary: "furnished", usage: { tool_uses: 3, total_tokens: 10, duration_ms: 5 } })
+    await Bun.sleep(10)
+    expect(late.at(-1)?.event).toMatchObject({ text: "furnished", meta: { agentParent: call.itemId, agentEnd: true } })
     h.engine.stop()
   })
 
@@ -2412,4 +2462,21 @@ test("Claude Code's own automatic compaction writes its summary in the user's la
   expect(readFileSync(`${languageDir}/${turn.input.sessionId}.txt`, "utf8")).toBe(printed)
   h.engine.stop()
   rmSync(languageDir, { recursive: true, force: true })
+})
+
+describe("retainAgentTurns", () => {
+  const mapper = (name: string, running: boolean) => ({ name, hasBackgroundAgents: () => running })
+
+  test("a mapper whose agent still runs outlives any number of later turns whose agents ended", () => {
+    let kept = [mapper("long", true)]
+    for (let turn = 1; turn <= 20; turn++) kept = retainAgentTurns([...kept, mapper(`short-${turn}`, false)])
+    expect(kept).toHaveLength(8)
+    expect(kept[0]!.name).toBe("long")
+    expect(kept.slice(1).map((entry) => entry.name)).toEqual(["short-14", "short-15", "short-16", "short-17", "short-18", "short-19", "short-20"])
+  })
+
+  test("with every mapper still running, the oldest leaves; under the limit nothing leaves", () => {
+    expect(retainAgentTurns(Array.from({ length: 9 }, (_, n) => mapper(`m${n}`, true))).map((entry) => entry.name)).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"])
+    expect(retainAgentTurns([mapper("a", false), mapper("b", true)]).map((entry) => entry.name)).toEqual(["a", "b"])
+  })
 })

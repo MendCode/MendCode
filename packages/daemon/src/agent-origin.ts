@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, agentCommandClass, agentRefusal, capPermission, permissionRank, type Command, type PermissionMode, type SessionId } from "@mendcode/protocol"
+import { AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, agentCommandClass, agentRefusal, capPermission, permissionRank, type Command, type PermissionMode, type SessionId, type SessionOrigin } from "@mendcode/protocol"
 import { agentProcesses } from "@mendcode/tools"
 
 /**
@@ -173,6 +173,19 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
       return within(origin, target) ? undefined : refuse(`${command.type} on a session with more authority than the caller's own mode (${level})`)
     },
   }
+}
+
+/**
+ * Where a connection's messages and sessions come from, for `sessions.origin` and `queue.added.origin` (docs/sessions.md).
+ * Never the client's word alone: an agent-origin connection (read from the socket's process) is `agent`; a token-holding remote
+ * or peer client and the user's own terminal (it declared `extension-dialogs`, which only a local non-agent client may use)
+ * are `tui`; anything else local is `cli`. What `hello` says (a name ending in `-bridge`, `caller:agent`) can only move a
+ * `cli` client to `agent`, so no claim can make a script look like a person.
+ */
+export function connectionOrigin(connection: { dialogs?: boolean | undefined; agent?: unknown; remoteAddress?: string | undefined; peer?: unknown; client?: { name: string; callerAgent: boolean } | undefined }): SessionOrigin {
+  if (connection.agent) return "agent"
+  if (connection.remoteAddress || connection.peer || connection.dialogs === true) return "tui"
+  return connection.client?.callerAgent || connection.client?.name.endsWith("-bridge") ? "agent" : "cli"
 }
 
 /** The user's own interactive terminal: it draws cards, is local, and is neither a session's shell nor a remote or peer client. */

@@ -574,7 +574,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     let chatArea: { top: number; height: number } | undefined
     // Opened with no `sidechat` card of its own, the side chat takes the whole bar and the cards come back when it closes: stacked over them it left neither enough room.
     const implicitChat = chat.open && !widgets.some((widget) => widget.type === "sidechat")
-    const chatHeight = implicitChat ? Math.max(3, height - 1) : Math.max(8, widgets.some((widget) => widget.type !== "sidechat") ? Math.floor(height * .6) : height)
+    const chatHeight = implicitChat ? Math.max(3, height) :Math.max(8, widgets.some((widget) => widget.type !== "sidechat") ? Math.floor(height * .6) : height)
     const addChat = (title?: string) => {
       if (chatArea) return
       chatArea = { top: panels.length, height: chatHeight }
@@ -606,7 +606,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const name = implicitChat ? "side chat · /btw" : `${presetOf(widgets)} · /panel${state.rightFocus ? " · focused · esc back" : ""}`
     // A short sheet spends one row on the name and the note together, so the cards keep the rest.
     // `panelHeader` off gives the name row to the cards; a note (hidden cards, how to scroll) still shows when there is one.
-    const header: Line[] = !state.tuiProfile.panelHeader ? (note ? [fit(text(note, "muted"), width)] : []) : note && height < 10 ? [fit(text(`${name} · ${note}`, "muted"), width)] : [fit(text(name, "muted"), width), ...(note ? [fit(text(note, "muted"), width)] : [])]
+    // The side chat alone names itself in its box: a name row above it said the same thing twice.
+    const header: Line[] = !state.tuiProfile.panelHeader || (implicitChat && !note) ?(note ? [fit(text(note, "muted"), width)] : []) : note && height < 10 ? [fit(text(`${name} · ${note}`, "muted"), width)] : [fit(text(name, "muted"), width), ...(note ? [fit(text(note, "muted"), width)] : [])]
     const room = height - header.length
     maxScroll = Math.max(0, panels.length - room)
     if (chat.focused && chatArea) state.rightScroll = Math.min(maxScroll, chatArea.top)

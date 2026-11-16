@@ -149,6 +149,24 @@ describe("fitDashboard", () => {
 
   test("a dashboard that fits is returned as it is", () => {
     const small = buildDashboard({ jobs: [job({ state: "done" })], watches, reviewers, now: NOW, concurrency: 1 })
-    expect(fitDashboard(small)).toEqual({ dashboard: small, dropped: 0 })
+    expect(fitDashboard(small)).toEqual({ dashboard: small, dropped: 0, thinned: 0, droppedLive: 0 })
+  })
+
+  test("live jobs whose summaries alone are too big lose their decision logs, not their place in the list", () => {
+    const decisions = Array.from({ length: 20 }, (_, k) => ({ phase: `phase-${k}`, action: "kept" as const, reason: "x".repeat(600) }))
+    const live = Array.from({ length: 40 }, (_, n) => job({ state: n % 2 ? "running" : "waiting", updatedAt: NOW - n * HOUR, checkpoint: { completedPhases: ["discovery"], candidates: [], verified: [], rounds: [], decisions } }))
+    const done = job({ state: "done", updatedAt: NOW - 500 * HOUR })
+    const whole = buildDashboard({ jobs: [...live, done], watches, reviewers, now: NOW, concurrency: 2 })
+    expect(Buffer.byteLength(JSON.stringify(whole))).toBeGreaterThan(DASHBOARD_MAX_BYTES)
+    const fitted = fitDashboard(whole)
+    expect(Buffer.byteLength(JSON.stringify(fitted.dashboard))).toBeLessThanOrEqual(DASHBOARD_MAX_BYTES)
+    expect(fitted.droppedLive).toBe(0)
+    expect(fitted.dropped).toBe(1)
+    expect(fitted.thinned).toBeGreaterThan(0)
+    // Every live job is still listed, in the same order; the thinned ones are the oldest at the end.
+    expect(fitted.dashboard.jobs.map((entry) => entry.id)).toEqual(whole.jobs.slice(0, 40).map((entry) => entry.id))
+    expect(fitted.dashboard.jobs[0]!.decisions).toBeDefined()
+    expect(fitted.dashboard.jobs.at(-1)!.decisions).toBeUndefined()
+    expect(PrReviewDashboard.parse(fitted.dashboard)).toEqual(fitted.dashboard)
   })
 })

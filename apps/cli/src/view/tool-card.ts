@@ -13,7 +13,7 @@ import { computerCard } from "./computer-card"
 import { markFold } from "./line-meta"
 import { isReadTool, type ToolCounts } from "./tool-summary"
 import { asciiGlyphs, FOLD_CARD, FOLD_PAGE, INDENT, marksOf, railPrefix, type Marks } from "./tool-frame"
-import { branchRows, cardContext, failure, globCard, grepCard, header, linesOf, listCard, pagedLines, readCard, searchCard, shapeCard, shellCard, SPINNER_ASCII, taskCard, webCard, type CardContext } from "./tool-kinds"
+import { branchRows, cardContext, failure, globCard, grepCard, header, learnCard, linesOf, listCard, pagedLines, readCard, searchCard, shapeCard, shellCard, SPINNER_ASCII, taskCard, webCard, type CardContext } from "./tool-kinds"
 import { DEFAULT_TOOL_DESIGN, type ToolDesign } from "./tool-design"
 import { BRIEF_ROWS, shapeLines } from "./tool-bodies"
 import { resultShape } from "./tool-data"
@@ -105,6 +105,9 @@ const LABELS: Readonly<Record<string, string>> = {
   graph_callers: "Graph callers",
   graph_file_api: "File API",
   websearch: "Web search",
+  bot_note: "Learned",
+  bot_skill: "Skill",
+  bot_schedule: "Schedule",
 }
 export const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const
 /** Rows of a diff the `full` view shows before the `+N lines` row; `balanced` shows DIFF_ROWS. */
@@ -143,7 +146,7 @@ export function toolLabel(name: string) {
 }
 
 /** Tools v1 draws as a block (a titled body) instead of a one-line timeline row; only rows fold into `◇ N tools more`. */
-const BLOCK_TOOLS = new Set(["shell", "shell_output", "shell_kill", "shell_session", "notebook_edit", "write", "edit", "apply_patch", "task", "image_generation", "plan_submit", "todo", "question", "session_search", "session_read", "session_notes", "image_gen", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code"])
+const BLOCK_TOOLS = new Set(["shell", "shell_output", "shell_kill", "shell_session", "notebook_edit", "write", "edit", "apply_patch", "task", "image_generation", "plan_submit", "todo", "question", "session_search", "session_read", "session_notes", "image_gen", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code", "bot_note", "bot_skill", "bot_schedule"])
 
 /** Calls that change a file (every engine titles them with these names): their diff or content is never folded away outside `minimal`. */
 const FILE_EDIT_TOOLS = new Set(["write", "edit", "apply_patch", "notebook_edit"])
@@ -598,6 +601,10 @@ function kindCard(c: CardContext): Line[] | undefined {
       return searchCard(c)
     case "task":
       return taskCard(c)
+    case "bot_note":
+    case "bot_skill":
+    case "bot_schedule":
+      return learnCard(c)
     default:
       return undefined
   }

@@ -40,6 +40,7 @@ import { footerRowsOf, parseFooterRowsCommand } from "../../view/footer-rows"
 import { parseFooterPackCommand } from "../../view/footer-pack"
 import { parseActivityCommand } from "../../view/activity-status"
 import { parseSlash } from "../../view/commands"
+import { startNewChatPanel } from "./session-look"
 import { normalizeHomeMascot, SIDEBAR_MODES, type SidebarMode, type TuiProfile } from "../../view/tui-profile"
 import { PRESENTATION_MODES, type PresentationMode } from "../../view/transcript"
 import { SELECTABLE_PERMISSION_MODES } from "./constants"
@@ -177,6 +178,7 @@ export function createSlash(ctx: AppContext, actions: {
   async function enterNewSession(sessionId: SessionId) {
     const stayed = await actions.placeNewSession(sessionId)
     await switchSession(sessionId)
+    startNewChatPanel(ctx)
     if (stayed) say(stayed, "info")
   }
 
@@ -184,7 +186,8 @@ export function createSlash(ctx: AppContext, actions: {
     const requested = args.trim().toLowerCase()
     if (requested === "") {
       const { width } = input.screen.size
-      if (sidebarVisible({ mode: state.tuiProfile.sidebar, width, minimal: false })) return setSidebar("hidden")
+      // With bots on the icons column shows from the normal breakpoint, so it counts as shown there.
+      if (sidebarVisible({ mode: state.tuiProfile.sidebar, width: state.settingsNow.experimental?.bots === true && width >= BREAKPOINTS.normal ? BREAKPOINTS.wide : width, minimal: false })) return setSidebar("hidden")
       if (width < BREAKPOINTS.wide) return say(`the sidebar needs ${BREAKPOINTS.wide} columns`, "warning")
       return setSidebar("auto")
     }
@@ -726,6 +729,9 @@ export function createSlash(ctx: AppContext, actions: {
         break
       case "agent":
         await agentCommand(parsed.args)
+        break
+      case "bot":
+        await (await import("./bots")).runBotCommand(ctx, parsed.args, { switchSession: (sessionId) => switchSession(sessionId) })
         break
       case "model":
         await modelCommand(parsed.args)

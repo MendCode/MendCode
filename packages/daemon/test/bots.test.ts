@@ -1,0 +1,517 @@
+import { afterEach, describe, expect, test } from "bun:test"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { parseAgentFile } from "@mendcode/packages"
+import { AgentCreateReport, BotListReport } from "@mendcode/protocol"
+import { botStateOf, lookFromText, type BotConnector } from "../src/bot-service"
+import { boot, hang, openSession, put, say, stop, until, type NativeHarness } from "./native-harness"
+
+const harnesses: NativeHarness[] = []
+const extra: string[] = []
+afterEach(async () => {
+  for (const h of harnesses.splice(0)) await h.cleanup()
+  for (const dir of extra.splice(0)) rmSync(dir, { recursive: true, force: true })
+})
+const start = async (options: Parameters<typeof boot>[0] = {}, on = true) => {
+  const h = await boot(options)
+  harnesses.push(h)
+  if (on) await h.client.send({ type: "settings.set", patch: { experimental: { bots: true } } })
+  return h
+}
+const error = (ack: { ok: boolean }) => (ack as { ok: false; error: { code: string; message: string } }).error
+const result = <T>(ack: { ok: boolean; result?: unknown }) => { if (!ack.ok) throw new Error(JSON.stringify(ack)); return (ack as { result: T }).result }
+const folder = () => { const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "bots-proj-"))); extra.push(dir); return dir }
+const botFile = (extraLines = "", body = "You review.") => `---\ndescription: A calm reviewer\nmode: primary\npermission: smart\nbot:\n  shape: circle\n  color: success\n${extraLines}---\n${body}`
+const list = async (h: NativeHarness) => BotListReport.parse(result(await h.client.send({ type: "bot.list" })))
+
+describe("the bots flag", () => {
+  test("every bot command is refused while the flag is off, and a bot file is an ordinary agent", async () => {
+    const h = await start({ steps: [stop("ok")] }, false)
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    for (const command of [{ type: "bot.list" }, { type: "bot.create", directory: h.project, description: "x" }, { type: "bot.duplicate", name: "calm", newName: "calm2" }, { type: "bot.file", name: "calm" }, { type: "bot.save", name: "calm", create: false, prompt: "x", permission: "smart" }, { type: "bot.draft", directory: h.project, description: "x" }, { type: "bot.delete", name: "calm", memory: false }, { type: "bot.memory", name: "calm", op: "list" }] as const) {
+      expect(error(await h.client.send(command as never))).toMatchObject({ code: "forbidden", message: expect.stringContaining("/experimental bots on") })
+    }
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+    expect(h.requests[0]!.system).toBe("BASE\n\n# Agent: calm\n\nYou review.")
+    // Nothing is stored for bots: no memory folder, so a session costs the same bytes as before bots existed.
+    expect(existsSync(path.join(h.dir, "bots"))).toBe(false)
+  })
+
+  test("the first turn with the flag on loads the memory reader; a bot's memory reaches that very turn", async () => {
+    const h = await start({ steps: [stop("ok")] }, false)
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    put(path.join(h.dir, "bots", "calm", "memory.md"), "- Prefers short answers.\n")
+    await h.client.send({ type: "settings.set", patch: { experimental: { bots: true } } })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+    expect(h.requests[0]!.system).toContain("- Prefers short answers.")
+  })
+})
+
+describe("bot.list", () => {
+  test("lists the bots of the user's layer with identity and origin, and an empty external slot", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    put(path.join(h.dir, "agents", "plain.md"), "---\ndescription: Not a bot\n---\nPlain.")
+    put(path.join(h.project, ".mendcode", "agents", "local.md"), botFile())
+    const report = await list(h)
+    expect(report.external).toEqual([])
+    expect(report.bots.map((bot) => bot.name)).toEqual(["calm"])
+    expect(report.bots[0]).toMatchObject({ name: "calm", identity: { shape: "circle", color: "success", origin: "mendcode" }, permission: "smart", state: "idle", projects: [], file: path.join(h.dir, "agents", "calm.md") })
+  })
+
+  test("groups the bot's sessions by project directory; the state follows its sessions", async () => {
+    const h = await start({ steps: [hang, stop("done")] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    const other = folder()
+    const first = await openSession(h)
+    const second = result<{ sessionId: typeof first }>(await h.client.send({ type: "session.create", directory: other })).sessionId
+    await h.client.subscribe(second, 0)
+    await h.client.send({ type: "session.permission.set", sessionId: second, mode: "full" })
+    for (const sessionId of [first, second]) await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    // An unrelated session of the same project never counts.
+    await openSession(h)
+    let report = await list(h)
+    expect(report.bots[0]!.state).toBe("idle")
+    expect(report.bots[0]!.projects.map((project) => [project.directory, project.sessions.map((session) => session.sessionId)])).toEqual([[h.project, [first]], [other, [second]]].sort((a, b) => String(a[0]).localeCompare(String(b[0]))) as never)
+
+    // The first session works (the scripted model hangs): the bot works, that project too, the other stays idle.
+    await h.client.send({ type: "user.submit", sessionId: first, text: "go", attachments: [] })
+    await until(() => h.requests.length === 1)
+    report = await list(h)
+    expect(report.bots[0]!.state).toBe("working")
+    expect(Object.fromEntries(report.bots[0]!.projects.map((project) => [project.directory, project.state]))).toEqual({ [h.project]: "working", [other]: "idle" })
+  })
+
+  test("a session that failed makes a problem, unless another session still works", async () => {
+    const h = await start({ steps: [() => { throw new Error("provider down") }] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await h.client.send({ type: "user.submit", sessionId, text: "go", attachments: [] })
+    await until(() => h.store.lastTurnStatus(sessionId) === "failed")
+    expect((await list(h)).bots[0]).toMatchObject({ state: "problem", projects: [{ state: "problem" }] })
+  })
+
+  test("what connectors list is carried in external, and a failing connector is a problem, not an error", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    // The slot is typed: a connector answers ExternalBotInfo rows. Exercised on the service because no connector ships yet.
+    const { listBots } = await import("../src/bot-service")
+    const good: BotConnector = { id: "hermes", list: async () => [{ origin: "hermes", id: "h-1", name: "Hermes", state: "working" }] }
+    const bad: BotConnector = { id: "broken", list: async () => { throw new Error("socket closed") } }
+    const report = await listBots({ dir: h.dir, agents: () => ({ directory: h.dir, agents: [], problems: [] }), sessions: () => [], connectors: () => [good, bad] })
+    expect(BotListReport.safeParse(report).success).toBe(true)
+    expect(report.external).toEqual([{ origin: "hermes", id: "h-1", name: "Hermes", state: "working" }])
+    expect(report.problems).toEqual([{ file: "connector:broken", message: "socket closed" }])
+  })
+
+  test("an external bot lists the sessions on its chat model by folder, with the state they show, for any origin", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    const { listBots } = await import("../src/bot-service")
+    const connector: BotConnector = { id: "openbot", list: async () => [{ origin: "openbot", id: "ob-1", name: "Otto", state: "idle", chat: "acp:openbot-otto" }, { origin: "openbot", id: "ob-2", name: "Quiet", state: "idle", chat: "acp:openbot-quiet" }] }
+    const now = 50 * 60_000
+    const chat = (sessionId: string, directory: string, status: string, updatedAt: number) => ({ sessionId, title: sessionId, directory, createdAt: 1, updatedAt, lastSeq: 1, queued: 0, status, permission: "ask" })
+    const asked: string[] = []
+    const report = await listBots({
+      dir: h.dir, agents: () => ({ directory: h.dir, agents: [], problems: [] }), sessions: () => [], connectors: () => [connector], now: () => now,
+      sessionsOfModel: (model) => { asked.push(model); return (model === "acp:openbot-otto" ? [chat("ses_000000000000000A", "/work/app", "running", now), chat("ses_000000000000000B", "/work/app", "idle", now - 5000), chat("ses_000000000000000C", "/other", "idle", now - 9000)] : []) as never },
+    })
+    expect(BotListReport.safeParse(report).success).toBe(true)
+    const [otto, quiet] = report.external
+    expect(otto).toMatchObject({ name: "Otto", state: "working", projects: [{ directory: "/other", state: "idle", sessions: [{ sessionId: "ses_000000000000000C" }] }, { directory: "/work/app", state: "working", sessions: [{ sessionId: "ses_000000000000000A", status: "running" }, { sessionId: "ses_000000000000000B" }] }] })
+    expect(quiet).toEqual({ origin: "openbot", id: "ob-2", name: "Quiet", state: "idle", chat: "acp:openbot-quiet" })
+    expect(asked).toEqual(["acp:openbot-otto", "acp:openbot-quiet"])
+  })
+
+  test("the bot state: a waiting session first, then working, then a recent failure, else idle", () => {
+    const now = 10_000_000
+    const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })
+    expect(botStateOf([], now)).toBe("idle")
+    expect(botStateOf([at("idle"), at("completed"), at("cancelled")], now)).toBe("idle")
+    expect(botStateOf([at("completed", 60_000), at("failed", 30_000)], now)).toBe("problem")
+    expect(botStateOf([at("failed"), at("running")], now)).toBe("working")
+    expect(botStateOf([at("running"), at("waiting_for_approval"), at("failed")], now)).toBe("waiting")
+    expect(botStateOf([at("waiting_for_input")], now)).toBe("waiting")
+  })
+
+  test("a failure shows as a problem for ten minutes, until the bot has newer activity, and then the bot is idle again", () => {
+    const now = 10_000_000
+    const minute = 60_000
+    const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })
+    expect(botStateOf([at("failed", 9 * minute)], now)).toBe("problem")
+    expect(botStateOf([at("failed", 11 * minute)], now)).toBe("idle")
+    // A later turn that went well, in the same chat or another one of the bot, clears it.
+    expect(botStateOf([at("failed", 5 * minute), at("completed", 2 * minute)], now)).toBe("idle")
+    expect(botStateOf([at("completed", 5 * minute), at("failed", 2 * minute)], now)).toBe("problem")
+  })
+
+  test("bot.list reports the failed chat's status but leaves the bot idle once the failure is old", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    const { listBots } = await import("../src/bot-service")
+    const agents = () => ({ directory: h.dir, agents: [{ name: "mendy", description: "d", source: "user", trusted: true, file: "mendy.md", mode: "primary", bot: { shape: "circle", color: "success", origin: "local" } }], problems: [] }) as never
+    const failed = (updatedAt: number) => [{ sessionId: "ses_X", title: "t", directory: "/work", createdAt: 1, updatedAt, lastSeq: 1, queued: 0, status: "failed", permission: "ask" }] as never
+    const now = 50 * 60_000
+    const fresh = await listBots({ dir: h.dir, agents, sessions: () => failed(now - 2 * 60_000), connectors: () => [], now: () => now })
+    expect(fresh.bots[0]).toMatchObject({ state: "problem", projects: [{ state: "problem", sessions: [{ status: "failed" }] }] })
+    const old = await listBots({ dir: h.dir, agents, sessions: () => failed(now - 34 * 60_000), connectors: () => [], now: () => now })
+    expect(old.bots[0]).toMatchObject({ state: "idle", projects: [{ state: "idle", sessions: [{ status: "failed" }] }] })
+  })
+})
+
+describe("making bots", () => {
+  test("bot.create writes the agent file with a bot block and smart permission, and the bot is listed", async () => {
+    const h = await start()
+    const created = result<unknown>(await h.client.send({ type: "bot.create", directory: h.project, name: "calm", description: "a calm green reviewer" }))
+    expect(AgentCreateReport.safeParse(created).success).toBe(true)
+    const file = path.join(h.dir, "agents", "calm.md")
+    expect(created).toMatchObject({ file, generation: "deterministic", callsProviders: false })
+    const parsed = parseAgentFile({ text: readFileSync(file, "utf8"), stem: "calm", file, source: "user" })
+    expect(parsed).toMatchObject({ agent: { name: "calm", mode: "primary", permission: "smart", bot: { color: "success", origin: "mendcode" } } })
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm"])
+    // The name is taken by now, whether as a bot or as any other agent.
+    expect(error(await h.client.send({ type: "bot.create", directory: h.project, name: "calm", description: "again" })).message).toContain("already")
+    expect(error(await h.client.send({ type: "bot.create", directory: h.project, name: "build", description: "no" })).message).toContain("already")
+  })
+
+  test("from a description in chat: the model names it and writes the prompt, the look comes from the words", async () => {
+    const calls: string[] = []
+    const h = await start({ complete: async (request) => { calls.push(request.prompt); return JSON.stringify({ identifier: "Calm Reviewer", whenToUse: "Use this agent when a diff needs a gentle review.", systemPrompt: "You are a calm reviewer." }) } })
+    const created = result<{ file: string; generation: string; callsProviders: boolean }>(await h.client.send({ type: "bot.create", directory: h.project, description: "a calm green reviewer", generate: true }))
+    expect(created).toMatchObject({ generation: "model", callsProviders: true, file: path.join(h.dir, "agents", "calm-reviewer.md") })
+    expect(calls[0]).toContain("a calm green reviewer")
+    const text = readFileSync(created.file, "utf8")
+    expect(text).toContain("permission: smart")
+    expect(parseAgentFile({ text, stem: "calm-reviewer", file: created.file, source: "user" })).toMatchObject({ agent: { prompt: "You are a calm reviewer.", bot: { color: "success" } } })
+  })
+
+  test("when generation fails the plain template is written and the reason is reported", async () => {
+    const h = await start({ complete: async () => "not json" })
+    const created = result<{ fallback?: string; generation: string }>(await h.client.send({ type: "bot.create", directory: h.project, name: "plainer", description: "a red square tester", generate: true }))
+    expect(created).toMatchObject({ generation: "deterministic", fallback: expect.stringContaining("unusable") })
+    expect(readFileSync(path.join(h.dir, "agents", "plainer.md"), "utf8")).toContain("shape: square")
+  })
+
+  test("color and shape words of a request", () => {
+    expect(lookFromText("a calm green reviewer")).toEqual({ color: "success" })
+    expect(lookFromText("a Red triangular tester")).toEqual({ color: "error", shape: "triangle" })
+    expect(lookFromText("someone who reads logs")).toEqual({})
+  })
+
+  test("bot.duplicate copies the file under a new name, keeps the original and refuses a taken name", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), botFile("name: calm\n"))
+    const copy = result<{ file: string }>(await h.client.send({ type: "bot.duplicate", name: "calm", newName: "calm-2" }))
+    expect(copy.file).toBe(path.join(h.dir, "agents", "calm-2.md"))
+    expect(readFileSync(copy.file, "utf8")).toContain("name: calm-2")
+    expect(readFileSync(path.join(h.dir, "agents", "calm.md"), "utf8")).toContain("name: calm\n")
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm", "calm-2"])
+    expect(error(await h.client.send({ type: "bot.duplicate", name: "calm", newName: "calm-2" })).message).toContain("already")
+    expect(error(await h.client.send({ type: "bot.duplicate", name: "nobody", newName: "x" })).message).toContain("no bot named nobody")
+  })
+})
+
+describe("editing a bot's file", () => {
+  test("reads the file, saves a valid change and refuses one that breaks the agent or stops it being this bot", async () => {
+    const h = await start()
+    const file = path.join(h.dir, "agents", "calm.md")
+    put(file, botFile())
+    const read = result<{ text: string; saved: boolean }>(await h.client.send({ type: "bot.file", name: "calm" }))
+    expect(read).toMatchObject({ text: readFileSync(file, "utf8"), saved: false })
+    const changed = read.text.replace("You review.", "You review gently.")
+    expect(result<{ saved: boolean }>(await h.client.send({ type: "bot.file", name: "calm", text: changed })).saved).toBe(true)
+    expect(readFileSync(file, "utf8")).toBe(changed)
+    for (const text of ["---\nbot:\n  shape: blob\n---\nx", changed.replace(/bot:[\s\S]*---\nYou/, "---\nYou"), changed.replace("description:", "name: other\ndescription:")]) {
+      expect(error(await h.client.send({ type: "bot.file", name: "calm", text })).message).toContain("[BOT]")
+    }
+    expect(readFileSync(file, "utf8")).toBe(changed)
+    expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
+  })
+})
+
+describe("a bot's memory", () => {
+  test("one memory everywhere and one per project, read into that bot's prompt only", async () => {
+    const h = await start({ steps: [stop("a"), stop("b"), stop("c"), stop("d")] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    put(path.join(h.dir, "agents", "other.md"), botFile("", "You are other."))
+    const elsewhere = folder()
+    mkdirSync(elsewhere, { recursive: true })
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "Prefers short answers." })
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", scope: "project", directory: h.project, text: "This repo uses tabs." })
+    const listed = result<{ global: string; project: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "list", directory: h.project }))
+    expect(listed).toEqual({ global: "- Prefers short answers.", project: "- This repo uses tabs." })
+    expect(result<{ project: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "list", directory: elsewhere })).project).toBe("")
+
+    const here = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId: here, agent: "calm" })
+    await say(h, here, "hi")
+    expect(h.requests[0]!.system).toContain("## Everywhere\n- Prefers short answers.")
+    expect(h.requests[0]!.system).toContain("## This project")
+    expect(h.requests[0]!.system).toContain("- This repo uses tabs.")
+
+    const away = result<{ sessionId: typeof here }>(await h.client.send({ type: "session.create", directory: elsewhere })).sessionId
+    await h.client.subscribe(away, 0)
+    await h.client.send({ type: "session.permission.set", sessionId: away, mode: "full" })
+    await h.client.send({ type: "session.agent.set", sessionId: away, agent: "calm" })
+    await say(h, away, "hi")
+    expect(h.requests[1]!.system).toContain("- Prefers short answers.")
+    expect(h.requests[1]!.system).not.toContain("tabs")
+
+    const stranger = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId: stranger, agent: "other" })
+    await say(h, stranger, "hi")
+    expect(h.requests[2]!.system).not.toContain("short answers")
+
+    const plain = await openSession(h)
+    await say(h, plain, "hi")
+    expect(h.requests[3]!.system).not.toContain("Bot memory")
+  })
+
+  test("clear empties one memory, secrets are redacted, a full file refuses, and only a real bot has memory", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "key sk-abcdefghijklmnopqrstuvwxyz0123456789 here" })
+    expect(result<{ global: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "list" })).global).not.toContain("sk-abcdefghijklmnopqrstuvwxyz")
+    expect(result<{ global: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "clear" })).global).toBe("")
+    for (let i = 0; i < 50; i++) await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "x".repeat(500) })
+    expect(error(await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "y".repeat(600) })).message).toContain("full")
+    expect(error(await h.client.send({ type: "bot.memory", name: "nobody", op: "list" })).message).toContain("no bot named")
+    expect(error(await h.client.send({ type: "bot.memory", name: "calm", op: "add", scope: "project", text: "needs a directory" })).message).toContain("directory")
+  })
+
+  test("with the flag off a bot's memory is not read into its prompt", async () => {
+    const h = await start({ steps: [stop("a")] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "Prefers short answers." })
+    await h.client.send({ type: "settings.set", patch: { experimental: { bots: false } } })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+    expect(h.requests[0]!.system).not.toContain("short answers")
+  })
+})
+
+describe("a session started with a bot runs as that bot", () => {
+  const modelBot = "---\ndescription: A calm reviewer\nmode: primary\nmodel: gpt-6-luna\npermission: smart\nbot:\n  shape: circle\n  color: success\n---\nYou review calmly."
+
+  test("the first turn carries the bot's name, personality, memory and model, in that order", async () => {
+    const h = await start({ steps: [stop("ok")] })
+    put(path.join(h.dir, "agents", "calm.md"), modelBot)
+    await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "Prefers short answers." })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "quien eres")
+    const system = h.requests[0]!.system as string
+    expect(h.requests[0]!.model).toBe("gpt-6-luna")
+    const at = (text: string) => system.indexOf(text)
+    expect(at("You are calm, a MendCode bot. A calm reviewer")).toBeGreaterThan(-1)
+    expect(at("You review calmly.")).toBeGreaterThan(at("You are calm, a MendCode bot."))
+    expect(at("- Prefers short answers.")).toBeGreaterThan(at("You review calmly."))
+  })
+
+  test("the model report of that session names the bot's model, not the session's default; a plain session keeps its own", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), modelBot)
+    const sessionId = await openSession(h)
+    const before = result<{ effective?: { model: string } }>(await h.client.send({ type: "models.list", sessionId }))
+    expect(before.effective?.model).toBe("script-1")
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    const after = result<{ effective?: { model: string }; session?: { model: string } }>(await h.client.send({ type: "models.list", sessionId }))
+    expect(after.effective?.model).toBe("gpt-6-luna")
+    expect(after.session).toBeUndefined()
+    await h.client.send({ type: "session.agent.set", sessionId, agent: null })
+    expect(result<{ effective?: { model: string } }>(await h.client.send({ type: "models.list", sessionId })).effective?.model).toBe("script-1")
+  })
+
+  test("a bot without a model of its own and a bot with the flag off get no identity line", async () => {
+    const h = await start({ steps: [stop("a")] }, false)
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+    expect(h.requests[0]!.system).not.toContain("a MendCode bot")
+  })
+})
+
+describe("the bot form's commands", () => {
+  const save = (over: Record<string, unknown> = {}) => ({ type: "bot.save", name: "pixel", create: true, prompt: "Calm reviewer, explains briefly.", permission: "smart", ...over }) as never
+  const text = (h: NativeHarness, name = "pixel") => readFileSync(path.join(h.dir, "agents", `${name}.md`), "utf8")
+
+  test("bot.save creates the agent file from the form's fields, and a taken or reserved name is refused", async () => {
+    const h = await start()
+    const made = result<unknown>(await h.client.send(save({ shape: "hexagon", color: "info", model: "gpt-6-luna", permission: "edits" })))
+    expect(AgentCreateReport.safeParse(made).success).toBe(true)
+    const file = path.join(h.dir, "agents", "pixel.md")
+    expect(made).toMatchObject({ file, generation: "deterministic", callsProviders: false })
+    expect(parseAgentFile({ text: text(h), stem: "pixel", file, source: "user" })).toMatchObject({ agent: { name: "pixel", description: "The pixel bot", mode: "primary", model: "gpt-6-luna", permission: "edits", prompt: "Calm reviewer, explains briefly.", bot: { shape: "hexagon", color: "info", origin: "mendcode" } } })
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["pixel"])
+    expect(error(await h.client.send(save())).message).toContain("already")
+    expect(error(await h.client.send(save({ name: "build" }))).message).toContain("already")
+    expect(existsSync(path.join(h.dir, "agents", "build.md"))).toBe(false)
+  })
+
+  test("bot.save on an existing bot rewrites its fields and body, keeps the keys the form has no field for, and removes what the form cleared", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "calm.md"), botFile("  avatar: face.png\n  origin: mendcode\n", "You review.").replace("permission: smart\n", "permission: smart\nmodel: old-model\ntools:\n  - read\n  - grep\neffort: high\n"))
+    const saved = result<unknown>(await h.client.send(save({ name: "calm", create: false, prompt: "You review gently.", color: "warning", permission: "ask" })))
+    expect(AgentCreateReport.safeParse(saved).success).toBe(true)
+    const file = path.join(h.dir, "agents", "calm.md")
+    const after = readFileSync(file, "utf8")
+    expect(parseAgentFile({ text: after, stem: "calm", file, source: "user" })).toMatchObject({ agent: { description: "A calm reviewer", permission: "ask", effort: "high", tools: ["read", "grep"], prompt: "You review gently.", bot: { color: "warning", origin: "mendcode" } } })
+    const agent = (parseAgentFile({ text: after, stem: "calm", file, source: "user" }) as { agent: Record<string, unknown> }).agent
+    expect(agent.model).toBeUndefined()
+    expect((agent.bot as Record<string, unknown>).shape).toBeUndefined()
+    expect((agent.bot as Record<string, unknown>).avatar).toBeUndefined()
+    expect(existsSync(`${file}.${process.pid}.tmp`)).toBe(false)
+  })
+
+  test("bot.save refuses a save that breaks the file, a plain agent and an unknown bot, and writes nothing", async () => {
+    const h = await start()
+    const file = path.join(h.dir, "agents", "calm.md")
+    put(file, botFile())
+    put(path.join(h.dir, "agents", "plain.md"), "---\ndescription: Not a bot\n---\nPlain.")
+    const before = readFileSync(file, "utf8")
+    expect(error(await h.client.send(save({ name: "calm", create: false, prompt: "x".repeat(16_001) }))).code).toBeDefined()
+    expect(readFileSync(file, "utf8")).toBe(before)
+    expect(error(await h.client.send(save({ name: "plain", create: false }))).message).toContain("no bot named plain")
+    expect(error(await h.client.send(save({ name: "nobody", create: false }))).message).toContain("no bot named nobody")
+    expect(readFileSync(path.join(h.dir, "agents", "plain.md"), "utf8")).toContain("Plain.")
+  })
+
+  test("bot.draft answers what the model writes for a description and writes nothing; a failure answers the plain template", async () => {
+    const h = await start({ complete: async () => JSON.stringify({ identifier: "Calm Reviewer", whenToUse: "Use this agent when a diff needs a gentle review.", systemPrompt: "You are a calm reviewer." }) })
+    const draft = result<Record<string, unknown>>(await h.client.send({ type: "bot.draft", directory: h.project, description: "a calm green reviewer" }))
+    expect(draft).toMatchObject({ name: "calm-reviewer", description: "Use this agent when a diff needs a gentle review.", prompt: "You are a calm reviewer.", color: "success", generation: "model" })
+    expect(existsSync(path.join(h.dir, "agents"))).toBe(false)
+    const plain = await start({ complete: async () => "not json" })
+    const fallback = result<Record<string, unknown>>(await plain.client.send({ type: "bot.draft", directory: plain.project, name: "plainer", description: "a red square tester" }))
+    expect(fallback).toMatchObject({ name: "plainer", generation: "deterministic", shape: "square", color: "error", fallback: expect.stringContaining("unusable") })
+    expect(existsSync(path.join(plain.dir, "agents", "plainer.md"))).toBe(false)
+  })
+
+  test("bot.delete removes the agent file, keeps the memory unless asked, and never touches the bot's sessions", async () => {
+    const h = await start({ steps: [stop("ok")] })
+    put(path.join(h.dir, "agents", "calm.md"), botFile())
+    put(path.join(h.dir, "agents", "keep.md"), botFile())
+    put(path.join(h.dir, "bots", "calm", "memory.md"), "- Prefers short answers.\n")
+    put(path.join(h.dir, "bots", "keep", "memory.md"), "- Stays.\n")
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "calm" })
+    await say(h, sessionId, "hi")
+
+    const kept = result<{ file: string; memoryRemoved: boolean; sessions: number }>(await h.client.send({ type: "bot.delete", name: "calm", memory: false }))
+    expect(kept).toEqual({ file: path.join(h.dir, "agents", "calm.md"), memoryRemoved: false, sessions: 1 })
+    expect(existsSync(path.join(h.dir, "agents", "calm.md"))).toBe(false)
+    expect(readFileSync(path.join(h.dir, "bots", "calm", "memory.md"), "utf8")).toContain("short answers")
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["keep"])
+    // The conversation is still there, as an ordinary session.
+    const sessions = result<{ sessions: Array<{ sessionId: string }> }>(await h.client.send({ type: "session.list", limit: 20 })).sessions
+    expect(sessions.some((session) => session.sessionId === sessionId)).toBe(true)
+
+    const wiped = result<{ memoryRemoved: boolean }>(await h.client.send({ type: "bot.delete", name: "keep", memory: true }))
+    expect(wiped.memoryRemoved).toBe(true)
+    expect(existsSync(path.join(h.dir, "bots", "keep"))).toBe(false)
+    expect(existsSync(path.join(h.dir, "bots", "calm"))).toBe(true)
+  })
+
+  test("bot.delete refuses a plain agent, an unknown name, a project's agent and a name that is a path", async () => {
+    const h = await start()
+    put(path.join(h.dir, "agents", "plain.md"), "---\ndescription: Not a bot\n---\nPlain.")
+    put(path.join(h.project, ".mendcode", "agents", "local.md"), botFile())
+    put(path.join(h.dir, "bots", "plain", "memory.md"), "- x\n")
+    for (const name of ["plain", "local", "nobody"]) expect(error(await h.client.send({ type: "bot.delete", name, memory: true })).message).toContain(`no bot named ${name}`)
+    expect(error(await h.client.send({ type: "bot.delete", name: "../agents/plain", memory: true } as never)).code).toBeDefined()
+    expect(existsSync(path.join(h.dir, "agents", "plain.md"))).toBe(true)
+    expect(existsSync(path.join(h.project, ".mendcode", "agents", "local.md"))).toBe(true)
+    expect(existsSync(path.join(h.dir, "bots", "plain", "memory.md"))).toBe(true)
+  })
+})
+
+describe("bot files: the findings of the beta review", () => {
+  const save = (over: Record<string, unknown> = {}) => ({ type: "bot.save", name: "calm", create: false, prompt: "You review gently.", ...over }) as never
+  const calm = (h: NativeHarness) => path.join(h.dir, "agents", "calm.md")
+  const tmpFiles = (h: NativeHarness) => readdirSync(path.join(h.dir, "agents")).filter((entry) => entry.endsWith(".tmp"))
+
+  test("duplicating renames a name: on the first frontmatter line and leaves the body's own name: lines alone", async () => {
+    const h = await start()
+    put(calm(h), "---\nname: calm\ndescription: A calm reviewer\nmode: primary\npermission: smart\nbot:\n  shape: circle\n---\nYou review.\nname: not a field\n")
+    const copy = result<{ file: string; agent: { name: string } }>(await h.client.send({ type: "bot.duplicate", name: "calm", newName: "calm-2" }))
+    expect(copy.agent.name).toBe("calm-2")
+    const text = readFileSync(copy.file, "utf8")
+    expect(text.startsWith("---\nname: calm-2\n")).toBe(true)
+    expect(text).toContain("You review.\nname: not a field\n")
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm", "calm-2"])
+  })
+
+  test("a save that makes the file larger than the loader reads is refused, and the working file stays", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const before = readFileSync(calm(h), "utf8")
+    // 12,000 CJK characters are fewer than the prompt limit and about 36 KB.
+    const refused = error(await h.client.send(save({ prompt: "あ".repeat(12_000) })))
+    expect(refused.message).toContain("an agent file may hold")
+    expect(readFileSync(calm(h), "utf8")).toBe(before)
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm"])
+    const text = "---\ndescription: A calm reviewer\nmode: primary\nbot:\n  shape: circle\n---\n" + "あ".repeat(12_000)
+    expect(error(await h.client.send({ type: "bot.file", name: "calm", text } as never)).message).toContain("an agent file may hold")
+    expect(readFileSync(calm(h), "utf8")).toBe(before)
+  })
+
+  test("saves of one bot at the same time each write a whole file, and no staging file stays", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const prompts = Array.from({ length: 8 }, (_, n) => `Personality ${n}${n === 0 ? "" : ` ${"x".repeat(n * 700)}`}`)
+    const acks = await Promise.all(prompts.map((prompt) => h.client.send(save({ prompt }))))
+    for (const ack of acks) expect(ack.ok).toBe(true)
+    const after = readFileSync(calm(h), "utf8")
+    const parsed = parseAgentFile({ text: after, stem: "calm", file: calm(h), source: "user" })
+    expect("agent" in parsed && prompts.includes(parsed.agent.prompt)).toBe(true)
+    expect(tmpFiles(h)).toEqual([])
+  })
+
+  test("saving without a permission keeps the file's permission mapping; picking one replaces it", async () => {
+    const h = await start()
+    put(calm(h), "---\ndescription: A calm reviewer\nmode: primary\npermission:\n  shell: deny\n  write: ask\nbot:\n  shape: circle\n---\nYou review.")
+    expect((await list(h)).bots[0]).toMatchObject({ permissionRules: true })
+    expect((await list(h)).bots[0]!.permission).toBeUndefined()
+    result<unknown>(await h.client.send(save({ color: "warning" })))
+    const kept = parseAgentFile({ text: readFileSync(calm(h), "utf8"), stem: "calm", file: calm(h), source: "user" })
+    expect(kept).toMatchObject({ agent: { permissionRules: expect.arrayContaining([{ permission: "shell", pattern: "*", action: "deny" }]), bot: { color: "warning" } } })
+    result<unknown>(await h.client.send(save({ permission: "ask" })))
+    const replaced = parseAgentFile({ text: readFileSync(calm(h), "utf8"), stem: "calm", file: calm(h), source: "user" })
+    expect(replaced).toMatchObject({ agent: { permission: "ask" } })
+    expect("agent" in replaced && replaced.agent.permissionRules).toBeUndefined()
+  })
+
+  test("a frontmatter prompt is what the form loads, and a saved personality replaces it instead of being outranked", async () => {
+    const h = await start()
+    put(calm(h), "---\ndescription: A calm reviewer\nmode: primary\npermission: smart\nprompt: You review from the frontmatter.\nbot:\n  shape: circle\n---\nIgnored body.")
+    expect(result<{ prompt?: string }>(await h.client.send({ type: "bot.file", name: "calm" } as never)).prompt).toBe("You review from the frontmatter.")
+    result<unknown>(await h.client.send(save({ prompt: "You review gently." })))
+    const after = readFileSync(calm(h), "utf8")
+    expect(after).not.toContain("frontmatter")
+    expect(parseAgentFile({ text: after, stem: "calm", file: calm(h), source: "user" })).toMatchObject({ agent: { prompt: "You review gently." } })
+  })
+
+  test("a memory folder that cannot be removed keeps the bot, so deleting again can finish", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const nested = path.join(h.dir, "bots", "calm", "notes")
+    put(path.join(nested, "a.md"), "- note\n")
+    chmodSync(nested, 0o500)
+    try {
+      const refused = error(await h.client.send({ type: "bot.delete", name: "calm", memory: true }))
+      expect(refused.message).toContain("memory folder could not be removed")
+      expect(existsSync(calm(h))).toBe(true)
+    } finally { chmodSync(nested, 0o700) }
+    expect(result<{ memoryRemoved: boolean }>(await h.client.send({ type: "bot.delete", name: "calm", memory: true })).memoryRemoved).toBe(true)
+    expect(existsSync(calm(h))).toBe(false)
+    expect(existsSync(path.join(h.dir, "bots", "calm"))).toBe(false)
+  })
+})

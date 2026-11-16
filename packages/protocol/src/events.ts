@@ -8,7 +8,7 @@ import { RequestProfile } from "./support"
 import { ModelChoice } from "./queries"
 import { AsideThread, SidebarSpec } from "./sidebar"
 import { BlobRef, ClientId, ItemId, JobId, MemoryId, QueueId, RequestId, SessionId, TurnId } from "./ids"
-import { ErrorCode, ForegroundState, ItemKind, ItemStatus, JobState, JobType, MAX_INLINE_TEXT, MAX_JOINED_QUEUE_ENTRIES, MAX_QUEUE_ENTRIES, PermissionMode, QueueDelivery, QueueEntryKind, TurnOptions } from "./states"
+import { ErrorCode, ForegroundState, ItemKind, ItemStatus, JobState, JobType, MAX_INLINE_TEXT, MAX_JOINED_QUEUE_ENTRIES, MAX_QUEUE_ENTRIES, PermissionMode, QueueDelivery, QueueEntryKind, SessionOrigin, TurnOptions } from "./states"
 import { Goal, GoalBy, GoalChange } from "./goals"
 import { UsageLimitState } from "./usage-limit"
 import { Loop } from "./loops"
@@ -40,6 +40,8 @@ export const SessionCreated = lazySchema(() => z.strictObject({
   title: z.string().max(200),
   parentId: SessionId.optional(),
   imported: z.strictObject({ sourceSessionId: z.string().min(1).max(200), truncated: z.boolean(), sanitized: z.boolean() }).optional(),
+  /** Who created the session; absent on sessions made before it was recorded. */
+  origin: SessionOrigin.optional(),
 }))
 
 /** Full content of a queued message, so the queue survives a daemon restart (FC-08). */
@@ -65,6 +67,8 @@ export const QueueAdded = lazySchema(() => z.strictObject({
   selection: z.strictObject({ model: z.lazy(() => ModelChoice).optional(), agent: z.string().min(1).max(100).optional() }).optional(),
   displayText: InlineText.optional(),
   turnOptions: TurnOptions.optional(),
+  /** Who sent a message or ran a `!command` (set by the daemon). Absent on older rows; a notice or a compaction is the daemon's own. */
+  origin: SessionOrigin.optional(),
 }))
 
 export const QueueChanged = lazySchema(() => z.strictObject({
@@ -489,6 +493,8 @@ export const SessionActivity = lazySchema(() => z.strictObject({
   since: z.number().int().nonnegative().optional(),
   tool: z.string().max(200).optional(),
   pending: z.string().max(200).optional(),
+  /** What that request is: a tool approval, a question for the user, or a plan to review. Present with `pending`. */
+  pendingKind: z.enum(["approval", "question", "plan"]).optional(),
   /** True while the session is paused (`session.control`); omitted otherwise. */
   paused: z.boolean().optional(),
   /** Null explicitly clears the archive timestamp; omitted by older daemons. */

@@ -670,3 +670,40 @@ describe("a profile's custom panel and a session's preset choice", () => {
     expect(slashSuggestions("/panel pro").map((entry) => entry.name)).toEqual(["panel profile"])
   })
 })
+
+describe("panel at start (panelStart)", () => {
+  /** A terminal opened on a profile that has the pulse panel saved as shown, with `panelStart` as given. */
+  function started(panelStart: "remember" | "shown" | "hidden", saved = true) {
+    const dataDir = tempDir(), sessionId = ids("session"), fresh = ids("session")
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelStart, panelNarrow: "sheet", sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) as SidebarWidget[], rightSidebar: saved })
+    const h = appHarness({ width: 220, height: 40, directory: tempDir(), dataDir, sessionId, mode: "full", reply: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: fresh } } : { ok: true } })
+    h.app.applySettings({ onboarded: true, tier: "full" })
+    return { ...h, dataDir, fresh }
+  }
+
+  test("remember keeps today's start: the saved rightSidebar decides, old profiles included", () => {
+    expect(started("remember", true).app.accessibility.profile.rightSidebar).toBe(true)
+    expect(started("remember", false).app.accessibility.profile.rightSidebar).toBe(false)
+  })
+
+  test("hidden starts a new terminal without the panel, and the saved choice stays in the file", () => {
+    const h = started("hidden", true)
+    expect(h.app.accessibility.profile.rightSidebar).toBe(false)
+    expect(readTuiProfile(h.dataDir).rightSidebar).toBe(true)
+  })
+
+  test("shown starts a new terminal with the panel", () => {
+    expect(started("shown", false).app.accessibility.profile.rightSidebar).toBe(true)
+  })
+
+  test("a new chat follows it, and /panel still toggles at runtime", async () => {
+    const h = started("hidden", true)
+    await h.type("/panel\r")
+    expect(h.app.accessibility.profile.rightSidebar).toBe(true)
+    await h.type("/new\r")
+    expect(h.app.sessionId).toBe(h.fresh)
+    expect(h.app.accessibility.profile.rightSidebar).toBe(false)
+    await h.type("/panel\r")
+    expect(h.app.accessibility.profile.rightSidebar).toBe(true)
+  })
+})

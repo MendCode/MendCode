@@ -29,6 +29,8 @@ export function createSession(ctx: AppContext, actions: {
   endGoalEdit(): void
   loadEffectiveModel(): Promise<void>
   restoreDraft(target: SessionId): Promise<void>
+  /** The live loops and workflows of the terminal's project, asked again after the project changed. */
+  loadProjectLists(): Promise<void>
   keepDiscarded(options: { track?: boolean }): Promise<void>
   openTranscript(): Promise<void>
   loadEarlier(): Promise<void>
@@ -182,6 +184,29 @@ export function createSession(ctx: AppContext, actions: {
     return forkAt(entry)
   }
 
+  /**
+   * A session of another folder (the sidebar's all-projects list, /sessions, a bot) moves the terminal's project to that folder, as
+   * launching `mendcode` there would: footer, graph, branch, status line, the project's lists and the folder `/new` starts in follow
+   * `input.directory`. Its folder comes from the list this terminal holds, else from the daemon; one the daemon cannot tell changes nothing.
+   */
+  async function followFolder(next: SessionId) {
+    let folder = state.sessions.find((listed) => listed.sessionId === next)?.directory
+    if (!folder) {
+      const reply = await input.send({ type: "session.get", sessionId: next })
+      folder = reply.ok ? (reply.result?.session as SessionSummary | undefined)?.directory : undefined
+    }
+    if (!folder || folder === input.directory) return
+    input.directory = folder
+    state.gitBranch = undefined
+    state.branchRequested = false
+    state.loops = []
+    state.liveLoops.clear()
+    state.workflows = []
+    state.liveWorkflows.clear()
+    if (!input.remote?.readOnly) void input.send({ type: "status.watch", directory: folder, watching: true })
+    void actions.loadProjectLists()
+  }
+
   async function switchSession(next: SessionId) {
     if (next === state.sessionId) return
     state.changesSource = undefined
@@ -206,7 +231,7 @@ export function createSession(ctx: AppContext, actions: {
       input.directory = summary.directory
       state.gitBranch = undefined
       state.branchRequested = false
-    }
+    } else await followFolder(next)
     const previousChat = state.sideChats.get(state.sessionId)
     if (previousChat) previousChat.focused = false
     state.rightFocus = false
@@ -243,6 +268,8 @@ export function createSession(ctx: AppContext, actions: {
     state.compactionLive.focused = false
     state.openedAt = now()
     state.escArmedAt = 0
+    // The third Esc stops the sub-agents of the session that was interrupted, never another's.
+    state.agentStopArmedAt = 0
     // Leave the project note saved; reset the session's undo and goal editing cards.
     if (state.editingScratch) endScratchEdit()
     state.rewindCard = undefined

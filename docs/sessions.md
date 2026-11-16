@@ -71,6 +71,19 @@ Peer model turns exclude `threads` and retain that restriction through automatic
 
 Queue inspection, editing, reordering and steering are local-only; explicit `@thread` snapshots remain local-only.
 
+## Where a session and its messages come from
+
+The daemon records who created each session and who sent each message, from the connection and never from what the client says (a client cannot choose it: `user.submit` and `session.create` have no origin field). `session.created` and `queue.added` carry `origin`, the `sessions` table keeps `origin` (its creator) and `last_human_at` (the latest message with origin `tui`), and `session.list`, `session.get` and the other summaries expose them as `origin` and `lastHumanAt`. The cost is one short field per write and one small update per typed message. A session made before this was recorded has no `origin` and no `lastHumanAt`; a notice or a compaction in the queue is the daemon's own and carries none.
+
+| Origin | What it is | How the daemon decides |
+|---|---|---|
+| `tui` | Typed by a person in the terminal UI, or in an interactive remote client | The connection is the user's own local terminal (it declared `extension-dialogs`, is not started by a session's shell, and is neither remote nor a peer), or it is a token-holding remote or peer client (the web UI) |
+| `cli` | A command-line subcommand: `mendcode session send`, `mendcode run`, `acp`, the app server and any other local client | A local connection that is neither of the others |
+| `agent` | Another agent or a bridge | The connection is agent-origin (read from the socket's process, [permissions.md](permissions.md)); or a local client that names itself `*-bridge` or sends the `caller:agent` capability (the CLI sends it inside Claude Code or Codex: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `AI_AGENT`); also a session a model opens with the session tool |
+| `auto` | The daemon's own work | Loops, workflows, the PR reviewer, dream, sub-agent tasks, the extension `sendUserMessage`, a continuation after compaction, notices |
+
+What a client says can only move a local `cli` client to `agent`; nothing makes a script look like a person. An editor over ACP counts as `cli` and so does a message sent from a script with a remote-less local client, so only the terminal UI and the web UI count as a person typing. The all-projects sidebar uses this ([sidebar.md](sidebar.md)).
+
 ## Empty chats
 
 A terminal's new chat sends `session.create` with `reuseEmpty: true`. This applies at start-up without a session, through `/new`, `ctrl+x n`, the palette, and `tui` control `session.new`.

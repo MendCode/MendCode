@@ -63,6 +63,7 @@ import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDef
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents } from "../../engine-acp/src/agents"
+import { connectorAgents, lazyHermesConnector } from "./bot-connector-agents"
 import { withAcpEngine } from "../../engine-acp/src/router"
 import { createPiConfig, piCapabilities, probePi } from "../../engine-pi/src/config"
 import { withPiEngine } from "../../engine-pi/src/router"
@@ -77,6 +78,7 @@ import type { ReviewSetup, SetupMemory } from "./pr-review/setup"
 import { workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
 import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
+import { BOT_TOOLS } from "./bot-tools"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
 import { createLazyCodegraph } from "./lazy-codegraph"
@@ -319,6 +321,7 @@ const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
   dir,
+  extra: connectorAgents,
   displayName: acpAgentName,
   catalogEfforts: (model) => {
     const slash = model.indexOf("/")
@@ -480,6 +483,8 @@ export const daemon = await startDaemon({
   ...(argv.includes("--web") ? { web: (await import("./http-web")).HTTP_WEB } : {}),
   ...(hosting.log ? { log: hosting.log } : {}),
   release: { version: packageJson.version },
+  // Experimental bots: the Hermes connector loads with the first `bot.list` that runs with the flag on, never at start.
+  botConnectors: [lazyHermesConnector({ dir })],
   trace: argv.includes("--trace") || process.env.MENDCODE_TRACE === "1",
   ...(otlp ? { otlp } : {}),
   ...(arg("mflow-listen") ? { mflowListen: arg("mflow-listen")! } : {}),
@@ -521,7 +526,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, bot, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -579,7 +584,7 @@ export const daemon = await startDaemon({
     // A Claude Code session (`host`) has no image tool of its own: the ChatGPT login or an OpenAI key makes image_gen work there unconfigured,
     // as the hosted `image_generation` does for a native session. MENDCODE_IMAGE_GEN=0 turns both off.
     const imageGenTool = (host = false) => createDaemonImageGenTool({ dir, settings: () => store.settings.get(), provider: routedProvider(), models: () => modelCatalog.list(), credentials: (id) => providerService.imageTransport?.(id), subscriptionHeaders, ...(host ? { implicit: () => process.env.MENDCODE_IMAGE_GEN !== "0" && (subscriptionBackend() || providerService.imageTransport?.("openai") !== undefined) } : {}) })
-    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, diagnosticsTool, questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, lspTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
+    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, diagnosticsTool, questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, ...BOT_TOOLS, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, lspTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
     // Extensions tell an override from a clash, and `api.builtinTool` wraps, by these.
     builtinTools.push(createCustomizeUiTool(dir, extensions.reload, emitGlobal))
     builtinTools.push(createExtendTool({ dir, extensions: { reload: extensions.reload, report: extensions.report, routeInput: extensions.routeInput, checkTool: extensionToolCheck(extensions) } }))
@@ -784,6 +789,7 @@ export const daemon = await startDaemon({
           computer,
           browser,
           loops,
+          bot,
           loopRun,
           // Smart-mode reads of what this session's prompt was built from: the folders of the skills it may load and its instruction files, as the system prompt finds them.
           instructionRoots: (sessionId, root) => {

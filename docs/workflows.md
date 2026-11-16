@@ -420,7 +420,7 @@ Three complete examples live in [`examples/workflows/`](../examples/workflows): 
 | | `/workflows new <name>` writes a commented starter to `workflows/<name>.js` in the data folder; `/workflows convert <plan.json>` writes the script of a JSON plan next to it |
 | | `/workflows budget <id> agents=60 usd=5`, `/workflows update <id> <file.js>`, `/workflows resume <id>` |
 | CLI | `workflow run <file.js\|name> [key=value ... \| --args JSON] [--yes] [--wait]`, `workflow new <name>`, `workflow convert <plan.json>`, `workflow budget <id> --agents N`, `workflow update <id> <file.js>`, `workflow resume <id>` (`--wait` exits 4 when a run pauses at a cap) |
-| Model | the `workflow_script` tool, found with `tool_search`; every call that starts a script asks, in every permission mode, and shows the meta, caps, source hash and the source; the one exception is a saved script started by `name` in full access, which starts like any other tool (a script the model writes still asks, and a project's own scripts still need a trusted project). `workflow_script` with `help: true` returns the API reference without asking |
+| Model | the `workflow_script` tool, found with `tool_search`; every call that starts a script asks, in every permission mode, and shows the meta, caps, source hash and the source; the one exception is a script of an installed package started by `name` in full access, which starts like any other tool (a script the model writes still asks, and so does one saved in the project or the user's folder, which a write can create). `workflow_script` with `help: true` returns the API reference without asking |
 
 Saved scripts are `workflows/<name>.js` in the extension layers, next to the JSON plans. Layers are user folder, user packages, project, project packages; a later layer wins a name.
 
@@ -473,7 +473,7 @@ Calls, template substitutions and spreads in `meta` are refused with a line numb
 | `schema` | JSON Schema subset; validates the answer, gives one automatic repair turn in the same session, then rejects |
 | `mode` | `read` is default and cannot change anything; `work` edits, one work agent at a time per directory |
 | `worktree: true` | Isolated checkout per run; not held by the single-writer rule, so work agents can run in parallel |
-| `cwd: "/abs/path"` | The agent works in an existing linked git worktree of the run's repository (one the script made with `git worktree add`, for example): its session, permissions and sandbox belong to that directory. Like `worktree: true` it never edits the run's directory, so it is not held by the single-writer rule, and a run made only of such agents does not keep another run out of the directory. The main checkout, another repository or a missing path fails the call. Not with `worktree: true`. |
+| `cwd: "/abs/path"` | The agent works in an existing linked git worktree of the run's repository (one the script made with `git worktree add`, for example): its session, permissions and sandbox belong to that directory. Like `worktree: true` it never edits the run's directory, so it is not held by the single-writer rule, and a run made only of such agents does not keep another run out of the directory. Work agents given the same `cwd` take turns, in this run and across runs. The main checkout, the run's own directory, another repository or a missing path fails the call. Not with `worktree: true`. |
 | `model` | Catalog model id |
 | `effort` | Needs `model`; checked against its efforts |
 | `engine` | Engine, described below |
