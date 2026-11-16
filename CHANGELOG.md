@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.18-beta.3 - 2026-11-16
+
+Experimental bots learn on their own: they keep notes, save skills of their own and schedule their own work, see every session, and a new chat with a bot lists nothing until its first message. Chats can start with the right panel hidden.
+
 ### New
 
 - `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
