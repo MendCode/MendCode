@@ -1,5 +1,5 @@
 import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiSectionStarts, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
 import { sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
@@ -12,7 +12,7 @@ import type { TuiProfile } from "../../view/tui-profile"
 import { MAX_HIDDEN_PROJECTS } from "../../view/tui-profile"
 import type { PetImage } from "../../pets/decode"
 import type { FaceCapability } from "../../view/bot-face"
-import type { IconFaces } from "../../view/bot-icon"
+import type { BotColor, BotShape, IconFaces } from "../../view/bot-icon"
 import type { ImagePlacement } from "../image-layer"
 import { activeTheme, colorDepth, type Line } from "../theme"
 import type { AppContext } from "./context"
@@ -65,8 +65,8 @@ export function createSidebarBots(ctx: AppContext) {
   let report: BotListReport | undefined
   let others: SessionSummary[] = []
   const open = new Map<string, boolean>()
-  /** The folders whose whole list was opened with the more row; kept in memory only. */
-  const expanded = new Set<string>()
+  /** How many hidden rows each folder's (or bot's) more row has revealed, a page per press; kept in memory only. */
+  const revealed = new Map<string, number>()
   /** Each project's rank time, so a streaming turn or an opened chat does not reshuffle the project list (see `rankProjects`). */
   const rankStamps = new Map<string, number>()
   /** Which bot each listed session belongs to, from the last `bot.list`. */
@@ -88,8 +88,8 @@ export function createSidebarBots(ctx: AppContext) {
   let loadingOthers = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let iconsNow = false
-  /** The `+ N more projects` row was opened; kept in memory only. */
-  let projectsExpanded = false
+  /** How many projects past the cap the `+ N more projects` row has revealed, a page per press; kept in memory only. */
+  let projectsRevealed = 0
   const home = env.HOME ?? homedir()
   const tmpRoots = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
   /** The folders that are projects, asked of the disk once each and off the render path; a remote terminal has no local disk to ask. */
@@ -259,6 +259,28 @@ export function createSidebarBots(ctx: AppContext) {
     return all.some((session) => (session.parentId === state.sessionId || (parent !== undefined && session.parentId === parent && session.sessionId !== state.sessionId)) && (mark => mark === "running" || waitsOnYou(mark))(sessionMark(session as never, false)))
   }
 
+  /**
+   * Chats this terminal started with a bot, by session id: the bot's name, or an external bot's row id. They sit under the bot from the
+   * first frame that lists them (never under Projects), before any pushed summary or bot list says so; the bot's chats open to show them.
+   */
+  const chatHosts = new Map<string, string>()
+  function noteChat(sessionId: string, host: string) {
+    chatHosts.set(sessionId, host)
+    if (chatHosts.size > CLASSIFIED_MAX) chatHosts.delete(chatHosts.keys().next().value!)
+    open.set(hostKey(host), true)
+  }
+
+  /** Whose chat a session is, with the look its bot carries (a MendCode bot's identity, or the generated one of an external bot); undefined for any other session. */
+  function chatLook(sessionId: string): { name: string; shape?: BotShape | undefined; color?: BotColor | undefined } | undefined {
+    if (!botsOn() || !report) return undefined
+    const session = sessions().find((candidate) => candidate.sessionId === sessionId)
+    const named = chatHosts.get(sessionId) ?? botOfSession.get(sessionId) ?? (session?.agent !== undefined && report.bots.some((bot) => bot.name === session.agent) ? session.agent : undefined)
+    const bot = named === undefined ? undefined : report.bots.find((candidate) => candidate.name === named)
+    if (bot) return { name: bot.name, shape: bot.identity.shape, color: bot.identity.color }
+    const external = report.external.find((candidate) => externalBotId(candidate) === named || (session?.model !== undefined && candidate.chat === session.model.model) || candidate.projects?.some((project) => project.sessions.some((member) => member.sessionId === sessionId)))
+    return external ? { name: external.name, shape: external.identity?.shape, color: external.identity?.color } : undefined
+  }
+
   /** The sessions this terminal has had open in the last day, with the activity each had when first opened (view/sidebar-multi.ts keeps those that took part since from the empty-session rule). */
   const visits = new Map<string, { at: number; updatedAt: number }>()
   function noteVisit(): ReadonlyMap<string, { at: number; updatedAt: number }> {
@@ -289,15 +311,16 @@ export function createSidebarBots(ctx: AppContext) {
       previewCount: state.tuiProfile.sidebarPreviewCount,
       recentDays: state.tuiProfile.sidebarRecentDays,
       rankStamps,
-      expanded,
+      revealed,
+      chatBots: chatHosts,
       projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount, from: state.tuiProfile.sidebarProjectsFrom, hidden: hiddenSet() },
       visits: noteVisit(),
-      projectsExpanded,
+      projectsRevealed,
       ...over,
     }
   }
 
-  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean }): { lines: Line[]; hits: Array<{ row: number; id: string }>; images: ImagePlacement[] } {
+  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean }): { lines: Line[]; hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }>; images: ImagePlacement[] } {
     iconsNow = options.icons
     lastFrame = { height: options.height, header: options.header }
     // First show, a show after pushes came while hidden, a flag turned on after this was made, the slow safety refresh: whatever is due.
@@ -319,41 +342,40 @@ export function createSidebarBots(ctx: AppContext) {
   /** The first bot's row, which `b` jumps to; undefined while no bot is listed. */
   const firstBot = () => stops().find(isBotId)
 
-  function toggleGroup(id: string) {
-    const directory = groupDirectory(id)
-    open.set(directory, !(open.get(directory) ?? true))
+  /**
+   * A more row: reveals one more page and puts the cursor on the first row that appeared (the one right after where the list
+   * stopped). When the page shows nothing new the list was whole, so the row (`show less`/`show fewer`) folds it back instead.
+   */
+  function pageMore({ bump, reset }: { bump(): void; reset(): void }) {
+    const before = new Set(stops())
+    bump()
+    const fresh = stops().find((id) => !before.has(id))
+    if (fresh) state.sidebarSelected = fresh
+    else reset()
     requestFrame()
   }
+  const pageOf = (key: string) => pageMore({ bump: () => revealed.set(key, (revealed.get(key) ?? 0) + REVEAL_PAGE), reset: () => revealed.delete(key) })
+  const toggleMore = (id: string) => pageOf(moreDirectory(id))
 
-  function toggleMore(id: string) {
-    const directory = moreDirectory(id)
-    if (!expanded.delete(directory)) expanded.add(directory)
+  /** Whether a row folds and how it is drawn now (a group, a bot's chats, a bot of whom the chats are asked); undefined for any other row. */
+  const foldState = (id: string) => multiFoldState(model({ height: 0, icons: iconsNow }), id)
+  /** Space, `←`/`→` on a header and a click on its arrow: folds an open header, opens a folded one. */
+  function toggleFold(id: string) {
+    const current = foldState(id)
+    if (!current) return
+    if (isGroupId(id)) open.set(groupDirectory(id), current !== "open")
+    else open.set(isBotId(id) ? botKey(botName(id)) : isBotChatsId(id) ? hostKey(botChatsName(id)) : id, current !== "open")
     requestFrame()
   }
+  const toggleBotMore = (name: string) => pageOf(hostKey(name))
 
-  /** Whether the bot's chats show now: the user's fold or open, else open only while the open session is one of them. */
-  function botChatsOpen(name: string): boolean {
-    const chosen = open.get(botKey(name))
-    if (chosen !== undefined) return chosen
-    const bot = report?.bots.find((candidate) => candidate.name === name)
-    return bot?.projects.some((project) => project.sessions.some((session) => session.sessionId === state.sessionId)) === true || sessions().some((session) => session.sessionId === state.sessionId && session.agent === name)
-  }
-  function toggleBotChats(name: string) {
-    open.set(botKey(name), !botChatsOpen(name))
-    requestFrame()
-  }
-  function toggleBotMore(name: string) {
-    const key = botKey(name)
-    if (!expanded.delete(key)) expanded.add(key)
-    requestFrame()
-  }
-
-  /** Enter or a click on a row: a group folds or opens, the more row opens or closes a project's whole list, a bot starts a new chat with it, a session opens. */
+  /** Enter or a click on a row's name: a project or a bot (or its chats row) starts a new chat, a more row reveals a page, a session opens. */
   async function activate(id: string, deps: SidebarDeps) {
-    if (isGroupId(id)) return toggleGroup(id)
-    if (isMoreProjectsId(id)) { projectsExpanded = !projectsExpanded; return requestFrame() }
+    if (isGroupId(id)) return startFolderChat(groupDirectory(id), deps)
+    if (isMoreProjectsId(id)) return pageMore({ bump: () => { projectsRevealed += REVEAL_PAGE }, reset: () => { projectsRevealed = 0 } })
     if (isMoreId(id)) return toggleMore(id)
-    if (isBotChatsId(id)) return toggleBotChats(botChatsName(id))
+    if (isExternalGroupId(id)) return toggleFold(id)
+    if (isBotChatsId(id)) return isExternalBotId(botChatsName(id)) ? startExternalChat(botChatsName(id), deps) : startChat(botChatsName(id), deps)
     if (isBotMoreId(id)) return toggleBotMore(botMoreName(id))
     if (isBotId(id)) return startChat(botName(id), deps)
     if (isExternalBotId(id)) return startExternalChat(id, deps)
@@ -399,6 +421,7 @@ export function createSidebarBots(ctx: AppContext) {
     const created = await input.send({ type: "session.create", directory, title: "", choice: { model: bot.chat } })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    noteChat(sessionId, externalBotId(bot))
     return sessionId as SessionId
   }
 
@@ -422,7 +445,7 @@ export function createSidebarBots(ctx: AppContext) {
     const external = externalOf(id)
     if (!external) return say("that bot is gone from the list · /bot list shows them", "warning")
     const { createBotCard, foldersFor } = await import("../../view/bot-card-page")
-    const bot = { name: external.name, description: external.description ?? "", identity: external.identity ?? { origin: external.origin }, ...(external.model ? { model: external.model } : {}), file: "", state: external.state, projects: [] }
+    const bot = { name: external.name, description: external.description ?? "", identity: external.identity ?? { origin: external.origin }, ...(external.model ? { model: external.model } : {}), file: "", state: external.state, projects: external.projects ?? [] }
     state.botCard?.stop()
     const close = () => { card.stop(); if (state.botCard === card) state.botCard = undefined; state.page = "chat"; requestFrame() }
     const card = createBotCard({
@@ -432,7 +455,10 @@ export function createSidebarBots(ctx: AppContext) {
       actions: {
         redraw: requestFrame,
         close,
-        async openSession() {},
+        async openSession(sessionId) {
+          close()
+          await deps.switchSession(sessionId as SessionId)
+        },
         async newSession(directory) {
           const sessionId = await createExternalSession(external, directory)
           if (!sessionId) return
@@ -466,7 +492,19 @@ export function createSidebarBots(ctx: AppContext) {
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
     state.pendingBot = { sessionId: sessionId as SessionId, name }
+    noteChat(sessionId, name)
     return sessionId as SessionId
+  }
+
+  /** Enter or a click on a project's name: a blank chat in that folder (the one `/new` opens, reused while empty); the folder is this terminal's from then on. */
+  async function startFolderChat(directory: string, deps: SidebarDeps) {
+    state.sidebarFocus = false
+    open.set(directory, true)
+    const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
+    const sessionId = created.ok ? created.result?.sessionId : undefined
+    if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    await deps.switchSession(sessionId as SessionId)
+    startNewChatPanel(ctx)
   }
 
   /** Enter or a click on a bot: a new chat with it in the folder MendCode is opened in, shown right away. */
@@ -534,5 +572,5 @@ export function createSidebarBots(ctx: AppContext) {
   /** `/bot open <name>`: the bot's page, from anywhere. */
   const openNamed = (name: string, deps: SidebarDeps) => openBot(name, deps)
 
-  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, sessions, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
 }

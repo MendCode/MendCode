@@ -269,23 +269,24 @@ describe("all projects", () => {
     expect(sidebarText(folder)).not.toContain("▾ api")
   })
 
-  test("every folder is an open group; Enter and a click fold a group, and a folded one says how many of its sessions work or wait", async () => {
+  test("every folder is an open group; Space and a click on the arrow fold a group, and a folded one says how many of its sessions work or wait", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
     await until(h, "▾ api")
     expect(sidebarText(h)).toContain("▾ app")
     expect(sidebarText(h)).toContain("Other project")
     expect(h.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
-    await h.type(click(8, rowOf(h, "▾ api")))
+    const glyph = side(h)[rowOf(h, "▾ api")]!.indexOf("▾")
+    await h.type(click(glyph, rowOf(h, "▾ api")))
     expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Other project")
     expect(side(h)[rowOf(h, "▸ api")]).toMatch(/▸ api +1 active │$/)
-    await h.type(click(8, rowOf(h, "▸ api")))
+    await h.type(click(glyph, rowOf(h, "▸ api")))
     expect(sidebarText(h)).toContain("Other project")
-    // The keyboard: focus the list, go down to the group (Chrome, Client reconnect, then api), Enter folds it.
+    // The keyboard: focus the list, go down to the group (Chrome, Client reconnect, then api), Space folds it.
     await h.type("\x1b[D")
     for (let turn = 0; turn < 2; turn++) await h.type("\x1b[B")
     expect(side(h)[rowOf(h, "api")]).toMatch(/^ › /)
-    await h.type("\r")
+    await h.type(" ")
     expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Other project")
     expect(h.app.sessionId).toBe(h.ids.current)
@@ -305,7 +306,8 @@ describe("all projects", () => {
     expect(side(h)[appMore("more")]).toMatch(/^ › /)
     await h.type("\r")
     expect(sidebarText(h)).toContain("Client reconnect")
-    expect(side(h)[rowOf(h, "show less")]).toMatch(/^ › /)
+    // The cursor lands on the first row that appeared.
+    expect(side(h)[rowOf(h, "Client reconnect")]).toMatch(/^ › /)
     expect(h.app.sessionId).toBe(h.ids.current)
     // The mouse folds it back.
     await h.type(click(8, rowOf(h, "show less")))
@@ -358,6 +360,40 @@ describe("the bot card", () => {
     expect(h.text().join("\n")).not.toContain("Untitled")
   })
 
+  describe("a bot's chat wears the bot's colour", () => {
+    const rowWith = (h: App, needle: string) => h.frames.at(-1)!.find((line) => line.map((span) => span.text).join("").includes(needle))
+    const borders = (h: App) => h.frames.at(-1)!.filter((line) => line.some((span) => /^─+$/.test(span.text.trim()) && span.text.length > 20))
+
+    test("in a bot's chat, even a blank one, the prompt rules and the lead glyph take the bot's colour and the footer names the bot", async () => {
+      const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "build", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user" }], problems: [] } } as never : undefined })
+      await until(h, "Bots")
+      h.app.render()
+      // The open chat (Chrome) is calm's.
+      expect(borders(h).length).toBeGreaterThan(0)
+      for (const line of borders(h)) expect(line.find((span) => /─/.test(span.text))?.fg).toBe("success")
+      await onBot(h)
+      await h.type("\r")
+      for (let turn = 0; turn < 40 && h.app.sessionId !== h.ids.created; turn++) await Bun.sleep(5)
+      await Bun.sleep(20)
+      h.app.render()
+      expect(rowWith(h, "❭")?.find((span) => span.text.includes("❭"))).toMatchObject({ fg: "success", bold: true })
+      for (const line of borders(h)) expect(line.find((span) => /─/.test(span.text))?.fg).toBe("success")
+      const footer = h.text().at(-1)!
+      expect(footer).toContain("● calm · Sonnet")
+    })
+
+    test("a plain session keeps the prompt as it was", async () => {
+      const h = chatApp({ height: 30 })
+      await until(h, "Other project")
+      await h.type(click(8, rowOf(h, "Other project")))
+      expect(h.app.sessionId).toBe(h.ids.elsewhere)
+      h.app.render()
+      expect(borders(h).length).toBeGreaterThan(0)
+      for (const line of borders(h)) expect(line.find((span) => /─/.test(span.text))?.fg).toBe("primary")
+      expect(rowWith(h, "❭")?.find((span) => span.text.includes("❭"))?.fg).toBe("muted")
+    })
+  })
+
   test("a bot's blank chat names the bot's own model under the prompt, not the session's default", async () => {
     const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "build", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user" }], problems: [] } } as never : undefined })
     await onBot(h)
@@ -366,7 +402,7 @@ describe("the bot card", () => {
     await Bun.sleep(20)
     h.app.render()
     const footer = h.text().at(-1)!
-    expect(footer).toContain("Calm · Sonnet")
+    expect(footer).toContain("● calm · Sonnet")
     expect(footer).not.toContain("GPT-6-Luna")
   })
 
@@ -383,6 +419,25 @@ describe("the bot card", () => {
     expect(h.sentOf("session.agent.set")).toHaveLength(1)
   })
 
+  test("a new chat with a bot sits under the bot's chats the moment its summary arrives, never under Projects, and the chats open", async () => {
+    const h = chatApp({ height: 60 })
+    await onBot(h)
+    // Fold calm's chats first: starting a chat opens them again.
+    await h.type(" ")
+    expect(sidebarText(h)).toContain("▸ chats")
+    await h.type("\r")
+    await h.type("hello bot\r")
+    // The daemon pushes the new session as an ordinary summary (no agent in it).
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.ids.created, directory: "/work/app", title: "hello bot", state: "generating", updatedAt: NOW } as never)
+    h.app.render()
+    const text = sidebarText(h)
+    expect(text).toContain("▾ chats")
+    expect(text.indexOf("hello bot")).toBeGreaterThan(text.indexOf("Bots"))
+    expect(text.indexOf("hello bot")).toBeLessThan(text.indexOf("Projects"))
+    expect(text.match(/hello bot/g)).toHaveLength(1)
+    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
+  })
+
   test("a click on the bot's row does the same", async () => {
     const h = chatApp()
     await until(h, "Bots")
@@ -391,18 +446,41 @@ describe("the bot card", () => {
     expect(h.app.sessionId).toBe(h.ids.created)
   })
 
-  test("a click on a bot's chats row folds and opens them", async () => {
+  test("a click on the arrow of a bot's chats row folds and opens them; a click on its name starts a chat with the bot", async () => {
     const h = chatApp({ height: 40 })
-    // The open chat belongs to calm, so its chats start open; a click folds them, another opens them.
+    // The open chat belongs to calm, so its chats start open; a click on the arrow folds them, another opens them.
     await until(h, "▾ chats")
     expect(sidebarText(h)).toContain("Docs pass")
-    await h.type(click(8, rowOf(h, "▾ chats")))
+    const glyph = side(h)[rowOf(h, "▾ chats")]!.indexOf("▾")
+    await h.type(click(glyph, rowOf(h, "▾ chats")))
     h.app.render()
     expect(sidebarText(h)).toContain("▸ chats")
     expect(sidebarText(h)).not.toContain("Docs pass")
-    await h.type(click(8, rowOf(h, "▸ chats")))
+    await h.type(click(glyph, rowOf(h, "▸ chats")))
     h.app.render()
     expect(sidebarText(h)).toContain("Docs pass")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type(click(glyph + 3, rowOf(h, "▾ chats")))
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
+    expect(h.app.sessionId).toBe(h.ids.created)
+  })
+
+  test("Space on a bot or on its chats row folds the chats; Enter on the chats row starts a chat with the bot", async () => {
+    const h = chatApp({ height: 40 })
+    await onBot(h)
+    await h.type(" ")
+    h.app.render()
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(sidebarText(h)).not.toContain("Docs pass")
+    await h.type(" ")
+    h.app.render()
+    expect(sidebarText(h)).toContain("Docs pass")
+    await h.type("\x1b[B")
+    expect(sidebarText(h)).toContain("↵ chat")
+    expect(sidebarText(h)).toContain("spc fold")
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
+    expect(h.app.sessionId).toBe(h.ids.created)
   })
 
   test("/bot open <name> opens the page from a chat, and without a name the open chat's bot", async () => {

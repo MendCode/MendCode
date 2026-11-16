@@ -1,4 +1,5 @@
 import { agentColor } from "../../view/agent-color"
+import { botAccent } from "./bot-accent"
 import { compactFallback } from "./compact-fallback"
 import type { createSession } from "./session"
 import type { createScratch } from "./scratch"
@@ -163,7 +164,7 @@ export function createChrome(ctx: AppContext, actions: {
       } else {
         const sessions = multi.sessions()
         const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader })
-        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id }))
+        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id, ...(hit.fold ? { fold: hit.fold } : {}) }))
         state.sidebarImages = drawn.images
         return drawn.lines
       }
@@ -342,6 +343,8 @@ export function createChrome(ctx: AppContext, actions: {
     const model = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
+    // A chat with a bot leads its row with the bot's glyph and name in the bot's colour.
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state)
     // The model's own provider, else the engine that runs it (a Claude Code model is not served by the native engine the daemon started with).
     const provider = servedByProvider(state.effectiveModel?.model ?? model, state.modelReport) ?? usageInForce(state)?.provider
     // This session's background work; the row over the prompt names it, so the built-in count is not repeated (`/footer +jobs` still places it).
@@ -405,8 +408,8 @@ export function createChrome(ctx: AppContext, actions: {
       // With `footerRows` the first row is the left side whole (notice, goal and loops keep the right), and `statusRight` has no row to end.
       ...(rows ? { leftItems: rows[0] ?? [] } : state.tuiProfile.statusLeft ? { leftItems: items(state.tuiProfile.statusLeft) } : {}),
       ...(!rows && state.tuiProfile.statusRight ? { rightItems: items(state.tuiProfile.statusRight) } : {}),
-      agentColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)),
-      ...(state.tuiProfile.showAgent ? { agent: name.charAt(0).toUpperCase() + name.slice(1) } : {}),
+      agentColor: botSeen ? { fg: botSeen.color } : agentColor(state.agentReport?.agents.find((agent) => agent.name === name)),
+      ...(state.tuiProfile.showAgent ? { agent: botSeen ? `${botSeen.glyph} ${botSeen.name}` : name.charAt(0).toUpperCase() + name.slice(1) } : {}),
       // With the status line in the prompt border the row under it keeps telemetry only: model and effort are already above.
       ...(state.tuiProfile.showModel && model && !statusInBorder() ? { model: modelLabel(model, state.modelReport) } : {}),
       ...(state.tuiProfile.showModel && model && !statusInBorder() && (feed.fast || feed.fastIgnored) ? { fast: { mark: fastMark(feed), applies: feed.fast === true } } : {}),
@@ -562,6 +565,7 @@ export function createChrome(ctx: AppContext, actions: {
     const id = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     const threshold = contextLimit(usage, compactFallback(state))
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state)
     const profile = state.tuiProfile
     const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
     const fastOn = state.modelReport?.session?.fast ?? state.settingsNow.serviceTier === "fast"
@@ -594,7 +598,7 @@ export function createChrome(ctx: AppContext, actions: {
       waiting: loopsWaiting + flowsWaiting + childrenWaitingElsewhere(),
       ...(childrenWaitingElsewhere() ? { childApprovals: childrenWaitingElsewhere() } : {}),
       ...(state.transcript.goal ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
-      ...(profile.showAgent ? { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
+      ...(profile.showAgent ? botSeen ? { mode: `${botSeen.glyph} ${botSeen.name}`, modeColor: { fg: botSeen.color } } : { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
       ...(profile.showPermission ? { permission: state.transcript.permissionMode, permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode] } : {}),
       connection: state.connection,
       ...(hints.length ? { hints } : {}),

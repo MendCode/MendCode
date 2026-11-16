@@ -13,6 +13,7 @@ import { renderHeaderSlot } from "../../view/topbar"
 import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
 import { agentThreadHeader, threadState } from "../../view/agent-thread-header"
 import { parentTitle, viewedAgent } from "./agent-cue"
+import { botAccent } from "./bot-accent"
 import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
@@ -133,7 +134,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const plainFrame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
     // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
     const viewed = inlineView || home ? undefined : viewedAgent(state)
-    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : plainFrame
+    // A chat with a bot wears the bot's colour, subtly: the rules and the lead glyph, nothing else (a sub-agent's own colour wins).
+    const accent = inlineView || viewed || !rich ? undefined : botAccent(state)
+    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : accent ? tintFrame(plainFrame, accent.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
     const statusRoom = width - PROMPT_MARGIN * 2 - 6
     const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined

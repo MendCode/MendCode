@@ -1557,6 +1557,8 @@ const botParts = lazyValue(() => {
     chat: z.string().min(1).max(100).optional(),
     /** The app the bot lives in, as `open -a` names it, for "Open in <app>". */
     app: z.string().min(1).max(100).optional(),
+    /** The MendCode sessions on its chat model, by folder, as a MendCode bot's chats are (the daemon fills it; the app's own server-side history is not read). */
+    projects: z.array(project).optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),

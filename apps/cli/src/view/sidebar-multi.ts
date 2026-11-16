@@ -1,4 +1,4 @@
-import type { BotListReport, BotState, SessionSummary } from "@mendcode/protocol"
+import type { BotListReport, BotState, ExternalBotInfo, SessionSummary } from "@mendcode/protocol"
 import { glyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
 import type { ImagePlacement } from "../ui/image-layer"
 import { botIcon, type BotIcon, type IconFaces } from "./bot-icon"
@@ -18,7 +18,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -49,10 +49,16 @@ export type MultiInput = {
   visits?: ReadonlyMap<string, { at: number; updatedAt: number }>
   /** The `+ N more projects` row was opened: the whole ranked list shows, ending in `show fewer`. */
   projectsExpanded?: boolean
+  /** How many of the projects past the cap the `+ N more projects` row has revealed so far (a page per press); `projectsExpanded` reveals them all. */
+  projectsRevealed?: number
   /** Sessions a project shows before its `+ N more` row (the profile's `sidebarPreviewCount`); absent, `DEFAULT_PREVIEW`. */
   previewCount?: number
   /** The folders whose whole list the user opened with the more row; the others show the preview. */
   expanded?: ReadonlySet<string>
+  /** Per folder (or `bot:<name>` key), how many hidden rows the more row has revealed so far (a page per press). */
+  revealed?: ReadonlyMap<string, number>
+  /** Chats this terminal knows belong to a bot before any list says so (a blank chat started from the bot, a first message just sent): session id to the bot's name, or an external bot's row id. */
+  chatBots?: ReadonlyMap<string, string>
   unread?: readonly string[]
   spinner?: string
   blink?: boolean
@@ -72,6 +78,9 @@ const BOT_CHATS = "botchats:"
 const BOT_MORE = "botmore:"
 /** A bot of another app (`bot.list` `external`) that a connector can chat with: `xbot:<origin>:<id>`. */
 const EXTERNAL_BOT = "xbot:"
+/** The foldable row of the bots of one other app: `xgroup:<origin>` (also its key in `open`). */
+const XGROUP = "xgroup:"
+export const isExternalGroupId = (id: string) => id.startsWith(XGROUP)
 export const isExternalBotId = (id: string) => id.startsWith(EXTERNAL_BOT)
 export const externalBotId = (bot: { origin: string; id: string }) => `${EXTERNAL_BOT}${bot.origin}:${bot.id}`
 /** The connector and bot an `xbot:` row names (an origin never holds a colon). */
@@ -80,6 +89,8 @@ export function externalBotOf(id: string): { origin: string; id: string } | unde
   const colon = rest.indexOf(":")
   return isExternalBotId(id) && colon > 0 ? { origin: rest.slice(0, colon), id: rest.slice(colon + 1) } : undefined
 }
+/** How many hidden projects or sessions one press of a more row reveals. */
+export const REVEAL_PAGE = 8
 export const DEFAULT_PREVIEW = 5
 export const DEFAULT_RECENT_DAYS = 7
 const DAY_MS = 24 * 60 * 60 * 1000
@@ -95,7 +106,8 @@ const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●
 /** A row that works or waits for you: it shows past the preview and keeps its project listed. */
 const busyMark = (value: SessionMark) => value === "running" || waitsOnYou(value)
 
-type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> } }
+type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> }; /** A folding header: its ▸/▾ glyph starts `col` cells in from the line's start. */ fold?: { col: number; open: boolean } }
+type Push = (line: Line, id?: string, picture?: { col: number; at: NonNullable<BotIcon["image"]> }, fold?: { col: number; open: boolean }) => void
 
 export const isGroupId = (id: string) => id.startsWith(GROUP)
 export const isBotId = (id: string) => id.startsWith(BOT)
@@ -114,6 +126,8 @@ export const isBotMoreId = (id: string) => id.startsWith(BOT_MORE)
 export const botMoreName = (id: string) => id.slice(BOT_MORE.length)
 /** The key a bot's chats use in `open` (folded or opened by hand) and `expanded` (whole list); a folder path never starts with it. */
 export const botKey = (name: string) => `${BOT}${name}`
+/** The same key for a chat host: a bot's name, or the row id of a bot of another app (which already starts with `xbot:`). */
+export const hostKey = (host: string) => host.startsWith(EXTERNAL_BOT) ? host : botKey(host)
 
 const baseName = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() || directory
 /** The folder's own name, with its parent's when two listed folders share it. */
@@ -147,6 +161,13 @@ const hiddenEmpty = (session: MultiSession, input: Pick<MultiInput, "now" | "vis
 
 /** The first `limit` sessions, plus any beyond them that is open or busy (`keep`), in the same order. */
 const preview = (list: readonly MultiSession[], limit: number, keep: (session: MultiSession) => boolean) => list.filter((session, index) => index < limit || keep(session))
+
+/** The `shown` rows plus the next `extra` of the others, in the list's own order. */
+function reveal(list: readonly MultiSession[], shown: readonly MultiSession[], extra: number): MultiSession[] {
+  const have = new Set(shown.map((session) => session.sessionId))
+  let left = extra
+  return list.filter((session) => have.has(session.sessionId) || (left > 0 && left-- > 0))
+}
 
 /** The folders to list: the opened one first, then the busy ones, then the most recently used up to the cap; `rest` waits behind the more-projects row. */
 function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): ReturnType<typeof rankProjects> {
@@ -184,10 +205,24 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
   const unread = new Set(input.unread ?? [])
   const botOf = new Map<string, { name: string; state: BotState; identity: BotListReport["bots"][number]["identity"] }>()
   for (const bot of input.bots?.bots ?? []) for (const project of bot.projects) for (const member of project.sessions) botOf.set(member.sessionId, { name: bot.name, state: bot.state, identity: bot.identity })
+  // The chats of a bot of another app are sessions on its chat model: the row id names the host, as a bot's name does for its own.
+  const externalHost = new Map<string, string>()
+  for (const external of input.bots?.external ?? []) {
+    if (external.chat) externalHost.set(external.chat, externalBotId(external))
+    for (const project of external.projects ?? []) for (const member of project.sessions) botOf.set(member.sessionId, { name: externalBotId(external), state: external.state, identity: external.identity ?? { origin: external.origin } })
+  }
   // A chat of a bot lives under its bot: the project lists, their counts and their ranking leave it out (/sessions still lists it).
   const botNames = new Set((input.bots?.bots ?? []).map((bot) => bot.name))
-  const ofBot = (session: MultiSession) => botOf.has(session.sessionId) || (session.agent !== undefined && botNames.has(session.agent))
-  const projectInput: MultiInput = botNames.size ? { ...input, sessions: input.sessions.filter((session) => !ofBot(session)) } : input
+  /** The host of a chat: a bot's name or an external bot's row id, from the report, the terminal's own note, the agent, or the chat model. */
+  const hostOf = (session: MultiSession): string | undefined => botOf.get(session.sessionId)?.name ?? input.chatBots?.get(session.sessionId) ?? (session.agent !== undefined && botNames.has(session.agent) ? session.agent : undefined) ?? (session.model ? externalHost.get(session.model.model) : undefined)
+  const ofBot = (session: MultiSession) => hostOf(session) !== undefined
+  const known = new Map(input.sessions.map((session) => [session.sessionId, session]))
+  const byHost = new Map<string, MultiSession[]>()
+  for (const session of input.sessions) {
+    const host = hostOf(session)
+    if (host !== undefined) byHost.set(host, [...(byHost.get(host) ?? []), session])
+  }
+  const projectInput: MultiInput = botNames.size || externalHost.size || input.chatBots?.size ? { ...input, sessions: input.sessions.filter((session) => !ofBot(session)) } : input
   const mark = (session: MultiSession) => sessionMark(session as never, unread.has(session.sessionId) && session.sessionId !== input.current)
   const symbol = (value: SessionMark): Span => markSymbol(value, { g, spinner: input.spinner, blink: input.blink, ascii: input.ascii })
   const names = new Map<string, string>()
@@ -195,10 +230,10 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
   const lead = (id: string): Line => id === input.current ? [{ text: "▌", fg: "primary" }, { text: " " }] : id === picked ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
   const starts: Array<{ section: SidebarSection; id: string }> = []
   let inSection: SidebarSection | undefined
-  const push = (line: Line, id?: string, picture?: { col: number; at: NonNullable<BotIcon["image"]> }) => {
+  const push: Push = (line, id, picture, fold) => {
     if (id !== undefined && inSection && !starts.some((start) => start.section === inSection)) starts.push({ section: inSection, id })
     const selected = id !== undefined && id === picked
-    entries.push({ line, ...(id !== undefined ? { id, lead: lead(id) } : { lead: [{ text: "  " }] }), ...(selected ? { fill: true } : {}), ...(picture ? { picture } : {}) })
+    entries.push({ line, ...(id !== undefined ? { id, lead: lead(id) } : { lead: [{ text: "  " }] }), ...(selected ? { fill: true } : {}), ...(picture ? { picture } : {}), ...(fold ? { fold } : {}) })
   }
   const blankBetween = () => { if (entries.length) entries.push({ line: [] }) }
   const heading = (title: string, count: number) => push(spread([{ text: title, fg: "muted" }], [{ text: String(count), fg: "muted" }], inner))
@@ -243,35 +278,36 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
     }
   }
 
-  /** A bot's chats in every folder, newest first: what the daemon reports for it, plus the listed sessions that name it as their agent. */
-  const chatsOf = (bot: BotListReport["bots"][number]): MultiSession[] => {
-    const known = new Map(input.sessions.map((session) => [session.sessionId, session]))
+  /** A bot's chats in every folder, newest first: what the daemon reports for it, plus the listed sessions that belong to it. `host` is the bot's name or the external bot's row id. */
+  const chatsOf = (host: string, projects: BotListReport["bots"][number]["projects"]): MultiSession[] => {
     const found = new Map<string, MultiSession>()
-    for (const project of bot.projects) for (const member of project.sessions) found.set(member.sessionId, known.get(member.sessionId) ?? { sessionId: member.sessionId, title: member.title, state: (member.status === "running" ? "generating" : "idle") as MultiSession["state"], queued: 0, updatedAt: member.updatedAt, directory: project.directory })
-    for (const session of input.sessions) if (session.agent === bot.name && !found.has(session.sessionId)) found.set(session.sessionId, session)
+    for (const project of projects) for (const member of project.sessions) found.set(member.sessionId, known.get(member.sessionId) ?? { sessionId: member.sessionId, title: member.title, state: (member.status === "running" ? "generating" : "idle") as MultiSession["state"], queued: 0, updatedAt: member.updatedAt, directory: project.directory })
+    for (const session of byHost.get(host) ?? []) if (!found.has(session.sessionId)) found.set(session.sessionId, session)
     return [...found.values()].filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input))).sort((a, b) => sessionActivityAt(b as never) - sessionActivityAt(a as never))
   }
   /** The folding row under a bot and, when open, its chats: a preview of three and a `+ N more` row, as another project's group. */
-  const botChats = (bot: BotListReport["bots"][number]) => {
+  const botChats = (host: string, label: string, projects: BotListReport["bots"][number]["projects"], indent = "") => {
     if (input.icons) return
-    const chats = chatsOf(bot)
+    const chats = chatsOf(host, projects)
     if (!chats.length) return
-    const key = botKey(bot.name)
-    const id = `${BOT_CHATS}${bot.name}`
+    const key = hostKey(host)
+    const id = `${BOT_CHATS}${host}`
     const busy = (session: MultiSession) => busyMark(mark(session))
     const open = input.open.get(key) ?? chats.some((session) => session.sessionId === input.current)
     const active = chats.filter(busy).length
     const right: Line = [{ text: !open && active > 0 ? `${active} active` : String(chats.length), fg: !open && active > 0 ? "warning" : "muted" }]
-    names.set(id, `${bot.name} chats`)
-    push(spread([{ text: "  " }, { text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: "chats", fg: "muted", bold: id === picked }], right, inner), id)
+    names.set(id, `${label} chats`)
+    push(spread([{ text: `  ${indent}` }, { text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: "chats", fg: "muted", bold: id === picked }], right, inner), id, undefined, { col: 2 + indent.length, open })
     if (!open) return
     const expanded = input.expanded?.has(key) === true
-    const rows = expanded ? chats : preview(chats, OTHER_PREVIEW, (session) => session.sessionId === input.current || busy(session))
-    sessionRows(rows, "    ", false)
+    const more = expanded ? Number.POSITIVE_INFINITY : input.revealed?.get(key) ?? 0
+    const collapsed = preview(chats, OTHER_PREVIEW, (session) => session.sessionId === input.current || busy(session))
+    const rows = more > 0 ? reveal(chats, collapsed, more) : collapsed
+    sessionRows(rows, `    ${indent}`, false)
     const hidden = chats.length - rows.length
-    if (hidden > 0 || (expanded && chats.length > OTHER_PREVIEW)) {
-      const more = `${BOT_MORE}${bot.name}`
-      push([{ text: "      " }, { text: hidden > 0 ? `+ ${hidden} more` : "show less", fg: "muted", bold: more === picked }], more)
+    if (hidden > 0 || (more > 0 && chats.length > OTHER_PREVIEW)) {
+      const more = `${BOT_MORE}${host}`
+      push([{ text: `      ${indent}` }, { text: hidden > 0 ? `+ ${hidden} more` : "show less", fg: "muted", bold: more === picked }], more)
     }
   }
 
@@ -298,28 +334,45 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         const originRoom = room - lineWidth([{ text: name }]) - 2
         const origin = originRoom >= 3 ? [{ text: `  ${truncateEnd(bot.identity.origin, originRoom)}`, fg: "muted" as const }] : []
         push(spread([iconCells, { text: name, fg: "text", bold: `${BOT}${bot.name}` === picked }, ...origin], right, inner), `${BOT}${bot.name}`, picture)
-        botChats(bot)
+        botChats(bot.name, bot.name, bot.projects)
       }
-      for (const external of bots.external) {
-        if (input.icons) continue
-        const [unicodeMark, asciiMark] = STATE_MARK[external.state]
-        const stateMark = input.ascii ? asciiMark : unicodeMark
-        const identity = external.identity ?? { origin: external.origin }
-        // An imported bot keeps its glyph: it has no row to pick, so no picture is placed for it.
-        const made = botIcon({ name: external.name, shape: identity.shape, color: identity.color, ascii: input.ascii })
-        // One a connector can chat with is a row to pick (Enter chats, `o` opens its page); one it cannot stays a plain line.
-        const row = external.chat ? externalBotId(external) : undefined
-        push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner), row)
+      // The bots of another app list under one foldable row per origin: folded, only the ones with a chat that works or was active in the last day show.
+      const origins = new Map<string, ExternalBotInfo[]>()
+      for (const external of input.icons ? [] : bots.external) origins.set(external.origin, [...(origins.get(external.origin) ?? []), external])
+      for (const [origin, members] of origins) {
+        const groupId = `${XGROUP}${origin}`
+        const chatsOfBot = (external: ExternalBotInfo) => chatsOf(externalBotId(external), external.projects ?? [])
+        const lately = (external: ExternalBotInfo) => external.state !== "idle" || chatsOfBot(external).some((session) => busyMark(mark(session)) || input.now - sessionActivityAt(session as never) <= DAY_MS)
+        const recent = members.filter(lately)
+        const open = input.open.get(groupId) ?? false
+        names.set(groupId, `${origin} bots`)
+        push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: `${truncateEnd(origin, inner - 12)} · ${members.length}`, fg: "muted", bold: groupId === picked }], !open && recent.length ? [{ text: `${recent.length} active`, fg: "warning" }] : [], inner), groupId, undefined, { col: 0, open })
+        for (const external of open ? members : recent) {
+          const [unicodeMark, asciiMark] = STATE_MARK[external.state]
+          const stateMark = input.ascii ? asciiMark : unicodeMark
+          const identity = external.identity ?? { origin: external.origin }
+          // An imported bot keeps its glyph: it has no row to pick, so no picture is placed for it.
+          const made = botIcon({ name: external.name, shape: identity.shape, color: identity.color, ascii: input.ascii })
+          // One a connector can chat with is a row to pick (Enter chats, `o` opens its page); one it cannot stays a plain line.
+          const row = external.chat ? externalBotId(external) : undefined
+          push(spread([{ text: "  " }, { text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 16), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner), row)
+          if (row) botChats(row, external.name, external.projects ?? [], "  ")
+        }
       }
     } else if (section === "projects") {
       const ranked = input.icons ? { shown: [input.directory], rest: [] as string[], all: [input.directory], always: new Set([input.directory]) } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
-      // The expanded list is the whole ranking, newest first: shown and rest joined would put an old opened folder ahead of newer ones.
-      const directories = input.projectsExpanded ? ranked.all : ranked.shown
+      const extra = input.projectsExpanded ? Number.POSITIVE_INFINITY : input.projectsRevealed ?? 0
+      // The list is the ranking, newest first: the shown ones and the revealed page of the rest in ranking order, so an old opened folder never goes ahead of newer ones.
+      const visible = new Set([...ranked.shown, ...ranked.rest.slice(0, extra)])
+      const directories = ranked.all.filter((directory) => visible.has(directory))
       const labels = groupLabels(directories)
       if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
       else blankBetween()
       // An automatic count fills the height: a group that would not fit is taken back, and with it every plain one after it.
-      const auto = !input.icons && !input.projectsExpanded && input.scope === "all" && input.projects?.count === 0
+      const auto = !input.icons && input.scope === "all" && input.projects?.count === 0
+      // In the automatic count a page reveals projects past the height's cut: this many more are drawn after it.
+      let spare = extra
+      let revealedPast = 0
       const room = input.height - (input.header === false ? 0 : 2) - 1
       const ownBusy = (session: MultiSession) => busyMark(mark(session))
       const recentMs = (input.recentDays ?? DEFAULT_RECENT_DAYS) > 0 ? (input.recentDays ?? DEFAULT_RECENT_DAYS) * DAY_MS : Number.POSITIVE_INFINITY
@@ -329,7 +382,11 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         const list = live(projectInput.sessions, directory, input)
         // The opened, busy and used-today folders show past the height cut as they do past the count.
         const forced = directory === input.directory || ranked.always.has(directory) || list.some(ownBusy)
-        if (auto && cutAt >= 0 && !forced) continue
+        if (auto && cutAt >= 0 && !forced) {
+          if (spare <= 0) continue
+          spare--
+          revealedPast++
+        }
         const rollback = entries.length
         listed++
         const open = input.icons || isOpen(input, directory)
@@ -340,7 +397,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
           const holdsCurrent = list.some((session) => session.sessionId === input.current)
           // A folded group says how many of its sessions work or wait; otherwise how many it holds.
           const right: Line = [{ text: !open && active > 0 ? `${active} active` : String(list.length), fg: !open && active > 0 ? "warning" : "muted" }]
-          push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: truncateEnd(labels.get(directory) ?? baseName(directory), inner - lineWidth(right) - 4), fg: "text", bold: holdsCurrent || id === picked }], right, inner), id)
+          push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: truncateEnd(labels.get(directory) ?? baseName(directory), inner - lineWidth(right) - 4), fg: "text", bold: holdsCurrent || id === picked }], right, inner), id, undefined, { col: 0, open })
         }
         if (open) {
           if (!list.length && !input.icons) push([{ text: "  No sessions yet", fg: "muted" }])
@@ -348,29 +405,34 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
           const setting = input.previewCount ?? DEFAULT_PREVIEW
           const limit = directory === input.directory ? setting : Math.min(OTHER_PREVIEW, setting)
           const expanded = !input.icons && input.expanded?.has(directory) === true
+          const more = expanded ? Number.POSITIVE_INFINITY : input.icons ? 0 : input.revealed?.get(directory) ?? 0
           // Sessions older than the window wait behind the row too; the open, busy and pinned ones show at any age.
           const keep = (session: MultiSession) => session.sessionId === input.current || ownBusy(session) || session.lifecycle?.pinnedAt !== undefined
           const recent = input.icons || recentMs === Number.POSITIVE_INFINITY ? list : list.filter((session) => keep(session) || input.now - sessionActivityAt(session as never) <= recentMs)
           const collapsed = input.icons ? list : preview(recent, limit, keep)
-          const rows = expanded ? list : collapsed
+          const rows = more > 0 ? reveal(list, collapsed, more) : collapsed
           sessionRows(rows, input.icons ? "" : "  ")
           const hidden = list.length - rows.length
-          if (hidden > 0 || (expanded && list.length > collapsed.length)) {
+          if (hidden > 0 || (more > 0 && list.length > collapsed.length)) {
             const id = `${MORE}${directory}`
-            const older = collapsed.length === recent.length
+            const shownIds = new Set(rows.map((session) => session.sessionId))
+            const recentIds = new Set(recent.map((session) => session.sessionId))
+            const older = list.every((session) => shownIds.has(session.sessionId) || !recentIds.has(session.sessionId))
             push([{ text: "    " }, { text: hidden > 0 ? `+ ${hidden} ${older ? "older" : "more"}` : "show less", fg: "muted", bold: id === picked }], id)
           }
         }
-        if (auto && !forced && at >= AUTO_MIN_PROJECTS && entries.length > room) {
-          entries.length = rollback
-          listed--
+        if (auto && cutAt < 0 && !forced && at >= AUTO_MIN_PROJECTS && entries.length > room) {
           cutAt = at
+          // A revealed page lifts the cut: the group that would have been taken back stays as the first of the page.
+          if (spare > 0) { spare--; revealedPast++ }
+          else { entries.length = rollback; listed-- }
         }
       }
       // The projects past the cap wait behind one row that opens the whole ranked list (and folds it back).
-      const waiting = ranked.rest.length + (auto ? directories.length - listed : 0)
-      const foldable = waiting > 0 || (input.projectsExpanded === true && input.projects?.count === 0 && directories.length > AUTO_MIN_PROJECTS)
-      if (!input.icons && foldable) push([{ text: "  " }, { text: input.projectsExpanded ? "show fewer" : `+ ${waiting} more projects`, fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
+      const revealedRest = directories.length - ranked.shown.length
+      const waiting = ranked.rest.length - revealedRest + (auto ? directories.length - listed : 0)
+      const foldable = waiting > 0 || revealedRest + revealedPast > 0
+      if (!input.icons && foldable) push([{ text: "  " }, { text: waiting > 0 ? `+ ${waiting} more projects` : "show fewer", fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
     } else {
       blankBetween()
       const loose = live(projectInput.sessions, input.directory, input)
@@ -395,8 +457,18 @@ export function multiStops(input: MultiInput): string[] {
 export function multiSectionStarts(input: MultiInput): string[] {
   return build(input).starts.map((start) => start.id)
 }
+/**
+ * Whether the row folds, as drawn now: `open` or `folded` for a project, a bot's chats or an origin's bots (a bot's own row answers
+ * for its chats row), undefined for a row that does not fold.
+ */
+export function multiFoldState(input: MultiInput, id: string): "open" | "folded" | undefined {
+  const target = isBotId(id) ? `${BOT_CHATS}${botName(id)}` : isExternalBotId(id) ? `${BOT_CHATS}${id}` : id
+  const fold = build(input).entries.find((entry) => entry.id === target)?.fold
+  return fold ? (fold.open ? "open" : "folded") : undefined
+}
+
 /** The sidebar, exactly `input.height` rows by the width of its kind, every row closed by the rule. */
-export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Array<{ row: number; id: string }>; /** The bots' pictures at the sidebar's own row and column; empty unless `faces` was given. */ images: ImagePlacement[] } {
+export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Array<{ row: number; id: string; /** The cells (from the sidebar's left edge) of the ▸/▾ glyph of a folding row. */ fold?: { from: number; to: number } }>; /** The bots' pictures at the sidebar's own row and column; empty unless `faces` was given. */ images: ImagePlacement[] } {
   const g = input.glyphs ?? glyphs()
   const width = input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
   const inner = width - 1 - PAD_X - 2
@@ -411,7 +483,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
     if (value === "running") counts.running++
     else if (waitsOnYou(value)) counts.approval++
   }
-  const summary: Line = input.focused ? [{ text: picked !== undefined && (isBotId(picked) || isExternalBotId(picked)) ? "↵ chat  o page  → prompt" : picked !== undefined && isGroupId(picked) ? "↵ fold  x hide  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
+  const summary: Line = input.focused ? [{ text: picked !== undefined && (isBotId(picked) || isExternalBotId(picked)) ? "↵ chat  o page  → prompt" : picked !== undefined && isBotChatsId(picked) ? "↵ chat spc fold → prompt" : picked !== undefined && isGroupId(picked) ? "↵ new spc fold x hide" : picked !== undefined && isExternalGroupId(picked) ? "↵ fold  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
     ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
     : [{ text: "← focus", fg: "muted" }]
   const head: Entry[] = input.icons || input.header === false ? [] : [{ line: spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner) }, { line: [] }]
@@ -426,10 +498,11 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
   const start = overflow && lastOfPicked >= 0 ? Math.max(0, Math.min(lastOfPicked - shownRoom + 1, entries.length - shownRoom)) : 0
   const windowed = entries.slice(start, start + shownRoom)
   const body: Entry[] = [...head]
-  const hits: Array<{ row: number; id: string }> = []
+  const hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }> = []
   const images: ImagePlacement[] = []
   for (const entry of windowed) {
-    if (entry.id !== undefined) hits.push({ row: body.length, id: entry.id })
+    // One cell of margin, the two of the marker, then the cells before the glyph and its space.
+    if (entry.id !== undefined) hits.push({ row: body.length, id: entry.id, ...(entry.fold ? { fold: { from: 1 + PAD_X + entry.fold.col, to: 1 + PAD_X + entry.fold.col + 2 } } : {}) })
     // One cell of margin, the two of the marker, then the cells before the icon.
     const placed = entry.picture?.at({ row: body.length, col: 1 + PAD_X + entry.picture.col })
     if (placed && body.length < input.height) images.push(placed)

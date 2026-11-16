@@ -382,6 +382,8 @@ export function createKeys(ctx: AppContext, actions: {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
       else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+      // The ▸/▾ glyph of a folding row folds it; the rest of the row does what Enter does.
+      else if (hit?.fold && state.sidebarBots?.live() && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) >= hit.fold.from && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
       else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
       else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
@@ -451,12 +453,15 @@ export function createKeys(ctx: AppContext, actions: {
           if (bot) state.sidebarSelected = bot
         } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
         else if (multi && key === "x" && stops[index]) multi.hideProject(stops[index]!, actions)
+        // Space folds or opens any header; the arrow toward the list's edge folds an open one and the other opens a folded one (otherwise it returns to the prompt, as before).
+        else if (multi && key === " " && stops[index]) multi.toggleFold(stops[index]!)
+        else if (multi && stops[index] && !multi.isBot(stops[index]!) && ((arrow === (onRight ? "\x1b[C" : "\x1b[D") && multi.foldState(stops[index]!) === "open") || (arrow === (onRight ? "\x1b[D" : "\x1b[C") && multi.foldState(stops[index]!) === "folded"))) multi.toggleFold(stops[index]!)
         else if (!multi && stops[index] === SETTLED_MORE && key === "\r") {
           state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
           // The last page takes the more row away: the selection moves to the first session it revealed, which now stands where the row stood.
           const next = sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown)
           if (!next.includes(SETTLED_MORE)) state.sidebarSelected = next[index]
-        } else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        } else if (onSettled && (key === "\r" || key === " " || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false

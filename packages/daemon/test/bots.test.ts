@@ -110,6 +110,25 @@ describe("bot.list", () => {
     expect(report.problems).toEqual([{ file: "connector:broken", message: "socket closed" }])
   })
 
+  test("an external bot lists the sessions on its chat model by folder, with the state they show, for any origin", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    const { listBots } = await import("../src/bot-service")
+    const connector: BotConnector = { id: "openbot", list: async () => [{ origin: "openbot", id: "ob-1", name: "Otto", state: "idle", chat: "acp:openbot-otto" }, { origin: "openbot", id: "ob-2", name: "Quiet", state: "idle", chat: "acp:openbot-quiet" }] }
+    const now = 50 * 60_000
+    const chat = (sessionId: string, directory: string, status: string, updatedAt: number) => ({ sessionId, title: sessionId, directory, createdAt: 1, updatedAt, lastSeq: 1, queued: 0, status, permission: "ask" })
+    const asked: string[] = []
+    const report = await listBots({
+      dir: h.dir, agents: () => ({ directory: h.dir, agents: [], problems: [] }), sessions: () => [], connectors: () => [connector], now: () => now,
+      sessionsOfModel: (model) => { asked.push(model); return (model === "acp:openbot-otto" ? [chat("ses_000000000000000A", "/work/app", "running", now), chat("ses_000000000000000B", "/work/app", "idle", now - 5000), chat("ses_000000000000000C", "/other", "idle", now - 9000)] : []) as never },
+    })
+    expect(BotListReport.safeParse(report).success).toBe(true)
+    const [otto, quiet] = report.external
+    expect(otto).toMatchObject({ name: "Otto", state: "working", projects: [{ directory: "/other", state: "idle", sessions: [{ sessionId: "ses_000000000000000C" }] }, { directory: "/work/app", state: "working", sessions: [{ sessionId: "ses_000000000000000A", status: "running" }, { sessionId: "ses_000000000000000B" }] }] })
+    expect(quiet).toEqual({ origin: "openbot", id: "ob-2", name: "Quiet", state: "idle", chat: "acp:openbot-quiet" })
+    expect(asked).toEqual(["acp:openbot-otto", "acp:openbot-quiet"])
+  })
+
   test("the bot state: a waiting session first, then working, then a recent failure, else idle", () => {
     const now = 10_000_000
     const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })

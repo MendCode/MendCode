@@ -9,6 +9,19 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- In the left list, Enter on a project starts a new chat in that folder and Enter on a bot's `chats` row starts a chat with the bot. Space folds or opens any header; `←` folds an open header and `→` opens a folded one; a click on the ▸/▾ arrow folds, a click on the name does what Enter does.
+
+- Bots of another app (Hermes) list under one foldable row per app (`▸ hermes · 23`), folded unless a bot works or has a chat from the last day. Their chats are listed under the bot like a MendCode bot's, in the left list and on the bot's page.
+
+- A chat with a bot wears the bot's colour on the prompt's rules and lead glyph, and the footer leads with the bot's glyph and name.
+
+### Fixed
+
+- A new chat with a bot shows under the bot's chats from the first message instead of under Projects until a refresh, and starting a chat opens the bot's chats.
+- In the left list, `+ N more projects` and a project's `+ N more` / `+ N older` rows reveal one page of eight per press instead of everything, keep their count for the rest, and put the cursor on the first row that appeared.
+
 ## v0.0.18 - 2026-11-16
 
 Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, and Hermes Agent bots on this machine. The left list keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; opening a chat of another folder moves the terminal there.

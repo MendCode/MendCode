@@ -6204,6 +6204,7 @@ export async function startDaemon(options: DaemonOptions) {
           dir: options.dir,
           agents: () => agents.report({ directory: options.dir }),
           sessions: (name) => sessionAutomation.list({ agent: name, roots: true, limit: 100 }),
+          sessionsOfModel: (model) => sessionAutomation.list({ model, roots: true, limit: 100 }),
           connectors: () => options.botConnectors ?? [],
           // Schedules are loops the bot owns; read only when loops already exist (nothing is loaded for this).
           schedules: (name) => loops.list().filter((loop) => loop.agent === name && loop.state !== "stopped" && loop.state !== "completed").map((loop) => ({ loopId: loop.loopId, name: loop.name, trigger: describeTrigger(loop.trigger), directory: loop.directory, state: loop.state, runs: loop.runs, ...(loop.nextWakeAt !== undefined ? { nextWakeAt: loop.nextWakeAt } : {}) })),

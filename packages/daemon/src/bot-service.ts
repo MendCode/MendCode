@@ -63,6 +63,8 @@ export type BotContext = {
   agents(): AgentsReport
   /** The root sessions that ran as `name`, in every project. */
   sessions(name: string): SessionDetail[]
+  /** The root sessions on a model id, in every project: the chats of an external bot (`chat`). Absent, external bots list no chats. */
+  sessionsOfModel?(model: string): SessionDetail[]
   connectors(): readonly BotConnector[]
   /** The clock the failure window reads; the wall clock when absent. */
   now?(): number
@@ -71,6 +73,27 @@ export type BotContext = {
 }
 
 const isBot = (agent: AgentsReport["agents"][number]) => agent.bot !== undefined && agent.source === "user" && agent.trusted
+
+/**
+ * An external bot with the MendCode chats on its model, grouped by folder like a MendCode bot's, and the state those chats show
+ * (the connector's own state stands while they are all idle). Generic per origin: nothing here names an app.
+ */
+function withChats(bot: ExternalBotInfo, context: BotContext, now: number): ExternalBotInfo {
+  const sessions = bot.chat ? context.sessionsOfModel?.(bot.chat) ?? [] : []
+  if (!sessions.length) return bot
+  const byProject = new Map<string, SessionDetail[]>()
+  for (const session of sessions) byProject.set(session.directory, [...(byProject.get(session.directory) ?? []), session])
+  const own = botStateOf(sessions, now)
+  return {
+    ...bot,
+    state: own !== "idle" ? own : bot.state,
+    projects: [...byProject].map(([directory, group]) => ({
+      directory,
+      state: botStateOf(group, now),
+      sessions: group.map((session) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })),
+    })).sort((a, b) => a.directory.localeCompare(b.directory)),
+  }
+}
 
 export async function listBots(context: BotContext): Promise<BotListReport> {
   const report = context.agents()
@@ -99,7 +122,7 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
   const problems = [...report.problems]
   const external: ExternalBotInfo[] = []
   for (const connector of context.connectors()) {
-    try { external.push(...await connector.list()) } catch (error) { problems.push({ file: `connector:${connector.id}`, message: error instanceof Error ? error.message : String(error) }) }
+    try { external.push(...(await connector.list()).map((bot) => withChats(bot, context, now))) } catch (error) { problems.push({ file: `connector:${connector.id}`, message: error instanceof Error ? error.message : String(error) }) }
   }
   return { bots, external, problems }
 }

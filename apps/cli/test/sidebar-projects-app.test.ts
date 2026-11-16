@@ -17,7 +17,8 @@ const NOT_REPOS = ["/work/plain", HOME, `${HOME}/.ssh`, "/tmp/kit-fix-v-1", "/pr
 /** The app with the owner's shape of data: a few repos with a different recency, scratch folders, the home and a hidden one. */
 function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [], child, height = 60 }: { profile?: Partial<TuiProfile>; bots?: boolean; empty?: boolean; extraSessions?: SessionSummary[]; /** A sub-agent of the opened session, in this state. */ child?: string; height?: number } = {}) {
   const current = ids("session")
-  const make = (directory: string, title: string, age: number, state = "idle"): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW, updatedAt: NOW - age, lastSeq: 0, state, queued: 0 }) as SessionSummary
+  const created = ids("session")
+  const make =(directory: string, title: string, age: number, state = "idle"): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW, updatedAt: NOW - age, lastSeq: 0, state, queued: 0 }) as SessionSummary
   const sessions: SessionSummary[] = [
     { sessionId: current, title: "Chrome", directory: "/work/app", createdAt: NOW, updatedAt: NOW - MINUTE, lastSeq: 0, state: "idle", queued: 0 } as SessionSummary,
     make("/work/app", "Client reconnect", 10 * MINUTE),
@@ -39,6 +40,7 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
     reply: (command: CommandInput) => {
       if (command.type === "session.list") return reply({ sessions })
       if (command.type === "bot.list") return reply(report)
+      if (command.type === "session.create") return reply({ sessionId: created })
       if (command.type === "models.list") return reply({ engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6-luna" }, effective: { model: "gpt-6-luna", effort: "medium" }, roles: {} })
       if (command.type === "agents.list") return reply({ current: "build", agents: [], problems: [] })
       return undefined
@@ -46,7 +48,7 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
   })
   h.app.applySettings(bots ? { experimental: { bots: true } } : {})
   if (!empty) conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
-  return { ...h, inspected, sessions, current, dataDir }
+  return { ...h, inspected, sessions, current, created, dataDir }
 }
 type App = ReturnType<typeof chatApp>
 const side = (h: App) => h.text().map((row) => row.slice(0, SIDEBAR_WIDTH))
@@ -117,7 +119,7 @@ describe("ranking, the cap and the more-projects row", () => {
     expect(sidebarText(h)).not.toContain("▾ r1")
   })
 
-  test("Enter on the more row opens the ranked list and show fewer folds it", async () => {
+  test("Enter on the more row opens the rest of a short list and show fewer folds it", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 3 } })
     await until(h, "more projects")
     await h.type(LEFT)
@@ -125,11 +127,39 @@ describe("ranking, the cap and the more-projects row", () => {
     await h.type("\r")
     expect(sidebarText(h)).toContain("▾ r1")
     expect(sidebarText(h)).toContain("▾ r4")
-    expect(picked(h)).toContain("show fewer")
+    expect(picked(h)).toMatch(/^› [▾▸] r1/)
+    await goTo(h, /show fewer/)
     await h.type("\r")
     expect(sidebarText(h)).not.toContain("▾ r1")
     expect(picked(h)).toContain("+ 4 more projects")
     expect(h.app.sessionId).toBe(h.current)
+  })
+
+  test("Enter on the more row reveals one page, keeps the row for the rest and puts the cursor on the first new project", async () => {
+    const many = Array.from({ length: 12 }, (_, n) => ({ sessionId: ids("session"), title: `extra ${n}`, directory: `/repos/x${n}`, createdAt: NOW, updatedAt: NOW - (n + 5) * 60 * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
+    const h = chatApp({ profile: { sidebarProjectCount: 3 }, extraSessions: many, height: 120 })
+    await until(h, "more projects")
+    const groups = () => side(h).flatMap((row) => /[▾▸] (\S+)/.exec(row)?.[1] ?? [])
+    const before = groups()
+    expect(sidebarText(h)).toMatch(/\+ 16 more projects/)
+    await h.type(LEFT)
+    await goTo(h, /\+ 16 more projects/)
+    await h.type("\r")
+    const after = groups()
+    expect(after.length).toBe(before.length + 8)
+    expect(sidebarText(h)).toMatch(/\+ 8 more projects/)
+    // Revealed projects take their place in the activity ranking: the cursor goes to the first one that was not listed before.
+    const firstNew = after.find((name) => !before.includes(name))
+    expect(picked(h)).toMatch(new RegExp(`^› [▾▸] ${firstNew}`))
+    await goTo(h, /\+ 8 more projects/)
+    await h.type("\r")
+    expect(groups().length).toBe(before.length + 16)
+    expect(picked(h)).toMatch(new RegExp(`^› [▾▸] ${groups().find((name) => !after.includes(name))}`))
+    expect(sidebarText(h)).toContain("show fewer")
+    await goTo(h, /show fewer/)
+    await h.type("\r")
+    expect(groups()).toEqual(before)
+    expect(picked(h)).toContain("+ 16 more projects")
   })
 
   test("the cap is a setting; the default fills the height", () => {
@@ -174,17 +204,86 @@ describe("ranking, the cap and the more-projects row", () => {
 })
 
 describe("every group opens by default and can be folded", () => {
-  test("the sessions of the shown projects are listed at once; Enter on a group folds it", async () => {
+  test("the sessions of the shown projects are listed at once; Space on a group folds it and unfolds it", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await until(h, "▾ api")
     for (const title of ["Chrome", "Waiting review", "Marketing", "repo 1 chat"]) expect(sidebarText(h)).toContain(title)
     await h.type(LEFT)
     await goTo(h, /^› ▾ api/)
-    await h.type("\r")
+    await h.type(" ")
     expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Waiting review")
-    await h.type("\r")
+    expect(picked(h)).toMatch(/^› ▸ api/)
+    await h.type(" ")
     expect(sidebarText(h)).toContain("Waiting review")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+  })
+})
+
+describe("Enter on a project starts a chat in it; Space, the arrows and the glyph fold it", () => {
+  const onApi = async (h: App) => {
+    await until(h, "▾ api")
+    await h.type(LEFT)
+    await goTo(h, /^› ▾ api/)
+  }
+
+  test("Enter reuses a blank chat in that folder and opens it; the folder is the terminal's now", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await onApi(h)
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true, title: "" })
+    expect(h.app.sessionId).toBe(h.created)
+    expect(h.app.page).toBe("chat")
+    expect(sidebarText(h)).not.toContain("→ prompt")
+  })
+
+  test("Enter on a folded project opens it too, so the new chat shows in it", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await onApi(h)
+    await h.type(" ")
+    expect(sidebarText(h)).toContain("▸ api")
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api" })
+    h.app.render()
+    expect(sidebarText(h)).toContain("▾ api")
+  })
+
+  test("left folds an open project, right opens a folded one, and right on an open one returns to the prompt", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await onApi(h)
+    await h.type(LEFT)
+    expect(sidebarText(h)).toContain("▸ api")
+    await h.type(LEFT)
+    expect(sidebarText(h)).toContain("▸ api")
+    await h.type(RIGHT)
+    expect(sidebarText(h)).toContain("▾ api")
+    expect(sidebarText(h)).toContain("Waiting review")
+    expect(picked(h)).toMatch(/^› ▾ api/)
+    await h.type(RIGHT)
+    expect(sidebarText(h)).not.toContain("→ prompt")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+  })
+
+  test("a click on the arrow glyph folds the project and a click on its name starts the chat", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await until(h, "▾ api")
+    const row = side(h).findIndex((line) => line.includes("▾ api"))
+    const glyph = side(h)[row]!.indexOf("▾")
+    await h.type(click(glyph, row))
+    h.app.render()
+    expect(sidebarText(h)).toContain("▸ api")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type(click(glyph + 3, row))
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true })
+    expect(h.app.sessionId).toBe(h.created)
+  })
+
+  test("the header hint names the keys on a project row", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await onApi(h)
+    expect(side(h)[0]).toContain("↵ new")
+    expect(side(h)[0]).toContain("spc fold")
+    expect(side(h)[0]).toContain("x hide")
   })
 })
 
