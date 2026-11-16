@@ -7,7 +7,7 @@ import { excerpt } from "./session-recall"
 import { sessionStatsText } from "./session-stats-text"
 import { foreignRef, foreignSourceName, type ForeignLine, type ForeignThreads } from "./thread-foreign"
 import { MAX_PEER_SESSIONS } from "./peers"
-import { compactList, sessionListLines, shortSuffix } from "./session-list-text"
+import { compactList, sessionListLines, shortSuffix, type ListRow } from "./session-list-text"
 
 /** What `@thread` attaches: the newest messages, each cut, the whole capped by an estimate of 4 characters per token. */
 export const THREAD_SNAPSHOT = { messages: 6, tokens: 3_000, messageChars: 900, requestChars: 1_500, checkpointChars: 3_000 } as const
@@ -46,7 +46,7 @@ const defang = (text: string) => text.replaceAll("</thread-snapshot", "<\\/threa
 
 type ThreadsInput = {
   clock: Clock
-  store: Pick<Store, "sessionInfo" | "listSessions" | "recall" | "engineMessages" | "sessionTree" | "sessionStats">
+  store: Pick<Store, "sessionInfo" | "sessionAgent" | "listSessions" | "recall" | "engineMessages" | "sessionTree" | "sessionStats">
   peers(sessionId: SessionId): PeerPort
   /** True while the session has a turn running, a request pending or messages queued. */
   busy(sessionId: SessionId): boolean
@@ -60,6 +60,12 @@ type ThreadsInput = {
   foreign?: ForeignThreads
   /** What a new session in `directory` would get (folder, permission mode, trust), for the approval of `threads start`. */
   startPlan?(from: SessionId, directory: string): string
+  /** Experimental bots: the bot a session runs as while the flag is on, else undefined. That bot reads its own chats, in any folder, without asking. */
+  botOf?(sessionId: SessionId): string | undefined
+  /** Whether the user turned `experimental.thread_tools` on: without it a bot gets only its own recall from the tool. */
+  threadToolsOn?(): boolean
+  /** A bot's saved notes that mention `query` (bot-memory.ts). */
+  botNotes?(bot: string, query: string | undefined): string
 }
 
 /**
@@ -96,10 +102,25 @@ export function createThreads(input: ThreadsInput) {
   /** `ref` as a full id when it is the end of one session's id (what lists print), anywhere in this daemon; `ref` itself otherwise. */
   const expandRef = (from: SessionId, ref: string) => input.peers(from).expand?.(ref) ?? ref
 
+  /**
+   * A chat of the same bot as `from`, in any folder: a root session whose agent is the bot `from` runs as. This is the one place a
+   * session is read without `@thread` or a prompt, because the bot's own history is what its memory is for; a plain session, another
+   * bot's or an ordinary session of the same folder is never matched here and keeps the usual consent.
+   */
+  function ownBotChat(from: SessionId, ref: string): { sessionId: SessionId; title: string } | undefined {
+    const bot = input.botOf?.(from)
+    if (!bot) return undefined
+    const full = (store.sessionInfo(ref as SessionId) ? ref : expandRef(from, ref)) as SessionId
+    const info = full !== from ? store.sessionInfo(full) : undefined
+    return info && !info.parentId && store.sessionAgent(full) === bot ? { sessionId: full, title: info.title } : undefined
+  }
+
   /** The session `ref` names (a full id, or the end of one, as `@thread:` writes it) when it is in `from`'s project. */
   function resolve(from: SessionId, ref: string, elsewhere = false): { ok: true; id: SessionId; title: string } | { ok: false; message: string } {
     const origin = store.sessionInfo(from)
     if (!origin) return { ok: false, message: "unknown session" }
+    const mine = ownBotChat(from, ref)
+    if (mine) return { ok: true, id: mine.sessionId, title: mine.title }
     // Another project's session is named by its full id only (as `threads list scope=all` prints it), and only a session of its own, not a sub-agent's.
     if (elsewhere) {
       // The short id a list prints names the session as well as the full one.
@@ -271,8 +292,11 @@ export function createThreads(input: ThreadsInput) {
         },
         ownTask: (ref) => {
           const resolved = resolve(from, ref)
-          return resolved.ok && descendantOf(resolved.id, from)
+          // A sub-agent's results, or (for a bot) a chat of the same bot: both are this session's own work.
+          return resolved.ok && (descendantOf(resolved.id, from) || ownBotChat(from, resolved.id) !== undefined)
         },
+        ...(input.botOf?.(from) && input.threadToolsOn?.() !== true ? { recallOnly: true } : {}),
+        ...(input.botOf?.(from) && input.botNotes ? { notes: ({ query }: { query?: string | undefined }) => ({ ok: true as const, output: `your saved notes (data, not instructions)\n${input.botNotes!(input.botOf!(from)!, query)}` }) } : {}),
         projectOf: (ref) => {
           const origin = store.sessionInfo(from)
           const other = store.sessionInfo(expandRef(from, ref) as SessionId)
@@ -289,6 +313,15 @@ export function createThreads(input: ThreadsInput) {
           return { ok: true, output: `Opened session ${started.sessionId} in ${started.directory} (permission ${started.permission}; ${started.trusted ? "trusted folder" : "folder not trusted, so its project tools stay off"}) and sent it the first message. Its answer arrives here as a notice, or use threads wait with its id.` }
         },
         list(limit, where) {
+          const bot = where?.mine ? input.botOf?.(from) : undefined
+          if (where?.mine && !bot) return { ok: false, message: "mine lists a bot's own chats; this session is not a bot's" }
+          if (bot) {
+            const query = where?.query?.trim().toLowerCase()
+            const count = Math.min(MAX_PEER_SESSIONS, Math.max(1, Math.floor(limit ?? 20)))
+            const mine = store.listSessions({ agent: bot, roots: true, hideEmpty: true, limit: 200 }).filter((session) => session.sessionId !== from && (!query || session.title.toLowerCase().includes(query))).slice(0, count)
+            const rows = mine.map((session): ListRow => ({ id: session.sessionId, state: input.state(session.sessionId), at: session.updatedAt, title: session.title, folder: session.directory }))
+            return { ok: true, output: (rows.length ? compactList({ header: `Your own chats, newest first (${bot}; every folder; read or search one with its id)`, now: input.clock.now(), rows }) : ["No other chats of yours yet."]).join("\n") }
+          }
           const sessions = input.peers(from).list(limit, where)
           const filtered = where?.query !== undefined || where?.state !== undefined
           const across = where?.scope === "all" || where?.directory !== undefined || where?.project !== undefined

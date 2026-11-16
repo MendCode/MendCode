@@ -185,7 +185,7 @@ export type PrWatchPort = {
 export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number; /** Set when the list spans projects (`scope: "all"` or a `directory`). */ directory?: string; /** The shortest end of the id (at least 8 characters) that no other session shares: what lists print and every tool accepts as the id. */ shortId?: string }
 
 /** What a list covers: this session's project (default), every project of this daemon, or one other project's folder. */
-export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined }
+export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined; /** A bot's own chats in every folder (the `threads` tool's `mine`; ignored for a session that is not a bot's). */ mine?: boolean | undefined }
 
 /** A session started in another project's folder with a first message; the message and its answer follow the `tell` rules. */
 export type PeerStart = { directory: string; text: string; title?: string | undefined }
@@ -249,6 +249,10 @@ export type ThreadPort = {
   mergeBack(input: { sessionId: string }): ThreadResult
   /** Figures of a session (this one without an id): time per turn, day and hour, usage per model, tools, sub-agents, approvals. No message text. */
   stats(input: { sessionId?: string | undefined }): ThreadResult
+  /** Set for a bot's turn while `experimental.thread_tools` is off: only list, stats, read, search and notes work, so the tool offers a bot its own recall and nothing else. */
+  recallOnly?: boolean
+  /** A bot's own saved notes (everywhere and every project) that mention `query`, or its newest notes; absent for a session that is not a bot's. */
+  notes?(input: { query?: string | undefined }): ThreadResult
 }
 
 /** Workflow actions stay scoped to this session's project and use normal tool approval. */

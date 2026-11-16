@@ -234,7 +234,7 @@ describe("a bot's memory", () => {
     await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "key sk-abcdefghijklmnopqrstuvwxyz0123456789 here" })
     expect(result<{ global: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "list" })).global).not.toContain("sk-abcdefghijklmnopqrstuvwxyz")
     expect(result<{ global: string }>(await h.client.send({ type: "bot.memory", name: "calm", op: "clear" })).global).toBe("")
-    for (let i = 0; i < 20; i++) await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "x".repeat(500) })
+    for (let i = 0; i < 50; i++) await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "x".repeat(500) })
     expect(error(await h.client.send({ type: "bot.memory", name: "calm", op: "add", text: "y".repeat(600) })).message).toContain("full")
     expect(error(await h.client.send({ type: "bot.memory", name: "nobody", op: "list" })).message).toContain("no bot named")
     expect(error(await h.client.send({ type: "bot.memory", name: "calm", op: "add", scope: "project", text: "needs a directory" })).message).toContain("directory")

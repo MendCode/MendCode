@@ -112,7 +112,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
     models: { selectable: true, defaults: { model: "script-1" }, list: () => [...["script-1", "gpt-6-luna", "gpt-6-sol"].map((id): ModelInfo => ({ id, name: id, efforts: ["low", "medium", "high"], variants: { high: { effort: "high" } } })), ...(options.extraModels ?? [])] },
     ...(options.cancelGraceMs ? { cancelGraceMs: options.cancelGraceMs } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
-    engine: ({ trace, store: s, secrets, background, tasks, agents, plans, extensions, goals, memory, emitGlobal, inlineShell, runLimits }) => {
+    engine: ({ trace, store: s, secrets, background, tasks, agents, threads, plans, extensions, goals, memory, emitGlobal, inlineShell, runLimits }) => {
       store = s
       if (options.memoryTools) tools.push(createMemoryGraphTool(memory), createMemoryTool(memory), createRememberTool(memory.propose, memory))
       const catalog = filteredCatalog({ selectable: true, defaults: { model: "script-1" }, list: () => [...["script-1", "gpt-6-luna", "gpt-6-sol"].map((id): ModelInfo => ({ id, name: id, efforts: ["low", "medium", "high"], variants: { high: { effort: "high", parameters: { temperature: 0.8 } } } })), ...(options.extraModels ?? [])] }, () => s.settings.get())
@@ -146,6 +146,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
         subagents: true,
         tasks,
         agents,
+        ...(options.extraTools?.some((tool) => tool.name === "threads") ? { threads } : {}),
         permissionPolicy: () => s.settings.get(),
         memoryAlways: () => emitGlobal({ type: "settings.changed", settings: s.settings.set({ memoryRequireApproval: false }) }),
         plans,

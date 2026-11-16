@@ -986,6 +986,10 @@ export async function startDaemon(options: DaemonOptions) {
   const pluginMetadata = createPluginMetadata(options.dir)
   /** Experimental bots: loaded by the first turn that runs with `experimental.bots` on (see `runTurn`). */
   let botMemoryModule: typeof import("./bot-memory") | undefined
+  /** The recent-activity digest of a bot's turn, loaded with the memory reader (never at start). */
+  let botRecallModule: typeof import("./bot-recall") | undefined
+  let botSummaryAsker: ((sessionId: string) => void) | undefined
+  let botDigestCache: { key: string; at: number; text: string } | undefined
   /** Custom agents (`agents/*.md` of every layer); project ones follow the directory's trust, like custom tools. */
   const agents = createAgentRegistry({
     layers: resourceLayersFor,
@@ -1002,6 +1006,21 @@ export async function startDaemon(options: DaemonOptions) {
     select: (sessionId, name) => store.setSessionAgent(sessionId, name === "build" ? undefined : name),
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
     botsOn: () => botsOn(),
+    botRecall: (name, sessionId) => {
+      const recall = botRecallModule
+      if (!recall || !botsOn()) return ""
+      const now = clock.now()
+      // `primary` is asked several times in a turn: one digest serves them all.
+      if (botDigestCache?.key === `${name}:${sessionId}` && now - botDigestCache.at < 2_000) return botDigestCache.text
+      botSummaryAsker ??= recall.summaryAsker({ now: () => clock.now(), ask: (id) => void metadata.summary(id as SessionId).catch(() => {}) })
+      const sessions = sessionAutomation.list({ agent: name, roots: true, since: now - recall.DIGEST_WINDOW_MS, hideEmpty: true, limit: 30 }).map((session) => ({
+        sessionId: session.sessionId, title: session.title, directory: session.directory, updatedAt: session.updatedAt, status: session.status, summary: session.summary,
+        stale: store.meta.get(`session.summary.seq:${session.sessionId}`) !== String(store.lastSeq(session.sessionId) ?? 0),
+      }))
+      const text = [recall.botDigest({ sessions, excludeSessionId: sessionId, now, wantSummary: botSummaryAsker }), recall.BOT_RECALL_HINT].filter(Boolean).join("\n\n")
+      botDigestCache = { key: `${name}:${sessionId}`, at: now, text }
+      return text
+    },
     botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
   })
   /**
@@ -1464,7 +1483,10 @@ export async function startDaemon(options: DaemonOptions) {
     ...rawEngine,
     async runTurn(turn) {
       // Experimental bots: the memory reader loads at the first turn with the flag on, never otherwise.
-      if (botsOn()) botMemoryModule ??= await import("./bot-memory")
+      if (botsOn()) {
+        botMemoryModule ??= await import("./bot-memory")
+        botRecallModule ??= await import("./bot-recall")
+      }
       const unread =!turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
         loopNotes.delete(turn.sessionId)
@@ -1615,6 +1637,20 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.backlog > MAX_CLIENT_BACKLOG_BYTES) connection.socket.end()
   }
 
+  /**
+   * Experimental bots: what memory review found in a bot's session is also kept as the bot's own notes (everywhere for the user
+   * scope, this project for the project scope), deduped and redacted, so the bot's next chat in any folder starts knowing it.
+   * The bot memory module is loaded by the bot's own turns, so a session of a bot always finds it; with the flag off nothing is written.
+   */
+  function keepBotNotes(job: { sessionId: string; directory: string }, memories: ReadonlyArray<{ scope: string; text: string }>) {
+    const module = botMemoryModule
+    const name = module && botsOn() ? store.sessionAgent(job.sessionId as SessionId) : undefined
+    const bot = name ? agents.auxiliary(job.directory, name) : undefined
+    if (!module || !name || !bot?.bot || bot.source !== "user" || !bot.trusted) return
+    const notes = (scope: string) => memories.filter((memory) => memory.scope === scope).slice(0, 6).map((memory) => redactSecrets(memory.text).text)
+    module.appendBotNotes({ dir: options.dir, name }, notes("user"))
+    module.appendBotNotes({ dir: options.dir, name, directory: canonicalDir(job.directory) }, notes("project"))
+  }
   /** Loops and workflows observe every session event (a map lookup per event each). */
   let extractedNotices: MemoryEntry[] = []
   const extractionOptions: Parameters<typeof createMemoryExtraction>[0] = {
@@ -1638,6 +1674,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (written) notices.push(written)
         }
       }
+      keepBotNotes(job, memories)
       maintainMemory(job.directory)
       return proposed
     },
@@ -2973,6 +3010,15 @@ export async function startDaemon(options: DaemonOptions) {
     store,
     ...(options.foreignThreads ? { foreign: createForeignThreads(options.foreignThreads) } : {}),
     startPlan: (from, directory) => sessionStarter.plan(from, directory),
+    // Experimental bots: a bot reads its own chats and notes through the tool (bot-recall.ts, docs/agents.md); nothing here runs with the flag off.
+    botOf: (sessionId) => {
+      const name = botMemoryModule && botsOn() ? store.sessionAgent(sessionId) : undefined
+      const directory = name ? store.sessionDirectory(sessionId) : undefined
+      const bot = name && directory ? agents.auxiliary(directory, name) : undefined
+      return bot?.bot && bot.source === "user" && bot.trusted ? name : undefined
+    },
+    threadToolsOn: () => store.settings.get().experimental?.thread_tools === true,
+    botNotes: (bot, query) => botMemoryModule!.searchBotNotes({ dir: options.dir, name: bot, ...(query ? { query } : {}) }),
     peers: (sessionId) => peers.port(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     busy: (sessionId) => {

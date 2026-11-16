@@ -32,6 +32,8 @@ Cross-session history is an exception. `threads` read/search/wait/merge_back and
 
 This applies in every mode but `full`. Full access reads them unattended, as its shell could already run `mendcode export`.
 
+One exception, for experimental bots (`/experimental bots on`): a bot's own chats. A turn of a bot reads and searches, without a prompt and in any folder, the root sessions whose agent is that same bot (`threads` `read`, `search`, `list mine=true`), and searches its own saved notes (`threads` `notes`). It is the point of a bot's shared memory, and every such session was one the bot ran. It does not widen anything else: a plain session, another bot's session, a sub-agent of another session and Codex or Claude Code chats keep the consent above, and `message`, `wait`, `interrupt`, `merge_back` and `start` stay under their own rules (and are not offered to a bot at all unless `experimental.thread_tools` is on). With the flag off nothing of this applies.
+
 Allow rules, automatic reviewers and session grants cannot substitute for that consent. Explicit deny rules still win; individually approved reads are permitted in plan mode.
 
 ## Smart mode
