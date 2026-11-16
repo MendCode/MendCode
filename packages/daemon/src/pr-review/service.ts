@@ -213,6 +213,11 @@ export const PR_REVIEW_DISABLED = "The PR reviewer is off: it reaches the networ
 
 const View = (text: string) => { try { return JSON.parse(text) as { number?: number; headRefOid?: string; baseRefOid?: string; baseRefName?: string; isCrossRepository?: boolean; url?: string; title?: string; body?: string; files?: Array<{ path?: unknown }> } } catch { return {} } }
 const SHA = /^[0-9a-f]{40}$/
+/** What git said, as the tail of an error: its last non-empty line (`fatal: unable to access …: Could not resolve host: github.com`). */
+const gitSaid = (err: string | undefined) => {
+  const said = err?.split("\n").map((line) => line.trim()).filter(Boolean).at(-1)
+  return said ? `: ${said.slice(0, 200)}` : ""
+}
 const IN_FLIGHT: ReadonlySet<ReviewJob["state"]> = new Set(["running", "fixing", "validating"])
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^\[PR_REVIEW\]:\s*/, "")
 /** A checkpoint with work in it: a resume verifies or publishes it instead of reviewing again. */
@@ -436,7 +441,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     // FETCH_HEAD only: no branch or remote-tracking ref of the user's checkout changes.
     const worktree = await oneAtATime(directory, async () => {
       const fetched = await git(["fetch", "--no-tags", "--quiet", "origin", forge ? forge.provider.headRef(number) : `refs/pull/${number}/head`, ...(base ? [`refs/heads/${base}`] : [])], directory)
-      if (fetched.code !== 0) throw new Error(`[PR_REVIEW]: git fetch of pull request #${number} failed`)
+      if (fetched.code !== 0) throw new Error(`[PR_REVIEW]: git fetch of pull request #${number} failed${gitSaid(fetched.err)}`)
       mkdirSync(path.join(root, "worktrees"), { recursive: true, mode: 0o700 })
       const created = mkdtempSync(path.join(root, "worktrees", `pr${number}-`))
       rmSync(created, { recursive: true, force: true })

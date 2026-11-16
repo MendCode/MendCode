@@ -18,17 +18,19 @@ import { diffLines, generatedRules, triageByStat, triageFiles, type TriagedFile,
  */
 
 /** `maxBytes`: bound retained output; `count` drains a per-file diff, keeping its full coordinates up to the hard bound. */
-export type GitRun = (args: string[], cwd: string, maxBytes?: number, count?: boolean) => Promise<{ code: number; out: string; cut?: true | undefined; bytes?: number; coordinates?: Pick<FileDiff, "right" | "touched"> }>
+export type GitRun = (args: string[], cwd: string, maxBytes?: number, count?: boolean) => Promise<{ code: number; out: string; /** What git said on a failed plain run (no `maxBytes`), cut to 500 characters. */ err?: string | undefined; cut?: true | undefined; bytes?: number; coordinates?: Pick<FileDiff, "right" | "touched"> }>
 
 /** `git` without a shell; output bounded by `maxBytes` when the caller sets it. */
 export const gitRun: GitRun = async (args, cwd, maxBytes, count) => {
   try {
-    const child = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } })
+    // A plain run keeps what git said on failure (its first lines), so a fetch that failed on DNS reads as an outage, not a mystery.
+    const child = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: maxBytes === undefined ? "pipe" : "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } })
     const timer = setTimeout(() => child.kill(), 60_000)
     try {
       if (maxBytes === undefined) {
-        const out = await new Response(child.stdout).text()
-        return { code: await child.exited, out }
+        const [out, err] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr as ReadableStream).text()])
+        const code = await child.exited
+        return { code, out, ...(code !== 0 && err.trim() ? { err: err.trim().slice(0, 500) } : {}) }
       }
       const chunks: Uint8Array[] = []
       let size = 0

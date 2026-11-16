@@ -18,6 +18,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A PR review whose fetch fails because the network or DNS is down now waits for the network instead of spending its attempts, and its notice says what git reported.
 - Opening a chat in another project no longer moves the project groups in the left list: they rank by their latest message activity, and a streaming turn does not shuffle them.
 - A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.
 
