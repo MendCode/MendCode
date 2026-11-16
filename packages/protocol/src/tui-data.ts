@@ -218,6 +218,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "promptStatus": "off",
   "sidebar": "auto",
   "sidebarProjects": "folder",
+  "sidebarPreviewCount": 5,
   "sidebarLayout": "projects-first",
   "sidebarSections": "",
   "images": "auto",
@@ -464,7 +465,8 @@ export function tuiProblems(raw: unknown): string[] {
     else if (typeof value === "string" && (value.length > (key === "customAscii" ? 16000 : 4096) || /[\x1b\x00]/.test(value))) problems.push(`${key}: invalid terminal text`)
     else if (key === "draftRetentionDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 3650)) problems.push("draftRetentionDays: expected integer 0..3650")
     else if (key === "sidebarWidth" && (!Number.isInteger(value) || Number(value) !== 0 && (Number(value) < 32 || Number(value) > 80))) problems.push("sidebarWidth: expected 0 (automatic) or an integer 32..80")
-    else if (key === "wheelLines" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")
+    else if (key === "sidebarPreviewCount" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("sidebarPreviewCount: expected integer 1..50")
+    else if (key === "wheelLines" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")
     else if (key === "imageWaitSpeed" && (!Number.isInteger(value) || Number(value) < 80 || Number(value) > 5000)) problems.push("imageWaitSpeed: expected integer 80..5000 (milliseconds per frame)")
     else if (key === "imageWaitCanvas" && (!value || Array.isArray(value) || Object.entries(value).some(([field, bound]) => !Object.hasOwn(TUI_DEFAULTS.imageWaitCanvas as object, field) || typeof bound !== "number" || !Number.isFinite(bound)))) problems.push("imageWaitCanvas: expected numbers minWidth, maxWidth, minHeight, maxHeight, heightRatio, paddingX, paddingY")
     else if (key === "imageWaitArt" && ((value as unknown[]).length > 16 || JSON.stringify(value).length > 200_000 || (value as unknown[]).some((art) => !art || typeof art !== "object" || typeof (art as { name?: unknown }).name !== "string" || !Array.isArray((art as { frames?: unknown }).frames) && typeof (art as { static?: unknown }).static !== "string" && !Array.isArray((art as { static?: unknown }).static)))) problems.push("imageWaitArt: expected up to 16 presets { name, frames | static, fit?, align? }")

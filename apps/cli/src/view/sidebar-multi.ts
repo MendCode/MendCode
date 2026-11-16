@@ -16,7 +16,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -34,6 +34,10 @@ export type MultiInput = {
   icons: boolean
   /** A group the user opened (true) or folded (false) by hand; the others follow the default (only the opened project is open). */
   open: ReadonlyMap<string, boolean>
+  /** Sessions a project shows before its `+ N more` row (the profile's `sidebarPreviewCount`); absent, `DEFAULT_PREVIEW`. */
+  previewCount?: number
+  /** The folders whose whole list the user opened with the more row; the others show the preview. */
+  expanded?: ReadonlySet<string>
   unread?: readonly string[]
   spinner?: string
   blink?: boolean
@@ -47,6 +51,10 @@ export type MultiInput = {
 const PAD_X = 2
 const GROUP = "group:"
 const BOT = "bot:"
+const MORE = "more:"
+export const DEFAULT_PREVIEW = 5
+/** An untitled session whose log holds no more than this many events (created, permission mode) was opened and left alone. */
+const UNUSED_EVENTS = 2
 const STATE_WORD: Record<BotState, string> = { working: "working", idle: "idle", waiting: "waiting", problem: "problem" }
 const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted", waiting: "warning", problem: "error" }
 const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
@@ -57,6 +65,9 @@ type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's
 export const isGroupId = (id: string) => id.startsWith(GROUP)
 export const isBotId = (id: string) => id.startsWith(BOT)
 export const groupDirectory = (id: string) => id.slice(GROUP.length)
+/** The row under a project's preview: `+ N more` while it is short, `show less` once opened. */
+export const isMoreId = (id: string) => id.startsWith(MORE)
+export const moreDirectory = (id: string) => id.slice(MORE.length)
 export const botName = (id: string) => id.slice(BOT.length)
 
 const baseName = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() || directory
@@ -70,7 +81,17 @@ function groupLabels(directories: readonly string[]): Map<string, string> {
   }))
 }
 
-const live = (sessions: readonly MultiSession[], directory: string) => projectSessions(sessions as readonly SessionSummary[], directory).filter((session) => session.archivedAt === undefined) as MultiSession[]
+/**
+ * A chat nobody used: no title, no draft, nothing queued, idle, and a log that stops at its first events. The daemon already
+ * leaves the structurally empty ones out of the list; this catches the ones a model choice kept alive. They stay in /sessions.
+ */
+const unused = (session: MultiSession) => !session.title.trim() && !session.draft && session.queued === 0 && session.state === "idle" && !session.paused && session.lifecycle === undefined && session.lastSeq !== undefined && session.lastSeq <= UNUSED_EVENTS
+
+/** The folder's listed sessions in drawing order, without the unused ones (the open session is always kept). */
+const live = (sessions: readonly MultiSession[], directory: string, current: string) => (projectSessions(sessions as readonly SessionSummary[], directory) as MultiSession[]).filter((session) => session.archivedAt === undefined && (session.sessionId === current || !unused(session)))
+
+/** The first `limit` sessions, plus any beyond them that is open or busy (`keep`), in the same order. */
+const preview = (list: readonly MultiSession[], limit: number, keep: (session: MultiSession) => boolean) => list.filter((session, index) => index < limit || keep(session))
 
 /** The folders to list, the opened one first and the rest by their latest activity. */
 function directoriesOf(input: MultiInput): string[] {
@@ -179,7 +200,7 @@ function build(input: MultiInput): { entries: Entry[]; names: Map<string, string
       if (!input.icons) { blankBetween(); heading("Projects", directories.length) }
       else blankBetween()
       for (const directory of directories) {
-        const list = live(input.sessions, directory)
+        const list = live(input.sessions, directory, input.current)
         const open = input.icons || isOpen(input, directory)
         const active = list.filter((session) => ["running", "approval"].includes(mark(session))).length
         if (!input.icons) {
@@ -192,12 +213,21 @@ function build(input: MultiInput): { entries: Entry[]; names: Map<string, string
         }
         if (open) {
           if (!list.length && !input.icons) push([{ text: "  No sessions yet", fg: "muted" }])
-          sessionRows(list, input.icons ? "" : "  ")
+          // Past the limit a project shows the open session and the busy ones, and a row that opens the rest (or folds it again).
+          const limit = input.previewCount ?? DEFAULT_PREVIEW
+          const expanded = !input.icons && input.expanded?.has(directory) === true
+          const rows = input.icons || expanded ? list : preview(list, limit, (session) => session.sessionId === input.current || ["running", "approval"].includes(mark(session)))
+          sessionRows(rows, input.icons ? "" : "  ")
+          const hidden = list.length - rows.length
+          if (hidden > 0 || (expanded && list.length > limit)) {
+            const id = `${MORE}${directory}`
+            push([{ text: "    " }, { text: hidden > 0 ? `+ ${hidden} more` : "show less", fg: "muted", bold: id === picked }], id)
+          }
         }
       }
     } else {
       blankBetween()
-      const loose = live(input.sessions, input.directory).filter((session) => !botOf.has(session.sessionId))
+      const loose = live(input.sessions, input.directory, input.current).filter((session) => !botOf.has(session.sessionId))
       if (!input.icons) heading("Sessions", loose.length)
       if (!loose.length && !input.icons) push([{ text: "No sessions yet", fg: "muted" }])
       sessionRows(loose, "")

@@ -139,6 +139,28 @@ describe("all projects", () => {
     expect(h.app.sessionId).toBe(h.ids.current)
   })
 
+  test("the preview: sidebarPreviewCount sessions and a more row that Enter and a click expand and collapse, in memory only", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all", sidebarPreviewCount: 1 }, bots: false })
+    await until(h, "▸ api")
+    expect(sidebarText(h)).toContain("Chrome")
+    expect(sidebarText(h)).not.toContain("Client reconnect")
+    expect(side(h)[rowOf(h, "more")]).toMatch(/\+ 1 more +│$/)
+    // The keyboard: focus the list (on Chrome), one down is the more row.
+    await h.type("\x1b[D")
+    await h.type("\x1b[B")
+    expect(side(h)[rowOf(h, "more")]).toMatch(/^ › /)
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("Client reconnect")
+    expect(side(h)[rowOf(h, "show less")]).toMatch(/^ › /)
+    expect(h.app.sessionId).toBe(h.ids.current)
+    // The mouse folds it back.
+    await h.type(click(8, rowOf(h, "show less")))
+    expect(sidebarText(h)).not.toContain("Client reconnect")
+    await h.type(click(8, rowOf(h, "+ 1 more")))
+    expect(sidebarText(h)).toContain("Client reconnect")
+    expect(h.app.sessionId).toBe(h.ids.current)
+  })
+
   test("a click on a session of another folder opens it", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
     await until(h, "▸ api")

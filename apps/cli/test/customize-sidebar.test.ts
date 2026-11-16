@@ -23,6 +23,20 @@ describe("/customize sidebar rows", () => {
     expect(press("sidebarProjects", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjects: "all" }).action).toEqual({ type: "set", patch: { sidebarProjects: "folder" } })
   })
 
+  test("the preview count is a number row beside the other sidebar rows: shown with the sidebar, stepped within 1..50, typed and checked", () => {
+    expect(rowShown("sidebarPreviewCount", DEFAULT_TUI_PROFILE, {})).toBe(true)
+    expect(rowShown("sidebarPreviewCount", { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" }, {})).toBe(false)
+    expect(CUSTOMIZE_ROWS.indexOf("sidebarPreviewCount")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarProjects") + 1)
+    expect(press("sidebarPreviewCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 6 } })
+    expect(press("sidebarPreviewCount", "\x1b[D").action).toEqual({ type: "set", patch: { sidebarPreviewCount: 4 } })
+    expect(press("sidebarPreviewCount", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarPreviewCount: 50 }).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 50 } })
+    const open = press("sidebarPreviewCount", "\r").state
+    expect(press("sidebarPreviewCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "12" }).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 12 } })
+    const bad = press("sidebarPreviewCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "0" })
+    expect(bad.action).toEqual({ type: "none" })
+    expect(bad.state.error).toContain("1..50")
+  })
+
   test("choosing a starting layout brings its own sections, dropping a typed list", () => {
     const typed = { ...DEFAULT_TUI_PROFILE, sidebarSections: "bots" }
     expect(press("sidebarLayout", RIGHT, typed).action).toEqual({ type: "set", patch: { sidebarLayout: "bots-first", sidebarSections: "" } })

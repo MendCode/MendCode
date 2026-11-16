@@ -82,7 +82,7 @@ export function rowShown(row: CustomizeRow, profile: TuiProfile, facts: Customiz
   if (row === "activityStates") return profile.activityMascot
   if (row === "imageWaitSpeed") return profile.imageWait !== "static"
   if (part === "Top bar" && row !== "showTopbar") return profile.showTopbar && (row !== "contextStyle" || profile.contextBar !== "off")
-  if (row === "sidebarSide" || row === "sidebarHeader" || row === "sidebarProjects") return profile.sidebar !== "hidden"
+  if (row === "sidebarSide" || row === "sidebarHeader" || row === "sidebarProjects" || row === "sidebarPreviewCount") return profile.sidebar !== "hidden"
   if (row === "sidebarLayout" || row === "sidebarSections") return facts.bots === true && profile.sidebar !== "hidden"
   if (row === "titleTemplate" || row === "titleActivity") return profile.terminalTitle
   if (row === "pasteSummaryMinChars") return profile.pasteSummary
@@ -111,7 +111,7 @@ function nextShown(from: number, delta: number, profile: TuiProfile, facts: Cust
 /** Rows that hold a whole number: ←→ step it (Enter types it), within the bounds the profile accepts. `auto` is 0 below `min`. */
 const NUMBER_ROWS: Partial<Record<CustomizeRow, { min: number; max: number; step: number; auto?: true }>> = {
   imageWaitSpeed: { min: 80, max: 5000, step: 20 }, pasteSummaryMinChars: { min: 1, max: 100_000, step: 100 }, draftRetentionDays: { min: 0, max: 3650, step: 1 },
-  wheelLines: { min: 1, max: 20, step: 1 }, sidebarWidth: { min: 32, max: 80, step: 2, auto: true },
+  wheelLines: { min: 1, max: 20, step: 1 }, sidebarPreviewCount: { min: 1, max: 50, step: 1 }, sidebarWidth: { min: 32, max: 80, step: 2, auto: true },
   commentHintSeconds: { min: 1, max: 60, step: 1 }, commentCollapse: { min: 6, max: 40, step: 1 }, commentMax: { min: 1, max: 9, step: 1 },
 }
 function stepNumber(row: CustomizeRow, value: number, backwards: boolean): number {
@@ -133,6 +133,7 @@ const TEXT_ROWS = new Set<CustomizeRow>(["imageWaitSpeed", "quotaRefresh", "foot
 const COMMENT_TEXT_ROWS = ["commentHintSeconds", "commentCollapse", "commentMax", "commentMarkGlyph", "commentReplyKeys", "commentTemplate", "commentEntry"] as const
 for (const row of COMMENT_TEXT_ROWS) TEXT_ROWS.add(row)
 TEXT_ROWS.add("sidebarSections")
+TEXT_ROWS.add("sidebarPreviewCount")
 const COMMENT_TEXT_MAX: Record<(typeof COMMENT_TEXT_ROWS)[number], number> = { commentHintSeconds: 2, commentCollapse: 2, commentMax: 1, commentMarkGlyph: 2, commentReplyKeys: 4, commentTemplate: 1200, commentEntry: 1200 }
 const COMMENT_TEXT_HELP: Record<(typeof COMMENT_TEXT_ROWS)[number], string> = {
   commentHintSeconds: "Use an integer 1..60",
@@ -186,6 +187,7 @@ function textPatch(row: CustomizeRow, text: string, profile: TuiProfile): Partia
   if (row === "draftRetentionDays") return { draftRetentionDays: Number(text) }
   if (row === "wheelLines") return { wheelLines: Number(text) }
   if (row === "sidebarWidth") return { sidebarWidth: Number(text) }
+  if (row === "sidebarPreviewCount") return { sidebarPreviewCount: Number(text) }
   if (row === "sidebarSections") return { sidebarSections: normalizeSidebarSections(text) }
   if (row === "markdownColors") return { markdownColors: normalizeMarkdownColors(text) }
   if (row === "footerRows") return { footerRows: parseFooterRowsText(text) }
@@ -238,6 +240,7 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
       if (row === "draftRetentionDays" && (!/^\d+$/.test(state.typing) || tuiProblems({ draftRetentionDays: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 0..3650 (0 keeps drafts)" }, action: NONE }
       if (row === "wheelLines" && (!/^\d+$/.test(state.typing) || tuiProblems({ wheelLines: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 1..20" }, action: NONE }
       if (row === "sidebarSections" && tuiProblems({ sidebarSections: state.typing.trim() }).length) return { state: { ...state, error: "Use projects, bots, sessions in order, none, or leave empty" }, action: NONE }
+      if (row === "sidebarPreviewCount" && (!/^\d+$/.test(state.typing) || tuiProblems({ sidebarPreviewCount: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 1..50" }, action: NONE }
       if (row === "sidebarWidth" && (!/^\d+$/.test(state.typing) || tuiProblems({ sidebarWidth: Number(state.typing) }).length)) return { state: { ...state, error: "Use 0 (automatic) or an integer 32..80" }, action: NONE }
       if (row === "imageWaitSpeed" && (!/^\d+$/.test(state.typing) || tuiProblems({ imageWaitSpeed: Number(state.typing) }).length)) return { state: { ...state, error: "Use an integer 80..5000" }, action: NONE }
       if (row === "pasteSummaryMinChars" && tuiProblems({ pasteSummaryMinChars: Number(state.typing) }).length) return { state: { ...state, error: "Use an integer 1..100000" }, action: NONE }

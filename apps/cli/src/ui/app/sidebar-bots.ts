@@ -1,5 +1,5 @@
 import type { BotListReport, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botName, groupDirectory, isBotId, isGroupId, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import { botName, groupDirectory, isBotId, isGroupId, isMoreId, moreDirectory, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
 import { sidebarSectionsOf } from "../../view/tui-profile"
 import { join } from "node:path"
 import type { PetImage } from "../../pets/decode"
@@ -28,6 +28,8 @@ export function createSidebarBots(ctx: AppContext) {
   let report: BotListReport | undefined
   let others: SessionSummary[] = []
   const open = new Map<string, boolean>()
+  /** The folders whose whole list was opened with the more row; kept in memory only. */
+  const expanded = new Set<string>()
   let botsAt = Number.NEGATIVE_INFINITY
   let othersAt = Number.NEGATIVE_INFINITY
   let asking = false
@@ -123,6 +125,8 @@ export function createSidebarBots(ctx: AppContext) {
       sections: botsOn() ? sidebarSectionsOf(state.tuiProfile) : ["projects"],
       scope: allProjects() ? "all" : "folder",
       open,
+      previewCount: state.tuiProfile.sidebarPreviewCount,
+      expanded,
       ...over,
     }
   }
@@ -147,9 +151,16 @@ export function createSidebarBots(ctx: AppContext) {
     requestFrame()
   }
 
-  /** Enter or a click on a row: a group folds or opens, a bot opens its page, a session opens. */
+  function toggleMore(id: string) {
+    const directory = moreDirectory(id)
+    if (!expanded.delete(directory)) expanded.add(directory)
+    requestFrame()
+  }
+
+  /** Enter or a click on a row: a group folds or opens, the more row opens or closes a project's whole list, a bot opens its page, a session opens. */
   async function activate(id: string, deps: SidebarDeps) {
     if (isGroupId(id)) return toggleGroup(id)
+    if (isMoreId(id)) return toggleMore(id)
     if (isBotId(id)) return openBot(botName(id), deps)
     state.sidebarFocus = false
     await deps.switchSession(id as SessionId)

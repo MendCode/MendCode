@@ -136,6 +136,115 @@ describe("projects", () => {
   })
 })
 
+describe("a project previews a few sessions", () => {
+  /** `count` titled sessions of one folder, newest first (the title carries the rank). */
+  const many = (count: number, over: (index: number) => Record<string, unknown> = () => ({})) => Array.from({ length: count }, (_, index) => session(`m${index}`, `Task ${index}`, "/work/app", { updatedAt: NOW - (index + 1) * MINUTE, lastSeq: 9, ...over(index) }))
+  const tall = (over: Partial<MultiInput> = {}) => text({ sessions: many(75) as never, current: "m0", height: 40, sections: ["projects"], ...over })
+  const taskRows = (rows: string[]) => rows.filter((row) => /Task \d+/.test(row))
+
+  test("75 sessions draw 5 and a row that counts the 70 hidden ones", () => {
+    const rows = tall()
+    expect(taskRows(rows)).toHaveLength(5)
+    expect(rows.some((row) => /^ {3}\s+\+ 70 more\s*│$/.test(row))).toBe(true)
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/75 │$/)
+    for (const row of rows) expect(textWidth(row)).toBe(SIDEBAR_WIDTH)
+  })
+
+  test("a project with no more than the limit has no extra row", () => {
+    const rows = tall({ sessions: many(5) as never })
+    expect(taskRows(rows)).toHaveLength(5)
+    expect(rows.some((row) => /more|show less/.test(row))).toBe(false)
+  })
+
+  test("the preview count is honored", () => {
+    expect(taskRows(tall({ previewCount: 2 }))).toHaveLength(2)
+    expect(tall({ previewCount: 2 }).some((row) => row.includes("+ 73 more"))).toBe(true)
+    expect(taskRows(tall({ previewCount: 20 }))).toHaveLength(20)
+  })
+
+  test("the current session stays visible past the limit, once, in its place", () => {
+    const rows = tall({ current: "m40" })
+    const tasks = taskRows(rows)
+    expect(tasks).toHaveLength(6)
+    expect(tasks.filter((row) => row.includes("Task 40 "))).toHaveLength(1)
+    expect(tasks.at(-1)).toContain("Task 40")
+    expect(rows.some((row) => row.includes("+ 69 more"))).toBe(true)
+    // A current session already inside the preview is not drawn twice.
+    expect(taskRows(tall({ current: "m2" }))).toHaveLength(5)
+  })
+
+  test("working and waiting sessions stay visible past the limit", () => {
+    const rows = tall({ sessions: many(75, (index) => index === 30 ? { state: "generating" } : index === 50 ? { state: "waiting_approval" } : {}) as never })
+    const tasks = taskRows(rows)
+    expect(tasks).toHaveLength(7)
+    expect(tasks.some((row) => row.includes("Task 30"))).toBe(true)
+    expect(tasks.some((row) => row.includes("Task 50"))).toBe(true)
+    expect(rows.some((row) => row.includes("+ 68 more"))).toBe(true)
+  })
+
+  test("the more row is a stop and a hit; expanding lists everything and the row becomes show less", () => {
+    const input = { ...base, sessions: many(75) as never, current: "m0", height: 120, sections: ["projects"] as MultiInput["sections"] }
+    expect(multiStops(input)).toEqual(["group:/work/app", "m0", "m1", "m2", "m3", "m4", "more:/work/app"])
+    const out = renderMultiSidebar(input)
+    const hit = out.hits.find((candidate) => candidate.id === "more:/work/app")!
+    expect(plain(out.rows[hit.row]!)).toContain("+ 70 more")
+    const open = { ...input, expanded: new Set(["/work/app"]) }
+    expect(multiStops(open)).toHaveLength(77)
+    expect(multiStops(open).at(-1)).toBe("more:/work/app")
+    const rows = renderMultiSidebar(open).rows.map(plain)
+    expect(taskRows(rows)).toHaveLength(75)
+    expect(rows.some((row) => row.includes("show less"))).toBe(true)
+    expect(rows.some((row) => row.includes("more"))).toBe(false)
+  })
+
+  test("a short list that was expanded and shrank again shows no show less", () => {
+    const rows = tall({ sessions: many(3) as never, expanded: new Set(["/work/app"]) })
+    expect(rows.some((row) => /more|show less/.test(row))).toBe(false)
+  })
+
+  test("the order stays: pinned first, then the latest activity", () => {
+    const rows = tall({ sessions: many(75, (index) => index === 60 ? { lifecycle: { pinnedAt: NOW } } : {}) as never })
+    const tasks = taskRows(rows)
+    expect(tasks[0]).toContain("Task 60")
+    expect(tasks[1]).toContain("Task 0 ")
+  })
+
+  test("the limit holds in every open group, and the folded ones stay folded", () => {
+    const other = Array.from({ length: 9 }, (_, index) => session(`o${index}`, `Elsewhere ${index}`, "/other/api", { lastSeq: 9 }))
+    const rows = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"], open: new Map([["/other/api", true]]) })
+    expect(rows.filter((row) => /Elsewhere \d/.test(row))).toHaveLength(5)
+    expect(rows.filter((row) => row.includes("+ 4 more"))).toHaveLength(2)
+    const folded = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"] })
+    expect(folded.some((row) => /Elsewhere/.test(row))).toBe(false)
+  })
+})
+
+describe("sessions nobody used stay out of the sidebar", () => {
+  const blank = (id: string, over: Record<string, unknown> = {}) => session(id, "", "/work/app", { lastSeq: 2, ...over })
+  const rows = (list: unknown[], over: Partial<MultiInput> = {}) => text({ sessions: [session("t1", "Real work", "/work/app", { lastSeq: 14 }), ...list] as never, current: "t1", height: 40, sections: ["projects"], ...over })
+
+  test("an untitled session that never got past its first events is not listed or counted", () => {
+    const out = rows([blank("e1"), blank("e2")])
+    expect(out.some((row) => row.includes("Untitled session"))).toBe(false)
+    expect(out.find((row) => row.includes("▾ app"))).toMatch(/1 │$/)
+    expect(multiStops({ ...base, sessions: [session("t1", "Real work", "/work/app", { lastSeq: 14 }), blank("e1")] as never, current: "t1", sections: ["projects"] })).toEqual(["group:/work/app", "t1"])
+  })
+
+  test("the current one is kept even when it is empty", () => {
+    const out = rows([blank("e1")], { current: "e1" })
+    expect(out.filter((row) => row.includes("Untitled session"))).toHaveLength(1)
+  })
+
+  test("an untitled session that did something stays: it works, waits, has a draft or messages queued, or has more events", () => {
+    const out = rows([blank("w", { state: "generating" }), blank("q", { queued: 2 }), blank("d", { draft: { preview: "hello there", chars: 11, attachments: 0, images: 0, updatedAt: NOW } }), blank("u", { lastSeq: 23 })])
+    expect(out.filter((row) => row.includes("Untitled session") || row.includes("hello there") || row.includes("Draft"))).toHaveLength(4)
+  })
+
+  test("a titled session with few events stays", () => {
+    expect(rows([session("n1", "Hello", "/work/app", { lastSeq: 2 })]).some((row) => row.includes("Hello"))).toBe(true)
+  })
+})
+
 describe("keyboard stops and mouse hits agree with what is drawn", () => {
   test("stops run in drawing order: bots, groups and their visible sessions, never a hidden one", () => {
     expect(multiStops(base)).toEqual(["group:/work/app", "s1", "s2", "group:/other/api", "group:/work/site", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
