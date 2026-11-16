@@ -1,7 +1,11 @@
 import type { BotListReport, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botName, groupDirectory, isBotId, isGroupId, isMoreId, moreDirectory, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import { botName, groupDirectory, isBotId, isGroupId, isMoreId, isMoreProjectsId, moreDirectory, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
+import { createProjectProbe, eligibleDirectory, type ProjectInspection } from "../../view/sidebar-projects"
+import { sessionMark } from "../../view/sidebar"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
-import { join } from "node:path"
+import { readFile, stat } from "node:fs/promises"
+import { homedir, tmpdir } from "node:os"
+import { isAbsolute, join, resolve } from "node:path"
 import type { PetImage } from "../../pets/decode"
 import type { FaceCapability } from "../../view/bot-face"
 import type { IconFaces } from "../../view/bot-icon"
@@ -21,6 +25,22 @@ const REFRESH_MS = 2000
 /** How many sessions of every folder the all-projects list asks for. */
 const ALL_LIMIT = 200
 
+/** The linked worktrees keep a `.git` file that points into the main repo's `.git/worktrees/<name>`. */
+const WORKTREE_MARKER = "/.git/worktrees/"
+
+/** One stat per folder (plus one small read for a linked worktree): is it a git work tree root, and whose worktree is it. */
+async function inspectOnDisk(directory: string): Promise<ProjectInspection> {
+  const marker = join(directory, ".git")
+  const found = await stat(marker).catch(() => undefined)
+  if (!found) return { git: false }
+  if (found.isDirectory()) return { git: true }
+  const pointer = /^gitdir:\s*(.+?)\s*$/m.exec(await readFile(marker, "utf8"))?.[1]
+  if (!pointer) return { git: true }
+  const target = isAbsolute(pointer) ? pointer : resolve(directory, pointer)
+  const at = target.indexOf(WORKTREE_MARKER)
+  return { git: true, ...(at > 0 ? { main: target.slice(0, at) } : {}) }
+}
+
 export type SidebarDeps = { switchSession(sessionId: SessionId): Promise<void> }
 
 export function createSidebarBots(ctx: AppContext) {
@@ -34,6 +54,14 @@ export function createSidebarBots(ctx: AppContext) {
   let othersAt = Number.NEGATIVE_INFINITY
   let asking = false
   let iconsNow = false
+  /** The `+ N more projects` row was opened; kept in memory only. */
+  let projectsExpanded = false
+  const home = env.HOME ?? homedir()
+  const tmpRoots = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"]
+  /** The folders that are projects, asked of the disk once each and off the render path; a remote terminal has no local disk to ask. */
+  const probe = input.remote
+    ? { isProject: (directory: string) => eligibleDirectory({ directory, home, tmpRoots }), canonical: (directory: string) => directory }
+    : createProjectProbe({ home, tmpRoots, inspect: input.inspectProject ?? inspectOnDisk, onChange: requestFrame })
 
   /** The face modules, loaded by the first frame of a terminal that draws images, or by opening a bot's page; never otherwise. */
   let faceModule: typeof import("../../view/bot-face") | undefined
@@ -112,6 +140,13 @@ export function createSidebarBots(ctx: AppContext) {
   /** The folder whose group starts open: the open session's, else the one this terminal was started in. */
   const openedDirectory = () => state.sessions.find((session) => session.sessionId === state.sessionId)?.directory ?? input.directory ?? ""
 
+  /** Whether a working sub-agent holds the plain left/right arrows: a child of this session, or a sibling of it, that works or waits. */
+  function holdsArrows(): boolean {
+    const all = sessions()
+    const parent = all.find((session) => session.sessionId === state.sessionId)?.parentId
+    return all.some((session) => (session.parentId === state.sessionId || (parent !== undefined && session.parentId === parent && session.sessionId !== state.sessionId)) && ["running", "approval"].includes(sessionMark(session as never, false)))
+  }
+
   function model(over: Partial<MultiInput> & { height: number; icons: boolean }): MultiInput {
     return {
       sessions: sessions() as never,
@@ -127,6 +162,8 @@ export function createSidebarBots(ctx: AppContext) {
       open,
       previewCount: state.tuiProfile.sidebarPreviewCount,
       expanded,
+      projects: { isProject: probe.isProject, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount },
+      projectsExpanded,
       ...over,
     }
   }
@@ -147,7 +184,7 @@ export function createSidebarBots(ctx: AppContext) {
 
   function toggleGroup(id: string) {
     const directory = groupDirectory(id)
-    open.set(directory, !(open.get(directory) ?? directory === openedDirectory()))
+    open.set(directory, !(open.get(directory) ?? true))
     requestFrame()
   }
 
@@ -160,6 +197,7 @@ export function createSidebarBots(ctx: AppContext) {
   /** Enter or a click on a row: a group folds or opens, the more row opens or closes a project's whole list, a bot opens its page, a session opens. */
   async function activate(id: string, deps: SidebarDeps) {
     if (isGroupId(id)) return toggleGroup(id)
+    if (isMoreProjectsId(id)) { projectsExpanded = !projectsExpanded; return requestFrame() }
     if (isMoreId(id)) return toggleMore(id)
     if (isBotId(id)) return openBot(botName(id), deps)
     state.sidebarFocus = false
@@ -217,5 +255,5 @@ export function createSidebarBots(ctx: AppContext) {
     requestFrame()
   }
 
-  return { live, sessions, draw, stops, activate, noteActivity: refresh }
+  return { live, sessions, draw, stops, activate, holdsArrows, noteActivity: refresh }
 }

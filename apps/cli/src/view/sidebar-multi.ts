@@ -6,6 +6,7 @@ import { fit, spread } from "./deck"
 import { relativeTime, truncateEnd } from "./session-list"
 import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { ICON_SIDEBAR_WIDTH, projectSessions, SIDEBAR_WIDTH, sessionMark, type SessionMark } from "./sidebar"
+import { rankProjects } from "./sidebar-projects"
 import type { SidebarSection } from "./tui-profile"
 import { lineWidth, wrap } from "./wrap"
 
@@ -32,8 +33,15 @@ export type MultiInput = {
   sections: readonly SidebarSection[]
   scope: "folder" | "all"
   icons: boolean
-  /** A group the user opened (true) or folded (false) by hand; the others follow the default (only the opened project is open). */
+  /** A group the user opened (true) or folded (false) by hand; the others follow the default (every shown group is open). */
   open: ReadonlyMap<string, boolean>
+  /**
+   * Which folders are projects and how many show: absent, every folder with a session is listed (no cap). `canonical` names a
+   * linked worktree by its main repo, so its sessions list under it.
+   */
+  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; count: number }
+  /** The `+ N more projects` row was opened: the whole ranked list shows, ending in `show fewer`. */
+  projectsExpanded?: boolean
   /** Sessions a project shows before its `+ N more` row (the profile's `sidebarPreviewCount`); absent, `DEFAULT_PREVIEW`. */
   previewCount?: number
   /** The folders whose whole list the user opened with the more row; the others show the preview. */
@@ -52,7 +60,10 @@ const PAD_X = 2
 const GROUP = "group:"
 const BOT = "bot:"
 const MORE = "more:"
+const MORE_PROJECTS = "projects:"
 export const DEFAULT_PREVIEW = 5
+/** Projects other than the opened one preview at most this many sessions. */
+const OTHER_PREVIEW = 3
 /** An untitled session whose log holds no more than this many events (created, permission mode) was opened and left alone. */
 const UNUSED_EVENTS = 2
 const STATE_WORD: Record<BotState, string> = { working: "working", idle: "idle", waiting: "waiting", problem: "problem" }
@@ -68,6 +79,9 @@ export const groupDirectory = (id: string) => id.slice(GROUP.length)
 /** The row under a project's preview: `+ N more` while it is short, `show less` once opened. */
 export const isMoreId = (id: string) => id.startsWith(MORE)
 export const moreDirectory = (id: string) => id.slice(MORE.length)
+/** The row under the last project: `+ N more projects` while the list is cut, `show fewer` once it is whole. */
+export const MORE_PROJECTS_ID = MORE_PROJECTS
+export const isMoreProjectsId = (id: string) => id === MORE_PROJECTS
 export const botName = (id: string) => id.slice(BOT.length)
 
 const baseName = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() || directory
@@ -93,21 +107,36 @@ const live = (sessions: readonly MultiSession[], directory: string, current: str
 /** The first `limit` sessions, plus any beyond them that is open or busy (`keep`), in the same order. */
 const preview = (list: readonly MultiSession[], limit: number, keep: (session: MultiSession) => boolean) => list.filter((session, index) => index < limit || keep(session))
 
-/** The folders to list, the opened one first and the rest by their latest activity. */
-function directoriesOf(input: MultiInput): string[] {
-  if (input.scope === "folder") return [input.directory]
-  const latest = new Map<string, number>()
-  for (const session of input.sessions) if (session.archivedAt === undefined) latest.set(session.directory, Math.max(latest.get(session.directory) ?? 0, sessionActivityAt(session)))
-  const others = [...latest.keys()].filter((directory) => directory !== input.directory).sort((a, b) => latest.get(b)! - latest.get(a)! || a.localeCompare(b))
-  return [input.directory, ...others]
+/** The folders to list: the opened one first, then the busy ones, then the most recently used up to the cap; `rest` waits behind the more-projects row. */
+function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): { shown: string[]; rest: string[] } {
+  if (input.scope === "folder") return { shown: [input.directory], rest: [] }
+  const listed = input.sessions.filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !unused(session)))
+  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count ?? Number.POSITIVE_INFINITY, busy: busy as never, isProject: input.projects?.isProject ?? (() => true) })
 }
 
-const isOpen = (input: MultiInput, directory: string) => input.open.get(directory) ?? directory === input.directory
+/** Every shown group starts open; a fold or an open by hand wins. */
+const isOpen = (input: MultiInput, directory: string) => input.open.get(directory) ?? true
 
 /** Which sections draw: the sessions without a bot only stand in for the projects, which hold them already. */
 const shown = (input: MultiInput): SidebarSection[] => input.sections.filter((section) => section !== "sessions" || !input.sections.includes("projects")).filter((section) => section !== "bots" || input.bots !== undefined)
 
-function build(input: MultiInput): { entries: Entry[]; names: Map<string, string> } {
+/** A linked worktree's sessions list under its main repo: only the sessions whose folder has such a name are copied. */
+function canonicalized(input: MultiInput): MultiInput {
+  const canonical = input.projects?.canonical
+  if (!canonical || input.scope === "folder") return input
+  const directory = canonical(input.directory)
+  let changed = directory !== input.directory
+  const sessions = input.sessions.map((session) => {
+    const named = canonical(session.directory)
+    if (named === session.directory) return session
+    changed = true
+    return { ...session, directory: named }
+  })
+  return changed ? { ...input, directory, sessions } : input
+}
+
+function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string> } {
+  const input = canonicalized(raw)
   const g = input.glyphs ?? glyphs()
   const inner = (input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH) - 1 - PAD_X - 2
   const picked = input.focused ? input.selected ?? input.current : undefined
@@ -195,9 +224,10 @@ function build(input: MultiInput): { entries: Entry[]; names: Map<string, string
         push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: "muted" }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner))
       }
     } else if (section === "projects") {
-      const directories = input.icons ? [input.directory] : directoriesOf(input)
+      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[] } : directoriesOf(input, (session) => ["running", "approval"].includes(mark(session)))
+      const directories = input.projectsExpanded ? [...ranked.shown, ...ranked.rest] : ranked.shown
       const labels = groupLabels(directories)
-      if (!input.icons) { blankBetween(); heading("Projects", directories.length) }
+      if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
       else blankBetween()
       for (const directory of directories) {
         const list = live(input.sessions, directory, input.current)
@@ -214,7 +244,8 @@ function build(input: MultiInput): { entries: Entry[]; names: Map<string, string
         if (open) {
           if (!list.length && !input.icons) push([{ text: "  No sessions yet", fg: "muted" }])
           // Past the limit a project shows the open session and the busy ones, and a row that opens the rest (or folds it again).
-          const limit = input.previewCount ?? DEFAULT_PREVIEW
+          const setting = input.previewCount ?? DEFAULT_PREVIEW
+          const limit = directory === input.directory ? setting : Math.min(OTHER_PREVIEW, setting)
           const expanded = !input.icons && input.expanded?.has(directory) === true
           const rows = input.icons || expanded ? list : preview(list, limit, (session) => session.sessionId === input.current || ["running", "approval"].includes(mark(session)))
           sessionRows(rows, input.icons ? "" : "  ")
@@ -225,6 +256,8 @@ function build(input: MultiInput): { entries: Entry[]; names: Map<string, string
           }
         }
       }
+      // The projects past the cap wait behind one row that opens the whole ranked list (and folds it back).
+      if (!input.icons && ranked.rest.length) push([{ text: "  " }, { text: input.projectsExpanded ? "show fewer" : `+ ${ranked.rest.length} more projects`, fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
     } else {
       blankBetween()
       const loose = live(input.sessions, input.directory, input.current).filter((session) => !botOf.has(session.sessionId))

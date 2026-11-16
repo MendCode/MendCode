@@ -81,24 +81,25 @@ describe("the bots section", () => {
 })
 
 describe("projects", () => {
-  test("all projects: the opened one first and open, the others folded with an active count", () => {
+  test("all projects: the opened one first, every group open", () => {
     const rows = text()
     const at = (needle: string) => rows.findIndex((row) => row.includes(needle))
     expect(at("▾ app")).toBeGreaterThan(-1)
     expect(at("Chrome")).toBeGreaterThan(at("▾ app"))
     expect(at("Client reconnect")).toBeGreaterThan(at("Chrome"))
-    expect(rows[at("▸ api")]).toMatch(/▸ api +1 active │$/)
-    expect(rows[at("▸ site")]).toMatch(/▸ site +1 │$/)
-    expect(at("Other project")).toBe(-1)
-    expect(at("▸ api")).toBeGreaterThan(at("Client reconnect"))
+    expect(rows[at("▾ api")]).toMatch(/▾ api +2 │$/)
+    expect(rows[at("▾ site")]).toMatch(/▾ site +1 │$/)
+    expect(at("Other project")).toBeGreaterThan(at("▾ api"))
+    expect(at("▾ api")).toBeGreaterThan(at("Client reconnect"))
   })
 
-  test("a folded group opens by choice, and the opened one folds", () => {
-    const rows = text({ open: new Map([["/other/api", true], ["/work/app", false]]) })
-    expect(rows.some((row) => row.includes("▾ api"))).toBe(true)
-    expect(rows.some((row) => row.includes("Other project"))).toBe(true)
+  test("a group folded by choice shows its active count, and opens again", () => {
+    const rows = text({ open: new Map([["/other/api", false], ["/work/app", false]]) })
+    expect(rows.find((row) => row.includes("▸ api"))).toMatch(/▸ api +1 active │$/)
+    expect(rows.some((row) => row.includes("Other project"))).toBe(false)
     expect(rows.some((row) => row.includes("▸ app"))).toBe(true)
     expect(rows.some((row) => row.includes("Chrome"))).toBe(false)
+    expect(text({ open: new Map([["/other/api", true]]) }).some((row) => row.includes("Other project"))).toBe(true)
   })
 
   test("the opened folder only, as today's list under one group", () => {
@@ -209,12 +210,13 @@ describe("a project previews a few sessions", () => {
     expect(tasks[1]).toContain("Task 0 ")
   })
 
-  test("the limit holds in every open group, and the folded ones stay folded", () => {
+  test("the opened project previews the setting, the others at most three, and a folded group stays folded", () => {
     const other = Array.from({ length: 9 }, (_, index) => session(`o${index}`, `Elsewhere ${index}`, "/other/api", { lastSeq: 9 }))
-    const rows = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"], open: new Map([["/other/api", true]]) })
-    expect(rows.filter((row) => /Elsewhere \d/.test(row))).toHaveLength(5)
-    expect(rows.filter((row) => row.includes("+ 4 more"))).toHaveLength(2)
-    const folded = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"] })
+    const rows = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"] })
+    expect(rows.filter((row) => /Elsewhere \d/.test(row))).toHaveLength(3)
+    expect(rows.filter((row) => row.includes("+ 4 more"))).toHaveLength(1)
+    expect(rows.filter((row) => row.includes("+ 6 more"))).toHaveLength(1)
+    const folded = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"], open: new Map([["/other/api", false]]) })
     expect(folded.some((row) => /Elsewhere/.test(row))).toBe(false)
   })
 })
@@ -247,8 +249,8 @@ describe("sessions nobody used stay out of the sidebar", () => {
 
 describe("keyboard stops and mouse hits agree with what is drawn", () => {
   test("stops run in drawing order: bots, groups and their visible sessions, never a hidden one", () => {
-    expect(multiStops(base)).toEqual(["group:/work/app", "s1", "s2", "group:/other/api", "group:/work/site", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
-    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", true]]) })).toEqual(["bot:calm", "bot:scout", "bot:hermes-1", "bot:oops", "group:/work/app", "s1", "s2", "group:/other/api", "s3", "s4", "group:/work/site"])
+    expect(multiStops(base)).toEqual(["group:/work/app", "s1", "s2", "group:/other/api", "s3", "s4", "group:/work/site", "s5", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
+    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "bot:scout", "bot:hermes-1", "bot:oops", "group:/work/app", "s1", "s2", "group:/other/api", "group:/work/site", "s5"])
   })
 
   test("each hit names a stop on the row that draws it", () => {

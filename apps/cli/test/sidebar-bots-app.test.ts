@@ -35,7 +35,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
   }
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
-  const h = appHarness({ width, height, mode: "balanced", ...(clock ? { now: () => clock.at } : {}), sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
+  const h = appHarness({ width, height, mode: "balanced", inspectProject: async () => ({ git: true }), ...(clock ? { now: () => clock.at } : {}), sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
     const extraReply = extra?.(command)
     if (extraReply) return extraReply
     if (command.type === "session.list") return reply({ sessions: (command as { directory?: string }).directory ? sessions.filter((session) => session.directory === (command as { directory?: string }).directory) : sessions })
@@ -121,22 +121,24 @@ describe("flag on: the bots section and the bot's icon in its project", () => {
 describe("all projects", () => {
   test("auto (the default) lists every project with bots on, and an explicit folder keeps the opened one only", async () => {
     const auto = chatApp()
-    await until(auto, "▸ api")
+    await until(auto, "▾ api")
     expect(auto.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
     const folder = chatApp({ profile: { sidebarProjects: "folder" } })
     await until(folder, "calm")
-    expect(sidebarText(folder)).not.toContain("▸ api")
+    expect(sidebarText(folder)).not.toContain("▾ api")
   })
 
-  test("every folder is a group: the opened one open, the rest folded with a count; Enter and a click fold or open", async () => {
+  test("every folder is an open group; Enter and a click fold a group, and a folded one says how many of its sessions work or wait", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
-    await until(h, "▸ api")
+    await until(h, "▾ api")
     expect(sidebarText(h)).toContain("▾ app")
+    expect(sidebarText(h)).toContain("Other project")
+    expect(h.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
+    await h.type(click(8, rowOf(h, "▾ api")))
+    expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Other project")
     expect(side(h)[rowOf(h, "▸ api")]).toMatch(/▸ api +1 active │$/)
-    expect(h.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
     await h.type(click(8, rowOf(h, "▸ api")))
-    expect(sidebarText(h)).toContain("▾ api")
     expect(sidebarText(h)).toContain("Other project")
     // The keyboard: focus the list, go down to the group (Chrome, Client reconnect, then api), Enter folds it.
     await h.type("\x1b[D")
@@ -150,7 +152,7 @@ describe("all projects", () => {
 
   test("the preview: sidebarPreviewCount sessions and a more row that Enter and a click expand and collapse, in memory only", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all", sidebarPreviewCount: 1 }, bots: false })
-    await until(h, "▸ api")
+    await until(h, "▾ api")
     expect(sidebarText(h)).toContain("Chrome")
     expect(sidebarText(h)).not.toContain("Client reconnect")
     expect(side(h)[rowOf(h, "more")]).toMatch(/\+ 1 more +│$/)
@@ -172,8 +174,7 @@ describe("all projects", () => {
 
   test("a click on a session of another folder opens it", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
-    await until(h, "▸ api")
-    await h.type(click(8, rowOf(h, "▸ api")))
+    await until(h, "Other project")
     await h.type(click(8, rowOf(h, "Other project")))
     expect(h.app.sessionId).toBe(h.ids.elsewhere)
   })

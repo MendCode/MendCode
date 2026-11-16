@@ -42,6 +42,17 @@ describe("/customize sidebar rows", () => {
     expect(bad.state.error).toContain("1..50")
   })
 
+  test("the project count row sits next to Sessions per project and steps within 1..30", () => {
+    expect(rowShown("sidebarProjectCount", DEFAULT_TUI_PROFILE, {})).toBe(true)
+    expect(CUSTOMIZE_ROWS.indexOf("sidebarProjectCount")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarPreviewCount") + 1)
+    expect(press("sidebarProjectCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjectCount: 7 } })
+    expect(press("sidebarProjectCount", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjectCount: 30 }).action).toEqual({ type: "set", patch: { sidebarProjectCount: 30 } })
+    const open = press("sidebarProjectCount", "\r").state
+    const bad = press("sidebarProjectCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "31" })
+    expect(bad.action).toEqual({ type: "none" })
+    expect(bad.state.error).toContain("1..30")
+  })
+
   test("choosing a starting layout brings its own sections, dropping a typed list", () => {
     const typed = { ...DEFAULT_TUI_PROFILE, sidebarSections: "bots" }
     expect(press("sidebarLayout", RIGHT, typed).action).toEqual({ type: "set", patch: { sidebarLayout: "bots-first", sidebarSections: "" } })

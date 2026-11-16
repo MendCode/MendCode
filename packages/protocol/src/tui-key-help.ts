@@ -168,6 +168,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   sidebarHeader: "the sessions sidebar's title row ('Sessions')",
   sidebarProjects: "sessions the sidebar lists: auto (all projects with bots on, else the opened one), folder (the opened one) or all",
   sidebarPreviewCount: "sessions each project of the all-projects (or bots) sidebar shows before its '+ N more' row (1..50, default 5); the open and busy ones always show",
+  sidebarProjectCount: "projects the all-projects (or bots) sidebar shows before its '+ N more projects' row (1..30, default 6); the open one and the busy ones always show",
   sidebarLayout: "experimental bots: sidebar layout: projects-first, bots-first, icons-only (narrow icon column) or scratch (no section until you add them)",
   sidebarSections: "experimental bots: sidebar sections in order, comma list of projects, bots, sessions (no-bot ones); none hides all, empty = the layout's own",
   showTasks: "running sub-agents and background commands listed over the prompt",

@@ -273,6 +273,7 @@ Also `imageWaitArt` and `imageWaitCanvas` are set in the file. See [web and imag
 | `sidebar` | Sidebar |
 | `sidebarProjects` | Sidebar projects |
 | `sidebarPreviewCount` | Sessions per project |
+| `sidebarProjectCount` | Projects shown |
 | `sidebarLayout` | Sidebar layout |
 | `sidebarSections` | Sidebar sections |
 | `sidebarSide` | Sidebar side |

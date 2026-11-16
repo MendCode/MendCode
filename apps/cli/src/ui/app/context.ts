@@ -120,6 +120,8 @@ export type AppInput = {
   pets?: { dirs: PetDirs; cacheDir: string; images: boolean }
   /** Capability replies a host already has; this client does not probe stdin for image support. */
   imageAnswers?: { da1?: string; cellPixels?: { width: number; height: number } }
+  /** What a folder is for the sidebar's project list (a git work tree, and the main repo of a linked worktree); unset reads the disk. */
+  inspectProject?: (directory: string) => Promise<import("../../view/sidebar-projects").ProjectInspection>
   /**
    * The MendCode data dir (`--dir`). With it the terminal reads `keybindings.json` and loads terminal extensions
    * from `<dir>/extensions` and profiles (plus the project's, when it is trusted); without it, neither.

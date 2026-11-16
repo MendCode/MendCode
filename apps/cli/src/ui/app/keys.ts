@@ -33,6 +33,9 @@ import { fileInSlot, panelWanted } from "./file-slot"
 import { queuePolicy, userQueue } from "./queue-policy"
 import { fastStep, wheelStep } from "./page-wheel"
 
+/** The arrows of a terminal in application-cursor mode, as the list reads them. */
+const APPLICATION_ARROWS: Record<string, string> = { "\x1bOA": "\x1b[A", "\x1bOB": "\x1b[B", "\x1bOC": "\x1b[C", "\x1bOD": "\x1b[D" }
+
 export function createKeys(ctx: AppContext, actions: {
   slashMenu: ReturnType<typeof import("./slash-menu").createSlashMenu>
   /** Esc while dictating drops the clip; false when nothing is being dictated. */
@@ -395,7 +398,7 @@ export function createKeys(ctx: AppContext, actions: {
       return requestFrame()
     }
     if (click && state.page === "chat" && click.row === 0 && state.contextArea && click.col >= state.contextArea.from && click.col < state.contextArea.to) return requestFrame()
-    if (state.page === "chat" && leader.armedAt === undefined && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
+    if (state.page === "chat" && leader.armedAt === undefined && !state.sidebarFocus && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
       const sessions = homeVisibleSessions(actions.homeSessions()).filter((session) => session.id)
       const selected = sessions.findIndex((session) => session.id === state.homeSelected)
       // Down enters the list; up stays the prompt's history until a row is selected.
@@ -416,24 +419,29 @@ export function createKeys(ctx: AppContext, actions: {
     }
     if (state.page === "chat" && sideWidth > 0 && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !suggestions.length && !mentionActive) {
       const sessions = projectSessions(state.sessions, input.directory ?? "")
-      if (!state.sidebarFocus && (onRight ? key === "\x1b[C" : key === "\x1b[D") && editor.isEmpty()) {
+      const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
+      // Terminals in application-cursor mode send ESC O A..D for the arrows; the list takes both forms.
+      const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
+      // The key that enters the list. In the multi-project list a session with sub-agents working keeps the plain arrows for them
+      // (session.child.next/previous, and the list shows the hint), and Alt+arrow enters the list instead.
+      const entering = multi?.holdsArrows() ? (onRight ? key === "\x1b[1;3C" || key === "\x1bf" : key === "\x1b[1;3D" || key === "\x1bb") : arrow === (onRight ? "\x1b[C" : "\x1b[D")
+      if (!state.sidebarFocus && entering && editor.isEmpty()) {
         state.sidebarFocus = true
         state.sidebarSelected = state.sessionId
         return requestFrame()
       }
       if (state.sidebarFocus && !mouse) {
         // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
-        const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
         const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
         const onSettled = !multi && stops[index] === SETTLED_ROW
-        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
-        else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (arrow === "\x1b[B" ? 1 : -1)))]
+        else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
           await actions.switchSession(stops[index]! as typeof state.sessionId)
-        } else if (key === "\x1b" || (onRight ? key === "\x1b[D" : key === "\x1b[C")) state.sidebarFocus = false
+        } else if (key === "\x1b" || (onRight ? arrow === "\x1b[D" : arrow === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }
     } else state.sidebarFocus = false
