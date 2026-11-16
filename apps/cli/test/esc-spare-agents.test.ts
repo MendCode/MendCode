@@ -135,3 +135,69 @@ test("Esc Esc on a message nobody answered still takes it back when no sub-agent
   expect(h.sentOf("session.undo")).toMatchObject([{ atItemId: message, cancelRunning: true }])
   expect(h.sentOf("turn.cancel")).toHaveLength(0)
 })
+
+/** A running turn whose `held` command waits for `release()`, so a test can switch sessions while the reply is on its way. */
+function heldReply(held: string, answer: (command: { type: string }) => unknown) {
+  let release = () => {}
+  const gate = new Promise<void>((resolve) => { release = resolve })
+  const h = appHarness({
+    width: 110,
+    height: 30,
+    reply: (command) => {
+      if (command.type === "session.create") return { ok: true, result: { sessionId: ids("session") } }
+      if (command.type === held) return gate.then(() => answer(command) as never)
+      return answer(command) as never
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  const chat = conversation(h.sessionId, h.app.onEvent)
+  chat.exchange("hello", "hi")
+  const turnId = ids("turn")
+  chat.emit({ type: "turn.started", turnId, queueId: ids("queue") })
+  chat.emit({ type: "foreground.state", state: "generating", turnId })
+  h.app.render()
+  return { ...h, chat, turnId, release: () => release() }
+}
+
+test("a stop that fails after a session switch does not arm the next Esc in the other session", async () => {
+  const h = heldReply("background.stop", (command) => {
+    if (command.type === "turn.cancel") return { ok: true }
+    if (command.type === "task.list") return { ok: true, result: { tasks: [] } }
+    if (command.type === "background.list") return { ok: true, result: { tasks: [{ id: "engine:a1", kind: "local_agent", status: "running" }] } }
+    if (command.type === "background.stop") return { ok: true, result: { stopped: 0, failed: ["Review the diff"] } }
+    return undefined
+  })
+  await h.type(ESC)
+  await h.type(ESC)
+  h.chat.emit({ type: "turn.cancelled", turnId: h.turnId, by: "user" })
+  const stopping = h.type(ESC)
+  await h.type("/new\r")
+  expect(h.sessionId).not.toBe(h.app.sessionId)
+  h.release()
+  await stopping
+  const before = h.sentOf("background.list").length
+  await h.type(ESC)
+  expect(h.sentOf("background.list")).toHaveLength(before)
+  expect(h.text().join("\n")).not.toContain("could not be stopped")
+})
+
+test("Esc Esc on an unanswered message does nothing to the session switched to while sub-agents were looked up", async () => {
+  const h = heldReply("task.list", (command) => {
+    if (command.type === "turn.cancel") return { ok: true }
+    if (command.type === "task.list") return { ok: true, result: { tasks: [] } }
+    if (command.type === "background.list") return { ok: true, result: { tasks: [] } }
+    return undefined
+  })
+  const message = ids("item")
+  h.chat.emit({ type: "item.started", turnId: h.turnId, itemId: message, kind: "user_message" })
+  h.chat.emit({ type: "item.completed", itemId: message, status: "ok", text: "check the build" })
+  h.app.render()
+  await h.type(ESC)
+  const second = h.type(ESC)
+  await h.type("/new\r")
+  expect(h.sessionId).not.toBe(h.app.sessionId)
+  h.release()
+  await second
+  expect(h.sentOf("session.undo")).toHaveLength(0)
+  expect(h.sentOf("turn.cancel")).toHaveLength(0)
+})

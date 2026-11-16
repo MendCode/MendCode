@@ -419,7 +419,10 @@ export function createInput(ctx: AppContext, actions: {
     if (state.agentStopArmedAt > 0 && now() - state.agentStopArmedAt <= DOUBLE_ESC_MS) {
       state.agentStopArmedAt = 0
       state.escArmedAt = 0
+      const stopping = state.sessionId
       const { stopped, failed } = await stopSubagents()
+      // A switch while the stop was on its way: its result belongs to the session left behind, not this one.
+      if (state.sessionId !== stopping) return
       // An agent that would not stop leaves the arm up, so the next Esc tries it again.
       if (failed) state.agentStopArmedAt = now()
       const summary = stopped ? `stopped ${stopped} sub-agent${stopped === 1 ? "" : "s"}` : "no sub-agents running"
@@ -442,7 +445,11 @@ export function createInput(ctx: AppContext, actions: {
     // Nothing answered yet (a typo caught in time): the message is taken back, as if never sent, and waits in the prompt to fix.
     // Not while sub-agents run: the undo cancels them with the turn, and the interrupt below spares them until a third Esc.
     const unanswered = retractable(turnId)
-    if (unanswered && !unanswered.answered && !await subagentsRunning()) {
+    const interrupting = state.sessionId
+    const agentsRunning = unanswered && !unanswered.answered ? await subagentsRunning() : undefined
+    // A switch or a new turn while the sub-agents were looked up: this Esc no longer has a turn to act on.
+    if (state.sessionId !== interrupting || state.transcript.activeTurn !== turnId) return requestFrame()
+    if (unanswered && !unanswered.answered && !agentsRunning) {
       const taking = retract(unanswered.itemId).finally(() => { if (retracting === taking) retracting = undefined })
       retracting = taking
       return taking
