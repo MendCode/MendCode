@@ -106,6 +106,7 @@ import { outputStyleText } from "./output-styles"
 import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
 import { renderingFor, renderingText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
+import { withRunLimitGuard } from "./run-limit-guard"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
 import { withCodexEngine } from "./codex-router"
@@ -980,7 +981,11 @@ export const daemon = await startDaemon({
         })
       },
     })
-    return withPiEngine({
+    // A run that limits the model's tools (`--tools`, `--exclude-tools`, `--offline`) fails on an engine that would ignore them.
+    return withRunLimitGuard({ limits: (sessionId) => runLimits.get(sessionId), route: (sessionId, override) => {
+      const model = turnModel(sessionId, override).model
+      return { model, engine: foreignEngine(model, modelCatalog) }
+    }, base: withPiEngine({
       base: withCodex,
       usesPi: (sessionId, override) => piEnabled() && modelEngine(turnModel(sessionId, override), modelCatalog) === "pi",
       pi: async (sessionId) => {
@@ -1023,7 +1028,7 @@ export const daemon = await startDaemon({
         stopPi = () => engine.stop()
         return engine
       },
-    })
+    }) })
   },
   clock: realClock,
   buildId: computeBuildId(),
