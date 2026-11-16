@@ -1,4 +1,4 @@
-import type { BotListReport } from "@mendcode/protocol"
+import type { BotListReport, SessionId } from "@mendcode/protocol"
 import type { BotColor, BotShape } from "../../../../../packages/packages/src/agents"
 import { BOT_USAGE, botListText, parseBotWords } from "../../view/bot"
 import { join } from "node:path"
@@ -125,11 +125,19 @@ async function openBotForm(ctx: AppContext, initial: BotFormState) {
  * `/bot` (experimental bots, docs/agents.md). The daemon makes, copies, saves and lists; this only asks and shows. Loaded by the
  * first `/bot`, so a terminal that never uses bots never evaluates it.
  */
-export async function runBotCommand(ctx: AppContext, args: string, options: { from?: "chat" | "bot" } = {}) {
+export async function runBotCommand(ctx: AppContext, args: string, options: { from?: "chat" | "bot"; switchSession?: (sessionId: SessionId) => Promise<void> } = {}) {
   const { input, state, env, say, fail, requestFrame } = ctx
   const words = parseBotWords(args)
   if (words.kind === "error") return say(`${words.message} · ${BOT_USAGE}`, "warning")
   const directory = input.directory
+
+  if (words.kind === "open") {
+    const name = words.name ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.agent
+    if (!name) return say("this chat has no bot · /bot open <name>", "warning")
+    if (!options.switchSession) return say("the bot's page cannot open from here", "warning")
+    state.sidebarBots ??= (await import("./sidebar-bots")).createSidebarBots(ctx)
+    return state.sidebarBots.openNamed(name, { switchSession: options.switchSession })
+  }
 
   if (words.kind === "list") {
     const reply = await input.send({ type: "bot.list" })

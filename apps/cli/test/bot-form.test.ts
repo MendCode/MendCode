@@ -471,8 +471,10 @@ describe("in the app", () => {
     const h = app({ bots: [bot()] })
     const open = async () => {
       for (let turn = 0; turn < 80 && !sidebar(h).some((row) => row.includes("calm")); turn++) { h.app.render(); await Bun.sleep(5) }
-      const row = sidebar(h).findIndex((line) => line.includes("calm"))
-      await h.type(`\x1b[<0;8;${row + 1}M`)
+      // ← takes the list, b goes to the first bot, o opens its page.
+      await h.type("\x1b[D")
+      await h.type("b")
+      await h.type("o")
       expect(h.app.page).toBe("bot")
     }
     await open()

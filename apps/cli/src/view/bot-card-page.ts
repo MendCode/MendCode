@@ -1,17 +1,18 @@
 import type { BotInfo, BotState } from "@mendcode/protocol"
 import type { ImagePlacement } from "../ui/image-layer"
 import type { ColorName, Line, Theme } from "../ui/theme"
-import { appearancePage } from "./appearance-layout"
 import { botFace, CARD_COLS, facePlacement, faceStateOf, type FaceCapability } from "./bot-face"
 import { createFaceAnimator } from "./bot-face-anim"
 import { botIcon } from "./bot-icon"
-import { fit, spread } from "./deck"
+import { clip, panelGrid, spread } from "./deck"
+import { pickerFrame } from "./picker-frame"
 import { relativeTime, truncateEnd } from "./session-list"
 import { wrap } from "./wrap"
 
 /**
- * The page of one bot (experimental bots, docs/agents.md): who it is, what it runs on, the sessions it has in each folder, and the
- * three things to do with it. Opened by Enter on its row in the sidebar; loaded by that, never at start.
+ * The page of one bot (experimental bots, docs/agents.md): who it is, what it runs on, the chats it has in each folder, and the
+ * things to do with it. Opened by `o` on its row in the sidebar or `/bot open`; loaded by that, never at start. It is drawn like the
+ * other list pages (stash, drafts): the shared header, a summary line, panels, the wheel and Esc.
  */
 export type BotCardActions = {
   openSession(sessionId: string): Promise<void>
@@ -44,16 +45,20 @@ export type BotCard = {
   stop(): void
 }
 
-/** Narrower or shorter than this, the page keeps the one-line header: the face needs room beside the text. */
-const FACE_MIN_INNER = 40
-const FACE_MIN_HEIGHT = 12
-const FACE_GAP = 2
+/** The two-panel layout starts here, as the other list pages; below it the page is the list alone. */
+const TWO_PANELS = 70
+/** The face needs this much height to sit above the text in the left panel. */
+const FACE_MIN_HEIGHT = 16
+/** Where the left panel's content starts in the page: the header (2 rows), the box's border and its padding row; and the box's border and space. */
+const FACE_AT = { row: 4, col: 2 }
+const PAGE_STEP = 10
 
 type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
+/** `row` is the index in `rows` of a line the cursor can stand on. */
 type Item = { line: Line; row?: number }
 
 const ACTIONS: ReadonlyArray<Extract<Row, { kind: "action" }>> = [
-  { kind: "action", id: "new", label: "New session in a folder", hint: "n" },
+  { kind: "action", id: "new", label: "New chat in a folder", hint: "n" },
   { kind: "action", id: "edit", label: "Edit", hint: "e" },
   { kind: "action", id: "memory", label: "Memory", hint: "m" },
   { kind: "action", id: "delete", label: "Delete", hint: "d" },
@@ -62,16 +67,26 @@ const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted
 const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
+const PAGE_UP = new Set(["\x1b[5~"])
+const PAGE_DOWN = new Set(["\x1b[6~"])
+const FIRST = new Set(["\x1b[H", "\x1bOH", "\x1b[1~"])
+const LAST = new Set(["\x1b[F", "\x1bOF", "\x1b[4~"])
 
 /** The folders a new session may start in: the ones the bot already works in, then every other folder with sessions. */
 export const foldersFor = (bot: Pick<BotInfo, "projects">, known: readonly string[]): string[] => [...new Set([...bot.projects.map((project) => project.directory), ...known])]
 
+/** The bot's folders with the newest chat first in each, and the folder of the newest chat first. */
+const newestFirst = (bot: Pick<BotInfo, "projects">): BotInfo["projects"] => bot.projects
+  .map((project) => ({ ...project, sessions: [...project.sessions].sort((a, b) => b.updatedAt - a.updatedAt) }))
+  .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0))
+
 export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; folders: readonly string[]; actions: BotCardActions; face?: BotCardFace | undefined }): BotCard {
   const animator = face ? createFaceAnimator({ onChange: face.onFrame, ...(face.reducedMotion ? { reducedMotion: face.reducedMotion } : {}), ...(face.setTimer ? { setTimer: face.setTimer } : {}), ...(face.clearTimer ? { clearTimer: face.clearTimer } : {}) }) : undefined
   animator?.setState(faceStateOf(bot.state))
-  const rows: Row[] = [...ACTIONS, ...bot.projects.flatMap((project) => project.sessions.map((session): Row => ({ kind: "session", sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })))]
+  const projects = newestFirst(bot)
+  const rows: Row[] = [...ACTIONS, ...projects.flatMap((project) => project.sessions.map((session): Row => ({ kind: "session", sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })))]
   let selected = 0
-  /** The folder list of "New session", while it is open. */
+  /** The folder list of "New chat", while it is open. */
   let picking: { selected: number } | undefined
 
   async function activate(row: Row) {
@@ -88,6 +103,8 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
       if (value === "\x1b" || value === "q") picking = undefined
       else if (UP.has(value)) picking.selected = Math.max(0, picking.selected - 1)
       else if (DOWN.has(value)) picking.selected = Math.min(folders.length - 1, picking.selected + 1)
+      else if (PAGE_UP.has(value)) picking.selected = Math.max(0, picking.selected - PAGE_STEP)
+      else if (PAGE_DOWN.has(value)) picking.selected = Math.min(folders.length - 1, picking.selected + PAGE_STEP)
       else if (value === "\r" && folders[picking.selected] !== undefined) {
         const directory = folders[picking.selected]!
         picking = undefined
@@ -99,6 +116,10 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     if (value === "\x1b" || value === "q") return actions.close()
     if (UP.has(value)) selected = Math.max(0, selected - 1)
     else if (DOWN.has(value)) selected = Math.min(rows.length - 1, selected + 1)
+    else if (PAGE_UP.has(value)) selected = Math.max(0, selected - PAGE_STEP)
+    else if (PAGE_DOWN.has(value)) selected = Math.min(rows.length - 1, selected + PAGE_STEP)
+    else if (FIRST.has(value)) selected = 0
+    else if (LAST.has(value)) selected = rows.length - 1
     else if (value === "n") return activate(ACTIONS[0]!)
     else if (value === "e") return activate(ACTIONS[1]!)
     else if (value === "m") return activate(ACTIONS[2]!)
@@ -107,80 +128,79 @@ export function createBotCard({ bot, folders, actions, face }: { bot: BotInfo; f
     return actions.redraw()
   }
 
-  /** The page's top block, with the face beside the text; the face's picture is placed at `placements` when the terminal draws images. */
-  function faceBlock({ inner, ascii, theme }: { inner: number; ascii: boolean; theme?: Pick<Theme, "colors"> | undefined }): { rows: Line[]; picture?: ImagePlacement } {
-    const drawn = botFace({
-      name: bot.name, shape: bot.identity.shape, color: bot.identity.color, state: faceStateOf(bot.state), size: "card",
-      capability: { ...face!.capability(), ascii, ...(theme ? { theme } : {}) }, frame: animator!.frame(), label: bot.state,
-    })
-    const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
-    const room = inner - CARD_COLS - FACE_GAP
-    const text: Line[] = [
-      [{ text: truncateEnd(bot.name, Math.max(1, room)), fg: "text", bold: true }],
-      [{ text: `${ascii ? asciiMark : unicodeMark} ${bot.state}`, fg: STATE_FG[bot.state] }, { text: `  ${truncateEnd(bot.identity.origin, Math.max(1, room - bot.state.length - 4))}`, fg: "muted" }],
-      ...(bot.description ? wrap(bot.description, room).slice(0, 2).map((line): Line => [{ text: line, fg: "muted" }]) : []),
-      [{ text: "Model ", fg: "muted" }, { text: bot.model ?? "default", fg: "text" }, { text: "  Permission ", fg: "muted" }, { text: bot.permission ?? "default", fg: "text" }],
-    ]
-    // Under a picture the glyph rows are blank cells; the state word under it stays text.
-    const left = drawn.lines.map((line, at): Line => drawn.image && at < drawn.pictureRows ? [{ text: " ".repeat(CARD_COLS) }] : line)
-    const rows = Array.from({ length: Math.max(left.length, text.length) }, (_, at): Line => [...(left[at] ?? [{ text: " ".repeat(CARD_COLS) }]), { text: " ".repeat(FACE_GAP) }, ...fit(text[at] ?? [], room)])
-    const picture = facePlacement({ face: drawn, slot: "bot-card", row: 0, col: 2 })
-    return { rows, ...(picture ? { picture } : {}) }
-  }
-
-  function render({ width, height, now, ascii, theme, placements }: { width: number; height: number; now: number; ascii?: boolean; theme?: Pick<Theme, "colors">; placements?: ImagePlacement[] }): Line[] {
-    const inner = Math.max(1, width - 4)
-    const icon = botIcon({ name: bot.name, shape: bot.identity.shape, color: bot.identity.color, ascii })
-    const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
+  /** The list panel's lines: the actions, then the chats by folder (or, while "New chat" is open, the folders to start in). */
+  function listItems({ width, ascii, now }: { width: number; ascii: boolean; now: number }): Item[] {
     const items: Item[] = []
-    const plain = (line: Line) => items.push({ line })
-    const selectable = (line: Line, row: number) => {
-      const on = row === (picking ? -1 : selected)
-      items.push({ line: on ? line.map((span) => ({ ...span, bg: "element" as const })) : line, row })
-    }
-    let picture: ImagePlacement | undefined
-    if (face && inner >= FACE_MIN_INNER && height >= FACE_MIN_HEIGHT) {
-      const block = faceBlock({ inner, ascii: ascii === true, theme })
-      for (const row of block.rows) plain(row)
-      picture = block.picture
-    } else {
-      plain(spread([{ text: ascii ? `${icon.text} ` : icon.text, fg: icon.fg }, { text: bot.name, fg: "text", bold: true }, { text: `  ${bot.identity.origin}`, fg: "muted" }], [{ text: `${ascii ? asciiMark : unicodeMark} ${bot.state}`, fg: STATE_FG[bot.state] }], inner))
-      if (bot.description) for (const text of wrap(bot.description, inner)) plain([{ text, fg: "muted" }])
-      plain([{ text: "Model ", fg: "muted" }, { text: bot.model ?? "default", fg: "text" }, { text: "   Permission ", fg: "muted" }, { text: bot.permission ?? "default", fg: "text" }])
-    }
-    plain([])
+    const mark = (on: boolean) => ({ text: on ? (ascii ? "> " : "› ") : "  ", fg: "primary" as const })
     if (picking) {
-      plain([{ text: "Folder", fg: "heading", bold: true }, { text: "  for a new session of this bot", fg: "muted" }])
-      if (!folders.length) plain([{ text: "No folder known yet", fg: "muted" }])
-      folders.forEach((directory, index) => {
-        const on = index === picking!.selected
-        const line: Line = [{ text: on ? (ascii ? "> " : "› ") : "  ", fg: "primary" }, { text: truncateEnd(directory, inner - 2), fg: "text", bold: on }]
-        items.push({ line: on ? line.map((span) => ({ ...span, bg: "element" as const })) : line })
-      })
-    } else {
-      plain([{ text: "Actions", fg: "heading", bold: true }])
-      ACTIONS.forEach((action, index) => selectable(spread([{ text: selected === index ? (ascii ? "> " : "› ") : "  ", fg: "primary" }, { text: action.label, fg: "text", bold: selected === index }], [{ text: action.hint, fg: "muted" }], inner), index))
-      plain([])
-      plain([{ text: "Sessions", fg: "heading", bold: true }, { text: `  ${rows.length - ACTIONS.length}`, fg: "muted" }])
-      if (rows.length === ACTIONS.length) plain([{ text: "None yet · New session starts one", fg: "muted" }])
-      let index = ACTIONS.length
-      for (const project of bot.projects) {
-        plain([{ text: truncateEnd(project.directory, inner), fg: "muted" }])
-        for (const session of project.sessions) {
-          const at = index++
-          const on = at === selected
-          selectable(spread([{ text: on ? (ascii ? "> " : "› ") : "  ", fg: "primary" }, { text: truncateEnd(session.title || "Untitled session", Math.max(4, inner - 22)), fg: "text", bold: on }], [{ text: `${session.status} · ${relativeTime(now, session.updatedAt)}`, fg: "muted" }], inner), at)
-        }
+      if (!folders.length) items.push({ line: [{ text: "No folder known yet", fg: "muted" }] })
+      folders.forEach((directory, index) => items.push({ line: clip([mark(index === picking!.selected), { text: truncateEnd(directory, Math.max(1, width - 2)), fg: "text", bold: index === picking!.selected }], width), row: index }))
+      return items
+    }
+    ACTIONS.forEach((action, index) => items.push({ line: spread([mark(selected === index), { text: action.label, fg: "text", bold: selected === index }], [{ text: action.hint, fg: "muted" }], width), row: index }))
+    const total = rows.length - ACTIONS.length
+    items.push({ line: [] }, { line: [{ text: "Chats", fg: "heading", bold: true }, { text: `  ${total}`, fg: "muted" }] })
+    if (!total) items.push({ line: [{ text: "None yet · enter on the bot in the sidebar starts one", fg: "muted" }] })
+    let index = ACTIONS.length
+    for (const project of projects) {
+      if (!project.sessions.length) continue
+      items.push({ line: [{ text: truncateEnd(project.directory, width), fg: "muted" }] })
+      for (const session of project.sessions) {
+        const at = index++
+        const on = at === selected
+        items.push({ line: spread([mark(on), { text: truncateEnd(session.title || "Untitled session", Math.max(4, width - 24)), fg: "text", bold: on }], [{ text: `${session.status} · ${relativeTime(now, session.updatedAt)}`, fg: "muted" }], width), row: at })
       }
     }
-    // The window keeps the picked row in view.
-    const room = Math.max(1, height - 2)
-    const focus = Math.max(0, items.findIndex((item) => picking ? false : item.row === selected))
-    const start = Math.max(0, Math.min(focus - Math.floor(room / 2), items.length - room))
-    const body = items.slice(start, start + room).map((item) => fit(item.line, inner))
-    // The page's header takes two rows and a margin two cells; a face scrolled out of the window shows no picture.
-    if (picture && start === 0) placements?.push({ ...picture, row: 2 })
-    return appearancePage({ title: "Bot", hints: picking ? "↑↓ · ↵ start here · esc back" : "↑↓ · ↵ open · n new · e edit · m memory · d delete · esc back", body, width, height })
+    return items
+  }
+
+  /** The left panel: the face over the name, state, origin, what it is for, and the model and permission. */
+  function aboutLines({ width, ascii, theme, withFace }: { width: number; ascii: boolean; theme?: Pick<Theme, "colors"> | undefined; withFace: boolean }): { lines: Line[]; picture?: ImagePlacement } {
+    const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
+    const lines: Line[] = []
+    let picture: ImagePlacement | undefined
+    const faced = face !== undefined && withFace
+    if (face && withFace) {
+      const drawn = botFace({
+        name: bot.name, shape: bot.identity.shape, color: bot.identity.color, state: faceStateOf(bot.state), size: "card",
+        capability: { ...face.capability(), ascii, ...(theme ? { theme } : {}) }, frame: animator!.frame(), label: bot.state,
+      })
+      // Under a picture the glyph rows are blank cells; the state word under it stays text.
+      lines.push(...drawn.lines.map((line, at): Line => drawn.image && at < drawn.pictureRows ? [{ text: " ".repeat(CARD_COLS) }] : line), [])
+      picture = facePlacement({ face: drawn, slot: "bot-card", ...FACE_AT })
+    } else {
+      const icon = botIcon({ name: bot.name, shape: bot.identity.shape, color: bot.identity.color, ascii })
+      lines.push([{ text: ascii ? `${icon.text} ` : icon.text, fg: icon.fg }, { text: truncateEnd(bot.name, Math.max(1, width - 3)), fg: "text", bold: true }])
+    }
+    if (faced) lines.push([{ text: truncateEnd(bot.name, width), fg: "text", bold: true }])
+    lines.push([{ text: `${ascii ? asciiMark : unicodeMark} ${bot.state}`, fg: STATE_FG[bot.state] }, { text: `  ${truncateEnd(bot.identity.origin, Math.max(1, width - bot.state.length - 4))}`, fg: "muted" }])
+    if (bot.description) lines.push([], ...wrap(bot.description, width).slice(0, 4).map((line): Line => [{ text: line, fg: "muted" }]))
+    lines.push([], [{ text: "Model ", fg: "muted" }, { text: truncateEnd(bot.model ?? "default", Math.max(1, width - 6)), fg: "text" }], [{ text: "Permission ", fg: "muted" }, { text: bot.permission ?? "default", fg: "text" }])
+    return { lines, ...(picture ? { picture } : {}) }
+  }
+
+  function render({ width, height, now, ascii, theme, placements }: { width: number; height: number; now: number; ascii?: boolean; theme?: Pick<Theme, "colors"> | undefined; placements?: ImagePlacement[] }): Line[] {
+    const plainAscii = ascii === true
+    const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
+    const summary = `${plainAscii ? asciiMark : unicodeMark} ${bot.state} · ${bot.identity.origin} · ${bot.model ?? "default"} · permission ${bot.permission ?? "default"}`
+    const hints = picking ? "↑↓ select · enter start here · esc back" : "↑↓ select · enter open · n new · e edit · m memory · d delete · esc back"
+    const room = Math.max(0, height - 2)
+    const two = width >= TWO_PANELS
+    // The list scrolls to keep the cursor in view: its panel shows `room` rows less the box's border and padding.
+    const listWidth = Math.max(1, (two ? Math.floor(width * 0.6) : width) - 4)
+    const items = listItems({ width: listWidth, ascii: plainAscii, now })
+    const at = Math.max(0, items.findIndex((item) => item.row === (picking ? picking.selected : selected)))
+    const scroll = Math.max(0, at - Math.max(1, room - 6))
+    const panels = [{ title: picking ? "Folder for a new chat" : "Actions and chats", active: true, scroll, body: (w: number): Line[] => listItems({ width: w, ascii: plainAscii, now }).map((item) => item.line), weight: 3 }]
+    let picture: ImagePlacement | undefined
+    if (two) {
+      const about = aboutLines({ width: Math.max(1, Math.floor((width - 1) * 0.4) - 4), ascii: plainAscii, theme, withFace: room >= FACE_MIN_HEIGHT })
+      picture = about.picture
+      panels.unshift({ title: "Bot", active: false, scroll: 0, body: () => about.lines, weight: 2 })
+    }
+    const frame = pickerFrame(`Bot · ${bot.name}`, hints, width, height, panelGrid({ width, padding: true, compact: false, maxColumns: two ? 2 : 1, heights: [room], rows: [panels] }), summary)
+    if (picture && placements) placements.push(picture)
+    return frame
   }
 
   return { render, key, setVisible: (visible) => animator?.setVisible(visible), stop: () => animator?.stop() }

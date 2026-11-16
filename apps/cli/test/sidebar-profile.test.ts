@@ -23,9 +23,15 @@ describe("sidebar profile keys", () => {
   test("a profile written before the keys existed loads unchanged, with today's sidebar", () => {
     const old = { sidebar: "auto", sidebarSide: "left", sidebarHeader: true, theme: "dark" }
     const loaded = normalizeTuiProfile(old)
-    expect(loaded).toEqual(normalizeTuiProfile({ ...old, sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" }))
-    expect(loaded).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
-    expect(DEFAULT_TUI_PROFILE).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(loaded).toEqual(normalizeTuiProfile({ ...old, sidebarProjects: "auto", sidebarLayout: "bots-first", sidebarSections: "" }))
+    expect(loaded).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "bots-first", sidebarSections: "" })
+    expect(DEFAULT_TUI_PROFILE).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "bots-first", sidebarSections: "" })
+  })
+
+  test("bots come first by default, and a layout the user saved is kept", () => {
+    expect(sidebarSectionsOf(normalizeTuiProfile({}))).toEqual(["bots", "projects", "sessions"])
+    expect(sidebarSectionsOf(normalizeTuiProfile({ sidebarLayout: "projects-first" }))).toEqual(["projects", "bots", "sessions"])
+    expect(normalizeTuiProfile({ sidebarLayout: "scratch" }).sidebarLayout).toBe("scratch")
   })
 
   test("the protocol's defaults agree with the terminal's and its checks accept only the known values", () => {
@@ -37,7 +43,7 @@ describe("sidebar profile keys", () => {
   })
 
   test("a bad value falls back to the default instead of breaking the profile", () => {
-    expect(normalizeTuiProfile({ sidebarProjects: "x", sidebarLayout: 3, sidebarSections: "bots,mail" })).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(normalizeTuiProfile({ sidebarProjects: "x", sidebarLayout: 3, sidebarSections: "bots,mail" })).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "bots-first", sidebarSections: "" })
     expect(normalizeTuiProfile({ sidebarSections: "bots, projects, bots" }).sidebarSections).toBe("bots,projects")
     expect(normalizeTuiProfile({ sidebarSections: "none" }).sidebarSections).toBe("none")
   })
@@ -77,7 +83,8 @@ describe("sidebar profile keys", () => {
 
   test("the layout gives the sections and their order; an explicit list wins; none hides all", () => {
     const sections = (over: Record<string, unknown>) => sidebarSectionsOf(normalizeTuiProfile(over))
-    expect(sections({})).toEqual(["projects", "bots", "sessions"])
+    expect(sections({})).toEqual(["bots", "projects", "sessions"])
+    expect(sections({ sidebarLayout: "projects-first" })).toEqual(["projects", "bots", "sessions"])
     expect(sections({ sidebarLayout: "bots-first" })).toEqual(["bots", "projects", "sessions"])
     expect(sections({ sidebarLayout: "icons-only" })).toEqual(["bots", "projects", "sessions"])
     expect(sections({ sidebarLayout: "scratch" })).toEqual([])

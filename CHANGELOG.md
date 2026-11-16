@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Bots in the sidebar: Enter or a click on a bot starts a new chat with it in the folder you opened, `o` (or `/bot open`) opens its page, which now looks and scrolls like the other pages, bots come first by default, a bot's chats fold under it instead of mixing into the project lists, the icon has one space after it, a folder you used today stays listed, and the list follows other terminals live without polling.
 - The left list can show every project as folding groups (`/customize` › Sidebar projects), and with experimental bots on it also lists the bots with their state, marks a bot's sessions with its icon, opens a bot's page (new session in a folder, edit, memory) and takes a starting layout (projects first, bots first, icons only, from scratch) with sections you order and hide.
 - Experimental bots (`/experimental bots on`): an agent with a name, a look and its own memory that you send to work in any folder. `/bot new`, `/bot list`, `/bot edit` and `/bot duplicate` make and manage them, and `/bot memory` teaches one.
 - Experimental bots share one growing memory: a new chat with a bot starts knowing, in a short summary, what it did in the last day in every folder, keeps notes from its finished sessions, and can search its own past chats and notes on its own (plain chats stay from scratch).

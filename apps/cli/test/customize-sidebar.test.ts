@@ -55,8 +55,8 @@ describe("/customize sidebar rows", () => {
 
   test("choosing a starting layout brings its own sections, dropping a typed list", () => {
     const typed = { ...DEFAULT_TUI_PROFILE, sidebarSections: "bots" }
-    expect(press("sidebarLayout", RIGHT, typed).action).toEqual({ type: "set", patch: { sidebarLayout: "bots-first", sidebarSections: "" } })
-    expect(press("sidebarLayout", "\x1b[D", typed).action).toEqual({ type: "set", patch: { sidebarLayout: "scratch", sidebarSections: "" } })
+    expect(press("sidebarLayout", RIGHT, typed).action).toEqual({ type: "set", patch: { sidebarLayout: "icons-only", sidebarSections: "" } })
+    expect(press("sidebarLayout", "\x1b[D", typed).action).toEqual({ type: "set", patch: { sidebarLayout: "projects-first", sidebarSections: "" } })
   })
 
   test("the section list is typed, checked and saved in order; an unknown name is refused", () => {

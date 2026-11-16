@@ -445,7 +445,8 @@ export function createKeys(ctx: AppContext, actions: {
         } else if (multi && key === "b") {
           const bot = multi.firstBot()
           if (bot) state.sidebarSelected = bot
-        } else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
+        else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false

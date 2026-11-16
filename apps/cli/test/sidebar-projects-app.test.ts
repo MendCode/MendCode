@@ -24,7 +24,8 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
     make("/other/api", "Waiting review", 5 * DAY, "waiting_approval"),
     make("/work/site", "Marketing", 2 * MINUTE),
     ...[1, 2, 3, 4].map((n) => make(`/repos/r${n}`, `repo ${n} chat`, n * 60 * MINUTE)),
-    ...NOT_REPOS.map((directory, index) => make(directory, `scratch ${index}`, index * MINUTE)),
+    // Older than a day: a plain folder only counts as a project for the day after its last use.
+    ...NOT_REPOS.map((directory, index) => make(directory, `scratch ${index}`, (index + 2) * DAY)),
     ...extraSessions,
     ...(child ? [{ sessionId: ids("session"), title: "Sub agent", directory: "/work/app", createdAt: NOW, updatedAt: NOW, lastSeq: 0, state: child, queued: 0, parentId: current } as SessionSummary] : []),
   ]
@@ -79,6 +80,14 @@ describe("which projects the sidebar lists", () => {
     const text = sidebarText(h)
     for (const name of ["app", "api", "site", "r1", "r4"]) expect(text).toContain(`▾ ${name}`)
     for (const hidden of ["scratch", "plain", ".ssh", "kit-fix", "ui4-login"]) expect(text).not.toContain(hidden)
+  })
+
+  test("a plain folder used in the last day is listed too, and never the home, hidden or temp ones", async () => {
+    const used = { sessionId: ids("session"), title: "Plain today", directory: "/work/plain", createdAt: NOW, updatedAt: NOW - 30 * MINUTE, lastSeq: 9, state: "idle", queued: 0 } as SessionSummary
+    const h = chatApp({ profile: { sidebarProjectCount: 2 }, extraSessions: [used] })
+    await until(h, "▾ plain")
+    expect(sidebarText(h)).toContain("Plain today")
+    for (const hidden of [".ssh", "kit-fix", "ui4-login"]) expect(sidebarText(h)).not.toContain(hidden)
   })
 
   test("the opened folder is a project even without git", async () => {
@@ -183,7 +192,7 @@ describe("the keyboard drives the whole list", () => {
     expect(picked(h)).toContain("Chrome")
   })
 
-  test("Enter on a session opens it, on a more row expands its project, on a bot opens its card", async () => {
+  test("Enter on a session opens it, on a more row expands its project, on a bot starts a chat and o opens its card", async () => {
     const extra = [1, 2, 3].map((n) => ({ sessionId: ids("session"), title: `Site extra ${n}`, directory: "/work/site", createdAt: NOW, updatedAt: NOW - (3 + n) * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
     const h = chatApp({ profile: { sidebarProjectCount: 30, sidebarPreviewCount: 5 }, extraSessions: extra })
     await until(h, "▾ site")
@@ -197,7 +206,7 @@ describe("the keyboard drives the whole list", () => {
     expect(h.app.sessionId).not.toBe(h.current)
     await h.type(LEFT)
     await goTo(h, /calm/)
-    await h.type("\r")
+    await h.type("o")
     expect(h.app.page).toBe("bot")
   })
 

@@ -669,7 +669,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebarProjects: "auto",
   sidebarPreviewCount: 5,
   sidebarProjectCount: 6,
-  sidebarLayout: "projects-first",
+  sidebarLayout: "bots-first",
   sidebarSections: "",
   images: "auto",
   transcriptImages: true,

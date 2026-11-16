@@ -85,8 +85,9 @@ describe("projects", () => {
     const rows = text()
     const at = (needle: string) => rows.findIndex((row) => row.includes(needle))
     expect(at("▾ app")).toBeGreaterThan(-1)
-    expect(at("Chrome")).toBeGreaterThan(at("▾ app"))
-    expect(at("Client reconnect")).toBeGreaterThan(at("Chrome"))
+    // Chrome is a chat of the bot calm: it lives under the bot, not in the group or its count.
+    expect(rows[at("▾ app")]).toMatch(/▾ app +1 │$/)
+    expect(at("Client reconnect")).toBeGreaterThan(at("▾ app"))
     expect(rows[at("▾ api")]).toMatch(/▾ api +2 │$/)
     expect(rows[at("▾ site")]).toMatch(/▾ site +1 │$/)
     expect(at("Other project")).toBeGreaterThan(at("▾ api"))
@@ -98,7 +99,7 @@ describe("projects", () => {
     expect(rows.find((row) => row.includes("▸ api"))).toMatch(/▸ api +1 active │$/)
     expect(rows.some((row) => row.includes("Other project"))).toBe(false)
     expect(rows.some((row) => row.includes("▸ app"))).toBe(true)
-    expect(rows.some((row) => row.includes("Chrome"))).toBe(false)
+    expect(rows.some((row) => row.includes("Client reconnect"))).toBe(false)
     expect(text({ open: new Map([["/other/api", true]]) }).some((row) => row.includes("Other project"))).toBe(true)
   })
 
@@ -108,11 +109,43 @@ describe("projects", () => {
     expect(rows.some((row) => row.includes("api") || row.includes("site"))).toBe(false)
   })
 
-  test("a bot's session carries the bot's icon in its project list; the others keep a blank where it would be", () => {
+  test("a bot's chats are not in the project lists or their counts; they live under the bot", () => {
     const rows = text()
-    expect(rows.find((row) => row.includes("Chrome"))).toMatch(/● Chrome +1m │$/)
+    const groups = rows.slice(rows.findIndex((row) => row.includes("▾ app")), rows.findIndex((row) => row.includes("calm")))
+    expect(groups.some((row) => row.includes("Chrome"))).toBe(false)
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 │$/)
     expect(rows.find((row) => row.includes("Client reconnect"))).toMatch(/ {2}Client reconnect/)
-    expect(draw().rows.find((row) => plain(row).includes("Chrome"))!.find((span) => span.text === "● " && span.fg === "success")).toBeDefined()
+    // A session whose own `agent` names a bot is left out the same way, even when the report does not list it yet.
+    const named = text({ sessions: [...sessions, session("s6", "Agent named", "/work/app", { agent: "scout" })] as never, current: "s6" })
+    expect(named.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 │$/)
+    expect(named.some((row) => row.includes("Agent named"))).toBe(true)
+  })
+
+  test("a bot's chats fold under a row of their own, every folder, newest first, a preview of three and a more row", () => {
+    const many: BotListReport = { ...bots, bots: [{ ...bots.bots[0]!, projects: [
+      { directory: "/work/app", state: "idle", sessions: [1, 2, 3].map((n) => ({ sessionId: `a${n}` as never, title: `App chat ${n}`, status: "idle", updatedAt: NOW - n * MINUTE })) },
+      { directory: "/other/api", state: "idle", sessions: [4, 5].map((n) => ({ sessionId: `b${n}` as never, title: `Api chat ${n}`, status: "idle", updatedAt: NOW - n * MINUTE })) },
+    ] }, ...bots.bots.slice(1)] }
+    const closed = text({ bots: many, current: "s2" })
+    expect(closed.find((row) => row.includes("chats"))).toMatch(/^ {3} {2}▸ chats +5 │$/)
+    expect(closed.some((row) => row.includes("App chat"))).toBe(false)
+    const opened = text({ bots: many, current: "s2", open: new Map([["bot:calm", true]]) })
+    const chats = opened.filter((row) => /(App|Api) chat/.test(row)).map((row) => row.replace(/^ +· /, "").replace(/ +\d+m │$/, ""))
+    expect(chats).toEqual(["App chat 1", "App chat 2", "App chat 3"])
+    expect(opened.find((row) => row.includes("▾ chats"))).toBeDefined()
+    expect(opened.find((row) => row.includes("+ 2 more"))).toBeDefined()
+    expect(multiStops({ ...base, bots: many, current: "s2", open: new Map([["bot:calm", true]]) })).toContain("botmore:calm")
+    const whole = text({ bots: many, current: "s2", open: new Map([["bot:calm", true]]), expanded: new Set(["bot:calm"]) })
+    expect(whole.filter((row) => /(App|Api) chat/.test(row))).toHaveLength(5)
+    expect(whole.some((row) => row.includes("show less"))).toBe(true)
+    // The chat that is open opens its bot's chats by default; a fold by hand wins.
+    expect(text({ bots: many, current: "a1" }).some((row) => row.includes("App chat 1"))).toBe(true)
+    expect(text({ bots: many, current: "a1", open: new Map([["bot:calm", false]]) }).some((row) => row.includes("App chat 1"))).toBe(false)
+  })
+
+  test("a folded bot with a working chat says how many are active", () => {
+    const busy = { ...bots, bots: [{ ...bots.bots[0]!, projects: [{ directory: "/work/app", state: "working" as const, sessions: [{ sessionId: "s2" as never, title: "Client reconnect", status: "running", updatedAt: NOW }] }] }, ...bots.bots.slice(1)] }
+    expect(text({ bots: busy, current: "s5" }).find((row) => row.includes("chats"))).toMatch(/▸ chats +1 active │$/)
   })
 
   test("sessions without a bot are their own section when projects is not shown", () => {
@@ -245,12 +278,52 @@ describe("sessions nobody used stay out of the sidebar", () => {
   test("a titled session with few events stays", () => {
     expect(rows([session("n1", "Hello", "/work/app", { lastSeq: 2 })]).some((row) => row.includes("Hello"))).toBe(true)
   })
+
+  test("a session opened here today that has taken part since stays, even when its pushed summary says it is empty", () => {
+    const pushed = (updatedAt: number) => session("p1", "", "/work/app", { lastSeq: 0, updatedAt })
+    const visits = (updatedAt: number, at = NOW - 60 * MINUTE) => new Map([["p1", { at, updatedAt }]])
+    // Opened and left alone: still hidden. Used after it was opened: shown. Opened more than a day ago: the rule is back.
+    expect(rows([pushed(NOW - 90 * MINUTE)], { visits: visits(NOW - 90 * MINUTE) }).some((row) => row.includes("Untitled session"))).toBe(false)
+    expect(rows([pushed(NOW - 5 * MINUTE)], { visits: visits(NOW - 90 * MINUTE) }).some((row) => row.includes("Untitled session"))).toBe(true)
+    expect(rows([pushed(NOW - 5 * MINUTE)], { visits: visits(NOW - 90 * MINUTE, NOW - 25 * 60 * MINUTE) }).some((row) => row.includes("Untitled session"))).toBe(false)
+    expect(rows([pushed(NOW - 5 * MINUTE)]).some((row) => row.includes("Untitled session"))).toBe(false)
+  })
+})
+
+describe("a folder used today stays listed after the opened folder moves on", () => {
+  // The owner's sequence: MendCode opened in a new folder X (no git root), a chat there, then a switch to a session in another folder.
+  const x = session("x1", "Notes in X", "/new/x", { updatedAt: NOW - 20 * MINUTE })
+  const probe = { isProject: (directory: string) => directory !== "/new/x", eligible: () => true, count: 1 }
+  test("X and its chat are still shown with a cap of one project, and at the re-rank after the switch", () => {
+    const after = text({ sessions: [...sessions, x] as never, current: "s1", directory: "/work/app", sections: ["projects"], projects: probe })
+    expect(after.some((row) => row.includes("▾ x"))).toBe(true)
+    expect(after.some((row) => row.includes("Notes in X"))).toBe(true)
+    // Without the day's grace (the old rule) the folder is gone from the list but for the chat's own /sessions page.
+    const old = text({ sessions: [...sessions, x] as never, current: "s1", directory: "/work/app", sections: ["projects"], projects: { isProject: probe.isProject, count: 1 } })
+    expect(old.some((row) => row.includes("Notes in X"))).toBe(false)
+  })
+})
+
+describe("the icon and one space", () => {
+  const picture = { capability: { images: true } as never, slot: "bot-icon", stateOf: (() => "sleeping") as never, make: (({ row, col }: { row: number; col: number }) => ({ slot: "p", key: `${row}:${col}`, image: {} as never, row, col, cols: 2, rows: 1 })) as never }
+  test("a picture is its two cells and exactly one space, the text column the same on every row", () => {
+    const rows = text({ faces: picture, bots: { ...bots, bots: [{ ...bots.bots[0]!, projects: [{ directory: "/work/app", state: "idle", sessions: [{ sessionId: "s2" as never, title: "Client reconnect", status: "idle", updatedAt: NOW }] }] }, ...bots.bots.slice(1)] }, current: "s2" })
+    expect(rows.find((row) => row.includes("calm"))).toMatch(/^ {3} {3}calm/)
+    expect(rows.find((row) => row.includes("scout"))).toMatch(/^ {3} {3}scout/)
+    const chat = rows.find((row) => row.includes("Client reconnect"))!
+    // lead (3 cells), the 4-space indent, the mark, then the title in the column every chat row uses
+    expect(chat).toMatch(/^ ▌ {5}[·•] Client reconnect/)
+  })
+  test("a glyph is its cell and one space", () => {
+    expect(text().find((row) => row.includes("calm"))).toMatch(/^ {3}● calm/)
+    expect(text({ ascii: true, glyphs: glyphSet("ascii") }).find((row) => row.includes("calm"))).toMatch(/^ {3}\(\) calm/)
+  })
 })
 
 describe("keyboard stops and mouse hits agree with what is drawn", () => {
   test("stops run in drawing order: bots, groups and their visible sessions, never a hidden one", () => {
-    expect(multiStops(base)).toEqual(["group:/work/app", "s1", "s2", "group:/other/api", "s3", "s4", "group:/work/site", "s5", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
-    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "bot:scout", "bot:hermes-1", "bot:oops", "group:/work/app", "s1", "s2", "group:/other/api", "group:/work/site", "s5"])
+    expect(multiStops(base)).toEqual(["group:/work/app", "s2", "group:/other/api", "s3", "s4", "group:/work/site", "s5", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops"])
+    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops", "group:/work/app", "s2", "group:/other/api", "group:/work/site", "s5"])
   })
 
   test("each hit names a stop on the row that draws it", () => {
@@ -284,8 +357,8 @@ describe("icons only", () => {
   })
 
   test("its stops still reach every bot and the opened project's sessions", () => {
-    expect(multiStops({ ...base, icons: true })).toEqual(["s1", "s2", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
-    expect(multiStops({ ...base, icons: true, sections: ["bots", "projects"] })).toEqual(["bot:calm", "bot:scout", "bot:hermes-1", "bot:oops", "s1", "s2"])
+    expect(multiStops({ ...base, icons: true })).toEqual(["s2", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
+    expect(multiStops({ ...base, icons: true, sections: ["bots", "projects"] })).toEqual(["bot:calm", "bot:scout", "bot:hermes-1", "bot:oops", "s2"])
   })
 })
 

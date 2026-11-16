@@ -652,6 +652,7 @@ You review gently…
 | `/bot` or `/bot list` | the bots, their state (working, waiting for you, idle, problem) and the folders they work in |
 | `/bot new [name]` | opens the bot form with the name filled in; nothing is written until Create |
 | `/bot new <name> <description>` or `/bot new -d <description>` | the model drafts the name (when you gave none), the when-to-use text and the personality, and the words "green", "red", "square"… pick the color and shape; the draft opens in the same form to confirm, and nothing is written until Create |
+| `/bot open [name]` | opens the bot's page (its chats by folder, new chat in a folder, edit, memory, delete); without a name, the bot of the open chat. Enter or a click on a bot in the sidebar starts a new chat with it in the opened folder instead, and `o` on the bot row opens the page |
 | `/bot edit <name>` | opens the form on the bot; the name stays, a save that would break the file is refused and nothing is written |
 | `/bot delete <name>` | asks first (lowercase `y` confirms, Enter does not; `m` also removes its memory folder, kept by default; Esc cancels), then removes the agent file. Its sessions and conversations are never deleted: they stay in `/sessions` as normal sessions |
 | `/bot duplicate <name> <new>` | copies the file under a new name (the memory is not copied) |

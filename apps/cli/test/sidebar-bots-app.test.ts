@@ -10,7 +10,7 @@ const reply = (result: unknown) => ({ ok: true, result }) as CommandReply
 const MINUTE = 60_000
 
 /** The app with a bots list and sessions in three folders; `bots: false` is a terminal that never turned the flag on. */
-function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock }: { bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number } } = {}) {
+function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect }: { bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
   const current = ids("session")
   const second = ids("session")
   const elsewhere = ids("session")
@@ -21,6 +21,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
     { sessionId: second, title: "Client reconnect", directory: "/work/app", createdAt: NOW, updatedAt: NOW - 10 * MINUTE, lastSeq: 0, state: "idle", queued: 0 },
     { sessionId: elsewhere, title: "Other project", directory: "/other/api", createdAt: NOW, updatedAt: NOW, lastSeq: 0, state: "waiting_approval", queued: 0 },
     { sessionId: docs, title: "Docs pass", directory: "/other/api", createdAt: NOW, updatedAt: NOW - 120 * MINUTE, lastSeq: 0, state: "idle", queued: 0 },
+    ...more,
   ]
   const report = {
     bots: [
@@ -35,7 +36,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
   }
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
-  const h = appHarness({ width, height, mode: "balanced", inspectProject: async () => ({ git: true }), ...(clock ? { now: () => clock.at } : {}), sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
+  const h = appHarness({ width, height, mode: "balanced", inspectProject: inspect ?? (async () => ({ git: true })), ...(clock ? { now: () => clock.at } : {}), sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
     const extraReply = extra?.(command)
     if (extraReply) return extraReply
     if (command.type === "session.list") return reply({ sessions: (command as { directory?: string }).directory ? sessions.filter((session) => session.directory === (command as { directory?: string }).directory) : sessions })
@@ -92,29 +93,141 @@ describe("flag off and default settings: today's sidebar, nothing new asked", ()
 })
 
 describe("flag on: the bots section and the bot's icon in its project", () => {
-  test("a row per bot with its state, and the bot's session marked with its icon", async () => {
+  test("a row per bot with its state; the bot's chat lives under the bot, not in the project", async () => {
     const h = chatApp()
     await until(h, "Bots")
     expect(side(h)[rowOf(h, "calm")]).toMatch(/^ {3}● calm +mendcode +● working │$/)
     expect(side(h)[rowOf(h, "scout")]).toMatch(/scout +mendcode +◌ idle │$/)
-    expect(side(h)[rowOf(h, "Chrome")]).toMatch(/● Chrome +1m │$/)
+    // Bots first by default; Chrome (the bot's, and the open one) sits under calm's chats row, after the Bots heading.
+    expect(rowOf(h, "Bots")).toBeLessThan(rowOf(h, "Projects"))
+    expect(rowOf(h, "Chrome")).toBeGreaterThan(rowOf(h, "calm"))
+    expect(rowOf(h, "Chrome")).toBeLessThan(rowOf(h, "Projects"))
+    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
     expect(h.sentOf("bot.list")).toHaveLength(1)
   })
+})
 
-  test("an activity push refreshes the bots, at most once every two seconds", async () => {
+describe("the lists follow pushes without asking", () => {
+  const MINUTE_MS = 60_000
+  /** The app on a fake clock after its first answers; the requests it made so far are the baseline. */
+  async function live() {
     const clock = { at: NOW }
-    const h = chatApp({ clock })
+    const h = chatApp({ clock, height: 60 })
     await until(h, "Bots")
-    const push = (gseq: number) => h.app.onGlobal({ type: "session.activity", gseq, at: clock.at, sessionId: h.ids.second, directory: "/work/app", title: "Client reconnect", state: "generating", updatedAt: clock.at } as never)
-    push(1)
-    push(2)
     await Bun.sleep(10)
-    expect(h.sentOf("bot.list")).toHaveLength(1)
-    clock.at += 3000
-    push(3)
-    push(4)
-    await Bun.sleep(10)
-    expect(h.sentOf("bot.list")).toHaveLength(2)
+    let gseq = 0
+    const push = (sessionId: string, over: Record<string, unknown> = {}) => h.app.onGlobal({ type: "session.activity", gseq: ++gseq, at: clock.at, sessionId, directory: "/work/app", title: "Elsewhere", state: "idle", updatedAt: clock.at, ...over } as never)
+    const count = () => ({ lists: h.sentOf("session.list").length, bots: h.sentOf("bot.list").length })
+    const frame = async () => { h.app.render(); await Bun.sleep(5) }
+    return { h, clock, push, count, frame, base: count() }
+  }
+
+  test("a burst of 50 pushes asks for no session list, and the list shows them", async () => {
+    const { h, push, count, frame, base } = await live()
+    for (let n = 0; n < 50; n++) push(`ses_other${String(n).padStart(2, "0")}`, { directory: "/far/away", title: `Far ${n}`, state: n % 2 ? "generating" : "idle" })
+    await frame()
+    expect(count().lists).toBe(base.lists)
+    expect(sidebarText(h)).toContain("▾ away")
+    expect(sidebarText(h)).toMatch(/Far \d+/)
+  })
+
+  test("a session no list holds may be a bot's new chat: one bot list per window, however many", async () => {
+    const { clock, push, count, frame, base } = await live()
+    for (let n = 0; n < 10; n++) push(`ses_new${String(n).padStart(2, "0")}`)
+    await frame()
+    // Inside the one-second window nothing goes out yet; once it passes there is one request for all ten.
+    expect(count().bots).toBe(base.bots)
+    clock.at += 1000
+    await frame()
+    await frame()
+    expect(count().bots).toBe(base.bots + 1)
+    // The ten are classified: pushing them again asks for nothing.
+    for (let n = 0; n < 10; n++) push(`ses_new${String(n).padStart(2, "0")}`, { title: "again" })
+    clock.at += 5000
+    await frame()
+    expect(count().bots).toBe(base.bots + 1)
+    expect(count().lists).toBe(base.lists)
+  })
+
+  test("a push for a session of a listed bot moves the bot's state with no request", async () => {
+    const { h, push, count, frame, base } = await live()
+    push(h.ids.current, { state: "idle", title: "Chrome" })
+    await frame()
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle │$/)
+    push(h.ids.current, { state: "waiting_approval", title: "Chrome" })
+    await frame()
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/… waiting │$/)
+    expect(count()).toEqual(base)
+  })
+
+  test("hidden, the sidebar does nothing but note it; shown again it asks once for both lists", async () => {
+    const { h, clock, push, count, frame, base } = await live()
+    h.size.width = 60
+    await frame()
+    for (let n = 0; n < 20; n++) push(`ses_hidden${String(n).padStart(2, "0")}`, { directory: "/far/away" })
+    clock.at += 5 * MINUTE_MS
+    await frame()
+    expect(count()).toEqual(base)
+    h.size.width = 120
+    await frame()
+    await frame()
+    expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
+    await frame()
+    expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
+  })
+
+  test("the slow safety refresh runs only while the sidebar shows, at 60 s", async () => {
+    const { h, clock, count, frame, base } = await live()
+    clock.at += 59_000
+    await frame()
+    expect(count()).toEqual(base)
+    clock.at += 1000
+    await frame()
+    await frame()
+    expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
+    // Hidden for ten minutes: nothing, even when frames draw.
+    h.size.width = 60
+    clock.at += 10 * MINUTE_MS
+    await frame()
+    await frame()
+    expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
+  })
+
+  test("a reconnect asks for both lists whole", async () => {
+    const { h, count, frame, base } = await live()
+    h.app.onConnection("reconnecting")
+    h.app.onConnection("connected")
+    await frame()
+    await frame()
+    expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
+  })
+})
+
+describe("a folder used today stays after the opened folder moves on", () => {
+  test("the new folder and its chat are still listed after the switch and after the refresh that follows it", async () => {
+    const clock = { at: NOW }
+    const x: SessionSummary = { sessionId: ids("session"), title: "Notes in X", directory: "/new/x", createdAt: NOW, updatedAt: NOW - 20 * MINUTE, lastSeq: 9, state: "idle", queued: 0 }
+    // X is no git root; every other folder is. Six more recent folders fill the project cap.
+    const crowd = ["a", "b", "c", "d", "e", "f"].map((name, index): SessionSummary => ({ sessionId: ids("session"), title: `${name} chat`, directory: `/p/${name}`, createdAt: NOW, updatedAt: NOW - (index + 1) * MINUTE, lastSeq: 9, state: "idle", queued: 0 }))
+    const h = chatApp({ clock, height: 60, more: [x, ...crowd], inspect: async (directory) => ({ git: directory !== "/new/x" }) })
+    await until(h, "Bots")
+    await Bun.sleep(20)
+    h.app.render()
+    // The owner's step: switch from the sidebar to a session in another folder, then wait past the refresh interval.
+    await h.type("\x1b[D")
+    for (let turn = 0; turn < 40 && h.app.sessionId !== h.ids.docs; turn++) {
+      h.app.render()
+      if (h.text().some((row) => /^ › .*Docs pass/.test(row.slice(0, SIDEBAR_WIDTH)))) { await h.type("\r"); break }
+      await h.type("\x1b[B")
+    }
+    expect(h.app.sessionId).toBe(h.ids.docs)
+    for (const wait of [1000, 40_000, 70_000]) {
+      clock.at += wait
+      for (let turn = 0; turn < 4; turn++) { h.app.render(); await Bun.sleep(5) }
+      expect(sidebarText(h)).toContain("▾ x")
+      expect(sidebarText(h)).toContain("Notes in X")
+    }
+    expect(h.sentOf("session.list").length).toBeGreaterThan(1)
   })
 })
 
@@ -181,34 +294,72 @@ describe("all projects", () => {
 })
 
 describe("the bot card", () => {
-  test("Enter on a bot opens its page: identity, origin, description, model, permission, sessions by folder", async () => {
-    const h = chatApp()
+  /** ← takes the list, `b` goes to the first bot. */
+  async function onBot(h: App) {
     await until(h, "Bots")
     await h.type("\x1b[D")
-    // Walk down to the calm row.
-    for (let turn = 0; turn < 12 && h.app.page === "chat"; turn++) {
-      h.app.render()
-      if (h.text().some((row) => /^ › .*calm/.test(row.slice(0, SIDEBAR_WIDTH)))) { await h.type("\r"); break }
-      await h.type("\x1b[B")
-    }
+    await h.type("b")
+    h.app.render()
+  }
+
+  test("o on a bot opens its page, shown in the hint: identity, origin, description, model, permission, chats by folder", async () => {
+    const h = chatApp()
+    await onBot(h)
+    expect(sidebarText(h)).toContain("↵ chat  o page")
+    await h.type("o")
     expect(h.app.page).toBe("bot")
+    h.app.render()
     const page = h.text().join("\n")
-    for (const needle of ["calm", "mendcode", "A calm reviewer", "gpt-6-luna", "smart", "/work/app", "/other/api", "Chrome", "Docs pass", "New session", "Edit", "Memory"]) expect(page).toContain(needle)
+    for (const needle of ["Bot · calm", "calm", "mendcode", "A calm reviewer", "gpt-6-luna", "smart", "/work/app", "/other/api", "Chrome", "Docs pass", "New chat", "Edit", "Memory"]) expect(page).toContain(needle)
     await h.type("\x1b")
     expect(h.app.page).toBe("chat")
   })
 
-  test("a click on the bot's row opens the same page", async () => {
+  test("Enter on a bot starts a new chat with it in the opened folder and shows it right away", async () => {
+    const h = chatApp()
+    await onBot(h)
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", agent: "calm" })
+    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
+    expect(h.app.sessionId).toBe(h.ids.created)
+    expect(h.app.page).toBe("chat")
+  })
+
+  test("a click on the bot's row does the same", async () => {
     const h = chatApp()
     await until(h, "Bots")
     await h.type(click(8, rowOf(h, "calm")))
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", agent: "calm" })
+    expect(h.app.sessionId).toBe(h.ids.created)
+  })
+
+  test("a click on a bot's chats row folds and opens them", async () => {
+    const h = chatApp({ height: 40 })
+    // The open chat belongs to calm, so its chats start open; a click folds them, another opens them.
+    await until(h, "▾ chats")
+    expect(sidebarText(h)).toContain("Docs pass")
+    await h.type(click(8, rowOf(h, "▾ chats")))
+    h.app.render()
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(sidebarText(h)).not.toContain("Docs pass")
+    await h.type(click(8, rowOf(h, "▸ chats")))
+    h.app.render()
+    expect(sidebarText(h)).toContain("Docs pass")
+  })
+
+  test("/bot open <name> opens the page from a chat, and without a name the open chat's bot", async () => {
+    const h = chatApp()
+    await until(h, "Bots")
+    await h.type("/bot open calm\r")
     expect(h.app.page).toBe("bot")
+    await h.type("\x1b")
+    expect(h.app.page).toBe("chat")
   })
 
   async function card() {
     const h = chatApp()
-    await until(h, "Bots")
-    await h.type(click(8, rowOf(h, "calm")))
+    await onBot(h)
+    await h.type("o")
     expect(h.app.page).toBe("bot")
     return h
   }
@@ -217,18 +368,18 @@ describe("the bot card", () => {
     const h = await card()
     const lines = () => h.text()
     // Rows: actions first, then the sessions; move to the Docs pass row.
-    for (let turn = 0; turn < 12 && !lines().some((row) => /^\s*›.*Docs pass/.test(row)); turn++) await h.type("\x1b[B")
+    for (let turn = 0; turn < 12 && !lines().some((row) => /›.*Docs pass/.test(row)); turn++) await h.type("\x1b[B")
     await h.type("\r")
     expect(h.app.sessionId).toBe(h.ids.docs)
     expect(h.app.page).toBe("chat")
   })
 
-  test("New session in a folder creates it there, sets the bot's agent and opens it", async () => {
+  test("New chat in a folder creates it there, sets the bot's agent and opens it", async () => {
     const h = await card()
     await h.type("n")
-    expect(h.text().join("\n")).toContain("Folder")
+    expect(h.text().join("\n")).toContain("Folder for a new chat")
     // The folders the bot works in come first; pick /other/api.
-    for (let turn = 0; turn < 8 && !h.text().some((row) => /^\s*›.*\/other\/api/.test(row)); turn++) await h.type("\x1b[B")
+    for (let turn = 0; turn < 8 && !h.text().some((row) => /›.*\/other\/api/.test(row)); turn++) await h.type("\x1b[B")
     await h.type("\r")
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", agent: "calm" })
     expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
@@ -239,12 +390,13 @@ describe("the bot card", () => {
   test("e edits through /bot edit and m shows the memory", async () => {
     const h = chatApp({ extra: (command) => command.type === "bot.memory" ? reply({ global: "- likes short answers", project: "" }) : command.type === "bot.file" ? reply({ file: "/d/agents/calm.md", text: "x", saved: false }) : undefined })
     await until(h, "Bots")
-    await h.type(click(8, rowOf(h, "calm")))
+    await h.type("/bot open calm\r")
     await h.type("m")
     expect(h.sentOf("bot.memory").at(-1)).toMatchObject({ name: "calm" })
     expect(h.text().join("\n")).toContain("likes short answers")
+    // Esc from the memory text goes back to the bot's page.
     await h.type("\x1b")
-    await h.type(click(8, rowOf(h, "calm")))
+    expect(h.app.page).toBe("bot")
     await h.type("e")
     expect(h.sentOf("bot.file").at(-1)).toMatchObject({ name: "calm" })
   })

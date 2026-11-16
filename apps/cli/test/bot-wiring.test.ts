@@ -30,7 +30,8 @@ const faces = (capability: FaceCapability): IconFaces => ({ capability, slot: "b
 describe("botIcon stays the one icon entry point and uses the picture only when images are on", () => {
   test("an image-capable terminal gets a blank two-cell icon and a 2 by 1 placement from botIconImage", () => {
     const icon = botIcon({ name: "calm", shape: "circle", color: "success", state: "working", faces: faces({ images: true }) })
-    expect(icon.text).toBe("  ")
+    // Its two cells and exactly one space after them.
+    expect(icon.text).toBe("   ")
     const placed = icon.image!({ row: 4, col: 3 })!
     expect(placed).toMatchObject({ slot: "bot-icon", row: 4, col: 3, cols: 2, rows: 1 })
     const direct = botIconImage({ name: "calm", shape: "circle", color: "success", state: faceStateOf("working"), capability: { images: true }, slot: "bot-icon", row: 4, col: 3 })!
@@ -76,22 +77,22 @@ describe("the sidebar places a picture over each bot icon only with faces", () =
     expect(lines(drawn.rows).join("\n")).toContain("●")
   })
 
-  test("with faces the bot row and its session row each get a picture at the icon's cell, and the glyph cells are blank", () => {
+  test("with faces the bot row gets a picture at the icon's cell, and the cells are blank", () => {
     const plain = renderMultiSidebar(input())
     const drawn = renderMultiSidebar(input({ faces: faces({ images: true }) }))
-    expect(drawn.images.length).toBe(2)
+    // The bot row; the bot's chat sits under it (no picture there: every row of that list is the bot's).
+    expect(drawn.images.length).toBe(1)
     for (const placement of drawn.images) {
       expect(placement).toMatchObject({ cols: 2, rows: 1 })
       const row = lines(drawn.rows)[placement.row]!
-      expect(row.slice(placement.col, placement.col + 2)).toBe("  ")
+      expect(row.slice(placement.col, placement.col + 3)).toBe("   ")
       expect(lines(plain.rows)[placement.row]!.slice(placement.col, placement.col + 1)).toBe("●")
     }
-    expect(new Set(drawn.images.map((placement) => placement.slot)).size).toBe(2)
   })
 
   test("the icons column places them too", () => {
     const drawn = renderMultiSidebar(input({ icons: true, faces: faces({ images: true }) }))
-    expect(drawn.images.length).toBe(2)
+    expect(drawn.images.length).toBe(1)
   })
 
   test("ASCII mode draws no pictures", () => {
@@ -119,7 +120,7 @@ describe("the bot page draws the face", () => {
   })
 
   test("the state maps through faceStateOf: each bot state draws a different face under its word", () => {
-    const faces = (["idle", "working", "waiting", "problem"] as const).map((state) => page(state, {}).text().split("\n").slice(2, 6).map((line) => line.slice(0, 13)).join("\n"))
+    const faces = (["idle", "working", "waiting", "problem"] as const).map((state) => page(state, {}).text().split("\n").slice(4, 8).map((line) => line.slice(0, 13)).join("\n"))
     expect(new Set(faces).size).toBe(4)
   })
 
@@ -131,11 +132,13 @@ describe("the bot page draws the face", () => {
     expect(placements).toEqual([])
   })
 
-  test("with images the picture is placed under the page header, and the label stays text", () => {
+  test("with images the picture is placed in the left panel under the page header, and the label stays text", () => {
     const placements: ImagePlacement[] = []
     const text = page("working", { images: true }, { placements, theme: theme("mendcode") }).text()
     expect(placements.length).toBe(1)
-    expect(placements[0]).toMatchObject({ slot: "bot-card", row: 2, col: 2, cols: 9, rows: 4 })
+    expect(placements[0]).toMatchObject({ slot: "bot-card", row: 4, col: 2, cols: 9, rows: 4 })
+    // The cells under the picture are blank inside the panel's border.
+    expect(text.split("\n")[4]!.slice(0, 12)).toBe("│" + " ".repeat(11))
     expect(text).not.toContain("╭")
     expect(text).toContain("working")
   })
@@ -157,10 +160,12 @@ describe("the bot page draws the face", () => {
     expect(placements[0]!.key.startsWith("bot-avatar/")).toBe(true)
   })
 
-  test("a narrow page keeps the one-line header", () => {
+  test("a narrow page is the list alone under the shared header and summary", () => {
     const text = lines(page("working", {}).card.render({ ...view, width: 40 })).join("\n")
     expect(text).not.toContain("╭")
-    expect(text).toContain("calm")
+    expect(text).toContain("Bot · calm")
+    expect(text).toContain("working · mendcode")
+    expect(text).toContain("New chat")
   })
 })
 
@@ -242,6 +247,13 @@ async function settle(h: ReturnType<typeof app>, until: () => boolean) {
   }
 }
 
+/** The list takes focus (←), `b` goes to the first bot and `o` opens its page. */
+async function openPage(h: ReturnType<typeof app>) {
+  await h.type("\x1b[D")
+  await h.type("b")
+  await h.type("o")
+}
+
 describe("wired into the app", () => {
   test("flag off: no picture is ever placed, whatever the terminal can draw", async () => {
     const h = app({ bots: false })
@@ -254,7 +266,7 @@ describe("wired into the app", () => {
     const h = app()
     await settle(h, () => h.placements.at(-1)?.some((placement) => placement.slot.startsWith("bot-icon")) === true)
     const icons = h.placements.at(-1)!.filter((placement) => placement.slot.startsWith("bot-icon"))
-    expect(icons.length).toBe(2)
+    expect(icons.length).toBe(1)
     for (const icon of icons) expect(icon).toMatchObject({ cols: 2, rows: 1, col: expect.any(Number) })
   })
 
@@ -269,8 +281,7 @@ describe("wired into the app", () => {
   test("the page of a bot places the face and takes the picture away when it closes", async () => {
     const h = app()
     await settle(h, () => h.text().join("\n").includes("calm"))
-    const row = h.text().findIndex((line) => line.includes("calm") && line.includes("idle"))
-    await h.type(`\x1b[<0;8;${row + 1}M`)
+    await openPage(h)
     expect(h.app.page).toBe("bot")
     h.app.render()
     expect(h.placements.at(-1)!.filter((placement) => placement.slot === "bot-card").length).toBe(1)
@@ -282,8 +293,7 @@ describe("wired into the app", () => {
   async function cardKey(avatar: string) {
     const h = app({ avatar })
     await settle(h, () => h.text().join("\n").includes("calm"))
-    const row = h.text().findIndex((line) => line.includes("calm") && line.includes("idle"))
-    await h.type(`\x1b[<0;8;${row + 1}M`)
+    await openPage(h)
     // The avatar is read once, after the page opens; the next frames carry it.
     let key = ""
     await settle(h, () => { key = h.placements.at(-1)?.find((placement) => placement.slot === "bot-card")?.key ?? ""; return key.startsWith("bot-avatar/") })

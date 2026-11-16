@@ -14,6 +14,8 @@ export type ProjectInspection = { git: boolean; main?: string }
 /** The window "recent use" counts sessions over. */
 export const RECENT_DAYS = 14
 const RECENT_MS = RECENT_DAYS * 24 * 60 * 60 * 1000
+/** A folder with a session used within this long is listed as a project even when it is not a git root. */
+export const FRESH_MS = 24 * 60 * 60 * 1000
 
 const trimmed = (directory: string) => directory.length > 1 ? directory.replace(/\/+$/, "") : directory
 const within = (directory: string, root: string) => directory === root || directory.startsWith(`${root}/`)
@@ -29,6 +31,8 @@ export function eligibleDirectory({ directory, home, tmpRoots }: { directory: st
 export type ProjectProbe = {
   /** Whether the folder is a project; false until the first answer for it is in. */
   isProject(directory: string): boolean
+  /** Whether the path alone allows a project: not home, hidden or under a temp root. No disk question. */
+  eligible(directory: string): boolean
   /** The folder a linked worktree belongs to (its main repo), else the folder itself. */
   canonical(directory: string): string
 }
@@ -59,6 +63,7 @@ export function createProjectProbe({ home, tmpRoots, inspect, onChange }: { home
     return answers.get(path) ?? undefined
   }
   return {
+    eligible: (directory) => eligibleDirectory({ directory: trimmed(directory), home, tmpRoots }),
     isProject(directory) {
       const found = known(directory)
       if (!found?.git) return false
@@ -78,20 +83,24 @@ type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Pa
  * (the opened and busy ones count toward it and always show). `rest` keeps the ranking for the "more projects" row.
  * `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
  */
-export function rankProjects({ sessions, opened, now, count, busy, isProject }: { sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean }): { shown: string[]; rest: string[] } {
-  const facts = new Map<string, { latest: number; recent: number; busy: boolean }>()
+export function rankProjects({ sessions, opened, now, count, busy, isProject, eligible }: { sessions: readonly Ranked[]; opened: string; now: number; count: number; busy: (session: Ranked) => boolean; isProject: (directory: string) => boolean; /** Whether a folder may be a project by its path alone (see `eligibleDirectory`); with it, a folder used in the last day counts even when it is not a git root. */ eligible?: (directory: string) => boolean }): { shown: string[]; rest: string[] } {
+  const facts = new Map<string, { latest: number; recent: number; busy: boolean; fresh: boolean }>()
   for (const session of sessions) {
     const directory = session.directory
-    if (directory !== opened && !isProject(directory)) continue
     const at = sessionActivityAt(session as never)
-    const fact = facts.get(directory) ?? { latest: 0, recent: 0, busy: false }
+    // A folder used in the last day is a project whether or not it is a git root, and stays listed after the opened folder moves on.
+    const fresh = directory !== opened && !isProject(directory) && eligible?.(directory) === true && now - at <= FRESH_MS
+    if (directory !== opened && !isProject(directory) && !fresh) continue
+    const fact = facts.get(directory) ?? { latest: 0, recent: 0, busy: false, fresh: false }
     fact.latest = Math.max(fact.latest, at)
     if (now - at <= RECENT_MS) fact.recent++
     if (busy(session)) fact.busy = true
+    if (fresh) fact.fresh = true
     facts.set(directory, fact)
   }
   const others = [...facts.keys()].filter((directory) => directory !== opened).sort((a, b) => facts.get(b)!.latest - facts.get(a)!.latest || facts.get(b)!.recent - facts.get(a)!.recent || a.localeCompare(b))
-  const working = others.filter((directory) => facts.get(directory)!.busy)
+  // Busy folders, and folders listed only because they were used today, show past the cap: recent use beats it as work in progress does.
+  const working = others.filter((directory) => facts.get(directory)!.busy || facts.get(directory)!.fresh)
   const shown = [opened, ...working]
   for (const directory of others) {
     if (shown.length >= count) break

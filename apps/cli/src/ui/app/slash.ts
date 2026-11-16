@@ -729,7 +729,7 @@ export function createSlash(ctx: AppContext, actions: {
         await agentCommand(parsed.args)
         break
       case "bot":
-        await (await import("./bots")).runBotCommand(ctx, parsed.args)
+        await (await import("./bots")).runBotCommand(ctx, parsed.args, { switchSession: (sessionId) => switchSession(sessionId) })
         break
       case "model":
         await modelCommand(parsed.args)

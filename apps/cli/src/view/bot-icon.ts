@@ -13,7 +13,7 @@ import { faceLook } from "./bot-look"
 export type BotShape = (typeof BOT_SHAPES)[number]
 export type BotColor = (typeof BOT_COLORS)[number]
 export type BotIcon = {
-  /** Exactly two cells (blank under a picture). */
+  /** The icon and exactly one space after it: the glyph and a space (ASCII: the two glyph cells, to which the caller adds the space), or under a picture its two blank cells and the space. */
   text: string
   fg: ColorName
   shape: BotShape
@@ -33,5 +33,5 @@ export function botIcon({ name, shape, color, ascii, state, faces }: { name: str
   const glyph: BotIcon = { text: ascii ? ASCII[kind] : `${UNICODE[kind]} `, fg: role, shape: kind, color: role }
   if (ascii || !faces || faces.capability.ascii || !faces.capability.images) return glyph
   const { capability, slot, make, stateOf, frame } = faces
-  return { ...glyph, text: "  ", image: ({ row, col }) => make({ name, shape, color, state: stateOf(state ?? "idle"), capability, slot, row, col, ...(frame === undefined ? {} : { frame }) }) }
+  return { ...glyph, text: "   ", image: ({ row, col }) => make({ name, shape, color, state: stateOf(state ?? "idle"), capability, slot, row, col, ...(frame === undefined ? {} : { frame }) }) }
 }

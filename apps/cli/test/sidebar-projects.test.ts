@@ -111,6 +111,26 @@ describe("ranking and the cap", () => {
     expect(out.rest).toEqual(["/p/few"])
   })
 
+  test("a folder used today counts without being a git root, shows past the cap, and ranks by its latest activity", () => {
+    // The owner's sequence: a new folder (no git) was opened and used; the opened folder then moved to a session elsewhere.
+    const sessions = [s("/work/app", 5 * MINUTE), s("/new/x", 30 * MINUTE), s("/p/a", MINUTE), s("/p/b", 2 * MINUTE), s("/p/old", 3 * DAY)]
+    const gitOnly = (directory: string) => directory.startsWith("/p/")
+    const eligible = (directory: string) => !directory.startsWith("/tmp")
+    const before = rank(sessions, { opened: "/work/app", count: 2, isProject: gitOnly })
+    expect(before.shown).toEqual(["/work/app", "/p/a"])
+    const after = rank(sessions, { opened: "/work/app", count: 2, isProject: gitOnly, eligible })
+    // Like a busy project it shows past the cap (and counts toward it).
+    expect(after.shown).toEqual(["/work/app", "/new/x"])
+    expect(after.rest).toEqual(["/p/a", "/p/b", "/p/old"])
+    // A day later it is an ordinary non-project again; temp folders never count.
+    expect(rank([s("/new/x", 2 * DAY), s("/tmp/y", MINUTE)], { opened: "/work/app", count: 5, isProject: gitOnly, eligible }).shown).toEqual(["/work/app"])
+  })
+
+  test("ranking is by the latest activity first; the number of sessions in 14 days only breaks a tie", () => {
+    const out = rank([s("/p/busy", 3 * MINUTE, "x1"), s("/p/busy", DAY, "x2"), s("/p/busy", 2 * DAY, "x3"), s("/p/new", MINUTE, "n1")], { count: 3 })
+    expect(out.shown).toEqual(["/work/open", "/p/new", "/p/busy"])
+  })
+
   test("folders that are not projects are left out, the opened one never", () => {
     const out = rank([s("/tmp/x", MINUTE), s("/p/a", 2 * MINUTE)], { count: 5, isProject: (directory) => directory === "/p/a" })
     expect(out.shown).toEqual(["/work/open", "/p/a"])

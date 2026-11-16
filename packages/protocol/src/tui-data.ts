@@ -220,7 +220,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sidebarProjects": "auto",
   "sidebarPreviewCount": 5,
   "sidebarProjectCount": 6,
-  "sidebarLayout": "projects-first",
+  "sidebarLayout": "bots-first",
   "sidebarSections": "",
   "images": "auto",
   "transcriptImages": true,

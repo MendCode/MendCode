@@ -1,13 +1,15 @@
 import type { BotInfo, BotListReport } from "@mendcode/protocol"
 
 /** Experimental bots (docs/agents.md): the words of `/bot` and the text its pages show. Pure, so the daemon-free parts are tested alone. */
-export const BOT_USAGE = "usage: /bot [list] · new [name] · new <name> <description> · new -d <description> · edit <name> · delete <name> · duplicate <name> <new> · memory <name> [add|clear] [--project] [text]"
+export const BOT_USAGE = "usage: /bot [list] · new [name] · new <name> <description> · new -d <description> · open [name] · edit <name> · delete <name> · duplicate <name> <new> · memory <name> [add|clear] [--project] [text]"
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/
 
 export type BotWords =
   | { kind: "list" }
   /** The form opens either way; with `generate` the model's draft of `description` fills it first. */
   | { kind: "new"; name?: string; description: string; generate: boolean }
+  /** The bot's page; no name means the bot of the open chat. */
+  | { kind: "open"; name?: string }
   | { kind: "edit"; name: string }
   | { kind: "delete"; name: string }
   | { kind: "duplicate"; name: string; newName: string }
@@ -35,6 +37,7 @@ export function parseBotWords(args: string): BotWords {
     if (description.length > 300) return bad(`a description takes at most 300 characters (this one has ${description.length})`)
     return { kind: "new", name, description, generate: description !== "" }
   }
+  if (verb === "open") return rest.length === 0 ? { kind: "open" } : rest.length === 1 && NAME.test(rest[0]!) ? { kind: "open", name: rest[0]! } : bad("open takes one bot name, or none for the bot of this chat")
   if (verb === "edit") return rest.length === 1 && NAME.test(rest[0]!) ? { kind: "edit", name: rest[0]! } : bad("edit needs one bot name")
   if (verb === "delete") return rest.length === 1 && NAME.test(rest[0]!) ? { kind: "delete", name: rest[0]! } : bad("delete needs one bot name")
   if (verb === "duplicate") {
