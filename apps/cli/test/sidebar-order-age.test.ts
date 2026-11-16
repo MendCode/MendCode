@@ -145,3 +145,20 @@ describe("the profile", () => {
     expect(tuiProblems({ sidebarProjectCount: 31 })[0]).toContain("0..30")
   })
 })
+
+describe("the project lists share the row marks", () => {
+  const one = (extra: Partial<MultiSession>) => text(renderMultiSidebar(input({ sessions: [session("s-app", "/work/app", MINUTE, extra)], blink: true })).rows)
+
+  test("a running row counts up from its turn's start; a merged PR shows number and word", () => {
+    expect(one({ state: "tool", since: NOW - (2 * MINUTE + 14_000) })).toMatch(/chat s-app\s+2m14s/)
+    expect(one({ lifecycle: { pr: { number: 812, url: "u", title: "t", state: "MERGED", branch: "b", checkedAt: NOW } } })).toMatch(/chat s-app\s+1m #812 merged/)
+  })
+
+  test("question and plan waits get their own marks and keep the project busy", () => {
+    expect(one({ state: "waiting_approval", pendingKind: "question" })).toMatch(/◎ chat s-app/)
+    expect(one({ state: "waiting_approval", pendingKind: "plan" })).toMatch(/◈ chat s-app/)
+    expect(one({ state: "waiting_approval", pendingKind: "approval" })).toMatch(/\? chat s-app/)
+    const header = text(renderMultiSidebar(input({ sessions: [session("s-app", "/work/app", MINUTE, { state: "waiting_approval", pendingKind: "question" })], sections: ["projects"] })).rows)
+    expect(header).toContain("? 1")
+  })
+})

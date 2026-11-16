@@ -5,7 +5,8 @@ import { botIcon, type BotIcon, type IconFaces } from "./bot-icon"
 import { fit, spread } from "./deck"
 import { relativeTime, truncateEnd } from "./session-list"
 import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
-import { ICON_SIDEBAR_WIDTH, projectSessions, SIDEBAR_WIDTH, sessionMark, type SessionMark } from "./sidebar"
+import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
+import { elapsedLabel, prSpans } from "./sidebar-marks"
 import { FRESH_MS, rankProjects } from "./sidebar-projects"
 import type { SidebarSection } from "./tui-profile"
 import { lineWidth, wrap } from "./wrap"
@@ -17,7 +18,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "since" | "pending" | "pendingKind">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -81,7 +82,8 @@ const UNUSED_EVENTS = 2
 const STATE_WORD: Record<BotState, string> = { working: "working", idle: "idle", waiting: "waiting", problem: "problem" }
 const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted", waiting: "warning", problem: "error" }
 const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
-const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
+/** A row that works or waits for you: it shows past the preview and keeps its project listed. */
+const busyMark = (value: SessionMark) => value === "running" || waitsOnYou(value)
 
 type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> } }
 
@@ -177,12 +179,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
   const ofBot = (session: MultiSession) => botOf.has(session.sessionId) || (session.agent !== undefined && botNames.has(session.agent))
   const projectInput: MultiInput = botNames.size ? { ...input, sessions: input.sessions.filter((session) => !ofBot(session)) } : input
   const mark = (session: MultiSession) => sessionMark(session as never, unread.has(session.sessionId) && session.sessionId !== input.current)
-  const symbol = (value: SessionMark): Span => {
-    if (value === "running") return { text: input.spinner || g.running, fg: "primary" }
-    if (value === "approval") return { text: g.ask, fg: input.blink === false ? "muted" : "warning" }
-    const text = value === "error" ? g.fail : value === "unread" ? g.dot : value === "queued" ? (input.ascii ? "~" : g.queue) : value === "settled" ? g.collapsed : input.ascii ? "." : "·"
-    return { text, fg: MARK_FG[value] }
-  }
+  const symbol = (value: SessionMark): Span => markSymbol(value, { g, spinner: input.spinner, blink: input.blink, ascii: input.ascii })
   const names = new Map<string, string>()
   const entries: Entry[] = []
   const lead = (id: string): Line => id === input.current ? [{ text: "▌", fg: "primary" }, { text: " " }] : id === picked ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
@@ -222,8 +219,13 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       }
       const current = session.sessionId === input.current
       const quiet = value === "idle" || value === "settled" || value === "queued"
-      const meta: Line = [{ text: relativeTime(input.now, sessionActivityAt(session)), fg: "muted" }]
+      // A running row counts up from its turn's start (the tick that moves its spinner redraws it); the others show their age.
+      const age = value === "running" && session.since !== undefined && input.now >= session.since ? elapsedLabel(input.now - session.since) : relativeTime(input.now, sessionActivityAt(session))
+      const pr = session.lifecycle?.pr
+      const metaOf = (withNumber: boolean): Line => [{ text: age, fg: "muted" }, ...(pr ? prSpans(pr, withNumber) : [])]
       const used = indent.length + 2 + room
+      // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
+      const meta = pr && inner - used - lineWidth(metaOf(true)) - 2 < 10 ? metaOf(false) : metaOf(true)
       const titleRoom = Math.max(4, inner - used - lineWidth(meta) - 2)
       const title = labelSpans(sessionLabel(session as never, { untitled: "Untitled session", marker: "Draft" }), titleRoom, { fg: current || session.sessionId === picked || !quiet ? "text" : "muted", bold: current || session.sessionId === picked })
       const before: Line = [{ text: indent }, { ...symbol(value), text: `${symbol(value).text} ` }]
@@ -246,7 +248,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
     if (!chats.length) return
     const key = botKey(bot.name)
     const id = `${BOT_CHATS}${bot.name}`
-    const busy = (session: MultiSession) => ["running", "approval"].includes(mark(session))
+    const busy = (session: MultiSession) => busyMark(mark(session))
     const open = input.open.get(key) ?? chats.some((session) => session.sessionId === input.current)
     const active = chats.filter(busy).length
     const right: Line = [{ text: !open && active > 0 ? `${active} active` : String(chats.length), fg: !open && active > 0 ? "warning" : "muted" }]
@@ -298,7 +300,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         push(spread([{ text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: "muted" }, { text: `  ${truncateEnd(external.origin, 8)}`, fg: "muted" }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }], inner))
       }
     } else if (section === "projects") {
-      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[] } : directoriesOf(projectInput, (session) => ["running", "approval"].includes(mark(session)))
+      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[] } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
       const directories = input.projectsExpanded ? [...ranked.shown, ...ranked.rest] : ranked.shown
       const labels = groupLabels(directories)
       if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
@@ -306,7 +308,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       // An automatic count fills the height: a group that would not fit is taken back, and with it every plain one after it.
       const auto = !input.icons && !input.projectsExpanded && input.scope === "all" && input.projects?.count === 0
       const room = input.height - (input.header === false ? 0 : 2) - 1
-      const ownBusy = (session: MultiSession) => ["running", "approval"].includes(mark(session))
+      const ownBusy = (session: MultiSession) => busyMark(mark(session))
       const recentMs = (input.recentDays ?? DEFAULT_RECENT_DAYS) > 0 ? (input.recentDays ?? DEFAULT_RECENT_DAYS) * DAY_MS : Number.POSITIVE_INFINITY
       let cutAt = -1
       let listed = 0
@@ -317,7 +319,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
         const rollback = entries.length
         listed++
         const open = input.icons || isOpen(input, directory)
-        const active = list.filter((session) => ["running", "approval"].includes(mark(session))).length
+        const active = list.filter((session) => busyMark(mark(session))).length
         if (!input.icons) {
           const id = `${GROUP}${directory}`
           names.set(id, labels.get(directory) ?? baseName(directory))
@@ -393,7 +395,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
     if (session.archivedAt !== undefined) continue
     const value = sessionMark(session as never, unread.has(session.sessionId) && session.sessionId !== input.current)
     if (value === "running") counts.running++
-    else if (value === "approval") counts.approval++
+    else if (waitsOnYou(value)) counts.approval++
   }
   const summary: Line = input.focused ? [{ text: picked !== undefined && isBotId(picked) ? "↵ chat  o page  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
     ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]

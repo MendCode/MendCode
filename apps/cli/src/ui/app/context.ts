@@ -634,6 +634,10 @@ export type AppState = {
   sidebarSeen?: Map<string, number>
   /** The sidebar's Settled row is unfolded. */
   sidebarSettledOpen?: boolean
+  /** How many settled sessions the open Settled shelf lists; absent, 10. Its `+ N more` row adds 25. */
+  sidebarSettledShown?: number
+  /** Whether the opened folder is a linked worktree, asked once per folder for the selected row's detail line. */
+  sidebarWorktreeOf?: { directory: string; linked: boolean }
   /** Experimental bots or all projects: the module that draws the left list, there once the first frame that needs it loaded it. */
   sidebarBots?: import("./sidebar-bots").SidebarBots
   /** The open bot page (`page: "bot"`): its drawing and keys. */

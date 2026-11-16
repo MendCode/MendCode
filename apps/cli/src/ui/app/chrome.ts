@@ -7,7 +7,8 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { reviewActivityView } from "../lazy-pages"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
-import { ICON_SIDEBAR_WIDTH, projectSessions, SETTLED_ROW, SIDEBAR_GAP, SIDEBAR_WIDTH, sidebarKind } from "../../view/sidebar"
+import { autoSettled, SETTLED_FIRST, worktreeName } from "../../view/sidebar-marks"
+import { ICON_SIDEBAR_WIDTH, projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, SIDEBAR_WIDTH, sidebarKind } from "../../view/sidebar"
 import { SPINNER_FRAMES } from "../../view/tool-card"
 import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
@@ -167,10 +168,11 @@ export function createChrome(ctx: AppContext, actions: {
         return drawn.lines
       }
     }
-    const sessions = projectSessions(state.sessions, input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
-    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader } })
+    // A session whose PR is merged or closed settles by itself (see `autoSettled`), unless it is the open one, pinned or busy.
+    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
+    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder() } })
     state.sidebarImages = undefined
-    state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
+    state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "more" ? [{ row: hit.row, sessionId: SETTLED_MORE }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
     return drawn.lines
   }
 
@@ -186,6 +188,19 @@ export function createChrome(ctx: AppContext, actions: {
       else if (session.updatedAt > seen.get(session.sessionId)! && session.state === "idle") unread.push(session.sessionId)
     }
     return unread
+  }
+
+  /**
+   * The opened folder's branch and, when it is a linked worktree (its `.git` is a file), the worktree's name, for the selected row's detail
+   * line. The folder is asked once, off the draw path; a failed question means no worktree.
+   */
+  function sidebarFolder(): { branch?: string; worktree?: string } {
+    const directory = input.directory ?? ""
+    if (directory && state.sidebarWorktreeOf?.directory !== directory) {
+      state.sidebarWorktreeOf = { directory, linked: false }
+      void import("node:fs/promises").then(({ stat }) => stat(`${directory}/.git`)).then((found) => { if (found.isFile() && state.sidebarWorktreeOf?.directory === directory) { state.sidebarWorktreeOf.linked = true; requestFrame() } }, () => {})
+    }
+    return { ...(state.gitBranch ? { branch: state.gitBranch } : {}), ...(state.sidebarWorktreeOf?.linked ? { worktree: worktreeName(directory) } : {}) }
   }
 
   /** The activity tick's frame and blink, only while that tick already runs (a busy turn or a busy row in this list). */

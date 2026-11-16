@@ -15,7 +15,8 @@ import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
+import { projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
+import { autoSettled, SETTLED_FIRST, SETTLED_PAGE } from "../../view/sidebar-marks"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -378,6 +379,7 @@ export function createKeys(ctx: AppContext, actions: {
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
+      else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
       else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
       else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
@@ -418,7 +420,7 @@ export function createKeys(ctx: AppContext, actions: {
       }
     }
     if (state.page === "chat" && sideWidth > 0 && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !suggestions.length && !mentionActive) {
-      const sessions = projectSessions(state.sessions, input.directory ?? "")
+      const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "")
       const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
       // Terminals in application-cursor mode send ESC O A..D for the arrows; the list takes both forms.
       const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
@@ -432,7 +434,7 @@ export function createKeys(ctx: AppContext, actions: {
       }
       if (state.sidebarFocus && !mouse) {
         // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
-        const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown ?? SETTLED_FIRST)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
         const onSettled = !multi && stops[index] === SETTLED_ROW
         // Up from the first row wraps to the last and down from the last to the first.
@@ -446,6 +448,7 @@ export function createKeys(ctx: AppContext, actions: {
           const bot = multi.firstBot()
           if (bot) state.sidebarSelected = bot
         } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
+        else if (!multi && stops[index] === SETTLED_MORE && key === "\r") state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
         else if (onSettled && (key === "\r" || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
         else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
         else if (key === "\r" && stops[index]) {

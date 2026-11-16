@@ -10,10 +10,12 @@ export type ActivityEvent = Extract<GlobalEvent, { type: "session.activity" }>
 export function mergeActivity(list: SessionSummary[], event: ActivityEvent, { cap, keep }: { cap: number; keep: string }): SessionSummary[] {
   const { sessionId: id, title, directory, state, updatedAt } = event
   const archived = event.archivedAt === null ? { archivedAt: undefined } : event.archivedAt !== undefined ? { archivedAt: event.archivedAt } : {}
+  // The live detail of a running turn is replaced by every push: gone from the push means the turn or the request ended.
+  const live = { since: event.since, tool: event.tool, pending: event.pending, pendingKind: event.pendingKind }
   const known = list.some((session) => session.sessionId === id)
   // The draft of an untitled session labels it in every list: the push carries it when it appeared, changed its first line or went.
   const merged = known
-    ? list.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state, updatedAt, queued: event.queued ?? 0, paused: event.paused === true }, event.draft) : session))
-    : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state, queued: event.queued ?? 0, paused: event.paused === true }, event.draft), ...list]
+    ? list.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state, updatedAt, queued: event.queued ?? 0, paused: event.paused === true, ...live }, event.draft) : session))
+    : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state, queued: event.queued ?? 0, paused: event.paused === true, ...live }, event.draft), ...list]
   return merged.length > cap ? merged.filter((session, at) => at < cap || session.sessionId === keep) : merged
 }

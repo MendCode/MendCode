@@ -23,6 +23,16 @@ With `/experimental bots on` the list can also hold the bots. A bot is one row: 
 | `sidebarLayout` | `bots-first` (the default; a profile that never chose a layout gets it, a saved choice is kept), `projects-first`, `icons-only` (a narrow column of icons; the picked row's name shows under it) and `scratch` (no section until you add them) |
 | `sidebarSections` | the sections shown and their order, a comma list of `projects`, `bots`, `sessions` (the opened folder's sessions with no bot, shown when `projects` is not); `none` hides all; empty takes the layout's own. Choosing a layout clears it |
 
+### Row marks
+
+A session row starts with a symbol: a spinner while it works, `?` while it waits for you to approve a tool, `◎` while it asks you a question, `◈` when a plan waits for your review, `✗` after a failed turn, `●` for a reply you have not read, `…` when messages are queued. The header counts every kind that waits for you. A daemon that does not say what it waits on shows `?`.
+
+On the right, a working row shows how long its turn has run (`42s`, `2m14s`, `12m`, `1h05m`), counting on the same tick that moves its spinner and only while it works; every other row shows its age. A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
+
+The selected row's detail line adds the PR's branch (or, for the open session, the folder's branch) and, in a linked worktree, `worktree <name>`. Other rows never show them.
+
+A session whose PR is merged or closed settles by itself, unless it is the open session, pinned, working, waiting or has queued messages, and unless it had activity after the PR was last checked; a new message brings it back. In the classic one-folder list the Settled row folds these away. Opened, it lists 10, and its `+ N more` row (Enter or a click) adds 25 each time; the count is kept in memory only.
+
 ### Keyboard
 
 With the prompt empty, `←` focuses the list (`→` when the list is on the right); the header then reads `→ prompt`. In the list `↑` and `↓` move over every row: group rows, session rows, `+ N more` and `show less` rows, the `+ N more projects` row and bot rows, and the selected row is marked with `›` and a fill. `Enter` opens a session, folds or opens a group or a bot's chats, opens or closes a `more` row, or starts a new chat with a bot; `o` on a bot opens its page (the header then reads `↵ chat  o page  → prompt`); `→` or `Esc` returns to the prompt. `↑` on the first row wraps to the last row and `↓` on the last wraps to the first. In the sections list (all projects, or bots on) `Tab` jumps to the first row of the next section (Projects, Bots, Sessions), `Shift+Tab` to the first row of the current section and then of the previous ones, both wrapping, and `b` jumps to the first bot; the header then reads `tab section  → prompt`. `Tab` does nothing to the list while the prompt has focus. The mouse works as before. A terminal in application-cursor mode (arrows sent as `ESC O A..D`) is read the same.

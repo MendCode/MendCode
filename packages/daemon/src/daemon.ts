@@ -1874,18 +1874,19 @@ export async function startDaemon(options: DaemonOptions) {
   })
 
   /** What a running turn is doing right now, for the agent view: when it started, tools in flight, requests waiting. */
-  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string> }>()
-  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; paused?: boolean } {
+  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string>; kinds: Map<string, "approval" | "question" | "plan"> }>()
+  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; pendingKind?: "approval" | "question" | "plan"; paused?: boolean } {
     const paused = actors.get(sessionId)?.snapshot().paused ? { paused: true } : {}
     const entry = live.get(sessionId)
     if (!entry) return paused
     const tool = [...entry.tools.values()].at(-1)
     const pending = [...entry.pending.values()].at(-1)
-    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending } : {}), ...paused }
+    const pendingKind = [...entry.kinds.values()].at(-1)
+    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending, ...(pendingKind ? { pendingKind } : {}) } : {}), ...paused }
   }
   function trackLive(event: SessionEvent) {
     const id = event.sessionId
-    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map() })
+    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map(), kinds: new Map() })
     if (event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed") return void live.delete(id)
     // The queue length lands right after the event; publish once the actor has settled.
     if (event.type === "queue.added" || event.type === "queue.changed") return void queueMicrotask(() => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle"))
@@ -1894,8 +1895,8 @@ export async function startDaemon(options: DaemonOptions) {
     let changed = false
     if (event.type === "item.started" && event.kind === "tool_call") (entry.tools.set(event.itemId, String(event.meta?.tool ?? "tool").slice(0, 200)), (changed = true))
     else if (event.type === "item.completed") changed = entry.tools.delete(event.itemId)
-    else if (event.type === "server.request") (entry.pending.set(event.requestId, event.title.slice(0, 200)), (changed = true))
-    else if (event.type === "server.request.resolved") changed = entry.pending.delete(event.requestId)
+    else if (event.type === "server.request") (entry.pending.set(event.requestId, event.title.slice(0, 200)), entry.kinds.set(event.requestId, event.planReview ? "plan" : event.kind), (changed = true))
+    else if (event.type === "server.request.resolved") (entry.kinds.delete(event.requestId), (changed = entry.pending.delete(event.requestId)))
     if (changed) publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle")
   }
 

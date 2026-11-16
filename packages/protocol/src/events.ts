@@ -489,6 +489,8 @@ export const SessionActivity = lazySchema(() => z.strictObject({
   since: z.number().int().nonnegative().optional(),
   tool: z.string().max(200).optional(),
   pending: z.string().max(200).optional(),
+  /** What that request is: a tool approval, a question for the user, or a plan to review. Present with `pending`. */
+  pendingKind: z.enum(["approval", "question", "plan"]).optional(),
   /** True while the session is paused (`session.control`); omitted otherwise. */
   paused: z.boolean().optional(),
   /** Null explicitly clears the archive timestamp; omitted by older daemons. */
