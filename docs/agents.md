@@ -347,7 +347,7 @@ While the session rests and its sub-agents still work, a head line takes the wor
 
 One that ends stays 8 seconds with its outcome (`done`, `failed`, `cancelled`, `interrupted`) and the time it took.
 
-Four rows at most, then `+N more · /tasks`; under 60 columns the mode is dropped.
+Sub-agents and background commands share seven rows, then `+N more · /tasks` (or `/ps` when commands are left out). When both lists are long, sub-agents keep four rows and commands three; a short list gives its rows to the other. The sub-agent open in the chat always keeps its row. Under 60 columns the mode is dropped.
 
 The tree is drawn by the terminal from `task.list` (asked again on each `task.changed` of the session) and the `session.activity` push, which carries a sub-agent's session from the moment it waits on you until it ends (that is the `needs you` the row shows); a view can restyle it as the `bar` slot's `agents` variant.
 

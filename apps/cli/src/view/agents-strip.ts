@@ -8,12 +8,14 @@ import { truncateEnd } from "./wrap"
 import { backgroundName, type BackgroundItem } from "./background-row"
 import { markOpenRow } from "./agent-cue"
 
-/** Rows of sub-agents the strip shows before it says how many more there are. */
+/** Rows of sub-agents the strip keeps when commands fill their share too; with fewer commands the sub-agents take the rows left. */
 export const AGENTS_SHOWN = 4
 /** A sub-agent that just ended stays in the strip this long, so its outcome is seen before the row goes. */
 export const AGENT_DONE_MS = 8_000
-/** Background commands listed in the strip under its sub-agents before the rest fold into `+N more`. */
+/** Background commands the strip keeps when sub-agents fill their share too; with fewer sub-agents the commands take the rows left. */
 export const COMMANDS_SHOWN = 3
+/** Rows of sub-agents and commands together before the rest fold into `+N more`. */
+export const STRIP_ROWS = AGENTS_SHOWN + COMMANDS_SHOWN
 
 const ACTIVE: ReadonlySet<TaskRecord["state"]> = new Set(["queued", "running", "needs_input"])
 
@@ -106,8 +108,12 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** The 
     const hint: Line = [{ text: commands.length ? `${input.openHint} ${g.sep} /ps` : input.openHint, fg: "muted" }]
     push([pad, ...(lineWidth(head) + lineWidth(hint) + 2 <= room ? spread(head, hint, room) : fit(head, room))])
   }
-  const shown = tasks.slice(0, AGENTS_SHOWN)
-  const shownCommands = commands.slice(0, COMMANDS_SHOWN)
+  // Sub-agents and commands share one budget of rows: each keeps its own share when both overflow, and rows one list leaves go to the other.
+  const agentRows = Math.min(tasks.length, STRIP_ROWS - Math.min(commands.length, COMMANDS_SHOWN))
+  const opened = tasks.findIndex((task) => task.taskId === input.open)
+  // The sub-agent being read always keeps its row, in place of the last one that fits.
+  const shown = opened >= agentRows ? [...tasks.slice(0, agentRows - 1), tasks[opened]!] : tasks.slice(0, agentRows)
+  const shownCommands = commands.slice(0, STRIP_ROWS - shown.length)
   const more = tasks.length - shown.length + commands.length - shownCommands.length
   const cells = (text: string) => lineWidth([{ text }])
   const described = (task: StripTask) => task.description.replace(/\s+/g, " ") || task.agent
