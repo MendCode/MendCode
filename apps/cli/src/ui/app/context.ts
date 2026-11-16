@@ -642,6 +642,8 @@ export type AppState = {
   sidebarBots?: import("./sidebar-bots").SidebarBots
   /** The left list's search, there once the first `/` (or `sidebar.search`) loaded it. */
   sidebarSearch?: import("./sidebar-search").SidebarSearch
+  /** Experimental bots: the bots the home's Agent View lists while they work, there once the first home frame with the flag on loaded it. */
+  homeBots?: import("./home-bots").HomeBotsLive
   /** The open bot page (`page: "bot"`): its drawing and keys. */
   botCard?: import("../../view/bot-card-page").BotCard | undefined
   /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */

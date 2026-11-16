@@ -62,7 +62,20 @@ export type HomeInput = {
   mascot?: HomeMascot
   /** The prompt's place on the home (`homeInput`): blank rows under the logo, and `placed` told where. A home that cannot make room never calls it. */
   prompt?: HomePrompt
+  /** The bots at work, waiting or in trouble, drawn under the Agent View; absent without the experimental flag. */
+  bots?: HomeBots
 }
+
+/** What a hit id of a bot starts with, so a click or Enter on the home tells a bot from a session. */
+export const HOME_BOT_PREFIX = "home-bot:"
+/** One bot's cells in the Bots block: `row` and `from`/`to` relative to the block, or to the home's own lines once `placed` is told. */
+export type HomeBotHit = { row: number; from: number; to: number; id: string }
+export type HomeBotsBlock = { lines: Line[]; hits: HomeBotHit[] }
+/**
+ * The Bots block under the Agent View (experimental bots): `render` draws at most `maxRows` rows for `width` (none when no bot is
+ * at work, waiting or in trouble), and `placed` is told where the home put them (empty when it left them out).
+ */
+export type HomeBots = { render(input: { width: number; maxRows: number; selectedId?: string }): HomeBotsBlock; placed?: (hits: HomeBotHit[]) => void }
 
 /** `rows` blank rows for the prompt under the identity: `top` keeps the logo at the top, `center` centers logo and prompt together. */
 export type HomePrompt = { rows: number; at: "center" | "top"; placed?: (row: number) => void }
@@ -240,6 +253,49 @@ function headerRow(input: { width: number; root: string; version?: string; pad: 
  * 17 rows or fewer) and the Agent View of the sessions. The Agent View shrinks first when the space is short.
  */
 export function renderHome(input: HomeInput): Line[] {
+  if (!input.bots) return drawHome(input)
+  let drawn: HomeBotsBlock | undefined
+  const lines = drawHome({ ...input, botsSink: (block) => { drawn = block } })
+  input.bots.placed?.(drawn ? locateBots(lines, drawn) : [])
+  return lines
+}
+
+/** Where the Bots block landed in the finished rows: its first row is found by its text, the rest follow it. */
+function locateBots(lines: readonly Line[], block: HomeBotsBlock): HomeBotHit[] {
+  const first = block.lines[0]?.map((span) => span.text).join("").trimEnd()
+  if (!first) return []
+  const texts = lines.map((line) => line.map((span) => span.text).join(""))
+  const row = texts.findIndex((text) => text.includes(first))
+  if (row < 0) return []
+  const col = textWidth(texts[row]!.slice(0, texts[row]!.indexOf(first)))
+  return block.hits.map((hit) => ({ ...hit, row: row + hit.row, from: col + hit.from, to: col + hit.to })).filter((hit) => hit.row < lines.length)
+}
+
+/** The Bots block under an Agent View given `room` rows: as many rows as leave the view `viewMin`, with the blank row that parts them. */
+function botsUnder(input: { bots: HomeBots | undefined; sink: ((block: HomeBotsBlock | undefined) => void) | undefined; width: number; room: number; viewMin: number; selectedId?: string }): { rows: Line[]; held: number } {
+  const { bots, sink, width, room, viewMin } = input
+  if (!bots) return { rows: [], held: 0 }
+  for (let maxRows = 3; maxRows >= 1; maxRows--) {
+    const block = bots.render({ width, maxRows, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) })
+    if (block.lines.length === 0) break
+    if (room - block.lines.length - 1 < viewMin) continue
+    sink?.(block)
+    return { rows: [[], ...block.lines], held: block.lines.length + 1 }
+  }
+  sink?.(undefined)
+  return { rows: [], held: 0 }
+}
+
+/** The rows the Agent View keeps when bots take room: everything at work, waiting or looping (only Completed rows give way), or one row. */
+function viewKeeps(sessions: readonly HomeSession[], panelWidth: number, now: number): number {
+  if (sessions.length === 0) return 1
+  const active = agentView({ sessions, panelWidth, caps: { ...HOME_SECTION_CAPS, completed: 0 }, now, spinner: 0 }).length
+  return active > 0 ? active : 3
+}
+
+type BotsSink ={ botsSink?: (block: HomeBotsBlock | undefined) => void }
+
+function drawHome(input: HomeInput & BotsSink): Line[] {
   const { width } = input
   const screenHeight = input.screenHeight ?? input.height
   const size = input.bare ? "tiny" : density(input.screenWidth ?? width, screenHeight)
@@ -406,7 +462,7 @@ function pixelIdentity(input: { look: HomeLook | undefined; mascot: HomeMascot |
  * (ASCII only when the terminal is at least 24 rows and 65 columns, the text `MendCode` when smaller, nothing at
  * 17 rows or fewer) and the Agent View of the sessions. The Agent View shrinks first when the space is short.
  */
-function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Density): Line[] {
+function centeredHome(input: HomeInput & BotsSink & { below: readonly Line[] }, size: Density): Line[] {
   const { width, height } = input
   const below = input.below
   const product = input.look?.productName ?? PRODUCT
@@ -436,9 +492,13 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
   let lead = 0
   const build = (logo: Line[] | undefined, panelRoom: number): Line[] => {
     const listRoom = promptRows ? panelRoom - promptRows - gap : panelRoom
-    const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : sessions.length
-      ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
-      : [center([{ text: EMPTY_TITLE, fg: "muted" }])]
+    const agentManager = input.look?.homePanel !== false && input.look?.homeRightPanel !== "actions"
+    // The Bots block shares the Agent View's room: the sessions keep at least four rows (one for the empty line) before a bots row is drawn.
+    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: panelWidth, room: listRoom, viewMin: viewKeeps(sessions, panelWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
+    if (!agentManager) input.botsSink?.(undefined)
+    const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : [...(sessions.length
+      ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom - bots.held }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
+      : [center([{ text: EMPTY_TITLE, fg: "muted" }])]), ...bots.rows.map((row): Line => [{ text: " ".repeat(inset) }, ...row])]
     const identity = logo ? [...logo, ...(view.length || promptRows ? blank(gap) : [])] : []
     lead = identity.length
     return [...identity, ...blank(promptRows), ...(promptRows && view.length ? blank(gap) : []), ...view]
@@ -478,7 +538,7 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
  * the Agent View on the right. Narrower than the two columns need (42 cells of Agent View beside the identity) it stacks
  * them; a wordmark too wide for the columns gives way to the plain name first. There is no header row: the box holds the root.
  */
-function splitHome(input: HomeInput, below: readonly Line[]): Line[] {
+function splitHome(input: HomeInput & BotsSink, below: readonly Line[]): Line[] {
   const { width, height } = input
   const product = input.look?.productName ?? PRODUCT
   const inner = Math.max(24, width - 10)
@@ -505,10 +565,14 @@ function splitHome(input: HomeInput, below: readonly Line[]): Line[] {
   const belowSpace = belowRows.length > 0 ? belowRows.length + 1 : 0
   // Top margin row, two border rows, one padding row above and below the content.
   const contentRoom = Math.max(1, height - 5 - belowSpace)
-  const agent = (room: number): Line[] =>
-    input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(rightWidth, room) : sessions.length
-      ? fitAgentView({ sessions, panelWidth: rightWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room })
-      : [[{ text: EMPTY_TITLE, fg: "muted" }]]
+  const agent = (room: number): Line[] => {
+    const agentManager = input.look?.homePanel !== false && input.look?.homeRightPanel !== "actions"
+    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: rightWidth, room, viewMin: viewKeeps(sessions, rightWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
+    if (!agentManager) input.botsSink?.(undefined)
+    return input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(rightWidth, room) : [...(sessions.length
+      ? fitAgentView({ sessions, panelWidth: rightWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: room - bots.held })
+      : [[{ text: EMPTY_TITLE, fg: "muted" }] satisfies Line]), ...bots.rows]
+  }
   const middle = (rows: Line[], rowsHigh: number): Line[] => [...blank(Math.floor((rowsHigh - rows.length) / 2)), ...rows]
 
   let content: Line[]

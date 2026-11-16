@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - The left list has a search: `/` in the list (or `ctrl+x <` from the chat) finds sessions, projects and bots by name as you type, with the matched letters marked; Enter opens a session, starts a new chat in a project or with a bot, and Esc puts the list back as it was.
+- Experimental bots: the home screen's Agent View lists the bots that are working, waiting for you or in trouble, one row per state with their icons and names and a `+ N more` when they do not all fit; Enter or a click on one opens its latest chat, or its page when it has none. Idle bots are not shown.
 
 ### Changed
 

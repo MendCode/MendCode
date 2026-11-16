@@ -21,7 +21,7 @@ import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../..
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
 import type { AgentsReport } from "@mendcode/protocol"
-import { homeVisibleSessions, type HomeSession } from "../../view/home"
+import { HOME_BOT_PREFIX, homeVisibleSessions, type HomeSession } from "../../view/home"
 import { PERMISSION_MODES, MOUSE_SGR } from "./constants"
 import { rightBarCells } from "../../view/right-bar"
 import { rightClick } from "../selection"
@@ -405,12 +405,15 @@ export function createKeys(ctx: AppContext, actions: {
     if (home) {
       state.homeSelected = undefined
       state.homeHover = undefined
-      await actions.switchSession(home.sessionId as typeof state.sessionId)
+      if (home.sessionId.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(home.sessionId, actions)
+      else await actions.switchSession(home.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     if (click && state.page === "chat" && click.row === 0 && state.contextArea && click.col >= state.contextArea.from && click.col < state.contextArea.to) return requestFrame()
     if (state.page === "chat" && leader.armedAt === undefined && !state.sidebarFocus && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
-      const sessions = homeVisibleSessions(actions.homeSessions()).filter((session) => session.id)
+      // The sessions the Agent View lists, then the bots drawn under it (experimental bots), in the order they are on screen.
+      const botStops = (state.homeArea?.hits ?? []).filter((hit) => hit.sessionId.startsWith(HOME_BOT_PREFIX)).toSorted((a, b) => a.row - b.row || a.from - b.from).map((hit) => ({ id: hit.sessionId }))
+      const sessions = [...homeVisibleSessions(actions.homeSessions()).filter((session) => session.id).map((session) => ({ id: session.id! })), ...botStops]
       const selected = sessions.findIndex((session) => session.id === state.homeSelected)
       // Down enters the list; up stays the prompt's history until a row is selected.
       if (sessions.length && (key === "\x1b[B" || (key === "\x1b[A" && selected >= 0))) {
@@ -424,7 +427,9 @@ export function createKeys(ctx: AppContext, actions: {
       }
       if (key === "\r" && selected >= 0) {
         state.homeSelected = undefined
-        await actions.switchSession(sessions[selected]!.id as typeof state.sessionId)
+        const chosen = sessions[selected]!.id
+        if (chosen.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(chosen, actions)
+        else await actions.switchSession(chosen as typeof state.sessionId)
         return requestFrame()
       }
     }

@@ -575,5 +575,5 @@ export function createSidebarBots(ctx: AppContext) {
   /** What the sidebar's search indexes besides this terminal's own list (ui/app/sidebar-search.ts). */
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
-  return { live, sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, report: () => report, sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
 }

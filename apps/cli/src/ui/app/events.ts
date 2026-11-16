@@ -291,6 +291,7 @@ export function createEvents(ctx: AppContext, actions: {
       const { sessionId: id, title } = event
       // Bots on or every project listed: that list follows the same push (before this terminal's own list takes it, so a new session is still new to it), with no request.
       state.sidebarBots?.onActivity(event)
+      state.homeBots?.onActivity(event)
       // Sessions pushed by other terminals join at the top; past the cap the oldest go (the open one stays), and /sessions reads the rest again.
       state.sessions = mergeActivity(state.sessions, event, { cap: PUSHED_SESSIONS_MAX, keep: state.sessionId })
       state.paletteSessions = state.paletteSessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, title }, event.draft) : session))

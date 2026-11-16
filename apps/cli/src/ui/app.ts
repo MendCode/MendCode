@@ -1443,6 +1443,7 @@ export function createApp(input: AppInput) {
       if (back) void tuiControl.register()
       // Pushes may have been missed while the connection was down: the bots and other-folder lists are asked for whole.
       if (back) appState.sidebarBots?.resync()
+      if (back) appState.homeBots?.resync()
       if (back) void reconcileDaemon()
       if (back) void verifySession().catch(() => undefined)
       // A new daemon has none of the old one's background work (an engine's agents ended with its process): the list is asked again.
