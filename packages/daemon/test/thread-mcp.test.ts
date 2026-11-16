@@ -307,3 +307,41 @@ test("split token deltas are redacted before the process wrapper emits persisted
   input.flushProcessMcp()
   expect(events.flatMap((event) => event.type === "item.delta" && event.itemId === interrupted ? [event.text] : []).join("")).toBe("last partial answer")
 })
+
+test("a cancelled turn's token is revoked for the next turn, while a turn that ended on its own leaves it for the session", async () => {
+  const service = createThreadMcp({ clock: createVirtualClock(), listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }) } as unknown as ThreadPort
+  const open = (sessionId: string, signal: AbortSignal) => service.open({ engine: "claude", turn: { ...turn(), sessionId, signal } as TurnInput, allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const list = (authorization: string) => service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }))
+  const session = ids("session")
+  const cancelled = new AbortController()
+  const first = open(session, cancelled.signal)
+  const revoked = first.servers[0]!.headers[0]!.value
+  cancelled.abort()
+  const ended = open(session, new AbortController().signal)
+  const endedToken = ended.servers[0]!.headers[0]!.value
+  ended.release()
+  const next = open(session, new AbortController().signal)
+  expect((await list(revoked)).status).toBe(401)
+  expect((await list(endedToken)).status).toBe(200)
+  next.release()
+})
+
+test("a kept process's earlier token is scrubbed from what the next turn's lease returns", async () => {
+  const service = createThreadMcp({ clock: createVirtualClock(), listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }), read: () => ({ ok: true, output: "echo" }) } as unknown as ThreadPort
+  let echoed = ""
+  const open = (sessionId: string) => service.open({ engine: "claude", turn: { ...turn(), sessionId } as TurnInput, allowed: () => true, threads: { ...threads, list: () => ({ ok: true, output: `seen ${echoed}` }) } as unknown as ThreadPort, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const session = ids("session")
+  const first = open(session)
+  const earlier = first.servers[0]!.headers[0]!.value
+  echoed = earlier.replace("Bearer ", "")
+  first.release()
+  const next = open(session)
+  expect(next.scrub(`leak ${echoed}`)).toBe("leak [redacted]")
+  const reply = await (await service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization: earlier }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "thread_list", arguments: {} } }) }))).json() as any
+  expect(reply.result.content[0].text).toBe("seen [redacted]")
+  next.release()
+})

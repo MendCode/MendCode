@@ -25,7 +25,8 @@ const GROUPS = SLASH_GROUPS.filter((group) => group !== "recent")
 function tierSettings(settings: Record<string, unknown> | undefined): TierSettings {
   if (!settings) return {}
   const features = settings.features && typeof settings.features === "object" && !Array.isArray(settings.features) ? settings.features as TierSettings["features"] : undefined
-  return { ...(isTier(settings.tier) ? { tier: settings.tier } : {}), ...(features ? { features } : {}) }
+  const experimental = settings.experimental && typeof settings.experimental === "object" && !Array.isArray(settings.experimental) ? settings.experimental as TierSettings["experimental"] : undefined
+  return { ...(isTier(settings.tier) ? { tier: settings.tier } : {}), ...(features ? { features } : {}), ...(experimental ? { experimental } : {}) }
 }
 
 /** What the menu offers: the tier lists it and its feature, if it has one, is on. Setting rows are offered too, by search only. */

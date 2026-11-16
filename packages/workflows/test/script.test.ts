@@ -158,6 +158,14 @@ describe("script runs", () => {
     expect(tasks.some((task) => task.title === "bad")).toBe(false)
   })
 
+  test("work agents given the same cwd take turns; different cwds, and a work agent in the run's directory, still run together", async () => {
+    const h = scriptHarness({ responder: () => "HOLD" })
+    const run = h.start(wf(`await parallel([() => agent("w1", { mode: "work", cwd: "/r/.mend/worktrees/a" }), () => agent("w2", { mode: "work", cwd: "/r/.mend/worktrees/a/" }), () => agent("w3", { mode: "work", cwd: "/r/.mend/worktrees/b" }), () => agent("w4", { mode: "work" })])`))
+    await settle(20)
+    const running = h.get(run).tasks.filter((task) => task.state === "running").map((task) => task.title).sort()
+    expect(running).toEqual(["w1", "w3", "w4"])
+  })
+
   test("check() returns ok and detail for a passing and a failing command, without failing the run", async () => {
     const h = scriptHarness({ responder: () => "x", checkExit: (argv) => (argv.includes("bad") ? 1 : 0) })
     const run = h.start(wf(`

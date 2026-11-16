@@ -94,6 +94,8 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
       // An engine's agent at work whose call is above the history shown opens first, as the strip lists it.
       const working = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === current && shell.kind === "agent").at(-1)
       const thread = working ? await findThread(working.command) : undefined
+      // The reader moved to another session while older history loaded: this key press is over.
+      if (state.sessionId !== current) return false
       return (thread !== undefined && agentView.show(thread as never)) || agentView.first()
     }
     if (!next || next === current) return false
@@ -122,12 +124,15 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
     if (agentView.show(id as never)) return
     if (agentView.open) agentView.close()
     if (id.startsWith("ses_")) return actions.switchSession(id as SessionId)
+    const origin = state.sessionId
     const running = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId)
     // An engine's own agent is a sub-agent: its thread opens, never the command card. Its call may sit above the history shown,
     // so older pages load (a bounded few) until the call that started it is there.
     const engineAgent = running.find((shell) => shell.id === id && shell.kind === "agent")
     if (engineAgent) {
       const thread = await findThread(engineAgent.command)
+      // The reader moved to another session while older history loaded: the click belongs to the one it was made in.
+      if (state.sessionId !== origin) return
       if (thread && agentView.show(thread as never)) return
     }
     const at = running.findIndex((shell) => shell.id === id)

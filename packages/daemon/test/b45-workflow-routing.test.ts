@@ -125,14 +125,19 @@ describe("B45 workflow daemon/client routing", () => {
     await git(other, "init", "--quiet")
     const ids = createIdFactory()
     const router = createWorkflowRouter({ dir: temp(), catalog, roles: () => ({}), sessionModel: () => undefined, agent: (_directory, name) => ({ name, description: "", mode: "subagent", prompt: "" }) })
-    const routed = async (cwd: string) => {
+    const routed = async (cwd: string, runDirectory = directory) => {
       const plan = WorkflowPlan.parse(rawPlan({ tasks: [{ kind: "agent", id: "a", title: "Build", prompt: "Implement the item", mode: "work", cwd }] }))
-      const run = createRun({ workflowId: ids("workflow"), rootSessionId: ids("session"), plan, planHash: "0".repeat(64), directory, permission: "ask", at: 0 })
+      const run = createRun({ workflowId: ids("workflow"), rootSessionId: ids("session"), plan, planHash: "0".repeat(64), directory: runDirectory, permission: "ask", at: 0 })
       return router.prepare(run, plan.tasks[0]!, taskExecution(run, plan.tasks[0]!))
     }
     expect((await routed(linked)).directory).toBe(realpathSync(linked))
     await expect(routed(directory)).rejects.toThrow("is not a linked git worktree")
     await expect(routed(other)).rejects.toThrow("is not a linked git worktree")
+    // A run that itself started in a linked worktree cannot send an agent to its own directory; a sibling worktree is still fine.
+    await expect(routed(linked, linked)).rejects.toThrow("is not a linked git worktree")
+    const sibling = path.join(directory, ".mend", "worktrees", "item-2")
+    await git(directory, "worktree", "add", "--quiet", "-b", "mend/item-2", sibling)
+    expect((await routed(sibling, linked)).directory).toBe(realpathSync(sibling))
     await expect(routed(path.join(directory, "missing"))).rejects.toThrow("does not exist")
   })
 })

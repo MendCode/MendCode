@@ -214,6 +214,13 @@ describe("editing a bot", () => {
     expect(press({ ...form, row: 0 }, ...types("zzz")).form!.name).toBe("calm")
     expect(botSaveFields(form)).toEqual({ name: "calm", create: false, prompt: "You review.\nGently.", permission: "edits", shape: "hexagon", color: "info", model: "gpt-6-luna" })
     expect(botFormRows(form)).toContain("buttons")
+    // A file that limits tools with rules of its own is not shown as a mode: saving sends no permission until one is picked.
+    const ruled = editBotForm({ bot: bot({ permission: undefined, permissionRules: true }), prompt: "You review." })
+    expect(ruled.permission).toBeUndefined()
+    expect(text(ruled)).toContain("custom rules in the file")
+    expect("permission" in botSaveFields(ruled)).toBe(false)
+    const picked = press({ ...ruled, row: botFormRows(ruled).indexOf("permission") }, "\x1b[C").form!
+    expect(botSaveFields(picked)).toMatchObject({ permission: expect.any(String) })
     // An image the bot already has opens the face as an image path.
     const withImage = editBotForm({ bot: bot({ identity: { origin: "mendcode", avatar: "face.png" } }), prompt: "" })
     expect(withImage).toMatchObject({ face: "image", avatar: "face.png" })
@@ -462,7 +469,7 @@ describe("in the app", () => {
     await h.type("/bot delete calm\r")
     await until(h, "Delete bot calm?")
     await h.type("y")
-    await until(h, "nothing was removed")
+    await until(h, "the bot was not deleted")
     expect(h.app.page).toBe("bot-form")
   })
 

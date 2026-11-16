@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -2462,4 +2462,21 @@ test("Claude Code's own automatic compaction writes its summary in the user's la
   expect(readFileSync(`${languageDir}/${turn.input.sessionId}.txt`, "utf8")).toBe(printed)
   h.engine.stop()
   rmSync(languageDir, { recursive: true, force: true })
+})
+
+describe("retainAgentTurns", () => {
+  const mapper = (name: string, running: boolean) => ({ name, hasBackgroundAgents: () => running })
+
+  test("a mapper whose agent still runs outlives any number of later turns whose agents ended", () => {
+    let kept = [mapper("long", true)]
+    for (let turn = 1; turn <= 20; turn++) kept = retainAgentTurns([...kept, mapper(`short-${turn}`, false)])
+    expect(kept).toHaveLength(8)
+    expect(kept[0]!.name).toBe("long")
+    expect(kept.slice(1).map((entry) => entry.name)).toEqual(["short-14", "short-15", "short-16", "short-17", "short-18", "short-19", "short-20"])
+  })
+
+  test("with every mapper still running, the oldest leaves; under the limit nothing leaves", () => {
+    expect(retainAgentTurns(Array.from({ length: 9 }, (_, n) => mapper(`m${n}`, true))).map((entry) => entry.name)).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"])
+    expect(retainAgentTurns([mapper("a", false), mapper("b", true)]).map((entry) => entry.name)).toEqual(["a", "b"])
+  })
 })

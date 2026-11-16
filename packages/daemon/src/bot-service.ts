@@ -1,7 +1,8 @@
+import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { BOT_COLORS, BOT_SHAPES, parseAgentFile } from "@mendcode/packages"
+import { BOT_COLORS, BOT_SHAPES, MAX_AGENT_BYTES, parseAgentFile } from "@mendcode/packages"
 import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotInfo, type BotListReport, type BotSchedule, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
 import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import { canonicalDir } from "@mendcode/tools"
@@ -73,6 +74,7 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
       identity: agent.bot!,
       ...(agent.model ? { model: agent.model } : {}),
       ...(agent.permission ? { permission: agent.permission } : {}),
+      ...(!agent.permission && agent.permissionRules?.length ? { permissionRules: true } : {}),
       file: agent.file ?? "",
       state: botStateOf(sessions.map((session) => session.status)),
       schedules: context.schedules?.(agent.name) ?? [],
@@ -89,6 +91,24 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
     try { external.push(...await connector.list()) } catch (error) { problems.push({ file: `connector:${connector.id}`, message: error instanceof Error ? error.message : String(error) }) }
   }
   return { bots, external, problems }
+}
+
+/** An agent file larger than the loader reads is skipped, so the bot would vanish from the list: nothing larger is written. */
+function checkSize(text: string) {
+  const bytes = Buffer.byteLength(text)
+  if (bytes > MAX_AGENT_BYTES) throw new Error(`[BOT]: the file would take ${bytes} bytes, more than the ${MAX_AGENT_BYTES} an agent file may hold (non-Latin text takes more than one byte a character); shorten the personality`)
+}
+
+/** A copy beside the file under a name of its own, then a rename: a reader never sees half a file and two saves never share the copy. */
+async function replaceFile(file: string, text: string) {
+  const staged = `${file}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(staged, text, { mode: 0o600, flag: "wx" })
+    await rename(staged, file)
+  } catch (error) {
+    await rm(staged, { force: true })
+    throw error
+  }
 }
 
 /** The bot named `name` in the user's layers, or why not. */
@@ -125,10 +145,13 @@ export async function duplicateBot(context: BotContext, command: Extract<Command
   if ("error" in found) throw new Error(found.error)
   if (context.agents().agents.some((agent) => agent.name === command.newName) || ["build", "plan"].includes(command.newName)) throw new Error(`[BOT]: ${command.newName} is already an agent name`)
   const source = found.agent.file!
-  const text = (await readFile(source, "utf8")).replace(/^(---\r?\n[\s\S]*?\r?\n)name:[^\n]*\n/, `$1name: ${command.newName}\n`)
+  // Only a `name:` line of the frontmatter is renamed (any line of it, the first included); the body is left as it is.
+  const text = (await readFile(source, "utf8")).replace(/^(---\r?\n)([\s\S]*?)(\r?\n---[ \t]*(?:\r?\n|$))/, (_whole, open: string, front: string, close: string) => `${open}${front.replace(/^name:[^\r\n]*/m, `name: ${command.newName}`)}${close}`)
   const file = path.join(context.dir, "agents", `${command.newName}.md`)
   const parsed = parseAgentFile({ text, stem: command.newName, file, source: "user" })
   if ("problem" in parsed) throw new Error(`[BOT]: ${parsed.problem}`)
+  if (parsed.agent.name !== command.newName) throw new Error(`[BOT]: the copy would still be named ${parsed.agent.name}`)
+  checkSize(text)
   await mkdir(path.dirname(file), { recursive: true })
   try { await writeFile(file, text, { flag: "wx", mode: 0o600 }) } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`[BOT]: agent file already exists: ${file}`)
@@ -139,19 +162,21 @@ export async function duplicateBot(context: BotContext, command: Extract<Command
 }
 
 /** The bot's file as written, or (with `text`) replaced after the text is checked: it must still be this bot. */
-export async function botFile(context: BotContext, command: Extract<Command, { type: "bot.file" }>): Promise<{ file: string; text: string; saved: boolean }> {
+export async function botFile(context: BotContext, command: Extract<Command, { type: "bot.file" }>): Promise<{ file: string; text: string; saved: boolean; /** The personality the agent loads with: a frontmatter `prompt:` outranks the body. */ prompt?: string }> {
   const found = find(context, command.name)
   if ("error" in found) throw new Error(found.error)
   const file = found.agent.file!
-  if (command.text === undefined) return { file, text: await readFile(file, "utf8"), saved: false }
+  if (command.text === undefined) {
+    const text = await readFile(file, "utf8")
+    const parsed = parseAgentFile({ text, stem: command.name, file, source: "user" })
+    return { file, text, saved: false, ...("agent" in parsed ? { prompt: parsed.agent.prompt } : {}) }
+  }
   const parsed = parseAgentFile({ text: command.text, stem: command.name, file, source: "user" })
   if ("problem" in parsed) throw new Error(`[BOT]: ${parsed.problem}`)
   if (parsed.agent.name !== command.name) throw new Error(`[BOT]: the name must stay ${command.name}; /bot duplicate ${command.name} <new> makes another bot`)
   if (!parsed.agent.bot) throw new Error("[BOT]: the file lost its bot: block, so it would stop being a bot")
-  // A copy beside the file, then a rename, so a reader never sees half a file.
-  const staged = `${file}.${process.pid}.tmp`
-  await writeFile(staged, command.text, { mode: 0o600 })
-  await rename(staged, file)
+  checkSize(command.text)
+  await replaceFile(file, command.text)
   return { file, text: command.text, saved: true }
 }
 
@@ -177,12 +202,15 @@ export function applyBotFields(text: string, fields: Pick<Extract<Command, { typ
   if (!parts) return undefined
   const old = parts.blocks.find((block) => block.key === "bot")
   const origin = old?.lines.map((line) => /^\s+origin:\s*(\S+)/.exec(line)?.[1]).find(Boolean) ?? "mendcode"
-  const kept = parts.blocks.filter((block) => !["model", "permission", "bot", ...(fields.description !== undefined ? ["description"] : [])].includes(block.key)).flatMap((block) => block.lines)
+  // A `prompt:` block of the frontmatter outranks the body when the agent loads, so the personality the form edits would never apply
+  // while it stays: the body replaces it. A permission mapping stays unless the form deliberately set one.
+  const replaced = ["model", "bot", "prompt", ...(fields.permission !== undefined ? ["permission"] : []), ...(fields.description !== undefined ? ["description"] : [])]
+  const kept = parts.blocks.filter((block) => !replaced.includes(block.key)).flatMap((block) => block.lines)
   const front = [
     ...(fields.description !== undefined ? [`description: ${JSON.stringify(fields.description)}`] : []),
     ...kept,
     ...(fields.model ? [`model: ${JSON.stringify(fields.model)}`] : []),
-    `permission: ${fields.permission}`,
+    ...(fields.permission !== undefined ? [`permission: ${fields.permission}`] : parts.blocks.some((block) => block.key === "permission") ? [] : ["permission: smart"]),
     "bot:",
     ...(fields.shape ? [`  shape: ${fields.shape}`] : []),
     ...(fields.color ? [`  color: ${fields.color}`] : []),
@@ -215,6 +243,7 @@ export async function saveBot(context: BotContext, command: Extract<Command, { t
     const description = command.description ?? `The ${command.name} bot`
     const text = applyBotFields(`---\ndescription: ${JSON.stringify(description)}\nmode: primary\n---\n`, { ...command, prompt: command.prompt.trim() ? command.prompt : description, description })
     const agent = checked(text, file)
+    checkSize(text!)
     await mkdir(path.dirname(file), { recursive: true })
     try { await writeFile(file, text!, { flag: "wx", mode: 0o600 }) } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error(`[BOT]: agent file already exists: ${file}`)
@@ -228,9 +257,8 @@ export async function saveBot(context: BotContext, command: Extract<Command, { t
   if (!ownFile(context, file)) throw new Error(`[BOT]: ${command.name} is not in your own agents folder, so it cannot be edited here`)
   const text = applyBotFields(await readFile(file, "utf8"), { ...command, prompt: command.prompt.trim() ? command.prompt : found.agent.description })
   const agent = checked(text, file)
-  const staged = `${file}.${process.pid}.tmp`
-  await writeFile(staged, text!, { mode: 0o600 })
-  await rename(staged, file)
+  checkSize(text!)
+  await replaceFile(file, text!)
   return report(file, agent)
 }
 
@@ -257,15 +285,18 @@ export async function deleteBot(context: BotContext, command: Extract<Command, {
   const file = found.agent.file!
   if (!ownFile(context, file)) throw new Error(`[BOT]: ${command.name} is not in your own agents folder, so it cannot be deleted here`)
   const sessions = context.sessions(command.name).length
-  await rm(file, { force: true })
   let memoryRemoved = false
+  // The memory goes first: if it cannot be removed the bot is still there, and deleting again finishes the job.
   if (command.memory) {
     const folder = path.join(context.dir, "bots", command.name)
     if (path.dirname(path.resolve(folder)) === path.join(context.dir, "bots")) {
       memoryRemoved = existsSync(folder)
-      await rm(folder, { recursive: true, force: true })
+      try { await rm(folder, { recursive: true, force: true }) } catch (error) {
+        throw new Error(`[BOT]: the memory folder could not be removed (${error instanceof Error ? error.message : String(error)}); ${command.name} is kept, so delete can be tried again`)
+      }
     }
   }
+  await rm(file, { force: true })
   return { file, memoryRemoved, sessions }
 }
 

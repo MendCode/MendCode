@@ -419,8 +419,11 @@ export function createInput(ctx: AppContext, actions: {
     if (state.agentStopArmedAt > 0 && now() - state.agentStopArmedAt <= DOUBLE_ESC_MS) {
       state.agentStopArmedAt = 0
       state.escArmedAt = 0
-      const stopped = await stopSubagents()
-      state.notice = stopped ? `stopped ${stopped} sub-agent${stopped === 1 ? "" : "s"}` : "no sub-agents running"
+      const { stopped, failed } = await stopSubagents()
+      // An agent that would not stop leaves the arm up, so the next Esc tries it again.
+      if (failed) state.agentStopArmedAt = now()
+      const summary = stopped ? `stopped ${stopped} sub-agent${stopped === 1 ? "" : "s"}` : "no sub-agents running"
+      state.notice = failed ? `${stopped ? `${summary} · ` : ""}${failed} could not be stopped · esc to try again` : summary
       return requestFrame()
     }
     state.agentStopArmedAt = 0
@@ -437,8 +440,9 @@ export function createInput(ctx: AppContext, actions: {
     }
     state.escArmedAt = 0
     // Nothing answered yet (a typo caught in time): the message is taken back, as if never sent, and waits in the prompt to fix.
+    // Not while sub-agents run: the undo cancels them with the turn, and the interrupt below spares them until a third Esc.
     const unanswered = retractable(turnId)
-    if (unanswered && !unanswered.answered) {
+    if (unanswered && !unanswered.answered && !await subagentsRunning()) {
       const taking = retract(unanswered.itemId).finally(() => { if (retracting === taking) retracting = undefined })
       retracting = taking
       return taking

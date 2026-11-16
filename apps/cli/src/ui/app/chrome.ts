@@ -645,7 +645,9 @@ export function createChrome(ctx: AppContext, actions: {
   const botsOn = () => state.settingsNow.experimental?.bots === true
   /** The left list is drawn by the bots module: bots on, or every project's sessions asked for. */
   const multiWanted = () => (botsOn() || state.tuiProfile.sidebarProjects === "all") && !ctx.views.hasCustom("sessions.sidebar")
-  const sidebarKindNow = (width: number) => sidebarKind({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal", bots: botsOn(), iconsOnly: botsOn() && state.tuiProfile.sidebarLayout === "icons-only" })
+  // A custom `sessions.sidebar` view draws the classic full-width list: the bots' icon column (and its narrower reservation) is not for it.
+  const botsSidebar = () => botsOn() && !ctx.views.hasCustom("sessions.sidebar")
+  const sidebarKindNow = (width: number) => sidebarKind({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal", bots: botsSidebar(), iconsOnly: botsSidebar() && state.tuiProfile.sidebarLayout === "icons-only" })
   const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarKindNow(width) !== "none"
   /** Columns the left list takes, without the gap: 0 when it does not show. */
   const sidebarCells = (width: number) => !sidebarShown(width) ? 0 : sidebarKindNow(width) === "icons" ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH

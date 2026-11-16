@@ -37,7 +37,8 @@ export type BotFormState = {
   description?: string
   /** A catalog model id, or "" for the session's own. */
   model: string
-  permission: BotPermission
+  /** Undefined: the file limits tools with its own rules, which stay as they are until a mode is picked here. */
+  permission: BotPermission | undefined
   /** The catalog the model row cycles through, after "session default". */
   models: readonly string[]
   /** Agent names a new bot may not take (the form says so before the daemon has to). */
@@ -88,7 +89,7 @@ export function editBotForm({ bot, prompt, ...rest }: Common & { bot: BotInfo; p
   const sessions = bot.projects.reduce((sum, project) => sum + project.sessions.length, 0)
   return {
     ...base(rest), mode: "edit", name: bot.name, color: bot.identity.color ?? "auto", shape: bot.identity.shape ?? "auto", face: bot.identity.avatar ? "image" : "generated", avatar: bot.identity.avatar ?? "",
-    prompt, model: bot.model ?? "", permission: bot.permission ?? "smart", sessions, file: bot.file, row: 1,
+    prompt, model: bot.model ?? "", permission: bot.permission ?? (bot.permissionRules ? undefined : "smart"), sessions, file: bot.file, row: 1,
   }
 }
 
@@ -133,7 +134,8 @@ const shown = (form: BotFormState, row: BotFormRow) => form.attempted || form.to
 /** The command fields the daemon's `bot.save` takes, once the form has no problem. */
 export function botSaveFields(form: BotFormState) {
   return {
-    name: form.name, create: form.mode === "create", prompt: form.prompt, permission: form.permission,
+    name: form.name, create: form.mode === "create", prompt: form.prompt,
+    ...(form.permission ? { permission: form.permission } : {}),
     ...(form.description !== undefined ? { description: form.description } : {}),
     ...(form.shape !== "auto" ? { shape: form.shape } : {}), ...(form.color !== "auto" ? { color: form.color } : {}),
     ...(form.face === "image" && form.avatar.trim() ? { avatar: form.avatar.trim() } : {}),
@@ -165,7 +167,7 @@ function change(form: BotFormState, row: BotFormRow, direction: 1 | -1): BotForm
     case "shape": return { ...next, shape: cycle<BotShape | "auto">(["auto", ...BOT_SHAPES], form.shape, direction) }
     case "face": return { ...next, face: form.face === "generated" ? "image" : "generated" }
     case "model": return { ...next, model: cycle(["", ...form.models], form.model, direction) }
-    case "permission": return { ...next, permission: cycle(BOT_PERMISSIONS, form.permission, direction) }
+    case "permission": return { ...next, permission: cycle(BOT_PERMISSIONS, form.permission ?? "smart", direction) }
     case "buttons": return { ...form, button: (form.button + direction + botFormButtons(form).length) % botFormButtons(form).length }
     default: return form
   }
@@ -236,7 +238,7 @@ function hintFor(form: BotFormState, row: BotFormRow): string {
     case "prompt": return form.prompt.includes("\n") ? "several lines are kept; typing adds to the end" : "how it behaves, in a sentence or a few; empty uses a plain description"
     case "editor": return "opens the personality in your editor and takes the result back"
     case "model": return "the model its sessions use; session default follows the session"
-    case "permission": return { plan: "plans and reads, no edits", ask: "asks before every edit and command", smart: "edits inside the project; asks before deleting, secrets, sudo", edits: "edits freely; asks before commands", full: "no questions asked" }[form.permission]
+    case "permission": return form.permission === undefined ? "the file sets tool rules of its own; ← → replaces them with one of these" : { plan: "plans and reads, no edits", ask: "asks before every edit and command", smart: "edits inside the project; asks before deleting, secrets, sudo", edits: "edits freely; asks before commands", full: "no questions asked" }[form.permission]
     case "buttons": return botFormButtons(form)[form.button] === "delete" ? "asks again before anything is removed" : "←→ picks a button · enter presses it"
   }
 }
@@ -265,7 +267,7 @@ function valueSpans({ form, row, on, room, ascii }: { form: BotFormState; row: B
     case "prompt": return text(form.prompt, "optional")
     case "editor": return [{ text: "open in $EDITOR", fg: on ? "primary" : "muted", bold: on }]
     case "model": return choice([{ text: truncateEnd(form.model || "session default", Math.max(1, room - 4)), fg: form.model ? "text" : "muted", bold: on }])
-    case "permission": return [{ text: BOT_PERMISSIONS.map((value) => `${value === form.permission ? (ascii ? "(*)" : "(•)") : "( )"} ${value}`).join("  "), fg: "text", bold: on }]
+    case "permission": return form.permission === undefined ? [{ text: "custom rules in the file", fg: "text", bold: on }] : [{ text: BOT_PERMISSIONS.map((value) => `${value === form.permission ? (ascii ? "(*)" : "(•)") : "( )"} ${value}`).join("  "), fg: "text", bold: on }]
     case "buttons": {
       const label = { save: form.mode === "create" ? "Create" : "Save", delete: "Delete", cancel: "Cancel" }
       return botFormButtons(form).flatMap((button, index): Span[] => {

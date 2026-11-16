@@ -83,6 +83,19 @@ type ActiveTurn = {
 
 /** Ended turns per process whose background agents are still followed. */
 const MAX_AGENT_TURNS = 8
+
+/**
+ * The newest `MAX_AGENT_TURNS` mappers, oldest leaving first; a mapper whose agents still run stays while any mapper whose agents ended
+ * can leave instead, so a long-running agent keeps its thread however many short ones come after it.
+ */
+export function retainAgentTurns<T extends { hasBackgroundAgents(): boolean }>(mappers: T[]): T[] {
+  const kept = [...mappers]
+  while (kept.length > MAX_AGENT_TURNS) {
+    const ended = kept.findIndex((mapper) => !mapper.hasBackgroundAgents())
+    kept.splice(ended < 0 ? 0 : ended, 1)
+  }
+  return kept
+}
 /** The id of the `SubagentStart` hook MendCode registers at `initialize` (`subagentContext`). */
 const SUBAGENT_HOOK = "mendcode-subagent-start"
 /** The id of the `PostToolUse` hook MendCode registers at `initialize` (`oneTree`). */
@@ -960,7 +973,7 @@ export function createClaudeEngine(options: {
             if (connection.turn === turn) delete connection.turn
             if (turn.mapper.hasBackgroundAgents() && options.onAgentEvent) {
               sink = (event) => options.onAgentEvent?.(connection.sessionId, input.turnId, event)
-              connection.agentTurns = [...connection.agentTurns, turn.mapper].slice(-MAX_AGENT_TURNS)
+              connection.agentTurns = retainAgentTurns([...connection.agentTurns, turn.mapper])
             }
             // New MCP servers need a restart; it waits while a background task runs, as it would end with the process.
             if (connection.reload && connection.background === 0) close(connection, "MCP servers changed")

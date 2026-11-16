@@ -15,11 +15,17 @@ const inside = (folder: string, file: string) => {
 
 /** Width and height from the file header alone, so a hostile file cannot make us allocate before the size check. */
 function headerSize(bytes: Uint8Array): { width: number; height: number } {
+  const tag = (at: number) => String.fromCharCode(bytes[at] ?? 0, bytes[at + 1] ?? 0, bytes[at + 2] ?? 0, bytes[at + 3] ?? 0)
   if (PNG_SIGNATURE.every((byte, i) => bytes[i] === byte) && bytes.length >= 24) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+    // The decoder takes the last IHDR it meets, so the one read here must be the only one, and the first chunk as the format says.
+    if (view.getUint32(8) !== 13 || tag(12) !== "IHDR") throw new TypeError("[BOTS]: avatar PNG does not start with its header")
+    for (let at = 8; at + 8 <= bytes.length; at += 12 + view.getUint32(at)) {
+      if (at > 8 && tag(at + 4) === "IHDR") throw new TypeError("[BOTS]: avatar PNG has more than one header")
+      if (tag(at + 4) === "IEND") break
+    }
     return { width: view.getUint32(16), height: view.getUint32(20) }
   }
-  const tag = (at: number) => String.fromCharCode(bytes[at] ?? 0, bytes[at + 1] ?? 0, bytes[at + 2] ?? 0, bytes[at + 3] ?? 0)
   if (bytes.length >= 30 && tag(0) === "RIFF" && tag(8) === "WEBP") return webpSize(bytes)
   throw new TypeError("[BOTS]: avatar is not a PNG or WebP image")
 }

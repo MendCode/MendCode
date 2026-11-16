@@ -82,6 +82,16 @@ describe("docs commands: what this install offers", () => {
     const switched = groups((await docs({ settings: { tier: "balanced", features: { mcp: true } } })).live)
     expect(all(switched)).toContain("mcps")
   })
+  test("a command behind an experimental flag is listed when the flag is on, and only then", async () => {
+    const all = (map: Map<string, string[]>) => [...map.values()].flat()
+    const off = groups((await docs({ settings: { tier: "full" } })).live)
+    expect(all(off)).not.toContain("bot")
+    const on = groups((await docs({ settings: { tier: "full", experimental: { bots: true } } })).live)
+    expect(all(on)).toContain("bot")
+    const detail = (await docs({ settings: { tier: "full", experimental: { bots: true } }, detail: "bot" })).out
+    expect(detail).toContain("offered here")
+    expect(detail).not.toContain("not offered here")
+  })
   test("with no daemon the tier is said to be unknown, not guessed", async () => {
     const { live } = await docs({ settings: undefined })
     expect(live[0]).toContain("tier: not known (no daemon is running")

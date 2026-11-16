@@ -32,6 +32,7 @@ export type SidebarBots = ReturnType<typeof createSidebarBots>
 const BOTS_WINDOW_MS = 1000
 const JITTER_MS = 1500
 const SAFETY_MS = 60_000
+const DURING_MAX = 200
 /** The pushed sessions a list keeps (the cap `events.ts` gives this terminal's own list). */
 const PUSHED_MAX = 500
 /** Sessions known not to belong to a bot, so a busy old session does not ask for the list again at every push. */
@@ -78,6 +79,8 @@ export function createSidebarBots(ctx: AppContext) {
   let botsLoaded = false
   let othersLoaded = false
   let loadingBots = false
+  /** Pushes that came while a bot list was being asked for, in order (at most `DURING_MAX`): the answer may predate them. */
+  const during: ActivityEvent[] = []
   let loadingOthers = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let iconsNow = false
@@ -138,16 +141,19 @@ export function createSidebarBots(ctx: AppContext) {
     botsLoaded = true
     if (!botsOn() || input.remote) return
     loadingBots = true
+    during.length = 0
     try {
       const reply = await input.send({ type: "bot.list" })
       if (reply.ok) {
         report = reply.result as BotListReport
+        // The answer is older than the pushes that came while it was on its way: they move the new report as they moved the old one.
+        for (const event of during) report = patchBotReport(report, event) ?? report
         botOfSession = botIndex(report)
         for (const id of unknown) if (!botOfSession.has(id)) classified.add(id)
         unknown.clear()
         while (classified.size > CLASSIFIED_MAX) classified.delete(classified.values().next().value!)
       }
-    } finally { loadingBots = false }
+    } finally { loadingBots = false; during.length = 0 }
     requestFrame()
   }
   async function loadOthers() {
@@ -214,6 +220,7 @@ export function createSidebarBots(ctx: AppContext) {
     if (!shown()) { stale = true; stopTimer(); return }
     const held = state.sessions.find((session) => session.sessionId === event.sessionId) ?? others.find((session) => session.sessionId === event.sessionId)
     if (allProjects()) others = mergeActivity(others, event, { cap: PUSHED_MAX, keep: state.sessionId })
+    if (botsOn() && loadingBots && during.length < DURING_MAX) during.push(event)
     if (!botsOn() || !report) return
     if (botOfSession.has(event.sessionId)) {
       const next = patchBotReport(report, event)

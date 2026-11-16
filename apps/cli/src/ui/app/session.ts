@@ -243,6 +243,8 @@ export function createSession(ctx: AppContext, actions: {
     state.compactionLive.focused = false
     state.openedAt = now()
     state.escArmedAt = 0
+    // The third Esc stops the sub-agents of the session that was interrupted, never another's.
+    state.agentStopArmedAt = 0
     // Leave the project note saved; reset the session's undo and goal editing cards.
     if (state.editingScratch) endScratchEdit()
     state.rewindCard = undefined

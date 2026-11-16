@@ -1527,6 +1527,8 @@ const botParts = lazyValue(() => {
     identity,
     model: z.string().optional(),
     permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
+    /** The file limits tools with rules instead of one of the modes above (a `permission:` mapping, `tools`, `deny`). */
+    permissionRules: z.boolean().optional(),
     file: z.string(),
     /** From its sessions: `waiting` (an approval or a question is open) over `working` over `problem` (a session failed) over `idle`. */
     state,
@@ -1607,7 +1609,8 @@ export const BotSave = lazySchema(() => z.strictObject({
   color: z.enum(BOT_COLORS).optional(),
   avatar: z.string().min(1).max(4096).optional(),
   model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
-  permission: z.enum(["plan", "ask", "smart", "edits", "full"]),
+  /** Absent: the file's own permission stays (a per-tool mapping the form cannot show), or `smart` for a new bot. */
+  permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
 }))
 
 /**

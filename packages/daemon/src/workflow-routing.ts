@@ -69,7 +69,8 @@ export function createWorkflowRouter(options: {
     const listed = (await git(run.directory, ["worktree", "list", "--porcelain"])).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length))
     const worktrees = listed.flatMap((entry) => (existsSync(entry) ? [realpathSync(entry)] : []))
     // The first entry is the main checkout: an agent there would edit the user's files, which `cwd` is for avoiding.
-    if (!worktrees.slice(1).includes(target)) throw new Error(`agent cwd ${requested} is not a linked git worktree of ${run.directory} (git worktree list)`)
+    // Nor may it be the run's own directory, when the run itself started in a linked worktree.
+    if (target === realpathSync(run.directory) || !worktrees.slice(1).includes(target)) throw new Error(`agent cwd ${requested} is not a linked git worktree of ${run.directory} (git worktree list)`)
     return target
   }
   async function workspace(run: WorkflowRun, spec: WorkflowTaskSpec, execution: WorkflowTaskExecution) {

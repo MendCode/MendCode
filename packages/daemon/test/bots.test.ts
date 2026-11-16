@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { parseAgentFile } from "@mendcode/packages"
@@ -385,5 +385,88 @@ describe("the bot form's commands", () => {
     expect(existsSync(path.join(h.dir, "agents", "plain.md"))).toBe(true)
     expect(existsSync(path.join(h.project, ".mendcode", "agents", "local.md"))).toBe(true)
     expect(existsSync(path.join(h.dir, "bots", "plain", "memory.md"))).toBe(true)
+  })
+})
+
+describe("bot files: the findings of the beta review", () => {
+  const save = (over: Record<string, unknown> = {}) => ({ type: "bot.save", name: "calm", create: false, prompt: "You review gently.", ...over }) as never
+  const calm = (h: NativeHarness) => path.join(h.dir, "agents", "calm.md")
+  const tmpFiles = (h: NativeHarness) => readdirSync(path.join(h.dir, "agents")).filter((entry) => entry.endsWith(".tmp"))
+
+  test("duplicating renames a name: on the first frontmatter line and leaves the body's own name: lines alone", async () => {
+    const h = await start()
+    put(calm(h), "---\nname: calm\ndescription: A calm reviewer\nmode: primary\npermission: smart\nbot:\n  shape: circle\n---\nYou review.\nname: not a field\n")
+    const copy = result<{ file: string; agent: { name: string } }>(await h.client.send({ type: "bot.duplicate", name: "calm", newName: "calm-2" }))
+    expect(copy.agent.name).toBe("calm-2")
+    const text = readFileSync(copy.file, "utf8")
+    expect(text.startsWith("---\nname: calm-2\n")).toBe(true)
+    expect(text).toContain("You review.\nname: not a field\n")
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm", "calm-2"])
+  })
+
+  test("a save that makes the file larger than the loader reads is refused, and the working file stays", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const before = readFileSync(calm(h), "utf8")
+    // 12,000 CJK characters are fewer than the prompt limit and about 36 KB.
+    const refused = error(await h.client.send(save({ prompt: "あ".repeat(12_000) })))
+    expect(refused.message).toContain("an agent file may hold")
+    expect(readFileSync(calm(h), "utf8")).toBe(before)
+    expect((await list(h)).bots.map((bot) => bot.name)).toEqual(["calm"])
+    const text = "---\ndescription: A calm reviewer\nmode: primary\nbot:\n  shape: circle\n---\n" + "あ".repeat(12_000)
+    expect(error(await h.client.send({ type: "bot.file", name: "calm", text } as never)).message).toContain("an agent file may hold")
+    expect(readFileSync(calm(h), "utf8")).toBe(before)
+  })
+
+  test("saves of one bot at the same time each write a whole file, and no staging file stays", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const prompts = Array.from({ length: 8 }, (_, n) => `Personality ${n} ${"x".repeat(n * 700)}`)
+    const acks = await Promise.all(prompts.map((prompt) => h.client.send(save({ prompt }))))
+    for (const ack of acks) expect(ack.ok).toBe(true)
+    const after = readFileSync(calm(h), "utf8")
+    const parsed = parseAgentFile({ text: after, stem: "calm", file: calm(h), source: "user" })
+    expect("agent" in parsed && prompts.includes(parsed.agent.prompt)).toBe(true)
+    expect(tmpFiles(h)).toEqual([])
+  })
+
+  test("saving without a permission keeps the file's permission mapping; picking one replaces it", async () => {
+    const h = await start()
+    put(calm(h), "---\ndescription: A calm reviewer\nmode: primary\npermission:\n  shell: deny\n  write: ask\nbot:\n  shape: circle\n---\nYou review.")
+    expect((await list(h)).bots[0]).toMatchObject({ permissionRules: true })
+    expect((await list(h)).bots[0]!.permission).toBeUndefined()
+    result<unknown>(await h.client.send(save({ color: "warning" })))
+    const kept = parseAgentFile({ text: readFileSync(calm(h), "utf8"), stem: "calm", file: calm(h), source: "user" })
+    expect(kept).toMatchObject({ agent: { permissionRules: expect.arrayContaining([{ permission: "shell", pattern: "*", action: "deny" }]), bot: { color: "warning" } } })
+    result<unknown>(await h.client.send(save({ permission: "ask" })))
+    const replaced = parseAgentFile({ text: readFileSync(calm(h), "utf8"), stem: "calm", file: calm(h), source: "user" })
+    expect(replaced).toMatchObject({ agent: { permission: "ask" } })
+    expect("agent" in replaced && replaced.agent.permissionRules).toBeUndefined()
+  })
+
+  test("a frontmatter prompt is what the form loads, and a saved personality replaces it instead of being outranked", async () => {
+    const h = await start()
+    put(calm(h), "---\ndescription: A calm reviewer\nmode: primary\npermission: smart\nprompt: You review from the frontmatter.\nbot:\n  shape: circle\n---\nIgnored body.")
+    expect(result<{ prompt?: string }>(await h.client.send({ type: "bot.file", name: "calm" } as never)).prompt).toBe("You review from the frontmatter.")
+    result<unknown>(await h.client.send(save({ prompt: "You review gently." })))
+    const after = readFileSync(calm(h), "utf8")
+    expect(after).not.toContain("frontmatter")
+    expect(parseAgentFile({ text: after, stem: "calm", file: calm(h), source: "user" })).toMatchObject({ agent: { prompt: "You review gently." } })
+  })
+
+  test("a memory folder that cannot be removed keeps the bot, so deleting again can finish", async () => {
+    const h = await start()
+    put(calm(h), botFile())
+    const nested = path.join(h.dir, "bots", "calm", "notes")
+    put(path.join(nested, "a.md"), "- note\n")
+    chmodSync(nested, 0o500)
+    try {
+      const refused = error(await h.client.send({ type: "bot.delete", name: "calm", memory: true }))
+      expect(refused.message).toContain("memory folder could not be removed")
+      expect(existsSync(calm(h))).toBe(true)
+    } finally { chmodSync(nested, 0o700) }
+    expect(result<{ memoryRemoved: boolean }>(await h.client.send({ type: "bot.delete", name: "calm", memory: true })).memoryRemoved).toBe(true)
+    expect(existsSync(calm(h))).toBe(false)
+    expect(existsSync(path.join(h.dir, "bots", "calm"))).toBe(false)
   })
 })

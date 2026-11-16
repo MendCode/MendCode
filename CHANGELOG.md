@@ -11,7 +11,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## v0.0.18-beta.3 - 2026-11-16
 
-Experimental bots learn on their own: they keep notes, save skills of their own and schedule their own work, see every session, and a new chat with a bot lists nothing until its first message. Chats can start with the right panel hidden.
+Experimental bots learn on their own: they keep notes, save skills of their own and schedule their own work, see every session, and a new chat with a bot lists nothing until its first message. Chats can start with the right panel hidden. This beta also fixes what review found in the betas before it.
+
+### Fixed
+
+- Opening `/add-dir` or changing a run limit in a sub-agent that runs without tool limits no longer stops its next turn on Claude Code or Codex.
+- Cancelling a turn now revokes the sub-agent bridge access that turn held, and the access an earlier turn kept for background agents is hidden from output like the current one.
+- Workflow work agents given the same `cwd` now take turns instead of editing one worktree together, and an agent can no longer be sent to the directory its own run started in.
+- A command that moved to the background no longer shows a secret in its end-of-turn report, a custom command's `!` expansion always waits for the command's full output, and a turn that ends on its last step, a structured answer or the step limit still waits for such a command.
+- Opening a sub-agent from the strip while older history loads no longer opens something in the session you switched to meanwhile.
+- The reviews page keeps every running and waiting review when the list is too long for one reply: it drops older finished reviews first, then the decision logs of live ones.
+- Esc Esc on a message the model has not answered keeps running sub-agents instead of taking it back with them, the third Esc stays with the session you interrupted, and sub-agents that would not stop are reported instead of counted as stopped.
+- A Claude Code background agent that is still working keeps its thread when many later turns start short agents.
+- Experimental bots: duplicating a bot always renames it, a save too large for the agent loader is refused instead of hiding the bot, saves at the same time no longer clash, editing a bot keeps its permission rules and replaces a frontmatter prompt, deleting with its memory keeps the bot if the memory cannot be removed, and `docs commands` lists `/bot` when bots are on.
+- The sidebar's bot states no longer go back to an older state when the bot list answers after a newer push, a custom sessions sidebar view keeps its full width when bots are on, and a bot's picture with a second PNG header is refused.
 
 ### New
 
@@ -72,7 +85,7 @@ Long commands no longer block a turn, Esc Esc spares running sub-agents, Claude 
 - `mendcode usage` now lists each day's input, output and cache tokens, and each engine's sub-agents, so these no longer need `--json`.
 - Esc Esc now stops only the turn: sub-agents keep running, also Claude Code's background agents. A third Esc right after stops them too.
 - A command the model runs that is still going after 15 seconds moves to the background with its output so far: the model gets control back and can keep working, wait for it or stop it. The turn still waits for it before answering, and it still stops at its timeout or when you cancel.
-- In full access, a saved workflow script started by its name (such as one installed from a package) starts without an approval card; a script the model writes still asks in every mode.
+- In full access, a workflow script of an installed package started by its name starts without an approval card; a script the model writes, or one saved in the project or the user's folder, still asks in every mode.
 - Editing a steering message the model already took now says it reads it when the running tool ends and to send a correction instead, rather than "that message already started".
 - A sub-agent that runs while the session goes on is marked `async` instead of `bg` in the agents list and its thread, so it no longer reads as a background command; an engine's own agent listed with the commands reads `agent`.
 

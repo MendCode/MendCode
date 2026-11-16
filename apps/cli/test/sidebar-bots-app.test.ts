@@ -201,6 +201,33 @@ describe("the lists follow pushes without asking", () => {
     await frame()
     expect(count()).toEqual({ lists: base.lists + 1, bots: base.bots + 1 })
   })
+
+  test("a push that comes while a bot list is on its way still lands: the older answer does not bring back the state it replaced", async () => {
+    const clock = { at: NOW }
+    let hold = false
+    let release: (() => void) | undefined
+    let current = ""
+    const working = () => ({ bots: [{ name: "calm", description: "A calm reviewer", identity: { shape: "circle", color: "success", origin: "mendcode" }, file: "/d/agents/calm.md", state: "working", projects: [{ directory: "/work/app", state: "working", sessions: [{ sessionId: current, title: "Chrome", status: "running", updatedAt: NOW }] }] }], external: [], problems: [] })
+    const h = chatApp({ clock, height: 60, extra: (command) => command.type === "bot.list" && hold ? new Promise<CommandReply>((resolve) => { release = () => resolve(reply(working())) }) : undefined })
+    current = h.ids.current
+    await until(h, "Bots")
+    await Bun.sleep(10)
+    let gseq = 0
+    const push = (sessionId: string, over: Record<string, unknown> = {}) => h.app.onGlobal({ type: "session.activity", gseq: ++gseq, at: clock.at, sessionId, directory: "/work/app", title: "Chrome", state: "idle", updatedAt: clock.at, ...over } as never)
+    const frame = async () => { h.app.render(); await Bun.sleep(5) }
+    // A session no list holds asks for the bot list; the answer is held back, and the bot's chat finishes meanwhile.
+    hold = true
+    push("ses_01M7C3T9P0JHRKM9")
+    clock.at += 3000
+    await frame()
+    await frame()
+    expect(release).toBeDefined()
+    push(h.ids.current, { state: "idle" })
+    release!()
+    await Bun.sleep(10)
+    await frame()
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle │$/)
+  })
 })
 
 describe("a folder used today stays after the opened folder moves on", () => {

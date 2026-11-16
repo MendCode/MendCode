@@ -446,6 +446,21 @@ describe("avatar validation", () => {
     await expect(loadBotAvatar({ path: path.join(dir, "tall.png"), allowed: [dir] })).rejects.toThrow(/exceeds/)
   })
 
+  test("a PNG with a second header, which the decoder would take over the first, is refused whatever sizes they claim", async () => {
+    const dir = tempDir()
+    const small = Buffer.from(png(8, 8))
+    // The IHDR chunk is 25 bytes after the 8-byte signature; a second one for a much larger picture follows it.
+    const first = small.subarray(8, 33)
+    const second = Buffer.from(first)
+    second.writeUInt32BE(4000, 8)
+    second.writeUInt32BE(4000, 12)
+    writeFileSync(path.join(dir, "twin.png"), Buffer.concat([small.subarray(0, 33), second, small.subarray(33)]))
+    await expect(loadBotAvatar({ path: path.join(dir, "twin.png"), allowed: [dir] })).rejects.toThrow(/more than one header/)
+    // A chunk before the header is not a PNG either.
+    writeFileSync(path.join(dir, "late.png"), Buffer.concat([small.subarray(0, 8), Buffer.from([0, 0, 0, 0, 0x74, 0x45, 0x58, 0x74, 0, 0, 0, 0]), small.subarray(8)]))
+    await expect(loadBotAvatar({ path: path.join(dir, "late.png"), allowed: [dir] })).rejects.toThrow(/does not start with its header/)
+  })
+
   test("a PNG whose header lies about a small size and carries a huge one is cut by the header check", async () => {
     const dir = tempDir()
     const bytes = Buffer.from(png(8, 8))

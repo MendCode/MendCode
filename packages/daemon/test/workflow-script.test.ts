@@ -146,6 +146,10 @@ describe("who may start a script", () => {
     expect(workflows.execution(run.tasks[0]!.sessionId!)?.packageRoot).toBe(root)
     const inline = await workflows.handle({ type: "workflow.start", directory: project, plan: { script: plan.script, origin: "package" } })
     expect(inline.ok).toBe(true)
+    // The port the approval rule asks: only a script whose winning layer is a package is "installed".
+    const sessionId = createIdFactory()("session")
+    expect(workflows.port(sessionId, project).installed?.("package")).toBe(true)
+    expect(workflows.port(sessionId, project).installed?.("absent")).toBe(false)
     expect(store.workflows.all().find((entry) => entry.workflowId === (inline.ok ? (inline.result?.workflow as WorkflowSummary).workflowId : ""))?.packageRoot).toBeUndefined()
   })
 
@@ -201,9 +205,13 @@ describe("the workflow_script tool", () => {
     expect(workflowScriptTool.approvalFor?.({ script: "x" })).toBe(true)
     expect(workflowScriptTool.approvalFor?.({ help: true })).toBe(false)
     // Full access: a saved script started by name runs like any tool; a script the model wrote still asks.
-    expect(workflowScriptTool.approvalFor?.({ name: "mend", args: { item: "a" } }, { mode: "full" })).toBe(false)
-    expect(workflowScriptTool.approvalFor?.({ script: "x" }, { mode: "full" })).toBe(true)
-    for (const mode of ["smart", "ask", "edits", undefined]) expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode })).toBe(true)
+    const installed = { workflows: { installed: (name: string) => name === "mend" } as never }
+    expect(workflowScriptTool.approvalFor?.({ name: "mend", args: { item: "a" } }, { mode: "full", ...installed })).toBe(false)
+    expect(workflowScriptTool.approvalFor?.({ script: "x" }, { mode: "full", ...installed })).toBe(true)
+    // A script saved in the project or the user's folder is a file a write creates: it asks, as does any name the port cannot place in a package.
+    expect(workflowScriptTool.approvalFor?.({ name: "model-wrote-this" }, { mode: "full", ...installed })).toBe(true)
+    expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode: "full" })).toBe(true)
+    for (const mode of ["smart", "ask", "edits", undefined]) expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode, ...installed })).toBe(true)
     expect(workflowScriptTool.permissionFor?.({ help: true })).toBe("read")
     expect(workflowScriptTool.permissionFor?.({ script: "x" })).toBe("execute")
     expect(workflowScriptTool.args.safeParse({}).success).toBe(false)

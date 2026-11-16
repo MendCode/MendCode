@@ -26,7 +26,8 @@ const TOOL_PATTERN = /^[A-Za-z0-9_:.*-]{1,100}$/
 export const MAX_AGENT_FILES = 100
 /** Files read across all layers before precedence picks the winners that `MAX_AGENT_FILES` then caps. */
 const MAX_AGENT_SCANNED = 400
-const MAX_AGENT_BYTES = 32 * 1024
+/** The most an agent file may hold: a larger one is skipped by the loader, so nothing may write one. */
+export const MAX_AGENT_BYTES = 32 * 1024
 const MAX_PROMPT_CHARS = 16_000
 const MAX_TOOL_LIST = 100
 /** Generation and presentation fields shared with the donor's agent files. */

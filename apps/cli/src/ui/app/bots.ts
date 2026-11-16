@@ -70,7 +70,7 @@ async function openBotForm(ctx: AppContext, initial: BotFormState) {
   async function remove(memory: boolean) {
     const current = form!
     const reply = await input.send({ type: "bot.delete", name: current.name, memory })
-    if (!reply.ok) return failed(`${strip(reply.error.message)} · nothing was removed`)
+    if (!reply.ok) return failed(`${strip(reply.error.message)} · the bot was not deleted`)
     const result = reply.result as { memoryRemoved: boolean; sessions: number }
     form = undefined
     leave(true)
@@ -180,7 +180,7 @@ export async function runBotCommand(ctx: AppContext, args: string, options: { fr
     if (words.kind === "delete") return openBotForm(ctx, deleteBotForm({ ...common, bot }))
     const read = await input.send({ type: "bot.file", name: words.name })
     if (!read.ok) return fail(strip(read.error.message))
-    return openBotForm(ctx, editBotForm({ ...common, bot, prompt: botPromptOf((read.result as { text: string }).text) }))
+    return openBotForm(ctx, editBotForm({ ...common, bot, prompt: (read.result as { prompt?: string }).prompt ?? botPromptOf((read.result as { text: string }).text) }))
   }
 
   if (words.kind === "duplicate") {

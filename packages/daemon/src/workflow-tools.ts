@@ -62,9 +62,10 @@ export const workflowScriptTool = defineTool({
     args: z.record(z.string(), z.unknown()).optional().describe("Arguments the script reads as `args`"),
   }).refine((value) => value.help === true || (value.script !== undefined) !== (value.name !== undefined), { message: "give exactly one of script or name (or help true)" }),
   permissionFor: (args) => (args.help === true ? "read" : "execute"),
-  // A script the model writes is new code: the user sees it in every mode. A saved one started by name is code the user installed;
-  // in full access (the user chose to run unattended) it starts like any other tool, still within its caps and the project's trust.
-  approvalFor: (args, context) => args.help !== true && !(context?.mode === "full" && args.name !== undefined && args.script === undefined),
+  // A script the model writes is new code: the user sees it in every mode, and so is a "saved" one in the project or the user's folder,
+  // which a write creates. A script of an installed package is code the user installed; in full access (the user chose to run unattended)
+  // it starts like any other tool, still within its caps and the project's trust.
+  approvalFor: (args, context) => args.help !== true && !(context?.mode === "full" && args.name !== undefined && args.script === undefined && context.workflows?.installed?.(args.name) === true),
   async preview(args, context) {
     if (args.help === true || !context.workflows) return undefined
     const checked = await context.workflows.preview(scriptInput(args)).catch(() => undefined)

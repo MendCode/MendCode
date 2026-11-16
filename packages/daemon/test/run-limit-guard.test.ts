@@ -2,7 +2,7 @@ import { expect, test } from "bun:test"
 import type { EnginePort, TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
 import { createRunLimitsStore, type RunLimits } from "../src/run-limits"
-import { limitsTools, withRunLimitGuard } from "../src/run-limit-guard"
+import { configureRunLimits, limitsTools, withRunLimitGuard } from "../src/run-limit-guard"
 
 const session = "ses_01M7C3T9P0JHRKM1" as SessionId
 
@@ -37,4 +37,21 @@ test("limitsTools names exactly the limits a scripted run sets on tools", () => 
   expect(limitsTools(store.configure(session, { tools: [] }))).toBe(true)
   expect(limitsTools({ offline: true })).toBe(true)
   expect(limitsTools({ excludeTools: [] })).toBe(false)
+})
+
+test("reading or changing other limits keeps a bare child's own exclusions from becoming client-requested tool limits", async () => {
+  const store = createRunLimitsStore()
+  store.configure(session, { excludeTools: ["skill"], noHooks: true })
+  expect(configureRunLimits(store, session, {})).toEqual({ excludeTools: ["skill"], noHooks: true })
+  configureRunLimits(store, session, { addDirs: ["/tmp"], maxSteps: 3 })
+  expect(store.get(session)?.requestedTools).toBeUndefined()
+  const limits = (): RunLimits | undefined => store.get(session)
+  expect(await withRunLimitGuard({ base: { runTurn: async () => ({ status: "ok" as const }) } as unknown as EnginePort, limits, route: () => ({ model: "claude/claude-sonnet", engine: "Claude Code" }) }).runTurn({ sessionId: session } as TurnInput)).toEqual({ status: "ok" })
+  // A client that sets tool limits still marks them, and later unrelated patches keep the mark.
+  expect(configureRunLimits(store, session, { tools: ["read"] })).not.toHaveProperty("requestedTools")
+  expect(store.get(session)?.requestedTools).toBe(true)
+  configureRunLimits(store, session, { maxSteps: 4 })
+  expect(store.get(session)?.requestedTools).toBe(true)
+  configureRunLimits(store, session, { tools: null, excludeTools: null })
+  expect(store.get(session)?.requestedTools).toBeUndefined()
 })
