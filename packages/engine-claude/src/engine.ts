@@ -851,7 +851,7 @@ export function createClaudeEngine(options: {
       if (input.externalMcp && !plainBusy) {
         if (plain) close(plain, "a turn with its own MCP servers")
         // Background agents of an earlier bridged turn still run in its process: this turn joins them there, so they live on. That
-        // process's bridge was the earlier turn's, so its thread tools answer that the bridge is gone until a new process starts.
+        // process was started with the earlier turn's token: the bridge takes it for this session's live turn (daemon thread-mcp.ts).
         // When that process has to start again (new model, effort or credentials), it starts with this turn's bridge: the earlier
         // turn's config file went with its turn, and Claude Code refuses to start on it.
         const running = kept.get(input.sessionId)

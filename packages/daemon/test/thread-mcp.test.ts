@@ -135,6 +135,54 @@ test("authentication, origin/host, payload, expiry, live feature switch and revo
   expect((await max.request("tools/list")).status).not.toBe(200)
 })
 
+test("a process kept for its background agents keeps its earlier turn's token: it answers for the same session's next turn only, within the hour", async () => {
+  const clock = createVirtualClock()
+  const service = createThreadMcp({ clock, listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }) } as unknown as ThreadPort
+  const open = (sessionId: string) => service.open({ engine: "claude", turn: { ...turn(), sessionId } as TurnInput, allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const list = (authorization: string) => service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }))
+  const session = ids("session")
+  const first = open(session)
+  const earlier = first.servers[0]!.headers[0]!.value
+  first.release()
+  // Between turns no lease is live: the old token opens nothing.
+  expect((await list(earlier)).status).not.toBe(200)
+  const next = open(session)
+  const other = open(ids("session"))
+  expect((await list(earlier)).status).toBe(200)
+  // Another session's turn never answers to it.
+  next.release()
+  expect((await list(earlier)).status).toBe(401)
+  other.release()
+  const later = open(session)
+  // In use every few minutes, it lasts to the hour from when it was issued, and no longer.
+  for (let minutes = 5; minutes < 60; minutes += 5) {
+    clock.advance(5 * 60_000)
+    expect((await list(earlier)).status).toBe(200)
+  }
+  clock.advance(5 * 60_000)
+  expect((await list(earlier)).status).not.toBe(200)
+  later.release()
+  // A turn that starts after the hour does not take the old token either.
+  const fresh = open(session)
+  expect((await list(earlier)).status).toBe(401)
+  fresh.release()
+})
+
+test("the server opens again on the port it had, so a kept process's config still reaches it", () => {
+  const service = createThreadMcp({ clock: createVirtualClock() })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false } as unknown as ThreadPort
+  const open = () => service.open({ engine: "claude", turn: turn(), allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const first = open()
+  const url = first.servers[0]!.url
+  first.release()
+  const second = open()
+  expect(second.servers[0]!.url).toBe(url)
+  second.release()
+})
+
 test("Claude config is private and disposable; Codex injection is process flags; the bearer never reaches results", async () => {
   const h = fixture("claude")
   const file = h.lease.args[1]!

@@ -100,14 +100,36 @@ export function createThreadMcp(options: {
 }) {
   const leases = new Set<Lease>()
   let listener: { url: string; stop(): void } | undefined
-  const valid = (lease: Lease) => leases.has(lease) && !lease.controller.signal.aborted && !lease.turn.signal.aborted && lease.allowed() && options.clock.now() - lease.born < MAX_MS && options.clock.now() - lease.touched < IDLE_MS
+  /** The port the last listener had: a new one takes it again, so a Claude Code process kept alive keeps reaching its server. */
+  let lastPort: number | undefined
+  /**
+   * Tokens of turns that ended, with their session and the end of their lifetime. A Claude Code process kept alive for its background
+   * agents was started with an earlier turn's token; the next turn of the same session joins that process, so its token answers for
+   * that session's live lease, and never for another session's or past the hour it was issued for.
+   */
+  const retired = new Map<string, { sessionId: string; until: number }>()
+  const RETIRED_MAX = 64
+  function retire(lease: Lease) {
+    const now = options.clock.now()
+    for (const [token, entry] of retired) if (entry.until <= now) retired.delete(token)
+    if (lease.born + MAX_MS <= now) return
+    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: lease.born + MAX_MS })
+    while (retired.size > RETIRED_MAX) retired.delete(retired.keys().next().value!)
+  }
+  /** The live lease of the session an ended turn's `bytes` token belonged to, when that token's hour has not run out. */
+  function successor(bytes: Buffer): Lease | undefined {
+    const entry = [...retired].find(([token]) => bytes.length === token.length && timingSafeEqual(bytes, Buffer.from(token)))?.[1]
+    if (!entry || entry.until <= options.clock.now()) return undefined
+    return [...leases].reverse().find((lease) => lease.turn.sessionId === entry.sessionId && valid(lease))
+  }
+  const valid =(lease: Lease) => leases.has(lease) && !lease.controller.signal.aborted && !lease.turn.signal.aborted && lease.allowed() && options.clock.now() - lease.born < MAX_MS && options.clock.now() - lease.touched < IDLE_MS
 
   async function handle(request: Request): Promise<Response> {
     // No browser origins, redirects, remote hosts or alternate routes: protects the localhost bearer boundary.
     if (!listener || request.url !== listener.url || request.headers.has("origin")) return new Response(null, { status: 403 })
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? ""
     const bytes = Buffer.from(bearer)
-    const lease = [...leases].find((entry) => bytes.length === entry.token.length && timingSafeEqual(bytes, Buffer.from(entry.token)))
+    const lease = [...leases].find((entry) => bytes.length === entry.token.length && timingSafeEqual(bytes, Buffer.from(entry.token))) ?? successor(bytes)
     if (!lease || !valid(lease)) return new Response(null, { status: 401 })
     if (request.method === "GET") return new Response(null, { status: 405 })
     if (request.method !== "POST") return new Response(null, { status: 405 })
@@ -191,7 +213,11 @@ export function createThreadMcp(options: {
     }) {
       if (!input.allowed() || input.turn.signal.aborted) throw new Error("Bridge disabled or turn cancelled")
       listener ??= options.listen?.(handle) ?? (() => {
-        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, maxRequestBodySize: MAX_BODY, idleTimeout: 0, fetch: handle })
+        const serve = (port: number) => Bun.serve({ hostname: "127.0.0.1", port, maxRequestBodySize: MAX_BODY, idleTimeout: 0, fetch: handle })
+        let server: ReturnType<typeof serve>
+        // The last port again when it is free, so a kept process's config still points here; any free port otherwise.
+        try { server = serve(lastPort ?? 0) } catch { server = serve(0) }
+        lastPort = server.port
         return { url: `http://127.0.0.1:${server.port}/mcp`, stop: () => void server.stop(true) }
       })()
       const controller = new AbortController()
@@ -226,6 +252,7 @@ export function createThreadMcp(options: {
         },
         release() {
           if (!leases.delete(lease)) return
+          retire(lease)
           controller.abort()
           input.turn.signal.removeEventListener("abort", lease.release)
           expiry.cancel()
