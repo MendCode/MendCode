@@ -1509,6 +1509,18 @@ const botParts = lazyValue(() => {
   })
   /** One bot's sessions in one project directory. Several folders at once are several groups. */
   const project = z.strictObject({ directory: z.string().max(4096), state, sessions: z.array(session) })
+  /** A schedule the bot owns: a loop that wakes it on a trigger, in a folder. */
+  const schedule = z.strictObject({
+    loopId: z.string().min(1).max(64),
+    name: z.string().max(120),
+    /** The trigger in its text form (`daily 09:00`, `weekly mon 09:00`, `every 30m`). */
+    trigger: z.string().max(100),
+    directory: z.string().max(4096),
+    /** `active`, `running`, `paused`, `blocked`… (the loop's own state). */
+    state: z.string().max(40),
+    nextWakeAt: z.number().int().nonnegative().optional(),
+    runs: z.number().int().nonnegative(),
+  })
   const info = z.strictObject({
     name: botName(),
     description: z.string(),
@@ -1519,6 +1531,8 @@ const botParts = lazyValue(() => {
     /** From its sessions: `waiting` (an approval or a question is open) over `working` over `problem` (a session failed) over `idle`. */
     state,
     projects: z.array(project),
+    /** The schedules the bot made for itself (not cancelled, not finished); the daemon always sends it. */
+    schedules: z.array(schedule).optional(),
   })
   /** A bot that lives in another app and reaches MendCode through a connector (no connector ships yet: the list is empty). */
   const external = z.strictObject({
@@ -1535,7 +1549,7 @@ const botParts = lazyValue(() => {
     external: z.array(external),
     problems: z.array(z.strictObject({ file: z.string(), message: z.string() })),
   })
-  return { state, identity, session, project, info, external, report }
+  return { state, identity, session, project, schedule, info, external, report }
 })
 type BotParts = ReturnType<typeof botParts>
 
@@ -1544,6 +1558,7 @@ export type BotIdentity = z.infer<BotParts["identity"]>
 export type BotState = z.infer<BotParts["state"]>
 export type BotSession = z.infer<BotParts["session"]>
 export type BotProject = z.infer<BotParts["project"]>
+export type BotSchedule = z.infer<BotParts["schedule"]>
 export type BotInfo = z.infer<BotParts["info"]>
 export type ExternalBotInfo = z.infer<BotParts["external"]>
 export const BotListReport = lazySchema(() => botParts().report)

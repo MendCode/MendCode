@@ -134,7 +134,7 @@ describe("a bot reads its own chats and notes", () => {
     expect(notes.output).toContain("notes are for a bot's own sessions")
   })
 
-  test("another session still needs consent: a plain chat or another bot's chat asks, even in the same folder", async () => {
+  test("a bot sees all sessions (owner's choice): a plain chat and another bot's chat are read without asking, even in the same folder", async () => {
     let plain = "" as SessionId
     let theirs = "" as SessionId
     const h = await start({
@@ -149,8 +149,10 @@ describe("a bot reads its own chats and notes", () => {
     await h.client.send({ type: "session.permission.set", sessionId: reader, mode: "ask" })
     await h.client.send({ type: "session.agent.set", sessionId: reader, agent: "calm" })
     await h.client.send({ type: "user.submit", sessionId: reader, text: "go", attachments: [] })
-    await until(() => approvals(h, reader).length === 1)
-    expect(JSON.stringify(h.requests.at(-1)!.messages)).not.toContain("secret plain words")
+    await until(() => h.store.turns.list(reader).some((turn) => turn.status !== "running"))
+    expect(approvals(h, reader)).toEqual([])
+    expect(JSON.stringify(h.requests.at(-1)!.messages)).toContain("secret plain words")
+    expect(JSON.stringify(h.requests.at(-1)!.messages)).toContain("secret other words")
   })
 
   test("with the flag off the threads tool is not a bot's: no recall without thread_tools", async () => {

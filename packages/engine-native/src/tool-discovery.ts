@@ -22,6 +22,8 @@ const PRIMARY_TOOLS = new Set([
   "question", "plan_submit", "plan_review", "plan_exit", "lsp", "diagnostics", "secrets",
   "get_goal", "create_goal", "update_goal", "code", "tool_start", "tool_status", "tool_wait", "tool_cancel",
   "question_async", "session_search", "session_read", "snip", "worktree", "customize_ui", ...GRAPH_CORE, TOOL_SEARCH_NAME,
+  // A bot's own learning tools: offered to a bot's turn only (the engine drops them anywhere else).
+  "bot_note", "bot_skill", "bot_schedule",
 ])
 
 export const isPrimaryTool = (name: string) => PRIMARY_TOOLS.has(name)
@@ -34,6 +36,7 @@ export const isPrimaryTool = (name: string) => PRIMARY_TOOLS.has(name)
 const LEAN_CORE = new Set([
   "shell", "read", "glob", "grep", "edit", "write", "apply_patch", "shell_output", "shell_kill", "task", "task_status", "skill", "webfetch", "question",
   "plan_submit", "plan_review", "plan_exit", "code", "snip", "customize_ui", ...GRAPH_CORE, TOOL_SEARCH_NAME,
+  "bot_note", "bot_skill", "bot_schedule",
 ])
 
 /** File search by name and by content (feature `find_tools`, every tier): without them minimalist's first request fell under the provider's cacheable minimum. */

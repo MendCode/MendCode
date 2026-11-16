@@ -478,3 +478,41 @@ export function shapeCard(c: CardContext, label: string, fact: string | undefine
   if (c.brief && /^(object|array) · /.test(fact ?? "")) return head
   return [...head, ...shapeLines({ lines, ctx: c.body, rows: c.brief ? BRIEF_ROWS.shape : SHAPE_ROWS })]
 }
+
+/** What a bot's learning tools put in the header: the word for what happened, the thing itself, and a coloured fact. */
+function learnParts(c: CardContext, lines: string[]): { label: string; target: string; facts: Span[][]; body: string[] } {
+  const meta = c.input.meta ?? {}
+  const action = typeof meta.action === "string" ? meta.action : ""
+  const text = (key: string) => (typeof meta[key] === "string" ? (meta[key] as string) : "")
+  const body = lines.slice(1)
+  if (c.name === "bot_note") {
+    const scope = /\(([^)]+)\)/.exec(lines[0] ?? "")?.[1] ?? text("scope")
+    return { label: meta.known === true ? "Known" : "Learned", target: body[0] ?? "", facts: scope ? [[spanOf(scope, "accent")]] : [], body: [] }
+  }
+  if (c.name === "bot_skill") {
+    const label = action === "create" ? "New skill" : action === "update" ? "Skill updated" : action === "read" ? "Skill" : "Skills"
+    const saved = action === "create" || action === "update"
+    // A saved skill's description is the header's fact; the steps are what opens under it.
+    return { label, target: text("name") || c.detail, facts: saved && body[0] ? [[spanOf(truncateEnd(body[0], 60), "accent")]] : [], body: saved ? body.slice(1) : body }
+  }
+  const label = action === "create" ? "Scheduled" : action === "cancel" ? "Unscheduled" : "Schedules"
+  return { label, target: c.detail, facts: text("trigger") ? [[spanOf(text("trigger"), "accent")]] : [], body }
+}
+
+/**
+ * A bot learning (`bot_note`, `bot_skill`, `bot_schedule`): one distinct header, "learned", "new skill" or "scheduled", with the
+ * thing learned as its target and the scope, description or trigger in the accent role; what was saved opens under it (two rows
+ * in the balanced view, a page when opened).
+ */
+export function learnCard(c: CardContext): Line[] {
+  const lines = linesOf(c.input.text)
+  if (c.failed) return failure({ c, head: header(c, { label: toolWord(c.name), target: c.detail }, false), lines })
+  if (c.running) return live(c, { label: toolWord(c.name), target: c.detail })
+  const parts = learnParts(c, lines)
+  const head = headerRows(c, { label: parts.label, target: parts.target, wrap: true, ...(parts.facts.length ? { facts: parts.facts } : {}) }, parts.body.length > 0)
+  if (c.level === "summary" || !parts.body.length) return head
+  if (c.level === "full") return [...head, ...pagedLines({ lines: parts.body, c, tone: "muted" })]
+  return [...head, ...shapeLines({ lines: parts.body, ctx: c.body, rows: 2 })]
+}
+
+const toolWord = (name: string) => (name === "bot_note" ? "Learning" : name === "bot_skill" ? "Skill" : "Schedule")

@@ -236,6 +236,7 @@ import type { CreateLoopInput } from "@mendcode/loops"
 import { createLazyLoops } from "./lazy-loops"
 import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
+import { describeTrigger } from "../../loops/src/schedule"
 import { LOOP_INTERPRET_SYSTEM, LOOP_INTERPRET_TIMEOUT_MS, loopInterpretRequest, readInterpretation } from "./loop-interpret"
 import { createWorktreePort } from "./worktree-port"
 import type { GhRun } from "./pr-watch"
@@ -420,7 +421,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; bot(sessionId: SessionId): import("@mendcode/tools").BotPort | undefined; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -988,6 +989,15 @@ export async function startDaemon(options: DaemonOptions) {
   let botMemoryModule: typeof import("./bot-memory") | undefined
   /** The recent-activity digest of a bot's turn, loaded with the memory reader (never at start). */
   let botRecallModule: typeof import("./bot-recall") | undefined
+  /** What a bot learns with (notes, skills, schedules), loaded with the same first turn. */
+  let botLearnModule: typeof import("./bot-learn") | undefined
+  /** The bot a session runs as: a trusted bot of the user's own folder while the flag is on; undefined for every other session. */
+  function botNameOf(sessionId: SessionId): string | undefined {
+    const name = botMemoryModule && botsOn() ? store.sessionAgent(sessionId) : undefined
+    const directory = name ? store.sessionDirectory(sessionId) : undefined
+    const bot = name && directory ? agents.auxiliary(directory, name) : undefined
+    return bot?.bot && bot.source === "user" && bot.trusted ? name : undefined
+  }
   let botSummaryAsker: ((sessionId: string) => void) | undefined
   let botDigestCache: { key: string; at: number; text: string } | undefined
   /** Custom agents (`agents/*.md` of every layer); project ones follow the directory's trust, like custom tools. */
@@ -999,7 +1009,8 @@ export async function startDaemon(options: DaemonOptions) {
     },
     // A child in its own worktree reads agents (and their trust) from its parent's project, as a workflow agent does from its source.
     directoryOf: (sessionId) => workflowContext(sessionId)?.workflow.sourceDirectory ?? store.sessionDirectory((store.meta.get(`session.fanout.owner:${sessionId}`) || (store.tasks.list().find((task) => task.taskId === sessionId && task.worktree)?.parentId ?? sessionId)) as SessionId),
-    selected: (sessionId) => livePermission(sessionId) === "plan" ? "plan" : store.sessionAgent(sessionId),
+    // A report-only loop session is in plan mode; a bot's own schedule keeps the bot as its agent (the session's mode still caps it to reading).
+    selected: (sessionId) => livePermission(sessionId) === "plan" && !loops.forSession(sessionId)?.agent ? "plan" : store.sessionAgent(sessionId),
     planExitAgent: () => store.settings.get().plan_exit_agent ?? store.settings.get().planExitAgent,
     settings: () => store.settings.get(),
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
@@ -1017,10 +1028,16 @@ export async function startDaemon(options: DaemonOptions) {
         sessionId: session.sessionId, title: session.title, directory: session.directory, updatedAt: session.updatedAt, status: session.status, summary: session.summary,
         stale: store.meta.get(`session.summary.seq:${session.sessionId}`) !== String(store.lastSeq(session.sessionId) ?? 0),
       }))
-      const text = [recall.botDigest({ sessions, excludeSessionId: sessionId, now, wantSummary: botSummaryAsker }), recall.BOT_RECALL_HINT].filter(Boolean).join("\n\n")
+      const text = recall.botDigest({ sessions, excludeSessionId: sessionId, now, wantSummary: botSummaryAsker })
       botDigestCache = { key: `${name}:${sessionId}`, at: now, text }
       return text
     },
+    botSkills: (name) => botLearnModule && botsOn() ? botLearnModule.botSkillsPrompt({ dir: options.dir, name }) : "",
+    // Every folder's active sessions: a bot sees all sessions (docs/permissions.md).
+    botOverview: (_name, sessionId) => botRecallModule && botsOn()
+      ? botRecallModule.workspaceOverview({ sessions: sessionAutomation.list({ active: true, roots: true, limit: 12 }).map((session) => ({ sessionId: session.sessionId, title: session.title, directory: session.directory, status: session.status })), excludeSessionId: sessionId })
+      : "",
+    botHint: () => botRecallModule && botsOn() ? `${botRecallModule.BOT_RECALL_HINT} ${botRecallModule.BOT_TOOLS_HINT}` : "",
     botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
   })
   /**
@@ -1380,6 +1397,12 @@ export async function startDaemon(options: DaemonOptions) {
     },
     review: (sessionId) => reviews.port(sessionId),
     // Built below with the loop service; tools only call this during turns.
+    // A bot's learning tools (notes, skills, its own schedules): only for a bot's session with the flag on.
+    bot: (sessionId) => {
+      const name = botLearnModule ? botNameOf(sessionId) : undefined
+      const directory = name ? store.sessionDirectory(sessionId) : undefined
+      return name && directory ? botLearnModule!.createBotPort({ dir: options.dir, name, directory: canonicalDir(directory), sessionId, redact: (text) => secrets.mask(sessionId, text), loops: { list: () => loops.list(), stop: (loopId) => loops.stop(loopId), create: createLoop } }) : undefined
+    },
     loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
     // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
     loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => {
@@ -1486,6 +1509,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (botsOn()) {
         botMemoryModule ??= await import("./bot-memory")
         botRecallModule ??= await import("./bot-recall")
+        botLearnModule ??= await import("./bot-learn")
       }
       const unread =!turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
@@ -2632,10 +2656,12 @@ export async function startDaemon(options: DaemonOptions) {
       store: store.loops,
       clock,
       ids,
-      createSession: ({ directory, title, readOnly, permission }) => {
+      createSession: ({ directory, title, readOnly, permission, agent }) => {
         const id = ids("session")
         store.createSession({ id, directory, title })
         store.meta.set(`session.title.manual:${id}`, "true")
+        // A bot's schedule runs as that bot (its memory, skills and digest apply).
+        if (agent) store.setSessionAgent(id, agent)
         announceSession(id, directory)
         const actor = actorFor(id)
         // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
@@ -3011,12 +3037,7 @@ export async function startDaemon(options: DaemonOptions) {
     ...(options.foreignThreads ? { foreign: createForeignThreads(options.foreignThreads) } : {}),
     startPlan: (from, directory) => sessionStarter.plan(from, directory),
     // Experimental bots: a bot reads its own chats and notes through the tool (bot-recall.ts, docs/agents.md); nothing here runs with the flag off.
-    botOf: (sessionId) => {
-      const name = botMemoryModule && botsOn() ? store.sessionAgent(sessionId) : undefined
-      const directory = name ? store.sessionDirectory(sessionId) : undefined
-      const bot = name && directory ? agents.auxiliary(directory, name) : undefined
-      return bot?.bot && bot.source === "user" && bot.trusted ? name : undefined
-    },
+    botOf: botNameOf,
     threadToolsOn: () => store.settings.get().experimental?.thread_tools === true,
     botNotes: (bot, query) => botMemoryModule!.searchBotNotes({ dir: options.dir, name: bot, ...(query ? { query } : {}) }),
     peers: (sessionId) => peers.port(sessionId),
@@ -6168,6 +6189,8 @@ export async function startDaemon(options: DaemonOptions) {
           agents: () => agents.report({ directory: options.dir }),
           sessions: (name) => sessionAutomation.list({ agent: name, roots: true, limit: 100 }),
           connectors: () => options.botConnectors ?? [],
+          // Schedules are loops the bot owns; read only when loops already exist (nothing is loaded for this).
+          schedules: (name) => loops.list().filter((loop) => loop.agent === name && loop.state !== "stopped" && loop.state !== "completed").map((loop) => ({ loopId: loop.loopId, name: loop.name, trigger: describeTrigger(loop.trigger), directory: loop.directory, state: loop.state, runs: loop.runs, ...(loop.nextWakeAt !== undefined ? { nextWakeAt: loop.nextWakeAt } : {}) })),
         }
         try {
           switch (command.type) {

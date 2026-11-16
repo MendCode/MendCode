@@ -64,6 +64,12 @@ export function createAgentRegistry(options: {
   botMemory?(name: string, directory: string): string
   /** Experimental bots: the recent-activity digest and the hint to search past chats, added to a bot's turn after its memory; absent while the flag is off. */
   botRecall?(name: string, sessionId: SessionId): string
+  /** The bot's skills index (names and one line each, capped), added after its personality. */
+  botSkills?(name: string): string
+  /** The sessions active right now in every folder (capped), added after the digest. */
+  botOverview?(name: string, sessionId: SessionId): string
+  /** The last lines of a bot's prompt: where to look deeper and how to learn. */
+  botHint?(name: string): string
   /** Experimental bots flag: while on, a bot's turn opens with who it is. */
   botsOn?(): boolean
 }) {
@@ -117,12 +123,17 @@ export function createAgentRegistry(options: {
         const profile = toProfile(agent)
         const isBot = agent.bot && agent.source === "user"
         const memory = isBot ? options.botMemory?.(agent.name, directory) : undefined
+        const live = isBot && options.botsOn?.() === true
         // A bot knows who it is even when its personality is a few words: the name and description come first, then the personality, then the memory.
         const identity = isBot && options.botsOn?.() ? `You are ${agent.name}, a MendCode bot.${agent.description ? ` ${agent.description.replace(/[.\s]+$/, "")}.` : ""}` : ""
         // Then what it has been doing in the last day and where to look deeper (bot-recall.ts), after its notes.
-        const recall = isBot && options.botsOn?.() ? options.botRecall?.(agent.name, sessionId) : undefined
-        const prompt = [identity, profile.prompt, memory, recall].filter(Boolean).join("\n\n")
-        return { ...profile, ...(identity || memory || recall ? { prompt } : {}), ...(isBot && options.botsOn?.() ? { botTurn: true as const } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
+        const recall = live ? options.botRecall?.(agent.name, sessionId) : undefined
+        // Order of a bot's prompt: who it is, its personality, its skills index, its memory, what it did lately, what is active now, how to learn and look deeper.
+        const skills = live ? options.botSkills?.(agent.name) : undefined
+        const overview = live ? options.botOverview?.(agent.name, sessionId) : undefined
+        const hint = live ? options.botHint?.(agent.name) : undefined
+        const prompt = [identity, profile.prompt, skills, memory, recall, overview, hint].filter(Boolean).join("\n\n")
+        return { ...profile, ...(identity || memory || recall || skills || overview || hint ? { prompt } : {}), ...(isBot && options.botsOn?.() ? { botTurn: true as const } : {}), ...(name === "plan" ? { permission: "plan" as const } : {}) }
       }
       if (name === "plan" && !disabled(directory, name)) return { name: "plan", description: "Plan mode", mode: "primary", prompt: "", permission: "plan" }
       return override || options.isChild?.(sessionId) ? BUILTIN_SUBAGENTS.find((agent) => agent.name === name && !disabled(directory, name)) : undefined

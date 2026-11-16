@@ -22,7 +22,7 @@ export const threadsTool = defineTool({
     "list also names this project's chats in other programs (codex:…, claude:…, v1:…): read and search only, each asks the user.",
     "start opens a session in another project's folder (absolute directory) with text as its first message; message and wait take another project's id from list scope=all. Those always ask the user, arrive marked as an agent's, and never reach a session above this one's permission.",
     "Read, search, stats, interrupt, merge_back: this project only; use the id as printed. Reading another session needs approval unless the user attached it with @thread. Reasoning is never shown; secrets stay markers.",
-    "A bot (an agent with a bot: block): list mine=true shows your own chats in every folder, newest first; read and search work on any of them, in any folder, without asking; notes finds your saved notes (query optional). Other sessions keep the rules above.",
+    "A bot (an agent with a bot: block) sees every session of this daemon: list scope=all shows them, list mine=true only your own chats, newest first; read, search and wait work on any session, in any folder, without asking; notes finds your saved notes (query optional). message, interrupt and start keep their rules.",
   ].join(" "),
   permission: "write",
   args: z.object({

@@ -186,7 +186,7 @@ const GUTTER = 2
 /** How little of a tool card the full view shows: one row (`line`) or a short preview capped by kind (`brief`). */
 type ToolDensity = "line" | "brief"
 /** Calls whose card is a plan, a question or a lookup the reader acts on: the full view's density leaves them as they are. */
-const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code"])
+const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code", "bot_note", "bot_skill", "bot_schedule"])
 const DEFAULT_REASONING_ROWS = 7
 /**
  * Blocks laid out at first: the newest ones. Already loaded older blocks are laid out when the reader reaches

@@ -60,6 +60,8 @@ export type ToolContext = {
   sessionMeta?(input: import("@mendcode/protocol").SessionMetaInput): Promise<unknown>
   /** This project's loops (`loop`); absent where the host has none. */
   loops?: LoopPort
+  /** A bot's learning (`bot_note`, `bot_skill`, `bot_schedule`); present only on a bot's turn with `experimental.bots` on. */
+  bot?: BotPort
   /** This session's git worktree (`worktree`); absent where the host has none. */
   worktrees?: WorktreePort
   /** This session's pull request watches (`pr_watch`); absent where the host has none. */
@@ -134,6 +136,34 @@ export type LoopPort = {
   /** A bounded listing of the project's loops. */
   list(): string
   pause(loopId: string): { ok: true; text: string } | { ok: false; message: string }
+}
+
+/** What the per-call permission hooks of a tool may look at. */
+export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined }
+
+export type BotResult = { ok: true; text: string; /** Short facts for the transcript card. */ meta?: Record<string, string | number | boolean> } | { ok: false; message: string }
+export type BotSkillInput = { name: string; description?: string | undefined; body?: string | undefined }
+export type BotScheduleInput = { name: string; objective: string; trigger: string; directory?: string | undefined; reportOnly?: boolean | undefined; maxRuns?: number | undefined }
+
+/**
+ * What a bot's turn may do to learn (experimental bots, docs/agents.md): keep a note, save a skill of its own, schedule its own work.
+ * Everything lands under the bot (its memory, its skills folder, loops owned by it); nothing here reaches another bot or a plain session.
+ */
+export type BotPort = {
+  /** The bot's name. */
+  name: string
+  note(input: { text: string; scope: "everywhere" | "project" }): BotResult
+  /** The skills the bot saved: one line each. */
+  skillList(): BotResult
+  skillRead(name: string): BotResult
+  /** Whether saving this skill asks the user: the first time per skill (create, or an update of one the user has not approved yet). */
+  skillNeedsApproval(name: string): boolean
+  skillPreview(input: BotSkillInput): string
+  skillSave(input: BotSkillInput & { mode: "create" | "update" }): BotResult
+  schedulePreview(input: BotScheduleInput): Promise<{ problems: string[]; detail?: string }>
+  scheduleCreate(input: BotScheduleInput): Promise<BotResult>
+  scheduleList(): BotResult
+  scheduleCancel(loopId: string): BotResult
 }
 
 /** What a worktree move did: where the session works now and what to tell the model. */
@@ -318,14 +348,14 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   description: string
   permission: ToolPermission
   /** After argument validation, a mixed read/write tool may narrow its permission for this call. */
-  permissionFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): ToolPermission
+  permissionFor?(args: z.infer<Args>, context?: ToolPermissionContext): ToolPermission
   /** Requires the user's approval for this exact call, regardless of mode, allow rules or saved grants. */
-  individualApprovalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
+  individualApprovalFor?(args: z.infer<Args>, context?: ToolPermissionContext): boolean
   /** `always`, or `approvalFor` per call: the call asks, showing `preview`, in every permission mode and whatever the allow rules or saved grants say. */
   approval?: "always"
-  approvalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
+  approvalFor?(args: z.infer<Args>, context?: ToolPermissionContext & { /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
   /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
-  refusalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): string | undefined
+  refusalFor?(args: z.infer<Args>, context?: ToolPermissionContext): string | undefined
   /** The lowest tier that offers this tool to the model (docs/tiers.md); absent means every tier. Ignored while no `tier` is set. */
   tier?: import("@mendcode/protocol/wire").Tier
   args: Args

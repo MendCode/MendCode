@@ -12,10 +12,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
+- Experimental bots learn on their own: a bot can keep a note (`bot_note`), save a skill after a task that worked (`bot_skill`, kept in its own folder, offered only to it, you are asked the first time per skill) and schedule its own work when you say "every day at 9" or "every Monday" (`bot_schedule`, you are asked every time). Each shows in the chat as a short card: Learned, New skill, Scheduled.
+- Loops and bot schedules can wake on chosen weekdays: `weekly mon 09:00` or `weekly mon,thu 09:00 Europe/Madrid`.
+- `bot.list` reports each bot's schedules, so its page can show them.
 
 ### Changed
 
 - Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
+- With experimental bots on, a bot sees every session: it lists, searches and reads any of them without the per-session prompt, and its prompt names the sessions running right now in every folder. Plain sessions keep the prompt. A bot's prompt now goes: who it is, personality, skills, memory, recent activity, what is running now, then how to look deeper and learn.
 
 ## v0.0.18-beta.2 - 2026-11-15
 

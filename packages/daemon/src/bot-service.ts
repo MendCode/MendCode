@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { BOT_COLORS, BOT_SHAPES, parseAgentFile } from "@mendcode/packages"
-import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotInfo, type BotListReport, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
+import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotInfo, type BotListReport, type BotSchedule, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
 import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import { canonicalDir } from "@mendcode/tools"
 import type { createAgentFile } from "./agent-create"
@@ -55,6 +55,8 @@ export type BotContext = {
   /** The root sessions that ran as `name`, in every project. */
   sessions(name: string): SessionDetail[]
   connectors(): readonly BotConnector[]
+  /** The schedules (loops) owned by `name`; absent when the host has no loops. */
+  schedules?(name: string): BotSchedule[]
 }
 
 const isBot = (agent: AgentsReport["agents"][number]) => agent.bot !== undefined && agent.source === "user" && agent.trusted
@@ -73,6 +75,7 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
       ...(agent.permission ? { permission: agent.permission } : {}),
       file: agent.file ?? "",
       state: botStateOf(sessions.map((session) => session.status)),
+      schedules: context.schedules?.(agent.name) ?? [],
       projects: [...byProject].map(([directory, group]) => ({
         directory,
         state: botStateOf(group.map((session) => session.status)),
