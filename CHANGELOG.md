@@ -9,6 +9,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A chat with a bot names the bot's model under the prompt after its first message too, instead of the session's default.
+- An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
+
 ## v0.0.18 - 2026-11-16
 
 Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.

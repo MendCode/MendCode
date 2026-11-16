@@ -406,6 +406,15 @@ describe("the bot card", () => {
     expect(footer).not.toContain("GPT-6-Luna")
   })
 
+  test("a chat that already runs as a bot names the bot's model under the prompt, even when the models answer gives the default", async () => {
+    const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : undefined })
+    await until(h, "Bots")
+    for (let turn = 0; turn < 40 && !h.text().at(-1)!.includes("Sonnet"); turn++) { await Bun.sleep(5); h.app.render() }
+    const footer = h.text().at(-1)!
+    expect(footer).toContain("Sonnet")
+    expect(footer).not.toContain("GPT-6-Luna")
+  })
+
   test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {
     const h = chatApp()
     await onBot(h)
