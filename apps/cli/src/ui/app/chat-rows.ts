@@ -135,7 +135,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
     const viewed = inlineView || home ? undefined : viewedAgent(state)
     // A chat with a bot wears the bot's colour, subtly: the rules and the lead glyph, nothing else (a sub-agent's own colour wins).
-    const accent = inlineView || viewed || !rich ? undefined : botAccent(state)
+    const accent = inlineView || viewed || !rich ? undefined : botAccent(state, () => ctx.requestFrame())
     const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : accent ? tintFrame(plainFrame, accent.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
     const statusRoom = width - PROMPT_MARGIN * 2 - 6

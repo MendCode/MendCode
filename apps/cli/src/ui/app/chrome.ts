@@ -344,7 +344,7 @@ export function createChrome(ctx: AppContext, actions: {
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
     // A chat with a bot leads its row with the bot's glyph and name in the bot's colour.
-    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state)
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state, requestFrame)
     // The model's own provider, else the engine that runs it (a Claude Code model is not served by the native engine the daemon started with).
     const provider = servedByProvider(state.effectiveModel?.model ?? model, state.modelReport) ?? usageInForce(state)?.provider
     // This session's background work; the row over the prompt names it, so the built-in count is not repeated (`/footer +jobs` still places it).
@@ -565,7 +565,7 @@ export function createChrome(ctx: AppContext, actions: {
     const id = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     const threshold = contextLimit(usage, compactFallback(state))
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
-    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state)
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state, requestFrame)
     const profile = state.tuiProfile
     const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
     const fastOn = state.modelReport?.session?.fast ?? state.settingsNow.serviceTier === "fast"
