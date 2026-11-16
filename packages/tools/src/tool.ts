@@ -44,6 +44,10 @@ export type ToolContext = {
   /** The session's background commands (`shell` with background, `shell_output`, `shell_kill`); absent where none can run. */
   taskStatus?(input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }): Promise<string>
   background?: BackgroundPort
+  /** How long a foreground `shell` command runs before it moves to the background and the model gets control back; 0 never moves it. */
+  shellYieldMs?: number | undefined
+  /** A foreground command moved to the background (`shell` yield): the turn does not end while it runs. */
+  onYield?(taskId: string): void
   /** The session's interactive processes on a pseudo-terminal (`shell_session`); absent where none can run. Never reachable from remote clients. */
   interactive?: InteractivePort
   /** Workflows of this session's daemon (`workflow_start`, `workflow_status`); absent where the host has none. */

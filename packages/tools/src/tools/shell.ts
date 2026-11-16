@@ -13,6 +13,11 @@ import { exitOneMeaning } from "../exit-meaning"
 import { binaryNote, countBinaryChars, displayPath, errorMessage, fail, isBinaryShare, missingPathMessage, resolvePath, truncateHeadTail } from "../util"
 
 const DEFAULT_TIMEOUT_MS = 120_000
+/**
+ * A command still running after this long moves to the background: the model gets its output so far and control back, and can
+ * work on, wait for it (shell_output until exit) or stop it (shell_kill). It still ends at its timeout.
+ */
+export const SHELL_YIELD_MS = 15_000
 const MAX_TIMEOUT_MS = 600_000
 const KILL_GRACE_MS = 2_000
 /**
@@ -115,6 +120,8 @@ export default defineTool({
       let settled = false
       let killTimer: ReturnType<typeof setTimeout> | undefined
       let poll: ReturnType<typeof setInterval> | undefined
+      /** Set once the command moved to the background: its output and exit go to the task from then on. */
+      let adopted: { taskId: string; feed: import("../background").AdoptedFeed } | undefined
 
       const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
       /** Counted over everything the command printed, also what the retention below drops. */
@@ -122,6 +129,7 @@ export default defineTool({
       const followers = { stdout: followFile({ fd: outputFds.stdout }), stderr: followFile({ fd: outputFds.stderr }) }
       const append = (text: string) => {
         if (text === "") return
+        if (adopted) return adopted.feed.append(text)
         const binaryChars = countBinaryChars(text)
         seen.chars += text.length
         seen.binaryChars += binaryChars
@@ -173,29 +181,76 @@ export default defineTool({
       }, limit)
       const onAbort = () => {
         wasCancelled = true
-        terminate()
+        // A command that moved to the background is still this turn's: a cancel stops it like any other, and no exit notice follows.
+        if (adopted) context.background?.kill(adopted.taskId)
+        else terminate()
       }
       context.signal.addEventListener("abort", onAbort, { once: true })
       if (context.signal.aborted) onAbort()
 
-      const finish = (exitCode: number, spawnError?: string, exitSignal?: NodeJS.Signals | null) => {
-        if (settled) return
+      /** What the command printed so far, as the model reads it. Binary output (an executable, an archive) is one line, never the bytes. */
+      const printed = () => {
+        const full = dropped > 0 ? `${head}\n… output omitted …\n${tail}` : head + tail
+        const capped = truncateHeadTail({ text: full, ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) })
+        const binary = isBinaryShare({ bad: seen.binaryChars, total: seen.chars })
+        return { text: binary ? binaryNote(`${seen.bytes.toLocaleString("en-US")} bytes`) : capped.text, truncated: binary ? false : capped.truncated, binary }
+      }
+
+      // Only where the host keeps the turn open until a moved command ends (`onYield`), and only for the model's own commands.
+      const yieldMs = context.shellYieldMs ?? SHELL_YIELD_MS
+      const canYield = !owner && yieldMs > 0 && yieldMs < limit && !!context.background?.adopt && !!context.onYield
+      const yielder = canYield ? setTimeout(() => {
+        if (settled || timedOut || wasCancelled || tooMuch) return
+        drain(false)
+        const shown = printed()
+        const taken = context.background!.adopt!({ command, cwd, startedAt: started, shown: head + tail, stop: terminate })
+        if (!taken.ok) return
         settled = true
+        adopted = { taskId: taken.task.id, feed: taken.feed }
+        context.onYield!(taken.task.id)
+        const seconds = Math.round((Date.now() - started) / 1_000)
+        const note = `[still running after ${seconds} s: moved to the background as ${taken.task.id}. Keep working; when you need its result, shell_output with id ${taken.task.id} and until "exit" waits for it; shell_kill stops it if it is stuck. It stops at its ${limit} ms timeout. Your turn does not end before it does.]`
+        resolve({
+          output: `${shown.text}${shown.text ? "\n" : ""}${note}`,
+          truncated: shown.truncated,
+          title: `${title} &`,
+          isError: false,
+          meta: { taskId: taken.task.id, background: true, yielded: true, durationMs: Date.now() - started },
+        })
+      }, yieldMs) : undefined
+
+      const finish = (exitCode: number, spawnError?: string, exitSignal?: NodeJS.Signals | null) => {
+        if (settled && !adopted) return
+        const moved = adopted
+        settled = true
+        adopted = undefined
         clearTimeout(timeout)
+        clearTimeout(yielder)
         if (poll) clearInterval(poll)
         context.signal.removeEventListener("abort", onAbort)
         // Sweep stragglers left in the group (background children of a finished command).
         if (killTimer) clearTimeout(killTimer)
         killGroup("SIGKILL")
+        if (moved) {
+          // The rest of the output and the exit belong to the background task now.
+          adopted = moved
+          drain(true)
+          append(decoders.stdout.end())
+          append(decoders.stderr.end())
+          adopted = undefined
+          discardFiles({ fds: [outputFds.stdout, outputFds.stderr], files: [files.stdout, files.stderr] })
+          const note = spawnError ?? (timedOut ? `[timed out after ${limit} ms]` : tooMuch ? `[stopped: more than ${MAX_STREAM_BYTES / 1024 ** 2} MB of output]` : exitSignal ? `[killed by ${exitSignal}]` : exitCode !== 0 ? `[exit ${exitCode}]` : undefined)
+          moved.feed.end(timedOut || tooMuch ? -1 : exitCode, note)
+          return
+        }
         drain(true)
         discardFiles({ fds: [outputFds.stdout, outputFds.stderr], files: [files.stdout, files.stderr] })
         append(decoders.stdout.end())
         append(decoders.stderr.end())
-        const full = dropped > 0 ? `${head}\n… output omitted …\n${tail}` : head + tail
-        const capped = truncateHeadTail({ text: full, ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) })
-        // Binary output (an executable, an archive, an image sent to stdout) is one line for the model, never the bytes.
-        const binary = isBinaryShare({ bad: seen.binaryChars, total: seen.chars })
-        let output = binary ? binaryNote(`${seen.bytes.toLocaleString("en-US")} bytes`) : capped.text
+        const shown = printed()
+        const binary = shown.binary
+        const capped = { truncated: shown.truncated }
+        let output = shown.text
         const line = (text: string) => `${output && !output.endsWith("\n") ? "\n" : ""}${text}`
         // The status follows the exit code; the text says when exit 1 is the answer of a search or a comparison, not a crash.
         let expectedExit: string | undefined

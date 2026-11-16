@@ -156,6 +156,16 @@ A foreground `shell` call writes output to temporary files while the command run
 |---|---|
 | More than 256 MB to one stream | Command stops; reply ends with `[stopped: more than 256 MB of output]` |
 | Timeout: 120 seconds by default, at most 600 | Command ends with `[timed out after … ms]` |
+| Still running after 15 seconds | Command moves to the background (see below) |
+
+### A slow command does not hold the model
+
+A model's `shell` command still running after 15 seconds moves to the background with what it printed so far. The model gets control back at once and the reply names the task id.
+
+- It can keep working, wait for the task with `shell_output` and `until: "exit"`, or stop it with `shell_kill`.
+- The command still stops at its own timeout. It also stops when the turn is cancelled, with no exit notice.
+- The turn does not end while it runs. If the model answers before it ends, a "waiting for …" card shows while the turn waits. The model then gets how it ended and its output, and answers again. A scripted run (`mendcode run`) or a workflow task therefore never finishes before the command does.
+- A command you type yourself (`!command`) and a command started with `background: true` do not use this. When eight background tasks already run, the command stays in the foreground.
 
 ## Not done: model-callable worktree enter/exit (K85)
 

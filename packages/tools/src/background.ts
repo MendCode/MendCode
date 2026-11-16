@@ -41,7 +41,16 @@ export type BackgroundPort = {
   read(id: string, options: { waitMs: number; signal: AbortSignal; until?: "output" | "exit" }): Promise<BackgroundRead | undefined>
   kill(id: string): BackgroundTaskInfo | undefined
   list(): BackgroundTaskInfo[]
+  /**
+   * Takes over a command `shell` already runs in the foreground (it ran past its yield): the caller keeps the process and feeds
+   * its output and exit through the returned `feed`; `stop` is how the registry stops it (shell_kill, /ps, cleanup). `shown` is
+   * what the model already got, so `shell_output` starts after it.
+   */
+  adopt?(input: AdoptInput): { ok: true; task: BackgroundTaskInfo; feed: AdoptedFeed } | { ok: false; error: string }
 }
+
+export type AdoptInput = { command: string; cwd: string; startedAt: number; shown: string; stop(): void }
+export type AdoptedFeed = { append(text: string): void; end(code: number, note?: string): void }
 
 export const BACKGROUND_LIMITS = {
   /** Running tasks across all sessions (P5: a small machine must stay responsive). */
@@ -151,44 +160,36 @@ export function createBackgroundTasks(options: {
     return { ok: true, task: { ...entry.info }, watching: true }
   }
 
-  function start(sessionId: string, input: Parameters<BackgroundPort["start"]>[0]): ReturnType<BackgroundPort["start"]> {
-    if (running() >= limits.maxRunning) return { ok: false, error: `too many background tasks running (${limits.maxRunning}); stop one with shell_kill` }
-    const shellFile = input.shell ?? defaultShell()
-    const launch = agentShellLaunch({ shell: shellFile, policy: input.policy, environment: input.environment })
-    const wrapped = sandboxCommand({ argv: shellArgv({ shell: shellFile, command: input.command, policy: launch.policy }), policy: input.sandbox })
-    if (!wrapped.ok) return { ok: false, error: wrapped.error }
-    const id = `bg_${(++counter).toString(36)}${Math.random().toString(36).slice(2, 6)}`
-    const [binary, ...binaryArguments] = wrapped.argv as [string, ...string[]]
-    const child = spawn(binary, binaryArguments, {
-      cwd: input.cwd,
-      ...shellSpawnOptions({ shell: shellFile }),
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...launch.environment, PAGER: "cat", GIT_PAGER: "cat", TERM: "dumb" },
-    })
-    const tracked = agentProcesses.agent(child.pid, sessionId)
-    child.once("exit", () => tracked.exited())
-    child.once("error", () => tracked.exited())
-    const killGroup = (signal: NodeJS.Signals) => killProcessTree({ pid: child.pid, signal, fallback: (name) => { try { child.kill(name) } catch { /* already gone */ } } })
-    let killTimer: ReturnType<typeof setTimeout> | undefined
+  const tooMany = () => running() >= limits.maxRunning ? `too many background tasks running (${limits.maxRunning}); stop one with shell_kill` : undefined
+  const newId = () => `bg_${(++counter).toString(36)}${Math.random().toString(36).slice(2, 6)}`
+
+  /**
+   * One task in the registry: its buffer, notices and exit. `stop` stops the process (it must end in an exit reported through
+   * `end`); `sweep` runs once at the end (stragglers left in the process group).
+   */
+  function register(sessionId: string, input: { id: string; command: string; cwd: string; startedAt: number; pid?: number | undefined; stop(): void; sweep?(): void; shown?: string }) {
     const entry: Entry = {
       sessionId,
-      info: { id, command: input.command, cwd: input.cwd, status: "running", startedAt: now() },
-      ...(child.pid !== undefined ? { pid: child.pid } : {}),
-      buffer: "",
+      info: { id: input.id, command: input.command, cwd: input.cwd, status: "running", startedAt: input.startedAt },
+      ...(input.pid !== undefined ? { pid: input.pid } : {}),
+      buffer: input.shown ?? "",
       base: 0,
-      cursor: 0,
+      cursor: input.shown?.length ?? 0,
       waiters: new Set(),
       terminate(by) {
         if (entry.info.status !== "running" || entry.info.killedBy) return
         entry.info.killedBy = by
-        killGroup("SIGTERM")
-        killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS)
+        input.stop()
       },
     }
-    tasks.set(id, entry)
+    if (entry.buffer.length > limits.maxBufferChars) {
+      const over = entry.buffer.length - limits.maxBufferChars
+      entry.buffer = entry.buffer.slice(over)
+      entry.base = over
+    }
+    tasks.set(input.id, entry)
     const cap = options.lifetimeMs?.() ?? limits.maxLifetimeMs
-    const lifetime = cap > 0 ? setTimeout(() => entry.terminate("lifetime"), cap) : undefined
-    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
+    const lifetime = cap > 0 ? setTimeout(() => entry.terminate("lifetime"), Math.max(1, cap - (now() - input.startedAt))) : undefined
     // A binary chunk can end in half a character; the decoder then opens the next, textual chunk with a replacement mark.
     let afterBinary = false
     const append = (chunk: string) => {
@@ -204,18 +205,13 @@ export function createBackgroundTasks(options: {
       scanWatch(entry, text)
       wake(entry)
     }
-    child.stdout?.on("data", (chunk: Buffer) => append(decoders.stdout.write(chunk)))
-    child.stderr?.on("data", (chunk: Buffer) => append(decoders.stderr.write(chunk)))
     let ended = false
     const end = (code: number | null, error?: string) => {
       if (ended) return
       ended = true
       clearTimeout(lifetime)
-      if (killTimer) clearTimeout(killTimer)
-      // Stragglers left in the group die with the task.
-      killGroup("SIGKILL")
-      append(decoders.stdout.end() + decoders.stderr.end())
-      if (error) append(`${entry.buffer ? "\n" : ""}${error}`)
+      input.sweep?.()
+      if (error) append(`${entry.buffer && !entry.buffer.endsWith("\n") ? "\n" : ""}${error}`)
       entry.info.status = entry.info.killedBy ? "killed" : "exited"
       entry.info.exitCode = code ?? -1
       entry.info.endedAt = now()
@@ -229,6 +225,48 @@ export function createBackgroundTasks(options: {
       const tail = entry.buffer.slice(-2_000)
       if (!entry.info.killedBy || entry.info.killedBy === "lifetime") options.onExit?.(sessionId, { ...entry.info }, binaryOutputNote({ text: tail }) ?? tail)
     }
+    return { entry, append, end }
+  }
+
+  function start(sessionId: string, input: Parameters<BackgroundPort["start"]>[0]): ReturnType<BackgroundPort["start"]> {
+    const full = tooMany()
+    if (full) return { ok: false, error: full }
+    const shellFile = input.shell ?? defaultShell()
+    const launch = agentShellLaunch({ shell: shellFile, policy: input.policy, environment: input.environment })
+    const wrapped = sandboxCommand({ argv: shellArgv({ shell: shellFile, command: input.command, policy: launch.policy }), policy: input.sandbox })
+    if (!wrapped.ok) return { ok: false, error: wrapped.error }
+    const [binary, ...binaryArguments] = wrapped.argv as [string, ...string[]]
+    const child = spawn(binary, binaryArguments, {
+      cwd: input.cwd,
+      ...shellSpawnOptions({ shell: shellFile }),
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...launch.environment, PAGER: "cat", GIT_PAGER: "cat", TERM: "dumb" },
+    })
+    const tracked = agentProcesses.agent(child.pid, sessionId)
+    child.once("exit", () => tracked.exited())
+    child.once("error", () => tracked.exited())
+    const killGroup = (signal: NodeJS.Signals) => killProcessTree({ pid: child.pid, signal, fallback: (name) => { try { child.kill(name) } catch { /* already gone */ } } })
+    let killTimer: ReturnType<typeof setTimeout> | undefined
+    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
+    const { entry, append, end } = register(sessionId, {
+      id: newId(),
+      command: input.command,
+      cwd: input.cwd,
+      startedAt: now(),
+      pid: child.pid,
+      stop() {
+        killGroup("SIGTERM")
+        killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS)
+      },
+      sweep() {
+        if (killTimer) clearTimeout(killTimer)
+        // Stragglers left in the group die with the task.
+        killGroup("SIGKILL")
+        append(decoders.stdout.end() + decoders.stderr.end())
+      },
+    })
+    child.stdout?.on("data", (chunk: Buffer) => append(decoders.stdout.write(chunk)))
+    child.stderr?.on("data", (chunk: Buffer) => append(decoders.stderr.write(chunk)))
     child.on("error", (error) => end(-1, `cannot run command: ${error.message}`))
     // A descendant that inherited the pipes keeps them open after the command exits: the task ends a moment after the exit
     // (late output still comes in) instead of holding its slot until the lifetime limit; the sweep in `end` stops the descendant.
@@ -238,6 +276,13 @@ export function createBackgroundTasks(options: {
     })
     child.on("close", (code) => end(code))
     return { ok: true, task: { ...entry.info } }
+  }
+
+  function adopt(sessionId: string, input: AdoptInput): ReturnType<NonNullable<BackgroundPort["adopt"]>> {
+    const full = tooMany()
+    if (full) return { ok: false, error: full }
+    const { entry, append, end } = register(sessionId, { id: newId(), command: input.command, cwd: input.cwd, startedAt: input.startedAt, shown: input.shown, stop: input.stop })
+    return { ok: true, task: { ...entry.info }, feed: { append, end: (code, note) => end(code, note) } }
   }
 
   async function read(sessionId: string, id: string, input: Parameters<BackgroundPort["read"]>[1]): Promise<BackgroundRead | undefined> {
@@ -286,6 +331,7 @@ export function createBackgroundTasks(options: {
     forSession(sessionId: string): BackgroundPort {
       return {
         start: (input) => start(sessionId, input),
+        adopt: (input) => adopt(sessionId, input),
         peek: (id, tailChars) => peek(sessionId, id, tailChars),
         watch: (id, input) => watchTask(sessionId, id, input),
         read: (id, input) => read(sessionId, id, input),
