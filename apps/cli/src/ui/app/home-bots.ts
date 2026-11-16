@@ -51,7 +51,10 @@ export function createHomeBots(ctx: AppContext) {
         for (const id of unknown) if (!botOfSession.has(id)) classified.add(id)
         unknown.clear()
         while (classified.size > CLASSIFIED_MAX) classified.delete(classified.values().next().value!)
-      }
+      } else if (!report) stale = true
+    } catch {
+      // A failed request leaves the next frame, a second on, free to ask again; a report already held stays.
+      if (!report) stale = true
     } finally { loading = false; during.length = 0 }
     requestFrame()
   }
@@ -59,7 +62,7 @@ export function createHomeBots(ctx: AppContext) {
   /** Asks for the list when none was asked for yet, or when something made it stale and a second has passed. */
   function ensure() {
     if (!on() || loading || shared()) return
-    if (askedAt === Number.NEGATIVE_INFINITY || (stale && now() - askedAt >= WINDOW_MS)) void load().catch(() => undefined)
+    if (askedAt === Number.NEGATIVE_INFINITY || (stale && now() - askedAt >= WINDOW_MS)) void load()
   }
 
   /** A `session.activity` push: a session of a listed bot moves its state in place; one no list held may be a bot's new chat. */

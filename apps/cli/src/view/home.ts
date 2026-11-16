@@ -272,9 +272,11 @@ function locateBots(lines: readonly Line[], block: HomeBotsBlock): HomeBotHit[] 
 }
 
 /** The Bots block under an Agent View given `room` rows: as many rows as leave the view `viewMin`, with the blank row that parts them. */
-function botsUnder(input: { bots: HomeBots | undefined; sink: ((block: HomeBotsBlock | undefined) => void) | undefined; width: number; room: number; viewMin: number; selectedId?: string }): { rows: Line[]; held: number } {
-  const { bots, sink, width, room, viewMin } = input
+function botsUnder(input: { bots: HomeBots | undefined; sink: ((block: HomeBotsBlock | undefined) => void) | undefined; width: number; room: number; viewMin: () => number; selectedId?: string }): { rows: Line[]; held: number } {
+  const { bots, sink, width, room } = input
   if (!bots) return { rows: [], held: 0 }
+  // Asked only here, so a home with no bots block never lays the Agent View out a second time.
+  const viewMin = input.viewMin()
   for (let maxRows = 3; maxRows >= 1; maxRows--) {
     const block = bots.render({ width, maxRows, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) })
     if (block.lines.length === 0) break
@@ -494,7 +496,7 @@ function centeredHome(input: HomeInput & BotsSink & { below: readonly Line[] }, 
     const listRoom = promptRows ? panelRoom - promptRows - gap : panelRoom
     const agentManager = input.look?.homePanel !== false && input.look?.homeRightPanel !== "actions"
     // The Bots block shares the Agent View's room: the sessions keep at least four rows (one for the empty line) before a bots row is drawn.
-    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: panelWidth, room: listRoom, viewMin: viewKeeps(sessions, panelWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
+    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: panelWidth, room: listRoom, viewMin: () => viewKeeps(sessions, panelWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
     if (!agentManager) input.botsSink?.(undefined)
     const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : [...(sessions.length
       ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom - bots.held }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
@@ -567,7 +569,7 @@ function splitHome(input: HomeInput & BotsSink, below: readonly Line[]): Line[] 
   const contentRoom = Math.max(1, height - 5 - belowSpace)
   const agent = (room: number): Line[] => {
     const agentManager = input.look?.homePanel !== false && input.look?.homeRightPanel !== "actions"
-    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: rightWidth, room, viewMin: viewKeeps(sessions, rightWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
+    const bots = agentManager ? botsUnder({ bots: input.bots, sink: input.botsSink, width: rightWidth, room, viewMin: () => viewKeeps(sessions, rightWidth, input.now ?? Date.now()), ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) }) : { rows: [], held: 0 }
     if (!agentManager) input.botsSink?.(undefined)
     return input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(rightWidth, room) : [...(sessions.length
       ? fitAgentView({ sessions, panelWidth: rightWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: room - bots.held })

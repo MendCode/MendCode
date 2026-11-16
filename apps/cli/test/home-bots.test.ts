@@ -112,6 +112,19 @@ describe("the Bots block inside the home", () => {
     expect(out[mendy.row]!.slice(mendy.from, mendy.to)).toMatch(new RegExp(`^${G} mendy$`))
   })
 
+  test("without a bots block the Agent View is laid out once, not once more to size the block", () => {
+    let reads = 0
+    const counted = new Proxy([...sessions], { get: (target, key, receiver) => { if (key === "length") reads++; return Reflect.get(target, key, receiver) } })
+    for (const layout of ["center", "split"] as const) {
+      reads = 0
+      renderHome({ ...base, sessions: counted, width: 170, height: 40, look: { layout } })
+      const without = reads
+      reads = 0
+      renderHome({ ...base, sessions: counted, width: 170, height: 40, look: { layout }, bots: bots() })
+      expect(without, layout).toBeLessThan(reads)
+    }
+  })
+
   test("without bots, or with every bot idle, the home is exactly what it was", () => {
     const without = renderHome({ ...base, width: 100, height: 40 }).map(text)
     const idle: HomeBots = { render: ({ width, maxRows }) => renderHomeBots({ entries: homeBotEntries(report([bot("a", "idle")]), false), width, maxRows }) }
@@ -140,7 +153,8 @@ describe("the Bots block inside the home", () => {
 })
 
 describe("the Bots block on the home screen of the app", () => {
-  function homeApp({ flag = true, width = 100 }: { flag?: boolean; width?: number } = {}) {
+  function homeApp({ flag = true, width = 100, now, listFails = false }: { flag?: boolean; width?: number; now?: () => number; listFails?: boolean } = {}) {
+    const down = { listing: listFails }
     const current = ids("session")
     const chat = ids("session")
     const hermesChat = ids("session")
@@ -150,13 +164,13 @@ describe("the Bots block on the home screen of the app", () => {
       bot("Laura", "waiting"),
       bot("Hugo", "idle"),
     ], [{ origin: "hermes", id: "p1", name: "Hermes", state: "problem", projects: [{ directory: "/work/app", state: "problem", sessions: [{ sessionId: hermesChat as never, title: "chat", status: "failed", updatedAt: NOW }] }] }])
-    const h = appHarness({ width, height: 40, mode: "balanced", sessionId: current, dataDir: tempDir(), directory: "/work/app", reply: (command) => {
+    const h = appHarness({ width, height: 40, mode: "balanced", sessionId: current, dataDir: tempDir(), directory: "/work/app", ...(now ? { now } : {}), reply: (command) => {
       if (command.type === "session.list") return reply({ sessions: (command as { directory?: string }).directory ? [] : list })
-      if (command.type === "bot.list") return reply(bots)
+      if (command.type === "bot.list") return down.listing ? ({ ok: false, error: { code: "unavailable", message: "down" } } as unknown as CommandReply) : reply(bots)
       return undefined
     } })
     h.app.applySettings(flag ? { experimental: { bots: true } } : {})
-    return { ...h, chat, hermesChat }
+    return { ...h, chat, hermesChat, down }
   }
   async function until(h: ReturnType<typeof homeApp>, needle: string) {
     for (let turn = 0; turn < 80; turn++) {
@@ -203,6 +217,31 @@ describe("the Bots block on the home screen of the app", () => {
     expect(after).not.toMatch(/Bots\s+● working/)
     expect(after).toMatch(new RegExp(`\\? waiting\\s+${G} Laura`))
     expect(h.sentOf("bot.list")).toHaveLength(asked)
+  })
+
+  test("a push moves a bot of another app between rows too", async () => {
+    const h = homeApp()
+    await until(h, "Hermes")
+    const asked = h.sentOf("bot.list").length
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.hermesChat, directory: "/work/app", title: "chat", state: "running", updatedAt: NOW + 1000 } as never)
+    h.app.render()
+    expect(h.text().join("\n")).toMatch(new RegExp(`● working\\s+${G} mendy, ${G} Hermes|● working[^\\n]*Hermes`))
+    expect(h.text().join("\n")).not.toMatch(/✗ problem/)
+    h.app.onGlobal({ type: "session.activity", gseq: 2, at: NOW, sessionId: h.hermesChat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 2000 } as never)
+    h.app.render()
+    expect(h.text().join("\n")).not.toContain("Hermes")
+    expect(h.sentOf("bot.list")).toHaveLength(asked)
+  })
+
+  test("a first bot.list that fails is asked again by a later frame, not never", async () => {
+    let clock = NOW
+    const h = homeApp({ now: () => clock, listFails: true })
+    await Bun.sleep(20)
+    h.app.render()
+    expect(h.text().join("\n")).not.toContain("mendy")
+    h.down.listing = false
+    clock += 1500
+    await until(h, "mendy")
   })
 
   test("Enter on a bot opens its most recent chat", async () => {

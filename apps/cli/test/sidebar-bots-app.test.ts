@@ -438,6 +438,19 @@ describe("the bot card", () => {
     expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
   })
 
+  test("a bot chat stays in the list under Projects once the bots flag is turned off", async () => {
+    const h = chatApp({ height: 60, profile: { sidebarProjects: "all" } })
+    await onBot(h)
+    await h.type("\r")
+    await h.type("hello bot\r")
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.ids.created, directory: "/work/app", title: "hello bot", state: "generating", updatedAt: NOW } as never)
+    h.app.applySettings({})
+    h.app.render()
+    const text = sidebarText(h)
+    expect(text).not.toContain("Bots")
+    expect(text).toContain("hello bot")
+  })
+
   test("a click on the bot's row does the same", async () => {
     const h = chatApp()
     await until(h, "Bots")

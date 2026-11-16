@@ -49,6 +49,7 @@ Experimental bots learn on their own (notes, skills of their own, schedules), se
 
 ### Fixed
 
+- With experimental bots, the home's Bots block follows the chats of other apps' bots too and asks again when its first list failed; bot chats stay under Projects when bots are turned off, and projects past the first six in the left list fold with Space and the arrows.
 - Opening a chat from another folder in the left list now moves the terminal to that folder: the footer, the code graph, the branch, the project's lists and the folder a new chat starts in follow it.
 - A chat's age in the list and its place in the ranking move only with real conversation (a message or a turn), not with background bookkeeping; chats bumped before get their real age back.
 - A bot shows as a problem only for ten minutes after one of its chats fails, or until it has newer activity that went well; before, one failed chat kept it red for good.

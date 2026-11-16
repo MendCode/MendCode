@@ -220,6 +220,23 @@ describe("every group opens by default and can be folded", () => {
   })
 })
 
+describe("folding a project past the first six with the default count", () => {
+  test("Space folds a project only the tall sidebar draws", async () => {
+    // Older than a day, so none is forced past the height's cut the way today's projects are.
+    const many = Array.from({ length: 12 }, (_, n) => ({ sessionId: ids("session"), title: `extra ${n}`, directory: `/repos/x${n}`, createdAt: NOW, updatedAt: NOW - (n + 6) * DAY, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
+    const h = chatApp({ extraSessions: many, height: 80 })
+    await until(h, "▾ app")
+    const groups = side(h).filter((row) => /▾ /.test(row)).map((row) => row.replace(/│$/, "").replace(/\s+/g, " ").trim())
+    expect(groups.length).toBeGreaterThan(6)
+    const last = groups.at(-1)!.replace(/^[›▌] /, "").replace(/\s+\d+( active)?$/, "")
+    const title = last.replace(/^▾ /, "")
+    await h.type(LEFT)
+    await goTo(h, new RegExp(`^› ▾ ${title}`))
+    await h.type(" ")
+    expect(sidebarText(h)).toContain(`▸ ${title}`)
+  })
+})
+
 describe("Enter on a project starts a chat in it; Space, the arrows and the glyph fold it", () => {
   const onApi = async (h: App) => {
     await until(h, "▾ api")

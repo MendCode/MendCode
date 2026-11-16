@@ -312,7 +312,8 @@ export function createSidebarBots(ctx: AppContext) {
       recentDays: state.tuiProfile.sidebarRecentDays,
       rankStamps,
       revealed,
-      chatBots: chatHosts,
+      // Remembered ownership only places chats under a Bots section; without the flag there is none, so the chats stay under Projects.
+      ...(botsOn() ? { chatBots: chatHosts } : {}),
       projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount, from: state.tuiProfile.sidebarProjectsFrom, hidden: hiddenSet() },
       visits: noteVisit(),
       projectsRevealed,
@@ -358,7 +359,7 @@ export function createSidebarBots(ctx: AppContext) {
   const toggleMore = (id: string) => pageOf(moreDirectory(id))
 
   /** Whether a row folds and how it is drawn now (a group, a bot's chats, a bot of whom the chats are asked); undefined for any other row. */
-  const foldState = (id: string) => multiFoldState(model({ height: 0, icons: iconsNow }), id)
+  const foldState = (id: string) => multiFoldState(drawnModel(), id)
   /** Space, `←`/`→` on a header and a click on its arrow: folds an open header, opens a folded one. */
   function toggleFold(id: string) {
     const current = foldState(id)
