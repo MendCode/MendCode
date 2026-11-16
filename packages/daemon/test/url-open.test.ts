@@ -7,6 +7,13 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import { Command, createIdFactory } from "@mendcode/protocol"
 import { isReadOnlyCommand } from "@mendcode/protocol/wire"
 import { startDaemon } from "../src"
+import { launchAndWait, openApp } from "../src/open-url"
+
+test("an app launcher that exits with a failure is a failed open, not a success", async () => {
+  await expect(launchAndWait("true", [])).resolves.toBeUndefined()
+  await expect(launchAndWait("false", [])).rejects.toThrow("exited with 1")
+  if (process.platform === "darwin") await expect(openApp("Desk Agent", (program, args) => launchAndWait("false", [program, ...args]))).rejects.toThrow("Desk Agent did not open")
+})
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
