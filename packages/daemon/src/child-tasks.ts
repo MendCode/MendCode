@@ -1,4 +1,4 @@
-import type { TaskPort } from "@mendcode/kernel"
+import { sparesAgents, type TaskPort } from "@mendcode/kernel"
 import { createHash } from "node:crypto"
 import type { Store } from "@mendcode/store"
 import type { BlobRef, ModelChoice, PermissionMode, QueueId, SessionEvent, SessionId, TaskInput, TaskRecord } from "@mendcode/protocol"
@@ -187,14 +187,23 @@ export function createChildTasks(options: {
       }
       options.changed(task)
       if (task.background) options.background(task)
-      const abort = () => { void options.cancel(taskId) }
+      // The parent's turn stopped: its child stops too, unless it was detached meanwhile or the user stopped only the turn
+      // (`spareAgents`): then it goes on in the background and wakes the parent when it ends.
+      const stopWithTurn = async () => {
+        const current = get(taskId)
+        if (!current || !ACTIVE.has(current.state) || current.background) return current
+        if (sparesAgents(signal)) return change(current, { background: true })
+        await options.cancel(taskId)
+        return get(taskId)
+      }
+      const abort = () => { void stopWithTurn() }
       if (!task.background) signal.addEventListener("abort", abort, { once: true })
       try {
         if (signal.aborted) throw new Error("task cancelled before submission")
         await options.submit(taskId, input.prompt, options.permission(parentId), command)
         if (task.background || command) return get(taskId)!
         const result = await wait(parentId, taskId, Number.MAX_SAFE_INTEGER, signal)
-        if (signal.aborted) await options.cancel(taskId)
+        if (signal.aborted) return (await stopWithTurn()) ?? result
         return result
       } catch (error) {
         change(get(taskId) ?? task, { state: "failed", result: String(error).slice(0, 20_000) })

@@ -15,6 +15,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Esc Esc now stops only the turn: sub-agents keep running, also Claude Code's background agents. A third Esc right after stops them too.
 - A command the model runs that is still going after 15 seconds moves to the background with its output so far: the model gets control back and can keep working, wait for it or stop it. The turn still waits for it before answering, and it still stops at its timeout or when you cancel.
 - In full access, a saved workflow script started by its name (such as one installed from a package) starts without an approval card; a script the model writes still asks in every mode.
 - Editing a steering message the model already took now says it reads it when the running tool ends and to send a correction instead, rather than "that message already started".
@@ -22,6 +23,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A sub-agent detached with `b` in `/tasks` keeps running when its parent's turn is interrupted, as detaching promises.
 - A Claude Code or Codex session asked to tell another session something now finds it among your MendCode sessions by its title and sends the message there, instead of looking only at Claude Code's own processes and giving up.
 - The reviews page keeps refreshing once many pull requests have been reviewed: the oldest finished reviews are left out of the list instead of the refresh failing and the page staying on an old list.
 - Clicking an agent that Claude Code runs in the background, or opening it with ctrl+x ↓, opens its sub-agent thread even when the call that started it is far back in a long session, instead of the background commands card.

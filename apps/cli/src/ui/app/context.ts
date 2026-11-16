@@ -390,6 +390,8 @@ export type AppState = {
   /** When this session was opened here, for the exit summary. */
   openedAt: number
   escArmedAt: number
+  /** When an Esc interrupt stopped only the turn: another Esc soon after stops the sub-agents it left running. */
+  agentStopArmedAt: number
   /** The tray's own editor has focus; Esc returns to the prompt and flushes autosave. */
   editingScratch: true | undefined
   scratchFor: string | undefined

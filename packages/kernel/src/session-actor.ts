@@ -18,6 +18,7 @@ import type { Clock, TimerHandle } from "./clock"
 import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, QueuedMessage, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
 import type { Scope } from "./scope"
 import { createLiveOutput } from "./live-output"
+import { SPARE_AGENTS } from "./ports"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type ActorCommand = Extract<
@@ -386,9 +387,9 @@ export function createSessionActor(options: SessionActorOptions) {
     turn.pending.clear()
   }
 
-  function stopTurn(turn: ActiveTurn) {
+  function stopTurn(turn: ActiveTurn, reason?: string) {
     abandonPending(turn)
-    turn.abort.abort()
+    turn.abort.abort(reason)
     turn.grace = turn.scope.timer(cancelGraceMs, () =>
       post({
         kind: "engine.done",
@@ -404,9 +405,9 @@ export function createSessionActor(options: SessionActorOptions) {
    * stops behind it (some take seconds, Claude Code finishing its step); the turn stays active until then, so nothing new starts
    * and the daemon keeps waiting on it (undo, restart), and whatever the engine still sends is dropped.
    */
-  function cancel(turn: ActiveTurn, by: "user" | "promotion") {
+  function cancel(turn: ActiveTurn, by: "user" | "promotion", spareAgents = false) {
     turn.cancelBy = by
-    stopTurn(turn)
+    stopTurn(turn, spareAgents ? SPARE_AGENTS : undefined)
     compactionUpdated(turn, "cancelled")
     closeOpenItems(turn, "cancelled")
     emit({ type: "turn.cancelled", sessionId, turnId: turn.turnId, by })
@@ -750,7 +751,7 @@ export function createSessionActor(options: SessionActorOptions) {
         if (active.cancelBy || active.interruptReason) return { ok: true, result: { alreadyStopping: true } }
         held = true
         heldSinceRestart = false
-        cancel(active, "user")
+        cancel(active, "user", command.spareAgents === true)
         return { ok: true }
       }
       case "request.resolve": {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
-import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
+import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
 import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
@@ -1847,6 +1847,38 @@ describe("claude engine background tasks", () => {
     fake.api.push({ type: "system", subtype: "task_notification", task_id: "a2", tool_use_id: "toolu_agent2", status: "killed", summary: "stopped" })
     await Bun.sleep(10)
     expect(ended([...second.events, ...late], callOf(second.events))).toHaveLength(1)
+    h.engine.stop()
+  })
+
+  test("a stop that spares the agents asks Claude Code to keep background agents running and ends none of them; they report after the turn", async () => {
+    const controller = new AbortController()
+    const interrupts: Array<Record<string, unknown>> = []
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_agent1", "Agent", { description: "Agent 1", subagent_type: "general-purpose", prompt: "work", run_in_background: true })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent1", content: "Async agent launched successfully." }] } })
+        streamTool(api, 1, "toolu_sleep", "Bash", { command: "sleep 60" })
+        setTimeout(() => controller.abort(SPARE_AGENTS), 10)
+      },
+      onControl(api, request) {
+        if (request.subtype === "interrupt") {
+          interrupts.push(request)
+          queueMicrotask(() => api.push(result({ terminal_reason: "aborted_tools" })))
+        }
+        return {}
+      },
+    })
+    const late: EngineEvent[] = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, _turnId, event) => void late.push(event) })
+    const turn = turnInput({ signal: controller.signal })
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    expect(interrupts).toEqual([{ subtype: "interrupt", spare_background_tasks: true }])
+    expect(turn.events.some((event) => event.type === "item.completed" && event.meta?.agentEnd === true)).toBe(false)
+    // The agent keeps running in Claude Code; its later end still reaches MendCode, under the turn that started it.
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a1", tool_use_id: "toolu_agent1", status: "completed", summary: "done" })
+    await Bun.sleep(10)
+    expect(late.some((event) => event.type === "item.completed" && event.meta?.agentEnd === true)).toBe(true)
     h.engine.stop()
   })
 

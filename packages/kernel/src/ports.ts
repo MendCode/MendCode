@@ -13,6 +13,13 @@ import type {
   TurnId,
 } from "@mendcode/protocol"
 
+/**
+ * The abort reason of a turn the user stopped with `turn.cancel` and `spareAgents`: only the turn stops, its sub-agents keep running.
+ * An engine reads it from `TurnInput.signal.reason`; one that does not stops its sub-agents with the turn, as before.
+ */
+export const SPARE_AGENTS = "mendcode:spare-agents"
+export const sparesAgents = (signal: AbortSignal) => signal.aborted && signal.reason === SPARE_AGENTS
+
 export type TaskPort = {
   run(parentId: SessionId, input: import("@mendcode/protocol").TaskInput, signal: AbortSignal): Promise<import("@mendcode/protocol").TaskRecord>
   status(parentId: SessionId, input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }, signal: AbortSignal): Promise<string>

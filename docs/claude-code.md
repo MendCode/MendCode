@@ -328,9 +328,11 @@ The mapping follows mode changes between turns. Bypass mode still lets Claude Co
 In `full` access MendCode allows those unattended. With `engineSafetyPrompts` set to `true`, they reach you as an approval with Claude's reason: allow once or reject ([permissions](permissions.md#commands-the-engine-flags-in-full-access)).
 ### Stop or send now
 
-Esc interrupts the Claude turn. Claude Code also stops the session's background agents and will not resume them: `SendMessage` answers that the agent "was stopped by the user and won't be resumed".
+Esc Esc interrupts the Claude turn and leaves the session's background agents running: MendCode asks Claude Code to spare them, and they keep reporting in the Agents strip. A foreground agent ends with the turn.
 
-Each stays in the Agents strip as `stopped by you · /relaunch` until a turn begun after the stop ends.
+A third Esc right after (within 5 seconds) stops those background agents too. A Claude Code older than this option, or a stop that does not spare them (a workflow or loop stopping its turn), stops every background agent of the session for good: `SendMessage` answers that the agent "was stopped by the user and won't be resumed".
+
+Each stopped agent stays in the Agents strip as `stopped by you · /relaunch` until a turn begun after the stop ends.
 
 Use `/relaunch`, or `/relaunch <words of its description>`, to ask Claude to start it again as a new agent with the same type and prompt. The message includes how far it got: tool count and last tool.
 
