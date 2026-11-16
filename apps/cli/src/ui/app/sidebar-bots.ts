@@ -14,6 +14,7 @@ import type { IconFaces } from "../../view/bot-icon"
 import type { ImagePlacement } from "../image-layer"
 import { activeTheme, colorDepth, type Line } from "../theme"
 import type { AppContext } from "./context"
+import { startNewChatPanel } from "./session-look"
 
 /**
  * The left list when bots are on (docs/agents.md) or every project is asked for: it asks for the bots and for the other folders'
@@ -347,16 +348,15 @@ export function createSidebarBots(ctx: AppContext) {
     if (isBotId(id)) await openBot(botName(id), deps)
   }
 
-  /** A new session of the bot in `directory`, with the bot as its agent; the id, or undefined after saying why not. */
+  /**
+   * A blank chat in `directory`, the one `/new` opens, marked to take the bot as its agent when its first message goes (input.ts).
+   * Until then the daemon lists nothing for it, and no bot or project shows an untitled row. The id, or undefined after saying why not.
+   */
   async function createBotSession(name: string, directory: string): Promise<SessionId | undefined> {
-    const created = await input.send({ type: "session.create", directory, title: "", agent: name })
+    const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
-    const set = await input.send({ type: "session.agent.set", sessionId: sessionId as SessionId, agent: name })
-    if (!set.ok) return void fail(set.error.message)
-    // Its first push is this bot's own chat, not an unknown session: the bot list is asked for it once, now.
-    botOfSession.set(sessionId, name)
-    wantBots(false)
+    state.pendingBot = { sessionId: sessionId as SessionId, name }
     return sessionId as SessionId
   }
 
@@ -368,6 +368,7 @@ export function createSidebarBots(ctx: AppContext) {
     const sessionId = await createBotSession(name, directory)
     if (!sessionId) return
     await deps.switchSession(sessionId)
+    startNewChatPanel(ctx)
   }
 
   async function openBot(name: string, deps: SidebarDeps) {
@@ -400,6 +401,7 @@ export function createSidebarBots(ctx: AppContext) {
           if (!sessionId) return
           close()
           await deps.switchSession(sessionId)
+          startNewChatPanel(ctx)
         },
         async edit() {
           await (await import("./bots")).runBotCommand(ctx, `edit ${bot.name}`, { from: "bot" })

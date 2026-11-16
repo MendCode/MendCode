@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
+
+### Changed
+
+- Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
+
 ## v0.0.18-beta.2 - 2026-11-15
 
 Experimental bots arrive behind `/experimental bots on`: agents with a name, a face, their own memory and a sidebar section, that you send to work in any folder. The sidebar can list every project, and the sub-agent arrows move only between sub-agents still working.

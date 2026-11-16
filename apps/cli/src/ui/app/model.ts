@@ -23,7 +23,10 @@ export function createModel(ctx: AppContext, actions: { loadPage(name: Parameter
     }
     const agents = await input.send({ type: "agents.list", sessionId })
     if (state.sessionId !== sessionId) return
-    if (agents.ok && agents.result) state.agentReport = agents.result as AgentsReport
+    if (agents.ok && agents.result) {
+      const report = agents.result as AgentsReport
+      state.agentReport = state.pendingBot?.sessionId === sessionId ? { ...report, current: state.pendingBot.name } : report
+    }
     requestFrame()
   }
 

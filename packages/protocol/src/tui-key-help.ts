@@ -137,6 +137,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   titleActivity: "'working' or 'needs input' in the window title",
   sessionAccent: "a color accent per session",
   sidebarSide: "which side the sessions sidebar (list) is on: left or right",
+  panelStart: "whether a new terminal and a new chat start with the right panel: remember (as last saved), shown or hidden; /panel still toggles it",
   panelNarrow: "the right panel on a narrow terminal: hidden or a sheet above the prompt",
   panelHeader: "the right panel's header/title row (preset, /panel, focus key)",
   activityMascot: "an ASCII mascot over the prompt while a turn runs",

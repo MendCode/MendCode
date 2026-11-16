@@ -301,6 +301,17 @@ export function createInput(ctx: AppContext, actions: {
       report(denied)
       return requestFrame()
     }
+    // A blank chat opened from a bot takes the bot as its agent now, with its first message: only then does it become a listed chat.
+    const botChat = state.pendingBot?.sessionId === state.sessionId ? state.pendingBot : undefined
+    if (botChat) {
+      const set = await input.send({ type: "session.agent.set", sessionId: botChat.sessionId, agent: botChat.name })
+      if (!set.ok) {
+        fail(set.error.message)
+        if (state.sessionId === submissionSession && editor.isEmpty()) { state.attachments = live; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
+        return requestFrame()
+      }
+      if (state.pendingBot === botChat) state.pendingBot = undefined
+    }
     const sending = live
     state.attachments = []
     const executable = expanded !== undefined && typeof expanded !== "string" ? expanded : undefined

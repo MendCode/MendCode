@@ -104,6 +104,7 @@ A refused preset changes nothing and says why in one line:
 ### Choose the effective spec
 
 `sidebarWidgets` is an ordered list in `<dataDir>/tui/profile.json`. `rightSidebar` is the default visibility; a session's own goes in `session-look.json`.
+`panelStart` (`/customize` → Sidebar & panel → Panel at start) decides how a new terminal and a new chat open: `remember` (the default) uses `rightSidebar` as saved, `shown` always opens the panel, `hidden` never does. `/panel` still toggles it in the chat, and a chat keeps its own choice.
 `<project>/.mendcode/tui/profile.json` can override `sidebarWidgets`; even an empty project list overrides the user list.
 The manual editor and `/panel reset` edit the effective spec: the project override when present, otherwise the user profile. An empty project override stays empty; edit or remove that override explicitly to inherit the user spec again. Existing right-panel subcommands under `/sidebar` remain hidden compatibility aliases; completion and help only advertise `/panel`.
 

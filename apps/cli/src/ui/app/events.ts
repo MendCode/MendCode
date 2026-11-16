@@ -9,7 +9,7 @@ import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
 import { mergeActivity } from "../../view/session-activity"
-import { normalizeTuiProfile } from "../../view/tui-profile"
+import { normalizeTuiProfile, panelStarted } from "../../view/tui-profile"
 import { resolvePanel } from "../../view/sidebar-spec"
 import { profilePanel } from "./session-look"
 import type { FooterSegment } from "@mendcode/protocol/wire"
@@ -204,7 +204,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "tui.changed") {
       // The stored profile changed (customize_ui): only the keys that differ from the stored copy are new, so a profile's layer
       // keeps every other key it holds instead of seeing them all as the user's.
-      const stored = normalizeTuiProfile(event.profile), before = state.profileBase as Record<string, unknown>
+      const stored = panelStarted(normalizeTuiProfile(event.profile)), before = state.profileBase as Record<string, unknown>
       const changed = Object.fromEntries(Object.entries(stored).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])))
       state.profileBase = stored
       state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...changed })

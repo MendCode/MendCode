@@ -315,21 +315,37 @@ describe("the bot card", () => {
     expect(h.app.page).toBe("chat")
   })
 
-  test("Enter on a bot starts a new chat with it in the opened folder and shows it right away", async () => {
+  test("Enter on a bot opens a blank chat with it selected: no agent is set and no row is listed until the first message", async () => {
     const h = chatApp()
     await onBot(h)
     await h.type("\r")
-    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", agent: "calm" })
-    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
+    expect(h.sentOf("session.create").at(-1)).not.toHaveProperty("agent")
+    expect(h.sentOf("session.agent.set")).toHaveLength(0)
     expect(h.app.sessionId).toBe(h.ids.created)
     expect(h.app.page).toBe("chat")
+    h.app.render()
+    expect(h.text().join("\n")).not.toContain("Untitled")
+  })
+
+  test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {
+    const h = chatApp()
+    await onBot(h)
+    await h.type("\r")
+    await h.type("hello bot\r")
+    const order = h.sent.map((command) => command.type)
+    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
+    expect(h.sentOf("user.submit").at(-1)).toMatchObject({ sessionId: h.ids.created, text: "hello bot" })
+    expect(order.lastIndexOf("session.agent.set")).toBeLessThan(order.lastIndexOf("user.submit"))
+    await h.type("second\r")
+    expect(h.sentOf("session.agent.set")).toHaveLength(1)
   })
 
   test("a click on the bot's row does the same", async () => {
     const h = chatApp()
     await until(h, "Bots")
     await h.type(click(8, rowOf(h, "calm")))
-    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", agent: "calm" })
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
     expect(h.app.sessionId).toBe(h.ids.created)
   })
 
@@ -374,17 +390,19 @@ describe("the bot card", () => {
     expect(h.app.page).toBe("chat")
   })
 
-  test("New chat in a folder creates it there, sets the bot's agent and opens it", async () => {
+  test("New chat in a folder opens a blank chat there and gives it the bot on the first message", async () => {
     const h = await card()
     await h.type("n")
     expect(h.text().join("\n")).toContain("Folder for a new chat")
     // The folders the bot works in come first; pick /other/api.
     for (let turn = 0; turn < 8 && !h.text().some((row) => /›.*\/other\/api/.test(row)); turn++) await h.type("\x1b[B")
     await h.type("\r")
-    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", agent: "calm" })
-    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true })
+    expect(h.sentOf("session.agent.set")).toHaveLength(0)
     expect(h.app.sessionId).toBe(h.ids.created)
     expect(h.app.page).toBe("chat")
+    await h.type("hi\r")
+    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
   })
 
   test("e edits through /bot edit and m shows the memory", async () => {

@@ -518,6 +518,8 @@ export type AppState = {
   onboarding: { state: import("../../view/onboarding-page").OnboardingState; detected: import("../../view/onboarding-detect").Detected | undefined; loading: boolean; firstRun: boolean; /** The theme in use when the page opened: put back on esc, compared on Enter. */ lookStart: string; /** The profile keys the Look rows move (glyphs, tool cards, diff, prompt, pet) as they were when the page opened: put back on esc, compared on Enter. */ styleStart: Partial<import("../../view/tui-profile").TuiProfile>; /** The tier the installer was asked for, shown as the Tier row's start and applied when the page is left with esc. */ preset?: import("@mendcode/protocol/wire").Tier; /** A sign-in row opened `/connect`: closing it comes back to this page instead of the chat. */ connecting?: boolean } | undefined
   setupAdvanced: boolean
   agentReport: AgentsReport | undefined
+  /** A blank chat opened from a bot's row: it gets the bot's agent when its first message goes, so nothing is listed before. */
+  pendingBot: { sessionId: SessionId; name: string } | undefined
   agentError: string
   agentPicker: AgentPickerState
   themePicker: ThemePickerState

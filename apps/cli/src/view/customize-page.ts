@@ -166,7 +166,7 @@ const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
   messageRenderer: ["plain", "markdown", "full"], submitScroll: ["bottom", "clear"], presentation: ["auto", "raw", "minimal", "mendcode", "balanced", "full"], reasoning: ["auto", "hidden", "collapsed", "expanded"], toolOutput: ["auto", "collapsed", "expanded"], toolDensity: TOOL_DENSITIES, codeMapCard: CODE_MAP_CARDS, diffView: DIFF_VIEWS,
   logoKind: LOGO_KINDS, logoSize: LOGO_SIZES, homeAlign: HOME_ALIGNS, mascotSize: MASCOT_SIZES, petSize: PET_SIZES, logoFont: LOGO_FONTS, homeLayout: HOME_LAYOUTS, homeInput: HOME_INPUTS, homeRightPanel: HOME_PANELS, density: DENSITIES,
   promptBorder: ["auto", "single", "rounded", "double", "ascii"],
-  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarProjects: SIDEBAR_PROJECTS, sidebarLayout: SIDEBAR_LAYOUTS, sidebarSide: ["left", "right"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
+  promptChrome: PROMPT_CHROMES, sidebar: SIDEBAR_MODES, sidebarProjects: SIDEBAR_PROJECTS, sidebarLayout: SIDEBAR_LAYOUTS, sidebarSide: ["left", "right"], panelStart: ["remember", "shown", "hidden"], panelNarrow: ["hide", "sheet"], images: IMAGE_MODES, fileOpener: FILE_OPENERS, pathClick: ["auto", "panel", "editor"],
 }
 
 /** The widest the label column gets: the longest label, up to 25 cells. */

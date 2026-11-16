@@ -172,6 +172,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sessionAccent": false,
   "sidebarSide": "left",
   "panelNarrow": "hide",
+  "panelStart": "remember",
   "panelHeader": true,
   "activityMascot": false,
   "showActivity": true,
@@ -363,6 +364,11 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "panelNarrow": [
     "hide",
     "sheet"
+  ],
+  "panelStart": [
+    "remember",
+    "shown",
+    "hidden"
   ],
   "sidebar": [
     "auto",

@@ -100,7 +100,7 @@ import { createComments } from "./app/comments"
 import { osc52Copy } from "./osc52"
 import { createPromptStash } from "./prompt-stash"
 import { placeholderFor, shellPlaceholderFor } from "../view/prompt-chrome"
-import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile } from "../view/tui-profile"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, panelStarted, readTuiProfile } from "../view/tui-profile"
 import { recoverProfile, profileFile } from "@mendcode/program/profile-history"
 import { ACCESSIBLE_LOOK } from "../view/accessible"
 import { homeTip } from "../view/home-tips"
@@ -333,6 +333,7 @@ export function createApp(input: AppInput) {
     onboarding: undefined,
     setupAdvanced: false,
     agentReport: undefined,
+    pendingBot: undefined,
     agentError: "",
     agentPicker: { selected: 0 },
     themePicker: { query: "", selected: 0 },
@@ -466,6 +467,8 @@ export function createApp(input: AppInput) {
     appState.reducedMotion = true
     appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...(appState.tuiProfile.accessible ? {} : ACCESSIBLE_LOOK) })
   }
+  // `panelStart` decides whether a new terminal opens the right panel (a session's own /panel choice, below, still wins).
+  appState.tuiProfile = panelStarted(appState.tuiProfile)
   appState.profileBase = { ...appState.tuiProfile }
   // What slash commands showed or hid in each session is that session's (session-look.ts): the one this terminal opens on gets its own back.
   appState.sessionLook = input.profile ? new Map() : readSessionLook(input.dataDir)

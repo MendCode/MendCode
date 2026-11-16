@@ -347,6 +347,8 @@ export type TuiProfile = {
   sidebarSide: "left" | "right"
   /** Under 110 columns the right panel hides (`hide`) or becomes a sheet above the prompt (`sheet`). */
   panelNarrow: "hide" | "sheet"
+  /** How a new terminal and a new chat start the right panel: as `rightSidebar` says (`remember`, the default), always `shown` (when the panel has cards), or always `hidden`. `/panel` still toggles in the chat. */
+  panelStart: "remember" | "shown" | "hidden"
   /** The right panel's first row (its preset, `/panel`, the focus key); off gives that row to the cards. */
   panelHeader: boolean
   activityMascot: boolean
@@ -619,6 +621,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sessionAccent: false,
   sidebarSide: "left",
   panelNarrow: "hide",
+  panelStart: "remember",
   panelHeader: true,
   activityMascot: false,
   showActivity: true,
@@ -957,6 +960,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     titleTemplate: oneLine(source.titleTemplate, 180) || DEFAULT_TUI_PROFILE.titleTemplate,
     sidebarSide: oneOf(["left", "right"] as const, source.sidebarSide) ?? "left",
     panelNarrow: oneOf(["hide", "sheet"] as const, source.panelNarrow) ?? "hide",
+    panelStart: oneOf(["remember", "shown", "hidden"] as const, source.panelStart) ?? "remember",
     panelHeader: bool("panelHeader"),
     showAgent: bool("showAgent"),
     showEffort: bool("showEffort"),
@@ -1091,6 +1095,16 @@ function imageWaitKeys(source: Record<string, unknown>): Pick<TuiProfile, "image
 /** The footer names the model in use (a `model` segment in the rows, or the single row's model label), so a change needs no notice of its own. */
 export const footerShowsModel = (profile: Pick<TuiProfile, "showStatus" | "showModel" | "footerRows">) =>
   profile.showStatus && (profile.footerRows.length ? profile.footerRows.some((row) => row.includes("model")) : profile.showModel)
+
+/**
+ * The profile as a new terminal or a new chat opens it: `panelStart` `hidden` starts without the right panel, `shown` with it when it has
+ * cards (the panel draws only when it has some), `remember` as `rightSidebar` was saved. In memory only: the saved `rightSidebar` is never rewritten by this.
+ */
+export function panelStarted<T extends Pick<TuiProfile, "panelStart" | "rightSidebar">>(profile: T): T {
+  if (profile.panelStart === "remember") return profile
+  const visible = profile.panelStart === "shown"
+  return visible === profile.rightSidebar ? profile : { ...profile, rightSidebar: visible }
+}
 
 /** The saved profile; the defaults when the file is missing, unreadable or not JSON. */
 export function readTuiProfile(dataDir: string): TuiProfile {

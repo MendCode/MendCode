@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { CUSTOMIZE_ROWS, customizePageKey, rowShown } from "../src/view/customize-page"
-import { DEFAULT_TUI_PROFILE, type TuiProfile } from "../src/view/tui-profile"
+import { GROUPS } from "../src/view/customize-rows"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import path from "node:path"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 
 const RIGHT = "\x1b[C"
 const at = (row: (typeof CUSTOMIZE_ROWS)[number]) => ({ row: CUSTOMIZE_ROWS.indexOf(row) })
@@ -68,5 +72,29 @@ describe("/customize sidebar rows", () => {
     expect(bad.action).toEqual({ type: "none" })
     expect(bad.state.error).toContain("projects, bots, sessions")
     expect(press("sidebarSections", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "none" }).action).toEqual({ type: "set", patch: { sidebarSections: "none" } })
+  })
+})
+
+describe("/customize panel at start", () => {
+  test("the row sits in Sidebar & panel, defaults to remember and old profiles keep it", () => {
+    expect(rowShown("panelStart", DEFAULT_TUI_PROFILE, {})).toBe(true)
+    expect(DEFAULT_TUI_PROFILE.panelStart).toBe("remember")
+    expect(normalizeTuiProfile({ rightSidebar: true }).panelStart).toBe("remember")
+    expect(normalizeTuiProfile({ panelStart: "nonsense" }).panelStart).toBe("remember")
+    expect(GROUPS.flatMap((group) => group.parts).find((part) => part.title === "Sidebar & panel")?.rows).toContain("panelStart")
+  })
+
+  test("it cycles remember, shown, hidden", () => {
+    expect(press("panelStart", RIGHT).action).toEqual({ type: "set", patch: { panelStart: "shown" } })
+    expect(press("panelStart", RIGHT, { ...DEFAULT_TUI_PROFILE, panelStart: "shown" }).action).toEqual({ type: "set", patch: { panelStart: "hidden" } })
+    expect(press("panelStart", RIGHT, { ...DEFAULT_TUI_PROFILE, panelStart: "hidden" }).action).toEqual({ type: "set", patch: { panelStart: "remember" } })
+  })
+
+  test("it persists through the profile file", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "panel-start-"))
+    try {
+      writeTuiProfile(dir, { ...DEFAULT_TUI_PROFILE, panelStart: "hidden" })
+      expect(readTuiProfile(dir).panelStart).toBe("hidden")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

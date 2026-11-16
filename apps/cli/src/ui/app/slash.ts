@@ -40,6 +40,7 @@ import { footerRowsOf, parseFooterRowsCommand } from "../../view/footer-rows"
 import { parseFooterPackCommand } from "../../view/footer-pack"
 import { parseActivityCommand } from "../../view/activity-status"
 import { parseSlash } from "../../view/commands"
+import { startNewChatPanel } from "./session-look"
 import { normalizeHomeMascot, SIDEBAR_MODES, type SidebarMode, type TuiProfile } from "../../view/tui-profile"
 import { PRESENTATION_MODES, type PresentationMode } from "../../view/transcript"
 import { SELECTABLE_PERMISSION_MODES } from "./constants"
@@ -177,6 +178,7 @@ export function createSlash(ctx: AppContext, actions: {
   async function enterNewSession(sessionId: SessionId) {
     const stayed = await actions.placeNewSession(sessionId)
     await switchSession(sessionId)
+    startNewChatPanel(ctx)
     if (stayed) say(stayed, "info")
   }
 
