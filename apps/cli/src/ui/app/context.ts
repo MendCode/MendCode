@@ -637,7 +637,7 @@ export type AppState = {
   /** The open bot page (`page: "bot"`): its drawing and keys. */
   botCard?: import("../../view/bot-card-page").BotCard | undefined
   /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */
-  botForm?: { render(input: { width: number; height: number; ascii: boolean }): import("../theme").Line[]; key(key: string): Promise<void> } | undefined
+  botForm?: { render(input: { width: number; height: number; ascii: boolean; placements?: import("../image-layer").ImagePlacement[] }): import("../theme").Line[]; key(key: string): Promise<void> } | undefined
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined

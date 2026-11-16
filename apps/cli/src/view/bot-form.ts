@@ -1,7 +1,8 @@
 import type { BotInfo } from "@mendcode/protocol"
 import { BOT_COLORS, BOT_SHAPES, type BotColor, type BotShape } from "../../../../packages/packages/src/agents"
 import type { Line, Span } from "../ui/theme"
-import { botFace, CARD_COLS } from "./bot-face"
+import type { ImagePlacement } from "../ui/image-layer"
+import { botFace, CARD_COLS, facePlacement, type BotFace, type FaceCapability } from "./bot-face"
 import { faceLook } from "./bot-look"
 import { clip, panelGrid } from "./deck"
 import { pickerFrame } from "./picker-frame"
@@ -275,17 +276,27 @@ function valueSpans({ form, row, on, room, ascii }: { form: BotFormState; row: B
   }
 }
 
-/** The face and what it looks like now, at the top of the form: it changes as the shape, color and name do. */
-function previewLines({ form, inner, ascii }: { form: BotFormState; inner: number; ascii: boolean }): Line[] {
+/** Where the preview sits in the rendered page: below the header, the summary row and the panel's border and padding; right of its border and padding. */
+const PREVIEW_ROW = 4
+const PREVIEW_COL = 2
+/** Rows of the card-size face, as `botFace` draws it. */
+const FACE_PICTURE_ROWS = 4
+
+/**
+ * The face and what it looks like now, at the top of the form: it changes as the shape, color and name do. Where the terminal draws images
+ * the face is the picture (the cells under it stay blank) and the generated pictures are cached by look, so a repeated look costs nothing.
+ */
+function previewLines({ form, inner, capability }: { form: BotFormState; inner: number; capability: FaceCapability }): { lines: Line[]; face: BotFace } {
   const look = faceLook({ name: form.name || "bot", shape: form.shape === "auto" ? undefined : form.shape, color: form.color === "auto" ? undefined : form.color })
-  const face = botFace({ name: form.name || "bot", shape: look.shape, color: look.color, state: "idle", size: "card", capability: { ascii }, label: "idle" })
+  const face = botFace({ name: form.name || "bot", shape: look.shape, color: look.color, state: "idle", size: "card", capability, label: "idle" })
   const room = Math.max(1, inner - CARD_COLS - 2)
   const text: Line[] = [
     [{ text: truncateEnd(form.name || "(no name yet)", room), fg: form.name ? "text" : "muted", bold: true }],
     [{ text: truncateEnd(`${look.shape} · ${COLOR_WORD[look.color]}${form.face === "image" ? " · your image" : ""}`, room), fg: "muted" }],
     [{ text: truncateEnd(form.mode === "create" ? "a new bot" : "editing a bot", room), fg: "muted" }],
   ]
-  return face.lines.map((line, index): Line => [...line, { text: "  " }, ...(text[index] ?? [])])
+  const lines = face.lines.map((line, index): Line => [...(face.image && index < face.pictureRows ? [{ text: " ".repeat(CARD_COLS) }] : line), { text: "  " }, ...(text[index] ?? [])])
+  return { lines, face }
 }
 
 function confirmLines({ form, inner, ascii }: { form: BotFormState; inner: number; ascii: boolean }): Line[] {
@@ -308,7 +319,7 @@ function confirmLines({ form, inner, ascii }: { form: BotFormState; inner: numbe
 const HINTS = ["↑↓ row · ←→ change · type to edit · enter next · esc cancel", "↑↓ · ←→ · enter · esc cancel", "esc cancel"]
 
 /** Exactly `height` lines of at most `width` cells. */
-export function renderBotForm({ form, width, height, ascii = false }: { form: BotFormState; width: number; height: number; ascii?: boolean }): Line[] {
+export function renderBotForm({ form, width, height, ascii = false, capability = {}, placements }: { form: BotFormState; width: number; height: number; ascii?: boolean; /** What the terminal draws (`faceCapability`, with the form's loaded image as `avatar`); text only when absent. */ capability?: FaceCapability; /** Receives the preview's picture when the face is one. */ placements?: ImagePlacement[] }): Line[] {
   if (height <= 0) return []
   const inner = Math.max(1, width - 4)
   const title = `Bots · ${form.confirm ? "Delete" : form.mode === "create" ? "New" : "Edit"}`
@@ -321,7 +332,13 @@ export function renderBotForm({ form, width, height, ascii = false }: { form: Bo
   const focused = rowAt(form)
   const problems = botFormProblems(form)
   const valueRoom = Math.max(8, inner - 2 - LABEL_WIDTH)
-  const body: Line[] = [...previewLines({ form, inner, ascii }), []]
+  // A picture needs its four rows inside the panel and room beside it; otherwise, and once the panel scrolls, the face is the text one.
+  const fits = placements !== undefined && inner >= CARD_COLS + 4 && height >= PREVIEW_ROW + FACE_PICTURE_ROWS + 1
+  const plainGlyphs = ascii || capability.ascii === true
+  const wanted: FaceCapability = { ...capability, ascii: plainGlyphs }
+  const textOnly: FaceCapability = { ascii: plainGlyphs, ...(capability.theme ? { theme: capability.theme } : {}) }
+  const preview = previewLines({ form, inner, capability: fits ? wanted : textOnly })
+  const body: Line[] = [...preview.lines, []]
   let focusRow = 0
   rows.forEach((row) => {
     const on = row === focused
@@ -338,5 +355,11 @@ export function renderBotForm({ form, width, height, ascii = false }: { form: Bo
   else if (form.error) body.push([{ text: truncateEnd(`${ascii ? "x" : "✗"} ${form.error}`, inner), fg: "error" }])
   const hints = HINTS.find((text) => textWidth(text) <= Math.max(20, width - 2))!
   const scroll = Math.max(0, focusRow + 5 - room)
+  if (preview.face.image) {
+    if (scroll === 0) {
+      const picture = facePlacement({ face: preview.face, slot: "bot-form", row: PREVIEW_ROW, col: PREVIEW_COL })
+      if (picture) placements?.push(picture)
+    } else body.splice(0, preview.lines.length, ...previewLines({ form, inner, capability: textOnly }).lines)
+  }
   return pickerFrame(title, hints, width, height, panelGrid({ width, compact: false, padding: true, heights: [room], maxColumns: 1, rows: [[{ title: form.mode === "create" ? "New bot" : form.name, body, scroll, active: true }]] }), form.error ?? "")
 }

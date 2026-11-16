@@ -1,7 +1,11 @@
 import type { BotListReport } from "@mendcode/protocol"
 import type { BotColor, BotShape } from "../../../../../packages/packages/src/agents"
 import { BOT_USAGE, botListText, parseBotWords } from "../../view/bot"
+import { join } from "node:path"
+import type { PetImage } from "../../pets/decode"
+import type { FaceCapability } from "../../view/bot-face"
 import type { BotFormState } from "../../view/bot-form"
+import { activeTheme, colorDepth } from "../theme"
 import { createTextPageState, preload } from "../lazy-pages"
 import { loadEditorLauncher } from "../external-editor"
 import type { AppContext } from "./context"
@@ -47,7 +51,6 @@ async function openBotForm(ctx: AppContext, initial: BotFormState) {
     if (current.face === "image" && current.avatar.trim()) {
       const dataDir = input.dataDir
       if (!dataDir) return failed("the image cannot be checked here: no data folder", { row: 4, touched: [...current.touched, "avatar"] })
-      const { join } = await import("node:path")
       const folder = join(dataDir, "bots", current.name)
       try { await (await import("../../view/bot-avatar")).loadBotAvatar({ path: current.avatar.trim(), allowed: [folder, dataDir], base: folder }) } catch (error) {
         return failed(strip(error instanceof Error ? error.message : String(error)), { row: 4, touched: [...current.touched, "avatar"] })
@@ -83,8 +86,26 @@ async function openBotForm(ctx: AppContext, initial: BotFormState) {
     form = { ...current, busy: undefined, ...(edited.changed ? { prompt: edited.text.trim(), touched: [...current.touched, "prompt" as const] } : {}) }
   }
 
+  const { faceCapability } = await import("../../view/bot-face")
+  /** The form's own image, read once per path (a path that was refused stays null and the generated face shows). */
+  const previews = new Map<string, PetImage | null>()
+  const layerOn = () => input.screen.imageProtocol !== undefined && input.screen.imageProtocol !== "off"
+  /** What the preview can show now: images where the terminal and the image layer draw them, the form's image once it loaded. */
+  function previewCapability(): FaceCapability {
+    const path = form?.face === "image" ? form.avatar.trim() : ""
+    const dataDir = input.dataDir
+    if (path && dataDir && layerOn() && /\.(png|webp)$/i.test(path) && !previews.has(path)) {
+      previews.set(path, null)
+      const folder = join(dataDir, "bots", form!.name)
+      void import("../../view/bot-avatar").then(({ loadBotAvatar }) => loadBotAvatar({ path, allowed: [folder, dataDir], base: folder })).then((image) => { previews.set(path, image); requestFrame() }).catch(() => undefined)
+    }
+    const avatar = previews.get(path)
+    const found = faceCapability({ env, depth: colorDepth(env), mode: state.tuiProfile.images, ...(input.imageAnswers ? { answers: input.imageAnswers } : {}), ascii: state.glyphMode === "ascii", ...(avatar ? { avatar } : {}), ...(state.imageCellPixels ? { cellPixels: state.imageCellPixels } : {}), theme: activeTheme() })
+    return layerOn() ? found : { ...found, images: false }
+  }
+
   state.botForm = {
-    render: ({ width, height, ascii }) => form ? renderBotForm({ form, width, height, ascii }) : [],
+    render: ({ width, height, ascii, placements }) => form ? renderBotForm({ form, width, height, ascii, capability: previewCapability(), ...(placements ? { placements } : {}) }) : [],
     async key(key) {
       if (!form) return
       const result = botFormKey(form, key)

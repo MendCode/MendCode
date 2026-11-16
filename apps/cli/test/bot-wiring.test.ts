@@ -111,18 +111,16 @@ describe("the bot page draws the face", () => {
     return { card, redraw, text: () => lines(card.render({ ...view, ...extra })).join("\n") }
   }
 
-  test("the face and the state word are drawn beside the identity, in unicode", () => {
+  test("the face and the state word are drawn beside the identity, as half-block pixel art", () => {
     const text = page("working", {}).text()
-    expect(text).toContain("╭───────╮")
-    expect(text).toContain("◉") // listening: wide eyes
+    expect(text).toContain("▀▀███▀▀") // the bottom row of a circle
     expect(text).toContain("working")
     for (const needle of ["calm", "mendcode", "A calm reviewer", "gpt-6-luna", "smart", "Chrome"]) expect(text).toContain(needle)
   })
 
-  test("the state maps through faceStateOf: idle sleeps, a problem shows crossed eyes", () => {
-    expect(page("idle", {}).text()).toContain("-")
-    expect(page("problem", {}).text()).toContain("×")
-    expect(page("waiting", {}).text()).toContain("?")
+  test("the state maps through faceStateOf: each bot state draws a different face under its word", () => {
+    const faces = (["idle", "working", "waiting", "problem"] as const).map((state) => page(state, {}).text().split("\n").slice(2, 6).map((line) => line.slice(0, 13)).join("\n"))
+    expect(new Set(faces).size).toBe(4)
   })
 
   test("ASCII mode draws the ASCII face only, even when images are on", () => {

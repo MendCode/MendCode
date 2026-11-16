@@ -7,6 +7,7 @@ import type { ImagePlacement } from "../ui/image-layer"
 import { activeTheme, type ColorName, type Line, type Span, type Theme } from "../ui/theme"
 import { faceFrameCount, FACE_STATES, type FaceState } from "./bot-face-anim"
 import { rasterFace, type EyeStyle, type MouthStyle } from "./bot-face-image"
+import { halfBlockText, iconSpans, penFor, pixelFace } from "./bot-face-pixels"
 import { faceLook } from "./bot-look"
 
 export { faceFrameCount, FACE_STATES, type FaceState }
@@ -14,7 +15,7 @@ export { faceFrameCount, FACE_STATES, type FaceState }
 /**
  * Experimental bots: the face of a bot. A face is made from the bot's name (the same name always gives the same shape, color role,
  * eyes and mouth) and shows its state. Order of fallbacks: a real image (the bot's own `avatar`, else a generated picture) when the
- * terminal draws images, else a Unicode text face, else an ASCII one. Only theme color roles are used, so it reads on light and dark.
+ * terminal draws images, else a pixel-art face of half blocks, else (the `ascii` glyph setting) an ASCII one. Only theme color roles are used, so it reads on light and dark.
  */
 export type FaceSize = "card" | "icon"
 export type FaceInput = FaceState | "idle"
@@ -58,45 +59,28 @@ const normal = (state: FaceInput): FaceState => (state === "idle" ? "sleeping" :
 /** The role a face is drawn in: the bot's color, except that a problem is red and a wait is amber. */
 const roleOf = (state: FaceState, color: BotColor): ColorName => (state === "problem" ? "error" : state === "waiting" ? "warning" : color)
 
-const OUTLINE = {
-  unicode: {
-    circle: ["╭───────╮", "│       │", "│       │", "╰───────╯"],
-    square: ["┌───────┐", "│       │", "│       │", "└───────┘"],
-    hexagon: ["╱───────╲", "│       │", "│       │", "╲───────╱"],
-    diamond: ["  ╱───╲  ", "╱       ╲", "╲       ╱", "  ╲───╱  "],
-    triangle: ["    ▲    ", " ╱     ╲ ", "╱       ╲", "└───────┘"],
-  },
-  ascii: {
-    circle: [".-------.", "|       |", "|       |", "'-------'"],
-    square: ["+-------+", "|       |", "|       |", "+-------+"],
-    hexagon: ["/-------\\", "|       |", "|       |", "\\-------/"],
-    diamond: ["  /---\\  ", "/       \\", "\\       /", "  \\---/  "],
-    triangle: ["    ^    ", " /     \\ ", "/       \\", "+-------+"],
-  },
-} as const satisfies Record<"unicode" | "ascii", Record<BotShape, readonly string[]>>
+/** The plain ASCII face, for the `glyphs: ascii` setting only; every other text face is the half-block pixel art (`bot-face-pixels.ts`). */
+const OUTLINE: Record<BotShape, readonly string[]> = {
+  circle: [".-------.", "|       |", "|       |", "'-------'"],
+  square: ["+-------+", "|       |", "|       |", "+-------+"],
+  hexagon: ["/-------\\", "|       |", "|       |", "\\-------/"],
+  diamond: ["  /---\\  ", "/       \\", "\\       /", "  \\---/  "],
+  triangle: ["    ^    ", " /     \\ ", "/       \\", "+-------+"],
+}
 
 const GLYPHS = {
-  unicode: {
-    open: { round: "●", diamond: "◆", square: "■" },
-    wide: { round: "◉", diamond: "◈", square: "█" },
-    closed: "-", dead: "×",
-    mouth: { smile: "‿", flat: "─", small: "·" },
-    talk: ["o", "O"], think: ["·", "•"], sleep: ["z", "Z"], wait: "?", problem: "~",
-  },
-  ascii: {
-    open: { round: "o", diamond: "*", square: "#" },
-    wide: { round: "O", diamond: "@", square: "@" },
-    closed: "-", dead: "x",
-    mouth: { smile: "u", flat: "-", small: "." },
-    talk: ["o", "O"], think: [".", "o"], sleep: ["z", "Z"], wait: "?", problem: "~",
-  },
+  open: { round: "o", diamond: "*", square: "#" },
+  wide: { round: "O", diamond: "@", square: "@" },
+  closed: "-", dead: "x",
+  mouth: { smile: "u", flat: "-", small: "." },
+  talk: ["o", "O"], think: [".", "o"], sleep: ["z", "Z"], wait: "?", problem: "~",
 } as const
 
 type Kind = "frame" | "eye" | "mouth" | "mark" | "alert"
 type Cell = { char: string; kind: Kind }
 
 /** The two eyes, the mouth and the moving mark (thought dot, sleep z) of a state, in glyphs. */
-function expression({ state, eyes, mouth, frame, set }: { state: FaceState; eyes: EyeStyle; mouth: MouthStyle; frame: number; set: (typeof GLYPHS)["unicode"] | (typeof GLYPHS)["ascii"] }) {
+function expression({ state, eyes, mouth, frame, set }: { state: FaceState; eyes: EyeStyle; mouth: MouthStyle; frame: number; set: typeof GLYPHS }) {
   const eye = state === "sleeping" ? set.closed : state === "problem" ? set.dead : state === "listening" ? set.wide[eyes] : set.open[eyes]
   const f = frame % faceFrameCount(state)
   const mouthGlyph = state === "talking" ? set.talk[f]! : state === "waiting" ? set.wait : state === "problem" ? set.problem : set.mouth[mouth]
@@ -104,9 +88,9 @@ function expression({ state, eyes, mouth, frame, set }: { state: FaceState; eyes
   return { eye, mouth: mouthGlyph, mark }
 }
 
-function cardCells({ shape, ascii, state, eyes, mouth, frame }: { shape: BotShape; ascii: boolean; state: FaceState; eyes: EyeStyle; mouth: MouthStyle; frame: number }): Cell[][] {
-  const set = GLYPHS[ascii ? "ascii" : "unicode"]
-  const rows = OUTLINE[ascii ? "ascii" : "unicode"][shape].map((row) => [...row].map((char): Cell => ({ char, kind: "frame" })))
+function cardCells({ shape, state, eyes, mouth, frame }: { shape: BotShape; state: FaceState; eyes: EyeStyle; mouth: MouthStyle; frame: number }): Cell[][] {
+  const set = GLYPHS
+  const rows = OUTLINE[shape].map((row) => [...row].map((char): Cell => ({ char, kind: "frame" })))
   const look = expression({ state, eyes, mouth, frame, set })
   rows[1]![3] = { char: look.eye, kind: "eye" }
   rows[1]![5] = { char: look.eye, kind: "eye" }
@@ -115,8 +99,8 @@ function cardCells({ shape, ascii, state, eyes, mouth, frame }: { shape: BotShap
   return rows
 }
 
-function iconText({ ascii, state, eyes, frame }: { ascii: boolean; state: FaceState; eyes: EyeStyle; frame: number }): string {
-  const set = GLYPHS[ascii ? "ascii" : "unicode"]
+function iconText({ state, eyes, frame }: { state: FaceState; eyes: EyeStyle; frame: number }): string {
+  const set = GLYPHS
   const f = frame % faceFrameCount(state)
   switch (state) {
     case "sleeping": return f === 0 ? "--" : `-${set.sleep[0]}`
@@ -176,9 +160,15 @@ export function botFace({ name, shape, color, state: asked, size, capability, fr
   const ascii = capability.ascii === true
   const cols = size === "card" ? CARD_COLS : ICON_COLS
   const rows = size === "card" ? FACE_ROWS : 1
-  const text: Line[] = size === "card"
-    ? cardCells({ shape: look.shape, ascii, state, eyes: look.eyes, mouth: look.mouth, frame }).map((cells) => spansOf({ cells, role }))
-    : [[{ text: iconText({ ascii, state, eyes: look.eyes, frame }), fg: role, bold: true }]]
+  const body = (capability.theme ?? activeTheme()).colors[role]
+  const palette = { body, pen: penFor(body) }
+  const text: Line[] = ascii
+    ? size === "card"
+      ? cardCells({ shape: look.shape, state, eyes: look.eyes, mouth: look.mouth, frame }).map((cells) => spansOf({ cells, role }))
+      : [[{ text: iconText({ state, eyes: look.eyes, frame }), fg: role, bold: true }]]
+    : size === "card"
+      ? halfBlockText({ grid: pixelFace({ shape: look.shape, eyes: look.eyes, mouth: look.mouth, state, frame }), palette })
+      : [iconSpans({ state, frame, palette })]
   if (size === "card" && label) text.push(labelLine({ label, state }))
   const result: BotFace = { lines: text, cols, rows: text.length, pictureRows: rows, mode: ascii ? "ascii" : "unicode", shape: look.shape, color: look.color }
   if (ascii || !capability.images) return result
@@ -187,7 +177,6 @@ export function botFace({ name, shape, color, state: asked, size, capability, fr
   if (capability.avatar) {
     return { ...result, mode: "image", lines: text.map((line, at) => at >= rows ? line : [{ text: " ".repeat(line.reduce((sum, span) => sum + span.text.length, 0)) }]), image: { key: `bot-avatar/${avatarKey(capability.avatar)}/${size}`, image: capability.avatar } }
   }
-  const body = (capability.theme ?? activeTheme()).colors[role]
   const f = frame % faceFrameCount(state)
   const key = `bot/${look.shape}/${body}/${look.eyes}/${look.mouth}/${state}/${f}/${width}x${height}`
   let image = PICTURES.get(key)

@@ -8,6 +8,7 @@ import { botFace, botIconImage, FACE_STATES, faceCapability, faceFrameCount, fac
 import { createFaceAnimator, FACE_FRAME_MS } from "../src/view/bot-face-anim"
 import { loadBotAvatar, MAX_AVATAR_BYTES, MAX_AVATAR_SIDE } from "../src/view/bot-avatar"
 import { THEMES } from "../src/themes"
+import { sgr } from "../src/ui/theme"
 
 const text = (lines: readonly { text: string }[][]) => lines.map((line) => line.map((span) => span.text).join(""))
 const UNICODE: FaceCapability = {}
@@ -15,6 +16,8 @@ const ASCII: FaceCapability = { ascii: true }
 const IMAGES: FaceCapability = { images: true }
 const theme = (name: string) => THEMES.find((candidate) => candidate.name === name)!
 const widthOf = (line: string) => [...line].length
+/** Glyphs and colors together: the half-block face puts its eyes and mouth in the colors, so the text alone does not tell two faces apart. */
+const look = (lines: readonly { text: string; fg?: string | undefined; fgHex?: string | undefined; bgHex?: string | undefined }[][]) => lines.map((line) => line.map((span) => `${span.text}|${span.fg ?? ""}|${span.fgHex ?? ""}|${span.bgHex ?? ""}`).join(" ")).join("\n")
 
 const dirs: string[] = []
 afterEach(() => {
@@ -95,12 +98,12 @@ describe("every state at both sizes", () => {
     })
   }
 
-  test("each state looks different from the others (card and icon, unicode and ASCII)", () => {
+  test("each state looks different from the others (card and icon, half blocks and ASCII, by glyph and color together)", () => {
     for (const size of ["card", "icon"] as const) {
       for (const capability of [UNICODE, ASCII]) {
         const seen = new Map<string, FaceState>()
         for (const state of FACE_STATES) {
-          const key = text(botFace({ name: "ada", shape: "circle", state, size, capability }).lines).join("\n")
+          const key = look(botFace({ name: "ada", shape: "circle", state, size, capability }).lines)
           expect(seen.get(key), `${size} ${state} equals ${seen.get(key)}`).toBeUndefined()
           seen.set(key, state)
         }
@@ -123,21 +126,20 @@ describe("every state at both sizes", () => {
     expect(faceStateOf("problem")).toBe("problem")
   })
 
-  test("a label becomes a fifth row, centered, and problem and waiting are readable without color", () => {
+  test("a label becomes a fifth row, centered, in bold for problem and waiting", () => {
     const face = botFace({ name: "ada", state: "problem", size: "card", capability: UNICODE, label: "problem" })
     expect(face.rows).toBe(5)
     expect(text(face.lines)[4]).toContain("problem")
-    const plain = text(face.lines).join("\n")
-    expect(plain).toContain("×")
-    const waiting = text(botFace({ name: "ada", state: "waiting", size: "card", capability: UNICODE, label: "waiting" }).lines).join("\n")
-    expect(waiting).toContain("?")
-    expect(waiting).toContain("waiting")
+    expect(face.lines[4]!.some((span) => span.bold && span.text === "problem")).toBe(true)
+    const waiting = botFace({ name: "ada", state: "waiting", size: "card", capability: UNICODE, label: "waiting" })
+    expect(text(waiting.lines)[4]).toContain("waiting")
+    expect(look(waiting.lines)).not.toBe(look(face.lines))
   })
 
   test("the animation frames change the picture only for states that move", () => {
     for (const state of FACE_STATES) {
       const frames = faceFrameCount(state)
-      const pictures = new Set(Array.from({ length: frames }, (_, frame) => text(botFace({ name: "ada", shape: "circle", state, size: "card", capability: UNICODE, frame }).lines).join("\n")))
+      const pictures = new Set(Array.from({ length: frames }, (_, frame) => look(botFace({ name: "ada", shape: "circle", state, size: "card", capability: UNICODE, frame }).lines)))
       expect(pictures.size).toBe(frames)
     }
     expect(faceFrameCount("talking")).toBeGreaterThan(1)
@@ -146,22 +148,33 @@ describe("every state at both sizes", () => {
 })
 
 describe("theme roles, light and dark", () => {
-  test("text faces use theme color roles only", () => {
-    for (const state of FACE_STATES) {
-      const face = botFace({ name: "ada", state, size: "card", capability: UNICODE, label: state })
-      for (const span of face.lines.flat()) {
-        expect(span.fgHex).toBeUndefined()
-        expect(span.bgHex).toBeUndefined()
-        expect(span.bg).toBeUndefined()
+  test("the pixel face takes its colors from the theme: the body role resolved, and black or white ink", () => {
+    for (const name of ["mendcode", "paper"]) {
+      const palette = theme(name)
+      const allowed = new Set([palette.colors.success, "#000000", "#ffffff"])
+      for (const state of FACE_STATES.filter((candidate) => candidate !== "problem" && candidate !== "waiting")) {
+        const face = botFace({ name: "ada", color: "success", shape: "circle", state, size: "card", capability: { theme: palette }, label: state })
+        for (const span of face.lines.slice(0, 4).flat()) {
+          expect(span.fg).toBeUndefined()
+          for (const hex of [span.fgHex, span.bgHex]) if (hex) expect(allowed.has(hex)).toBe(true)
+        }
       }
     }
   })
 
   test("problem draws in the error role and waiting in the warning role, the others in the bot's color", () => {
-    const frame = (state: FaceState) => botFace({ name: "ada", color: "info", shape: "circle", state, size: "card", capability: UNICODE }).lines[0]![0]!.fg
-    expect(frame("problem")).toBe("error")
-    expect(frame("waiting")).toBe("warning")
-    expect(frame("talking")).toBe("info")
+    const palette = theme("mendcode")
+    const body = (state: FaceState) => botFace({ name: "ada", color: "info", shape: "circle", state, size: "card", capability: { theme: palette } }).lines[1]![0]!.fgHex
+    expect(body("problem")).toBe(palette.colors.error)
+    expect(body("waiting")).toBe(palette.colors.warning)
+    expect(body("talking")).toBe(palette.colors.info)
+  })
+
+  test("the ink is white on a body too dark for black", () => {
+    const dark = { ...theme("mendcode"), colors: { ...theme("mendcode").colors, primary: "#101830" } }
+    const hexes = botFace({ name: "ada", color: "primary", shape: "circle", state: "listening", size: "card", capability: { theme: dark } }).lines.flat().flatMap((span) => [span.fgHex, span.bgHex])
+    expect(hexes).toContain("#ffffff")
+    expect(hexes).not.toContain("#000000")
   })
 
   test("the generated image uses the active theme's color for the role, on a light and a dark theme", () => {
@@ -439,5 +452,78 @@ describe("avatar validation", () => {
     bytes.writeUInt32BE(60000, 16)
     writeFileSync(path.join(dir, "lie.png"), bytes)
     await expect(loadBotAvatar({ path: path.join(dir, "lie.png"), allowed: [dir] })).rejects.toThrow(/exceeds/)
+  })
+})
+
+describe("the text face is pixel art made of half blocks", () => {
+  const BLOCKS = /^[ ▀▄█]*$/
+  const rowsOf = (face: ReturnType<typeof botFace>) => text(face.lines).slice(0, 4)
+
+  test("a card is 9 by 4 cells of only half blocks, in every shape and state, and an icon is 2 cells", () => {
+    for (const shape of BOT_SHAPES) {
+      for (const state of FACE_STATES) {
+        const card = botFace({ name: "ada", shape, state, size: "card", capability: UNICODE })
+        expect(card.mode).toBe("unicode")
+        expect(rowsOf(card).length).toBe(4)
+        for (const row of rowsOf(card)) {
+          expect(row).toMatch(BLOCKS)
+          expect(widthOf(row)).toBe(9)
+        }
+        const icon = text(botFace({ name: "ada", shape, state, size: "icon", capability: UNICODE }).lines)
+        expect(icon.length).toBe(1)
+        expect(icon[0]).toMatch(BLOCKS)
+        expect(widthOf(icon[0]!)).toBe(2)
+      }
+    }
+  })
+
+  test("the five shapes are five different bodies", () => {
+    const bodies = BOT_SHAPES.map((shape) => text(botFace({ name: "ada", shape, color: "success", state: "listening", size: "card", capability: UNICODE }).lines).slice(0, 4).join("\n"))
+    expect(new Set(bodies).size).toBe(BOT_SHAPES.length)
+  })
+
+  test("the pixels are the bot's color with black eyes, and the corners outside the shape stay empty", () => {
+    const palette = theme("mendcode")
+    const face = botFace({ name: "ada", shape: "circle", color: "success", state: "talking", size: "card", capability: { theme: palette } })
+    const colors = new Set(face.lines.slice(0, 4).flat().flatMap((span) => [span.fgHex, span.bgHex]).filter(Boolean))
+    expect([...colors].sort()).toEqual([palette.colors.success, "#000000"].sort())
+    expect(face.lines[0]![0]).toEqual({ text: " " })
+  })
+
+  test("the eyes and mouth styles of the name change the pixels", () => {
+    const seen = new Set<string>()
+    for (let i = 0; i < 40; i++) seen.add(look(botFace({ name: `bot-${i}`, shape: "circle", color: "info", state: "thinking", size: "card", capability: UNICODE }).lines))
+    expect(seen.size).toBeGreaterThan(5)
+  })
+
+  test("the same name draws the same face, byte for byte", () => {
+    const draw = (name: string) => look(botFace({ name, state: "talking", size: "card", capability: UNICODE, frame: 1 }).lines)
+    expect(draw("ada")).toBe(draw("ada"))
+    expect(draw("Ada")).toBe(draw("ada"))
+  })
+
+  test("the half-block face falls back to the nearest of 256 colors", () => {
+    const face = botFace({ name: "ada", shape: "circle", color: "success", state: "listening", size: "card", capability: UNICODE })
+    const painted = face.lines.slice(0, 4).flat().filter((span) => span.fgHex)
+    expect(painted.length).toBeGreaterThan(0)
+    for (const span of painted) {
+      expect(sgr(span, "256")).toMatch(/38;5;\d+/)
+      expect(sgr(span, "256")).not.toContain(";2;")
+      expect(sgr(span, "truecolor")).toContain("38;2;")
+    }
+    const mixed = painted.find((span) => span.bgHex)!
+    expect(sgr(mixed, "256")).toMatch(/48;5;\d+/)
+  })
+
+  test("ascii mode stays plain ASCII, with no hex colors, and wins over images", () => {
+    for (const size of ["card", "icon"] as const) {
+      const face = botFace({ name: "ada", state: "talking", size, capability: { ascii: true, images: true } })
+      expect(face.mode).toBe("ascii")
+      expect(face.image).toBeUndefined()
+      for (const span of face.lines.flat()) {
+        expect(span.text).toMatch(/^[\x20-\x7e]*$/)
+        expect(span.fgHex).toBeUndefined()
+      }
+    }
   })
 })

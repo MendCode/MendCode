@@ -31,6 +31,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - In the left list, `Tab` and `Shift+Tab` jump to the first row of the next and the previous section (Projects, Bots), `b` jumps to the first bot, and `↑` on the first row and `↓` on the last wrap around; the list's header shows `tab section`.
 - A session started with a bot now runs as that bot: the model chip and footer show the bot's model, the bot's turn opens with who it is (its name and description) before its personality and memory, and an image check or engine choice uses the bot's model instead of the session's.
+- The bot form's preview shows the bot's real picture (or its own image) on terminals that draw images, and it changes as you pick a shape or color; and the text face is now a small pixel-art character in the bot's color instead of line drawings, with the plain ASCII face kept for the ASCII glyph setting.
 - A bot's face is a picture only on terminals known to draw images; elsewhere, including terminals that only list sixel support, the page shows the text face instead of an empty area.
 - The left and right arrows between sub-agent chats move only between the sub-agents that are still working, not through the finished ones.
 - A Claude sub-agent started before a daemon restart and woken by a message shows its work in its own thread again; before, what it did was not shown or kept, so neither the session nor `/btw` could see it.

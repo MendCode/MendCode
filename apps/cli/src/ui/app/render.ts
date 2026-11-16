@@ -362,7 +362,7 @@ export function createRender(ctx: AppContext, actions: {
         : [[{ text: state.secretsError || "loading secrets…", fg: state.secretsError ? "warning" : "muted" }], [], [{ text: "esc back", fg: "muted", dim: true }]]
     else if (state.page === "tree") body = renderTreePage({ model: state.tree?.model, error: state.tree?.error ?? "", state: state.treeState, stats: state.tree?.stats ?? new Map(), width, height: bodyHeight, now: now(), pick: state.tree?.pick ?? false, glyphs: g, label: (id) => modelLabel(id, state.modelReport) })
     else if (state.page === "bot" && state.botCard) body = state.botCard.render({ width, height: bodyHeight, now: now(), ascii: state.glyphMode === "ascii", theme: activeTheme(), placements })
-    else if (state.page === "bot-form" && state.botForm) body = state.botForm.render({ width, height: bodyHeight, ascii: state.glyphMode === "ascii" })
+    else if (state.page === "bot-form" && state.botForm) body = state.botForm.render({ width, height: bodyHeight, ascii: state.glyphMode === "ascii", placements })
     else if (state.page === "text" && state.textPage) {
       state.pageBodyHeight = bodyHeight
       body = renderTextPage({ state: state.textPage, width, height: bodyHeight, minimal: state.mode === "minimal" })

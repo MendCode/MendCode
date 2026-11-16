@@ -1,6 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { BotInfo } from "@mendcode/protocol"
+import type { ImagePlacement } from "../src/ui/image-layer"
+import { activeTheme } from "../src/ui/theme"
+import type { FaceCapability } from "../src/view/bot-face"
 import { botFormKey, botFormProblems, botFormRows, botPromptOf, botSaveFields, deleteBotForm, editBotForm, newBotForm, renderBotForm, type BotFormAction, type BotFormState } from "../src/view/bot-form"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_WIDTH } from "../src/view/sidebar"
@@ -127,17 +130,71 @@ describe("the form's keys", () => {
     const picked = (form: BotFormState, tabs: number, key: string, times: number) => press(form, ...Array(tabs).fill(TAB), ...Array(times).fill(key)).form!
     const hexagon = picked(base, 1, "\x1b[C", 5)
     expect(hexagon.shape).toBe("hexagon")
-    expect(lines(hexagon)).toContain("╱───────╲")
+    expect(lines(hexagon)).toContain("▄█████▄")
     const square = picked(base, 1, "\x1b[C", 2)
     expect(square.shape).toBe("square")
-    expect(lines(square)).toContain("┌───────┐")
+    expect(lines(square)).toContain("▄██████")
     expect(lines(square)).not.toBe(lines(hexagon))
     const green = picked({ ...base, shape: "circle" }, 0, "\x1b[C", 4)
     expect(green.color).toBe("success")
-    const outline = (form: BotFormState) => renderBotForm({ form, width: 100, height: 34 }).flat().find((span) => span.text.includes("╭───────╮"))
-    expect(outline(green)?.fg).toBe("success")
-    expect(outline(picked({ ...base, shape: "circle" }, 0, "\x1b[C", 7))?.fg).toBe("info")
+    const bodyColor = (form: BotFormState) => renderBotForm({ form, width: 100, height: 34 }).flat().find((span) => span.text.includes("████"))?.fgHex
+    expect(bodyColor(green)).toBe(activeTheme().colors.success)
+    expect(bodyColor(picked({ ...base, shape: "circle" }, 0, "\x1b[C", 7))).toBe(activeTheme().colors.info)
     expect(text(green)).toContain("green")
+  })
+
+  describe("where the terminal draws images, the preview is the picture", () => {
+    const IMAGES: FaceCapability = { images: true }
+    const draw = (form: BotFormState, { capability = IMAGES, width = 100, height = 34 }: { capability?: FaceCapability; width?: number; height?: number } = {}) => {
+      const placements: ImagePlacement[] = []
+      const lines = renderBotForm({ form, width, height, capability, placements })
+      return { lines, placements }
+    }
+
+    test("a capable terminal gets one placement over the 9 by 4 cells at the face's place, with the cells under it blank", () => {
+      const { lines, placements } = draw(newBotForm({ name: "pixel" }))
+      expect(placements.length).toBe(1)
+      expect(placements[0]).toMatchObject({ slot: "bot-form", row: 4, col: 2, cols: 9, rows: 4 })
+      for (let row = 4; row < 8; row++) expect(plain(lines[row]!).slice(0, 13)).toBe("│" + " ".repeat(12))
+      expect(plain(lines[4]!)).toContain("pixel")
+      expect(plain(lines[8]!)).toContain("idle")
+    })
+
+    test("with an avatar the form shows the avatar, and a generated face without one", () => {
+      const avatar = { width: 8, height: 8, rgba: new Uint8Array(8 * 8 * 4).fill(200) }
+      const form = { ...newBotForm({ name: "pixel" }), face: "image" as const, avatar: "face.png" }
+      expect(draw(form, { capability: { images: true, avatar } }).placements[0]!.image).toBe(avatar)
+      expect(draw(form).placements[0]!.key).toStartWith("bot/")
+    })
+
+    test("a shape or color change gives another picture; the same look gives the very same one, encoded once", () => {
+      const base = newBotForm({ name: "pixel" })
+      const first = draw(base).placements[0]!
+      const again = draw(base).placements[0]!
+      expect(again.key).toBe(first.key)
+      expect(again.image).toBe(first.image)
+      const square = draw({ ...base, shape: "square" }).placements[0]!
+      const red = draw({ ...base, color: "error" }).placements[0]!
+      expect(square.key).not.toBe(first.key)
+      expect(red.key).not.toBe(first.key)
+      expect(draw({ ...base, shape: "square" }).placements[0]!.image).toBe(square.image)
+      expect(draw({ ...base, color: "error" }).placements[0]!.image).toBe(red.image)
+    })
+
+    test("the text face stays when the terminal draws no images, in ASCII mode, with nowhere to put the picture, in a short page or once the panel scrolls", () => {
+      const form = newBotForm({ name: "pixel" })
+      const none = (result: ReturnType<typeof draw>) => {
+        expect(result.placements).toEqual([])
+        expect(plain(result.lines[4]!)).not.toMatch(/^│ {12}/)
+      }
+      none(draw(form, { capability: {} }))
+      none(draw(form, { capability: { images: true, ascii: true } }))
+      none(draw(form, { height: 8 }))
+      expect(renderBotForm({ form, width: 100, height: 34, capability: IMAGES }).map(plain)[5]).toMatch(/[▀▄█]/)
+      // Moving to the last row on a short page scrolls the panel: the face is text again.
+      const scrolled = draw({ ...form, row: botFormRows(form).length - 1 }, { height: 12 })
+      expect(scrolled.placements).toEqual([])
+    })
   })
 
   test("the saved fields leave out what the form left on auto and carry what it set", () => {
@@ -247,6 +304,31 @@ describe("in the app", () => {
     expect(screen(h)).not.toContain("$VISUAL")
     expect(screen(h)).not.toContain("EDITOR")
     expect(none(h)).toEqual([])
+  })
+
+  test("in a terminal that draws images the form page places the generated picture and swaps it when the shape changes", async () => {
+    const screen = { size: { width: 120, height: 34 }, imageProtocol: "kitty", draw() {}, write() {}, setTitle() {} } as unknown as NonNullable<Parameters<typeof appHarness>[0]>["screen"]
+    const current = ids("session")
+    const h = appHarness({
+      mode: "balanced", width: 120, height: 34, sessionId: current, dataDir: dataDir(), directory: "/work/app", inspectProject: async () => ({ git: true }), screen,
+      env: { TERM_PROGRAM: "ghostty", COLORTERM: "truecolor" },
+      reply: (command) => command.type === "bot.list" ? reply({ bots: [calm], external: [], problems: [] }) : command.type === "models.list" ? reply({ engine: "native", selectable: true, models: [], defaults: {}, roles: {} }) : command.type === "session.list" ? reply({ sessions: [] }) : undefined,
+    })
+    h.app.applySettings({ experimental: { bots: true } })
+    conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
+    await h.type("/bot new pixel\r")
+    expect(h.app.page).toBe("bot-form")
+    const form = () => { h.app.render(); return h.placements.at(-1)!.filter((placement) => placement.slot === "bot-form") }
+    const first = form()
+    expect(first).toHaveLength(1)
+    expect(first[0]).toMatchObject({ row: 4, col: 2, cols: 9, rows: 4 })
+    expect(form()[0]!.key).toBe(first[0]!.key)
+    await h.type("\t\x1b[C")
+    const square = form()
+    expect(square).toHaveLength(1)
+    expect(square[0]!.key).not.toBe(first[0]!.key)
+    await h.type("\x1b")
+    expect(h.placements.at(-1)!.filter((placement) => placement.slot === "bot-form")).toHaveLength(0)
   })
 
   test("/bot new <name> opens it with the name filled, and typing, picking and Create send one bot.save", async () => {
