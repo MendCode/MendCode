@@ -23,3 +23,14 @@ test("a failure older than ten minutes no longer shows the bot as a problem", ()
   const old = patchBotReport(report([["ses_a", "completed", NOW - 40 * MINUTE]]), push("ses_a", "error", NOW - 34 * MINUTE), NOW)!
   expect(old.bots[0]).toMatchObject({ state: "idle", projects: [{ state: "idle", sessions: [{ status: "failed" }] }] })
 })
+
+test("an external bot its app reports busy stays busy when one of its MendCode chats goes idle, and its chats' own work still shows", () => {
+  const external = (appState: "working" | "idle") => ({
+    bots: [],
+    external: [{ origin: "hermes", id: "ada", name: "Ada", state: appState, appState, chat: "acp:hermes-ada", projects: [{ directory: "/work", state: "idle", sessions: [{ sessionId: "ses_x", title: "t", status: "completed", updatedAt: NOW - MINUTE }] }] }],
+    problems: [],
+  }) as unknown as BotListReport
+  expect(patchBotReport(external("working"), push("ses_x", "idle", NOW), NOW)!.external[0]!.state).toBe("working")
+  expect(patchBotReport(external("idle"), push("ses_x", "idle", NOW), NOW)!.external[0]!.state).toBe("idle")
+  expect(patchBotReport(external("idle"), push("ses_x", "error", NOW), NOW)!.external[0]!.state).toBe("problem")
+})

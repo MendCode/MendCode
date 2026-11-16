@@ -1559,6 +1559,8 @@ const botParts = lazyValue(() => {
     app: z.string().min(1).max(100).optional(),
     /** The MendCode sessions on its chat model, by folder, as a MendCode bot's chats are (the daemon fills it; the app's own server-side history is not read). */
     projects: z.array(project).optional(),
+    /** The state the app itself reported, before its MendCode chats are counted: it stands whenever those chats are all idle. */
+    appState: state.optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),

@@ -28,7 +28,7 @@ export function botIndex(report: BotListReport | undefined): Map<string, string>
 }
 
 /** One bot (MendCode or external) with this push applied to the session it names; the same object when it lists no such session. */
-function patchBot<T extends { projects?: BotListReport["bots"][number]["projects"] | undefined; state: BotState }>(bot: T, event: ActivityEvent, status: string, now: number): T {
+function patchBot<T extends { projects?: BotListReport["bots"][number]["projects"] | undefined; state: BotState; appState?: BotState | undefined }>(bot: T, event: ActivityEvent, status: string, now: number): T {
   const held = (project: { sessions: ReadonlyArray<{ sessionId: string }> }) => project.sessions.some((member) => member.sessionId === event.sessionId)
   if (!bot.projects?.some(held)) return bot
   const projects = bot.projects.map((project) => {
@@ -36,7 +36,9 @@ function patchBot<T extends { projects?: BotListReport["bots"][number]["projects
     const sessions = project.sessions.map((member) => (member.sessionId === event.sessionId ? { ...member, title: event.title, status, updatedAt: event.updatedAt } : member))
     return { ...project, sessions, state: stateOf(sessions, now) }
   })
-  return { ...bot, projects, state: stateOf(projects.flatMap((project) => project.sessions), now) }
+  const own = stateOf(projects.flatMap((project) => project.sessions), now)
+  // An external bot's app may be busy on its own while its MendCode chats are idle: its reported state stands then, as in the daemon.
+  return { ...bot, projects, state: own === "idle" && bot.appState ? bot.appState : own }
 }
 
 /** The report with this push applied to the bot session it names (a MendCode bot's or an external bot's chat), or undefined when no bot lists that session. */

@@ -87,6 +87,7 @@ function withChats(bot: ExternalBotInfo, context: BotContext, now: number): Exte
   return {
     ...bot,
     state: own !== "idle" ? own : bot.state,
+    appState: bot.state,
     projects: [...byProject].map(([directory, group]) => ({
       directory,
       state: botStateOf(group, now),
