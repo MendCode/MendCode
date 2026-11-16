@@ -18,6 +18,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- With experimental bots on the left list shows every project by default (`/customize` › Sidebar projects is now `auto`, `folder` and `all` keep their meaning), and the sidebar rows in `/customize` stay available when the sidebar mode is hidden.
 - The left list with every project (or with bots on) shows only the latest 5 sessions of each project, plus the open one and any that work or wait, with a `+ N more` row that opens the rest and a `show less` row that folds it again; `/customize` › Sessions per project sets how many (1 to 50). Chats nobody used no longer fill it; `/sessions` still lists them.
 - The `/btw` side chat shows how to start a new chat and open earlier ones: type `/new` or `/history` in it (or `/btw new`, `/btw history`), named in its header and in an empty chat.
 - The advisor is no longer consulted on its own at the end of a turn. The agent asks it only when you or the project's instructions say so, before the work rather than after; `advisor.checkpoints` turns the automatic consultations back on.

@@ -6,6 +6,7 @@ import type { AppContext } from "./context"
 import { BUSY } from "./constants"
 import { stripTasks } from "../../view/agents-strip"
 import { sessionDisplayTitle } from "./display-title"
+import { sidebarListsAll } from "../../view/tui-profile"
 
 export function createTicks(ctx: AppContext, actions: {
   chatWidth: () => number
@@ -30,7 +31,7 @@ export function createTicks(ctx: AppContext, actions: {
     // `/reviews` with a review running turns the same spinner on its running rows.
     const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
     // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
-    const listed = state.page === "chat" && (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval") && (s.directory === (ctx.input.directory ?? "") || state.tuiProfile.sidebarProjects === "all")) && sidebarShown(ctx.input.screen.size.width)
+    const listed = state.page === "chat" && (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval") && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true))) && sidebarShown(ctx.input.screen.size.width)
     const wanted = (busy || preview || agents || home || thread || reviewing || listed) && !state.reducedMotion
     if (wanted && !state.pulse)
       state.pulse = setInterval(() => {

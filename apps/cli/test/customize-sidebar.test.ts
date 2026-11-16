@@ -13,19 +13,24 @@ describe("/customize sidebar rows", () => {
     expect(rowShown("sidebarSections", DEFAULT_TUI_PROFILE, {})).toBe(false)
     expect(rowShown("sidebarLayout", DEFAULT_TUI_PROFILE, { bots: true })).toBe(true)
     expect(rowShown("sidebarSections", DEFAULT_TUI_PROFILE, { bots: true })).toBe(true)
-    // A hidden sidebar has nothing to lay out.
-    expect(rowShown("sidebarProjects", { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" }, {})).toBe(false)
-    expect(rowShown("sidebarLayout", { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" }, { bots: true })).toBe(false)
   })
 
-  test("projects scope steps folder, all", () => {
-    expect(press("sidebarProjects", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjects: "all" } })
-    expect(press("sidebarProjects", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjects: "all" }).action).toEqual({ type: "set", patch: { sidebarProjects: "folder" } })
+  test("the sidebar rows stay on the page when the mode is hidden, since the toggle key shows the sidebar in any mode", () => {
+    const hidden = { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" as const }
+    for (const row of ["sidebarProjects", "sidebarPreviewCount", "sidebarSide", "sidebarHeader"] as const) expect(rowShown(row, hidden, {})).toBe(true)
+    expect(rowShown("sidebarLayout", hidden, { bots: true })).toBe(true)
+    expect(rowShown("sidebarSections", hidden, { bots: true })).toBe(true)
+    expect(rowShown("sidebarLayout", hidden, {})).toBe(false)
+  })
+
+  test("projects scope steps auto, folder, all", () => {
+    expect(press("sidebarProjects", RIGHT).action).toEqual({ type: "set", patch: { sidebarProjects: "folder" } })
+    expect(press("sidebarProjects", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjects: "folder" }).action).toEqual({ type: "set", patch: { sidebarProjects: "all" } })
+    expect(press("sidebarProjects", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarProjects: "all" }).action).toEqual({ type: "set", patch: { sidebarProjects: "auto" } })
   })
 
   test("the preview count is a number row beside the other sidebar rows: shown with the sidebar, stepped within 1..50, typed and checked", () => {
     expect(rowShown("sidebarPreviewCount", DEFAULT_TUI_PROFILE, {})).toBe(true)
-    expect(rowShown("sidebarPreviewCount", { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" }, {})).toBe(false)
     expect(CUSTOMIZE_ROWS.indexOf("sidebarPreviewCount")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarProjects") + 1)
     expect(press("sidebarPreviewCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 6 } })
     expect(press("sidebarPreviewCount", "\x1b[D").action).toEqual({ type: "set", patch: { sidebarPreviewCount: 4 } })

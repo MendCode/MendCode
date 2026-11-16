@@ -1,6 +1,6 @@
 import type { BotListReport, SessionId, SessionSummary } from "@mendcode/protocol"
 import { botName, groupDirectory, isBotId, isGroupId, isMoreId, moreDirectory, multiStops, renderMultiSidebar, type MultiInput } from "../../view/sidebar-multi"
-import { sidebarSectionsOf } from "../../view/tui-profile"
+import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
 import { join } from "node:path"
 import type { PetImage } from "../../pets/decode"
 import type { FaceCapability } from "../../view/bot-face"
@@ -73,7 +73,7 @@ export function createSidebarBots(ctx: AppContext) {
   }
 
   const botsOn = () => state.settingsNow.experimental?.bots === true
-  const allProjects = () => state.tuiProfile.sidebarProjects === "all"
+  const allProjects = () => sidebarListsAll(state.tuiProfile.sidebarProjects, botsOn())
   /** Whether this list draws now; a flag turned off or a setting changed back hands the list to the classic one. */
   const live = () => botsOn() || allProjects()
 

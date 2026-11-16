@@ -37,9 +37,11 @@ export const LOGO_SIZES = ["small", "medium", "large"] as const
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
 export type SidebarMode = (typeof SIDEBAR_MODES)[number]
-/** Whose sessions the left sidebar lists: the opened folder's, or all projects as folding groups. */
-export const SIDEBAR_PROJECTS = ["folder", "all"] as const
+/** Whose sessions the left sidebar lists: `auto` is all projects while experimental bots are on and the opened folder otherwise; `folder` and `all` always mean what they say. */
+export const SIDEBAR_PROJECTS = ["auto", "folder", "all"] as const
 export type SidebarProjects = (typeof SIDEBAR_PROJECTS)[number]
+/** Whether the left sidebar lists every project as folding groups for this setting and bots flag. */
+export const sidebarListsAll = (projects: SidebarProjects, botsOn: boolean) => projects === "all" || (projects === "auto" && botsOn)
 /** Experimental bots: the starting layouts of the left sidebar. `icons-only` is a narrow column; `scratch` shows no section until the user adds them. */
 export const SIDEBAR_LAYOUTS = ["projects-first", "bots-first", "icons-only", "scratch"] as const
 export type SidebarLayout = (typeof SIDEBAR_LAYOUTS)[number]
@@ -662,7 +664,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebarWidth: 0,
   promptStatus: "off",
   sidebar: "auto",
-  sidebarProjects: "folder",
+  sidebarProjects: "auto",
   sidebarPreviewCount: 5,
   sidebarLayout: "projects-first",
   sidebarSections: "",

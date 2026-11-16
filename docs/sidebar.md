@@ -8,7 +8,7 @@ Its fixed header names the current preset and `/panel`, including in the narrow 
 
 ## The left list: every project, and bots
 
-By default the left list shows the sessions of the folder you opened. `sidebarProjects: all` (`/customize` › Top & side › Sidebar projects) shows every project instead: each folder is a group, the opened one first and open, the others folded with the number of sessions that work or wait; Enter or a click on a group folds or opens it, on a session opens it.
+`sidebarProjects` (`/customize` › Top & side › Sidebar projects) picks whose sessions the left list shows. The default, `auto`, shows every project while experimental bots are on and the sessions of the folder you opened otherwise; `folder` always shows the opened folder and `all` always shows every project. These rows stay in `/customize` even when `sidebar` is `hidden`, because the toggle key still shows the list. Every project means: each folder is a group, the opened one first and open, the others folded with the number of sessions that work or wait; Enter or a click on a group folds or opens it, on a session opens it.
 
 An open project shows its latest `sidebarPreviewCount` sessions (`/customize` › Top & side › Sessions per project, 1 to 50, default 5), in the usual order: pinned first, then the latest activity. The open session and any session that works or waits stay in the list even past that count, without repeating. Under the preview a `+ N more` row counts the hidden sessions; Enter or a click on it opens the project's whole list, and the `show less` row that replaces it folds it back. Which projects are opened this way is kept in memory only, so a restart shows the previews again. A chat nobody used (no title, no draft, nothing queued, only its first events) is left out of the list and the count unless it is the open one; `/sessions` still lists it. The classic one-folder list (flag off, `sidebarProjects: folder`) is unchanged and has no preview.
 
@@ -19,7 +19,7 @@ With `/experimental bots on` the list can also hold the bots. A bot is one row: 
 | `sidebarLayout` | `projects-first` (the default), `bots-first`, `icons-only` (a narrow column of icons; the picked row's name shows under it) and `scratch` (no section until you add them) |
 | `sidebarSections` | the sections shown and their order, a comma list of `projects`, `bots`, `sessions` (the opened folder's sessions with no bot, shown when `projects` is not); `none` hides all; empty takes the layout's own. Choosing a layout clears it |
 
-With bots on and a terminal from 70 to 109 columns, the list is the icons column; below 70 it does not show. With the flag off and `sidebarProjects: folder` the list is the one described above and nothing else loads.
+With bots on and a terminal from 70 to 109 columns, the list is the icons column; below 70 it does not show. With the flag off and `sidebarProjects` on `auto` or `folder` the list is the one described above and nothing else loads.
 
 ## Panel commands
 

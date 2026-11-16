@@ -119,6 +119,15 @@ describe("flag on: the bots section and the bot's icon in its project", () => {
 })
 
 describe("all projects", () => {
+  test("auto (the default) lists every project with bots on, and an explicit folder keeps the opened one only", async () => {
+    const auto = chatApp()
+    await until(auto, "▸ api")
+    expect(auto.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
+    const folder = chatApp({ profile: { sidebarProjects: "folder" } })
+    await until(folder, "calm")
+    expect(sidebarText(folder)).not.toContain("▸ api")
+  })
+
   test("every folder is a group: the opened one open, the rest folded with a count; Enter and a click fold or open", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
     await until(h, "▸ api")

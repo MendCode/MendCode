@@ -82,8 +82,8 @@ export function rowShown(row: CustomizeRow, profile: TuiProfile, facts: Customiz
   if (row === "activityStates") return profile.activityMascot
   if (row === "imageWaitSpeed") return profile.imageWait !== "static"
   if (part === "Top bar" && row !== "showTopbar") return profile.showTopbar && (row !== "contextStyle" || profile.contextBar !== "off")
-  if (row === "sidebarSide" || row === "sidebarHeader" || row === "sidebarProjects" || row === "sidebarPreviewCount") return profile.sidebar !== "hidden"
-  if (row === "sidebarLayout" || row === "sidebarSections") return facts.bots === true && profile.sidebar !== "hidden"
+  // The toggle key shows the sidebar in any mode, so its rows stay on the page even while the mode is hidden.
+  if (row === "sidebarLayout" || row === "sidebarSections") return facts.bots === true
   if (row === "titleTemplate" || row === "titleActivity") return profile.terminalTitle
   if (row === "pasteSummaryMinChars") return profile.pasteSummary
   if (row === "notifyWhen") return profile.turnNotify !== "off"

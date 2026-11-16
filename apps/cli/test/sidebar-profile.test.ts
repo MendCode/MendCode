@@ -1,26 +1,43 @@
 import { describe, expect, test } from "bun:test"
 import { TUI_DEFAULTS, tuiProblems } from "@mendcode/protocol/wire"
-import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, sidebarSectionsOf } from "../src/view/tui-profile"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, sidebarListsAll, sidebarSectionsOf } from "../src/view/tui-profile"
+
+describe("sidebar projects scope", () => {
+  test("auto lists every project while bots are on and the opened folder otherwise; folder and all mean what they say", () => {
+    expect(sidebarListsAll("auto", true)).toBe(true)
+    expect(sidebarListsAll("auto", false)).toBe(false)
+    expect(sidebarListsAll("folder", true)).toBe(false)
+    expect(sidebarListsAll("folder", false)).toBe(false)
+    expect(sidebarListsAll("all", true)).toBe(true)
+    expect(sidebarListsAll("all", false)).toBe(true)
+  })
+
+  test("a saved folder or all survives loading; a missing key is auto", () => {
+    expect(normalizeTuiProfile({ sidebarProjects: "folder" }).sidebarProjects).toBe("folder")
+    expect(normalizeTuiProfile({ sidebarProjects: "all" }).sidebarProjects).toBe("all")
+    expect(normalizeTuiProfile({ sidebar: "hidden" }).sidebarProjects).toBe("auto")
+  })
+})
 
 describe("sidebar profile keys", () => {
   test("a profile written before the keys existed loads unchanged, with today's sidebar", () => {
     const old = { sidebar: "auto", sidebarSide: "left", sidebarHeader: true, theme: "dark" }
     const loaded = normalizeTuiProfile(old)
-    expect(loaded).toEqual(normalizeTuiProfile({ ...old, sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" }))
-    expect(loaded).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
-    expect(DEFAULT_TUI_PROFILE).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(loaded).toEqual(normalizeTuiProfile({ ...old, sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" }))
+    expect(loaded).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(DEFAULT_TUI_PROFILE).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
   })
 
   test("the protocol's defaults agree with the terminal's and its checks accept only the known values", () => {
     for (const key of ["sidebarProjects", "sidebarLayout", "sidebarSections"] as const) expect(TUI_DEFAULTS[key]).toBe(DEFAULT_TUI_PROFILE[key])
     expect(tuiProblems({ sidebarProjects: "all", sidebarLayout: "icons-only", sidebarSections: "bots,projects" })).toEqual([])
-    expect(tuiProblems({ sidebarProjects: "everything" })[0]).toContain("folder|all")
+    expect(tuiProblems({ sidebarProjects: "everything" })[0]).toContain("auto|folder|all")
     expect(tuiProblems({ sidebarLayout: "grid" })[0]).toContain("projects-first|bots-first|icons-only|scratch")
     expect(tuiProblems({ sidebarSections: "bots,mail" })[0]).toContain("projects, bots, sessions")
   })
 
   test("a bad value falls back to the default instead of breaking the profile", () => {
-    expect(normalizeTuiProfile({ sidebarProjects: "x", sidebarLayout: 3, sidebarSections: "bots,mail" })).toMatchObject({ sidebarProjects: "folder", sidebarLayout: "projects-first", sidebarSections: "" })
+    expect(normalizeTuiProfile({ sidebarProjects: "x", sidebarLayout: 3, sidebarSections: "bots,mail" })).toMatchObject({ sidebarProjects: "auto", sidebarLayout: "projects-first", sidebarSections: "" })
     expect(normalizeTuiProfile({ sidebarSections: "bots, projects, bots" }).sidebarSections).toBe("bots,projects")
     expect(normalizeTuiProfile({ sidebarSections: "none" }).sidebarSections).toBe("none")
   })

@@ -217,7 +217,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sidebarWidth": 0,
   "promptStatus": "off",
   "sidebar": "auto",
-  "sidebarProjects": "folder",
+  "sidebarProjects": "auto",
   "sidebarPreviewCount": 5,
   "sidebarLayout": "projects-first",
   "sidebarSections": "",
@@ -368,7 +368,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "always",
     "hidden"
   ],
-  "sidebarProjects": ["folder", "all"],
+  "sidebarProjects": ["auto", "folder", "all"],
   "sidebarLayout": ["projects-first", "bots-first", "icons-only", "scratch"],
   "promptStatus": ["off", "border"],
   "scrollbar": ["auto", "always", "off"],
