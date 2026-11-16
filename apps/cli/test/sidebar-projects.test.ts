@@ -87,27 +87,27 @@ describe("ranking and the cap", () => {
   const s = (directory: string, ago: number, id = `${directory}:${ago}`) => ({ sessionId: id, directory, updatedAt: NOW - ago })
   const rank = (sessions: ReturnType<typeof s>[], over: Partial<Parameters<typeof rankProjects>[0]> = {}) => rankProjects({ sessions: sessions as never, opened: "/work/open", now: NOW, count: 3, busy: () => false, isProject: () => true, ...over })
 
-  test("the opened project first, then the most recently used", () => {
+  test("projects rank by their latest activity; the opened one takes its place by that rank, not first", () => {
     const out = rank([s("/p/old", 5 * DAY), s("/p/new", MINUTE), s("/work/open", 9 * DAY), s("/p/mid", DAY)], { count: 10 })
-    expect(out.shown).toEqual(["/work/open", "/p/new", "/p/mid", "/p/old"])
+    expect(out.shown).toEqual(["/p/new", "/p/mid", "/p/old", "/work/open"])
     expect(out.rest).toEqual([])
   })
 
-  test("projects with a working or waiting session come right after the opened one, past the cap", () => {
+  test("projects with a working or waiting session show past the cap, at their rank", () => {
     const out = rank([s("/p/a", MINUTE), s("/p/b", 2 * MINUTE), s("/p/busy1", 30 * DAY, "busy1"), s("/p/busy2", 40 * DAY, "busy2")], { count: 2, busy: (session) => String(session.sessionId).startsWith("busy") })
-    expect(out.shown).toEqual(["/work/open", "/p/busy1", "/p/busy2"])
+    expect(out.shown).toEqual(["/p/busy1", "/p/busy2", "/work/open"])
     expect(out.rest).toEqual(["/p/a", "/p/b"])
   })
 
   test("the cap counts the opened project; the rest keep their rank", () => {
     const out = rank([s("/p/a", MINUTE), s("/p/b", 2 * MINUTE), s("/p/c", 3 * MINUTE), s("/p/d", 4 * MINUTE)], { count: 3 })
-    expect(out.shown).toEqual(["/work/open", "/p/a", "/p/b"])
+    expect(out.shown).toEqual(["/p/a", "/p/b", "/work/open"])
     expect(out.rest).toEqual(["/p/c", "/p/d"])
   })
 
   test("equal latest activity is broken by sessions in the last 14 days", () => {
     const out = rank([s("/p/few", MINUTE, "f1"), s("/p/many", MINUTE, "m1"), s("/p/many", DAY, "m2"), s("/p/many", 3 * DAY, "m3"), s("/p/many", 20 * DAY, "m4")], { count: 2 })
-    expect(out.shown).toEqual(["/work/open", "/p/many"])
+    expect(out.shown).toEqual(["/p/many", "/work/open"])
     expect(out.rest).toEqual(["/p/few"])
   })
 
@@ -117,7 +117,7 @@ describe("ranking and the cap", () => {
     const gitOnly = (directory: string) => directory.startsWith("/p/")
     const eligible = (directory: string) => !directory.startsWith("/tmp")
     const before = rank(sessions, { opened: "/work/app", count: 2, isProject: gitOnly })
-    expect(before.shown).toEqual(["/work/app", "/p/a"])
+    expect(before.shown).toEqual(["/p/a", "/work/app"])
     const after = rank(sessions, { opened: "/work/app", count: 2, isProject: gitOnly, eligible })
     // Like a busy project it shows past the cap (and counts toward it).
     expect(after.shown).toEqual(["/work/app", "/new/x"])
@@ -128,12 +128,12 @@ describe("ranking and the cap", () => {
 
   test("ranking is by the latest activity first; the number of sessions in 14 days only breaks a tie", () => {
     const out = rank([s("/p/busy", 3 * MINUTE, "x1"), s("/p/busy", DAY, "x2"), s("/p/busy", 2 * DAY, "x3"), s("/p/new", MINUTE, "n1")], { count: 3 })
-    expect(out.shown).toEqual(["/work/open", "/p/new", "/p/busy"])
+    expect(out.shown).toEqual(["/p/new", "/p/busy", "/work/open"])
   })
 
   test("folders that are not projects are left out, the opened one never", () => {
     const out = rank([s("/tmp/x", MINUTE), s("/p/a", 2 * MINUTE)], { count: 5, isProject: (directory) => directory === "/p/a" })
-    expect(out.shown).toEqual(["/work/open", "/p/a"])
+    expect(out.shown).toEqual(["/p/a", "/work/open"])
     expect(out.rest).toEqual([])
   })
 })

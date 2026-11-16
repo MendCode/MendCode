@@ -81,7 +81,7 @@ describe("the bots section", () => {
 })
 
 describe("projects", () => {
-  test("all projects: the opened one first, every group open", () => {
+  test("all projects by latest activity (the opened one at its rank), every group open", () => {
     const rows = text()
     const at = (needle: string) => rows.findIndex((row) => row.includes(needle))
     expect(at("▾ app")).toBeGreaterThan(-1)
@@ -91,7 +91,9 @@ describe("projects", () => {
     expect(rows[at("▾ api")]).toMatch(/▾ api +2 │$/)
     expect(rows[at("▾ site")]).toMatch(/▾ site +1 │$/)
     expect(at("Other project")).toBeGreaterThan(at("▾ api"))
-    expect(at("▾ api")).toBeGreaterThan(at("Client reconnect"))
+    // app's own latest message is 10 minutes old (Chrome is the bot's), so app ranks after api and site.
+    expect(at("▾ app")).toBeGreaterThan(at("▾ site"))
+    expect(at("▾ site")).toBeGreaterThan(at("▾ api"))
   })
 
   test("a group folded by choice shows its active count, and opens again", () => {
@@ -322,8 +324,8 @@ describe("the icon and one space", () => {
 
 describe("keyboard stops and mouse hits agree with what is drawn", () => {
   test("stops run in drawing order: bots, groups and their visible sessions, never a hidden one", () => {
-    expect(multiStops(base)).toEqual(["group:/work/app", "s2", "group:/other/api", "s3", "s4", "group:/work/site", "s5", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops"])
-    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops", "group:/work/app", "s2", "group:/other/api", "group:/work/site", "s5"])
+    expect(multiStops(base)).toEqual(["group:/other/api", "s3", "s4", "group:/work/site", "s5", "group:/work/app", "s2", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops"])
+    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops", "group:/other/api", "group:/work/site", "s5", "group:/work/app", "s2"])
   })
 
   test("each hit names a stop on the row that draws it", () => {
