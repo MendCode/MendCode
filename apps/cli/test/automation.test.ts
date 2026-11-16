@@ -257,6 +257,22 @@ describe("output formatting", () => {
     expect(statsText({ ...report, auxiliary: undefined } as never, { kind: "stats" })).not.toContain("Auxiliary")
   })
 
+  test("usage lists each day's split and each engine's sub-agents, the figures --json holds", () => {
+    const day = (date: string, scale: number) => ({ day: date, input: 1_000 * scale, output: 500 * scale, reasoning: 0, cacheRead: 90_000 * scale, cacheWrite: 4_000 * scale, costMicros: 0, costUnknownCalls: 0, calls: 10 * scale, sessions: scale })
+    const report = { from: "2026-11-13", to: "2026-11-14", days: [day("2026-11-13", 1), day("2026-11-14", 2)], models: [], quotas: [], sessions: 3,
+      harnesses: [
+        { harness: "native", calls: 20, sessions: 3, input: 2_000, output: 1_000, reasoning: 0, cacheRead: 100_000, cacheWrite: 0, costMicros: 0, costUnknownCalls: 0, subagents: { calls: 12, sessions: 2, tokens: 40_000 } },
+        { harness: "claude-code", calls: 10, sessions: 1, input: 1_000, output: 500, reasoning: 0, cacheRead: 170_000, cacheWrite: 12_000, costMicros: 0, costUnknownCalls: 0 },
+      ] }
+    const text = usageText(report as never, 2)
+    expect(text).toMatch(/by day: +input +output +cache read +cache write +calls/)
+    expect(text).toMatch(/2026-11-14 +2,000 +1,000 +180K +8,000 +20/)
+    expect(text).toMatch(/native +3,000 tokens \(\+100K cached\) · 20 calls · 2 sub-agents \(12 calls, 40K tokens\)/)
+    expect(text).toMatch(/claude-code +1,500 tokens \(\+182K cached\) · 10 calls\n/)
+    // One day alone has nothing to split: its figures are the headline.
+    expect(usageText({ ...report, days: [day("2026-11-14", 1)], harnesses: [] } as never, 1)).not.toContain("by day")
+  })
+
   test("usage sends a local-day range and JSON returns the whole report", async () => {
     const report = { from: "x", to: "y", days: [], models: [], quotas: [], auxiliary: [{ role: "summary", provider: "chatgpt", model: "gpt-6-luna", input: 74_000, output: 2_100, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 12, costMicros: 0, costUnknownCalls: 12 }] }
     const h = harness({ send: () => ({ ok: true, result: report }) })

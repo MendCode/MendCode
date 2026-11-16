@@ -15,6 +15,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `mendcode usage` now lists each day's input, output and cache tokens, and each engine's sub-agents, so these no longer need `--json`.
 - Esc Esc now stops only the turn: sub-agents keep running, also Claude Code's background agents. A third Esc right after stops them too.
 - A command the model runs that is still going after 15 seconds moves to the background with its output so far: the model gets control back and can keep working, wait for it or stop it. The turn still waits for it before answering, and it still stops at its timeout or when you cancel.
 - In full access, a saved workflow script started by its name (such as one installed from a package) starts without an approval card; a script the model writes still asks in every mode.

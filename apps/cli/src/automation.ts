@@ -1167,8 +1167,27 @@ export function usageText(report: UsageReport, days: number) {
     lines.push(`auxiliary (outside turns): ${compact(total.tokens)} tokens · ${callCount(total.calls, compact)} · cost ${total.costMicros > 0 ? `$${(total.costMicros / 1e6).toFixed(2)}${total.unpriced ? ` (+${total.unpriced} unpriced)` : ""}` : total.unpriced ? "n/a" : "$0.00"}`)
     for (const entry of auxiliaryOrder(auxiliary)) lines.push(`  ${auxiliaryLabel(entry).padEnd(36)} ${callCount(entry.calls, compact).padStart(12)}  ${compact(entry.input).padStart(8)} in  ${compact(entry.output).padStart(7)} out`)
   }
+  // The same figures `--json` holds, so a day's split or a harness's sub-agents need no second query.
+  const shownDays = report.days.filter((day) => day.calls > 0).slice(-USAGE_TEXT_DAYS)
+  if (shownDays.length > 1) {
+    const title = `by day${report.days.filter((day) => day.calls > 0).length > shownDays.length ? ` (last ${USAGE_TEXT_DAYS})` : ""}:`
+    lines.push(`${title.padEnd(14)}${"input".padStart(9)} ${"output".padStart(8)} ${"cache read".padStart(11)} ${"cache write".padStart(12)} ${"calls".padStart(7)}`)
+    for (const day of shownDays) lines.push(`  ${day.day}  ${compact(day.input).padStart(9)} ${compact(day.output).padStart(8)} ${compact(day.cacheRead).padStart(11)} ${compact(day.cacheWrite).padStart(12)} ${compact(day.calls).padStart(7)}`)
+  }
+  const harnesses = (report.harnesses ?? []).filter((entry) => entry.calls > 0)
+  if (harnesses.length) {
+    lines.push("by engine:")
+    for (const entry of harnesses) {
+      // A sub-agent is its own session: `sessions` counts the sub-agents, `calls` their model calls.
+      const subagents = entry.subagents?.sessions ? ` · ${compact(entry.subagents.sessions)} sub-agent${entry.subagents.sessions === 1 ? "" : "s"} (${callCount(entry.subagents.calls, compact)}, ${compact(entry.subagents.tokens)} tokens)` : ""
+      lines.push(`  ${entry.harness.padEnd(14)} ${compact(entry.input + entry.output).padStart(8)} tokens (+${compact(entry.cacheRead + entry.cacheWrite)} cached) · ${callCount(entry.calls, compact)}${subagents}`)
+    }
+  }
   return `${lines.join("\n")}\n`
 }
+
+/** Days `mendcode usage` lists one by one in its text output; `--json` has them all. */
+const USAGE_TEXT_DAYS = 14
 
 export function storageText(report: StorageReport, now: number) {
   const total = report.dbBytes + report.walBytes + report.blobBytes
