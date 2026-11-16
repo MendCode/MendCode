@@ -72,6 +72,8 @@ export function createKeys(ctx: AppContext, actions: {
   suggestionPool: ReturnType<typeof createPrompt>["suggestionPool"]
   runSlash: (text: string) => Promise<boolean>
   chatWidth: () => number
+  /** Whether the left list shows at this width (the search draws in it). */
+  sidebarShown: (width: number) => boolean
   /** The columns the transcript's text is laid out in (the chat column less the scrollbar's). */
   transcriptWidth: () => number
   pickApproval: (index: number) => Promise<void>
@@ -229,6 +231,8 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "chat" && state.find && await actions.findKey(key)) return
     // The prompt-history search bar takes the keyboard the same way (the wheel and paging keys still scroll).
     if (state.page === "chat" && state.promptSearch && await actions.composer.searchKey(key)) return requestFrame()
+    // The left list's search takes every key but the mouse while it is open (ui/app/sidebar-search.ts).
+    if (state.page === "chat" && state.sidebarSearch?.isOpen() && await state.sidebarSearch.key(key, actions)) return requestFrame()
     if (state.page === "compaction" && state.compactionView?.editing) return pageKey(key)
     const { width, height } = input.screen.size
     // The keymap editor waiting for a key takes ctrl+c too (it is reserved, and says so) instead of quitting.
@@ -382,6 +386,7 @@ export function createKeys(ctx: AppContext, actions: {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
       else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+      else if (hit && state.sidebarSearch?.isOpen()) await state.sidebarSearch.activate(hit.sessionId, actions)
       // The ▸/▾ glyph of a folding row folds it; the rest of the row does what Enter does.
       else if (hit?.fold && state.sidebarBots?.live() && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) >= hit.fold.from && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
       else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
@@ -442,7 +447,8 @@ export function createKeys(ctx: AppContext, actions: {
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
         const onSettled = !multi && stops[index] === SETTLED_ROW
         // Up from the first row wraps to the last and down from the last to the first.
-        if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
+        if (key === "/") await openSidebarSearch()
+        else if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
         else if (multi && (key === "\t" || key === "\x1b[Z")) {
           // Tab and Shift+Tab land on the first row of the next and the previous section, wrapping; a Shift+Tab inside a section goes to its own first row first.
           const starts = multi.sectionStarts().map((id) => stops.indexOf(id)).filter((at) => at >= 0)
@@ -697,8 +703,16 @@ export function createKeys(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** `/` in the focused list or `sidebar.search` from the chat: the list's search, loaded by its first use. */
+  async function openSidebarSearch() {
+    if (state.page !== "chat" || !actions.sidebarShown(input.screen.size.width)) return say("the session list is not shown here · /sidebar or a wider terminal shows it", "info")
+    state.sidebarSearch ??= (await import("./sidebar-search")).createSidebarSearch(ctx)
+    state.sidebarSearch.show()
+  }
+
   /** A keymap action, through the same handlers as the slash commands; a draft in the prompt survives it. */
   async function runKeyAction(action: BindingAction, key?: string) {
+    if (action === "sidebar.search") { await openSidebarSearch(); return requestFrame() }
     if (action === "selection.quote") { mouseSelection.quote(); return requestFrame() }
     // The comment key: with comments off (or `commentKey` set to quote) it keeps its old job of quoting the selection into the prompt.
     // ctrl+g never had that job: it always comments.

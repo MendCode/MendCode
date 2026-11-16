@@ -43,6 +43,29 @@ With the prompt empty, `←` focuses the list (`→` when the list is on the rig
 
 `←` and `→` are also the keys between sub-agent chats. When the open session has a sub-agent (its own, or a sibling's) that is still working or waiting, the plain arrows stay sub-agent navigation and `Alt+←` (`Alt+→` for a list on the right) focuses the list instead; otherwise `←` focuses the list. A finished sub-agent does not hold the arrows. On a fresh session the home screen's list does not take `↓` while the sidebar has focus.
 
+### Search
+
+`/` in the focused list, or `ctrl+x <` from the chat (`sidebar.search` in `keybindings.json`), opens a search field at the top of the list. It finds sessions by title, projects by folder name or path, and bots by name, and draws them in place of the list:
+
+```text
+ / side▌                     4 │
+   ↑↓ move  ↵ open  esc back   │
+                               │
+ › · Fix the sidebar search 2m │
+   ▸ sidebar-lane      project │
+   ⬢ sidekick           ◌ idle │
+   · Notes on side effects  3d │
+
+   app · 2m                    │
+```
+
+- Typing filters at once. A lowercase query ignores case; a query with a capital letter matches case exactly.
+- The order: the start of the name, then the start of a word in it (a camelCase hump counts), then the letters together anywhere, then the letters in order with gaps (`fsb` finds `Fix the sidebar`). A project's path matches below its name. The most recent activity breaks ties. The matched letters are underlined in the accent colour.
+- `↑` `↓` move, `Enter` or a click opens the match: a session opens, a project starts a new chat in its folder, a bot starts a chat with it as Enter on its row does. The last row says where the picked match is.
+- `Esc` (or Backspace on an empty field) closes the search and gives back the list as it was, with the same row picked; opened from the chat, the prompt gets the keyboard back. `ctrl+u` clears the field, `ctrl+w` deletes a word.
+- The search runs over what the terminal already holds, with no request per key. When the typing stops for a moment, one `session.list` with `find` (50 at most) adds the sessions it does not hold, whose title or folder holds the text as typed. The list shows the best 64 matches and counts the rest.
+- Nothing of it loads until the first `/`; closed, it keeps no timer. It needs the list on screen: where the list does not show (a narrow terminal, the home screen, `/sidebar hidden`), `ctrl+x <` says so.
+
 With bots on and a terminal from 70 to 109 columns, the list is the icons column; below 70 it does not show. With the flag off and `sidebarProjects` on `auto` or `folder` the list is the one described above and nothing else loads.
 
 ## Panel commands

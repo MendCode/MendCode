@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- The left list has a search: `/` in the list (or `ctrl+x <` from the chat) finds sessions, projects and bots by name as you type, with the matched letters marked; Enter opens a session, starts a new chat in a project or with a bot, and Esc puts the list back as it was.
+
 ### Changed
 
 - In the left list, Enter on a project starts a new chat in that folder and Enter on a bot's `chats` row starts a chat with the bot. Space folds or opens any header; `←` folds an open header and `→` opens a folded one; a click on the ▸/▾ arrow folds, a click on the name does what Enter does.

@@ -640,6 +640,8 @@ export type AppState = {
   sidebarWorktreeOf?: { directory: string; linked: boolean }
   /** Experimental bots or all projects: the module that draws the left list, there once the first frame that needs it loaded it. */
   sidebarBots?: import("./sidebar-bots").SidebarBots
+  /** The left list's search, there once the first `/` (or `sidebar.search`) loaded it. */
+  sidebarSearch?: import("./sidebar-search").SidebarSearch
   /** The open bot page (`page: "bot"`): its drawing and keys. */
   botCard?: import("../../view/bot-card-page").BotCard | undefined
   /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */

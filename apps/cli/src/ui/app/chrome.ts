@@ -154,6 +154,13 @@ export function createChrome(ctx: AppContext, actions: {
 
   /** The project's sessions, with hit rows for mouse navigation. */
   function sidebarRows(height: number): Line[] {
+    // The search (`/` in the list) draws over whichever list shows, in the same cells.
+    const found = state.sidebarSearch?.draw({ height, width: sidebarCells(input.screen.size.width) || SIDEBAR_WIDTH, now: now(), ascii: asciiMarks(), ...sidebarMotion() })
+    if (found) {
+      state.sidebarHits = found.hits.map((hit) => ({ row: hit.row, sessionId: hit.id }))
+      state.sidebarImages = undefined
+      return found.lines
+    }
     // Experimental bots, or every project's sessions: a module loaded by the first frame that needs it draws the list; until it is
     // here the classic list stays (the icons column, which it cannot draw, waits blank).
     if (multiWanted()) {

@@ -1073,6 +1073,7 @@ export function createApp(input: AppInput) {
     suggestionPool,
     runSlash: (...args) => runSlash(...args),
     chatWidth: (...args) => chatWidth(...args),
+    sidebarShown: (...args) => sidebarShown(...args),
     transcriptWidth: () => transcriptWidth(),
     pickApproval: (...args) => pickApproval(...args),
     pickQuestion: (...args) => pickQuestion(...args),

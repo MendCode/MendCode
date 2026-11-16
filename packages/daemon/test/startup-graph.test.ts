@@ -54,6 +54,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   for (const file of ["apps/cli/src/ui/app/bots.ts", "apps/cli/src/view/bot.ts", "apps/cli/src/view/bot-face.ts", "apps/cli/src/view/bot-face-image.ts", "apps/cli/src/view/bot-face-anim.ts", "apps/cli/src/view/bot-avatar.ts"]) expect(inputs.has(file), file).toBe(false)
   // The bots sidebar (all projects, bots section, icons column, a bot's page) loads with the first frame that needs it.
   for (const file of ["apps/cli/src/ui/app/sidebar-bots.ts", "apps/cli/src/view/sidebar-multi.ts", "apps/cli/src/view/bot-icon.ts", "apps/cli/src/view/bot-look.ts", "apps/cli/src/view/bot-card-page.ts"]) expect(inputs.has(file), file).toBe(false)
+  // The left list's search (index, matcher, drawing and keys) loads with the first `/` or `sidebar.search`.
+  for (const file of ["apps/cli/src/ui/app/sidebar-search.ts", "apps/cli/src/view/sidebar-search.ts"]) expect(inputs.has(file), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
   // /profiles and what it names of an override (labels, groups, summaries) load with the page.
