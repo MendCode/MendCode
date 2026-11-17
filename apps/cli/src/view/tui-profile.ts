@@ -395,8 +395,6 @@ export type TuiProfile = {
   placeholderText: string
   /** The left session list's first row ("Sessions" and the focus key); off gives the row to the sessions. */
   sidebarHeader: boolean
-  /** A two-finger sideways swipe over the left list closes it, and over the chat's outer edge opens it; off leaves the sideways wheel alone. */
-  sidebarSwipe: boolean
   /** The running sub-agents and background commands listed over the prompt; off leaves them to /tasks and ctrl+t. */
   showTasks: boolean
   /** Opt-in Jobs panel in the balanced/full dock; minimal draws no dock. */
@@ -663,7 +661,6 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   showPlaceholder: true,
   placeholderText: "",
   sidebarHeader: true,
-  sidebarSwipe: true,
   showTasks: true,
   dockJobs: false,
   usageClock: true,
@@ -1049,7 +1046,6 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     showPlaceholder: bool("showPlaceholder"),
     placeholderText: oneLine(source.placeholderText, 120),
     sidebarHeader: bool("sidebarHeader"),
-    sidebarSwipe: bool("sidebarSwipe"),
     showTasks: bool("showTasks"),
     dockJobs: bool("dockJobs"),
     usageClock: bool("usageClock"),

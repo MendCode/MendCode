@@ -43,11 +43,11 @@ With the prompt empty, `←` focuses the list (`→` when the list is on the rig
 
 `←` and `→` are also the keys between sub-agent chats. When the open session has a sub-agent (its own, or a sibling's) that is still working or waiting, the plain arrows stay sub-agent navigation and `Alt+←` (`Alt+→` for a list on the right) focuses the list instead; otherwise `←` focuses the list. A finished sub-agent does not hold the arrows. On a fresh session the home screen's list does not take `↓` while the sidebar has focus.
 
-### Wheel and swipe
+### Wheel
 
 The mouse wheel or a trackpad over the list's columns moves the list's window by `wheelLines` rows (`/customize` › Input & keys › Wheel lines), in the projects and bots list and in the classic list, on either side; the chat does not move. The picked row stays where it is and may leave the view; the next arrow key, or opening another session, brings the window back to the picked row. A list that fits needs no scrolling and ignores the wheel. While the search is open the wheel does nothing over the list. Over the chat the wheel scrolls the chat as before.
 
-A two-finger sideways swipe (the terminal's sideways wheel, SGR buttons 66 and 67) toggles the list, once per gesture: toward the list's outer edge closes it (left for a list on the left, right for one on the right) and away from it opens it, as `/sidebar hidden` and `/sidebar always` do (never `auto`, so the list stays as the swipe left it). It counts three sideways events in one direction less than 150 ms apart, then ignores sideways events until 200 ms pass without one, so the tail of a trackpad's inertia does nothing more. It acts wherever the pointer is on the chat page; nothing else there reads the sideways wheel. The swipe changes the list at once, with no animation. It needs a terminal that reports the sideways wheel while mouse reporting is on (not with `MENDCODE_MOUSE=0` or in screen-reader mode, which turn mouse reporting off), and `sidebarSwipe` (`/customize` › Top & side › Sidebar swipe, default on) turns it off.
+A sideways swipe or wheel does nothing on the chat page; the list opens and closes with `/sidebar`.
 
 ### Search
 
