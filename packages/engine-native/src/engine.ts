@@ -1399,7 +1399,7 @@ export function createNativeEngine(options: {
    */
   async function permit(input: TurnInput, tool: Tool, call: ToolCall, itemId: ItemId, toolset: Toolset, frozen: ReturnType<typeof freezeAction>, explicitApproval = false): Promise<PermitResult> {
     const parsedPermission = tool.args.safeParse(call.args)
-    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId), ...(tool.name === "workflow_script" && options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...botFor(input.sessionId, tool.name) }
+    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId), ...botFor(input.sessionId, tool.name) }
     if (parsedPermission.success && tool.permissionFor) tool = { ...tool, permission: tool.permissionFor(parsedPermission.data, permissionContext) }
     tool = sessionRecallPermission(tool, call.args)
     const mode = modeOf(input, toolset)

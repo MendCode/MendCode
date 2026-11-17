@@ -139,7 +139,7 @@ export type LoopPort = {
 }
 
 /** What the per-call permission hooks of a tool may look at. */
-export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined; workflows?: WorkflowPort | undefined }
+export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined }
 
 export type BotResult = { ok: true; text: string; /** Short facts for the transcript card. */ meta?: Record<string, string | number | boolean> } | { ok: false; message: string }
 export type BotSkillInput = { name: string; description?: string | undefined; body?: string | undefined }
@@ -287,8 +287,6 @@ export type ThreadPort = {
 
 /** Workflow actions stay scoped to this session's project and use normal tool approval. */
 export type WorkflowPort = {
-  /** Whether the saved script `name` resolves to a file of an installed package (not one the project or the user's folder holds, which a write can create). */
-  installed?(name: string): boolean
   /** Problems (empty when the plan can start) and, when valid, the approval text: tasks, every check command, applied permission. */
   preview(plan: unknown): Promise<{ problems: string[]; detail?: string }>
   start(plan: unknown): Promise<{ ok: true; workflowId: string; name: string; tasks: number } | { ok: false; message: string }>

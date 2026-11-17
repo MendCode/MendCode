@@ -1,5 +1,4 @@
 import type { ExtensionLayer } from "@mendcode/packages"
-import { existsSync } from "node:fs"
 import path from "node:path"
 import { MAX_FRAME_BYTES, redactSecrets, summarizeWorkflow, WORKFLOW_PERMISSION_RANK, type LedgerPage, type ErrorCode, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId, type WorkflowId, type WorkflowPlan, type WorkflowPlanInput, type WorkflowRun, type WorkflowSummary } from "@mendcode/protocol"
 import type { CheckRunner } from "@mendcode/loops"
@@ -341,8 +340,6 @@ export function createWorkflowsHost(options: {
     /** The workflow tools' view for one session: plans start in its directory, as its children. */
     port(sessionId: SessionId, directory: string): WorkflowPort {
       return {
-        // The layer that wins a name is the last one with the file (as in readWorkflowScripts); only an installed package's counts.
-        installed: (name) => options.layersFor(directory).filter((layer) => existsSync(path.join(layer.dir, "workflows", `${name}.js`))).at(-1)?.pkg !== undefined,
         async preview(plan) {
           const reply = await handle({ type: "workflow.preview", directory, plan: plan as WorkflowPlanInput, originSessionId: sessionId }, MODEL)
           if (!reply.ok) return { problems: [reply.message] }

@@ -13,6 +13,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.
 - Opening a chat from the left list no longer waits for the previous chat to be released first.
+- In full access a script workflow starts at once, like any other tool; other permission modes still show its source and ask first.
 - Computer Use reads an app as a compact text tree and, after the first look, sends only what changed; actions say whether a change was seen afterwards, and a window can be restored, reopened or selected while the app stays in the background.
 
 ### Fixed
