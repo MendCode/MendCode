@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.18 - 2026-11-16
+
+Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.
+
+### Upgrade notes
+
+- Same code as v0.0.18-beta.4.
+
+## v0.0.18-beta.4 - 2026-11-16
+
+A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form.
+
 ### Changed
 
 - The home screen's Bots block reads like the Agent View's sections: a `Bots` title, then one row per state with the bots on the left and the state on the right, in the Agent View's column (also when there are no sessions).
@@ -22,14 +34,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Pasting into the new bot form fills the field it is on.
 - Pasting while the left list's search is open goes into the search instead of the prompt.
 - The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
-
-## v0.0.18 - 2026-11-16
-
-Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.
-
-### Upgrade notes
-
-- Same code as v0.0.18-beta.3.
 
 ## v0.0.18-beta.3 - 2026-11-16
 
