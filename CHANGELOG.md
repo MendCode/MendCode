@@ -13,6 +13,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - With a sub-agent's thread open, ← and → change sub-agent even while the left list shows; Alt+← enters the list there.
 - The Bots section of the left list appears as fast as the ordinary chats: the list of other apps' bots (Hermes) no longer holds it back, and the home screen no longer asks for the bots a second time.
+- A sideways swipe back right after the previous one now toggles the left list again, without clicking in the terminal first.
+- A crash screen raised while the chat is closing no longer opens the alternate screen over the shell.
 
 ## v0.0.18 - 2026-11-16
 
