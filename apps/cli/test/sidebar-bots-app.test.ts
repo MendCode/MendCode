@@ -406,6 +406,23 @@ describe("the bot card", () => {
     expect(footer).not.toContain("GPT-6-Luna")
   })
 
+  test("Enter on a bot that reuses the blank chat already open names the bot's model under the prompt", async () => {
+    let h!: App
+    h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : command.type === "models.list" ? { ok: true, result: { engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6.1-terra" }, effective: { model: "gpt-6.1-terra" }, roles: {} } } as never : undefined })
+    await until(h, "Bots")
+    await Bun.sleep(20)
+    h.app.render()
+    expect(h.text().at(-1)!.toLowerCase()).toContain("terra")
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    h.app.render()
+    const footer = h.text().at(-1)!.toLowerCase()
+    expect(footer).toContain("luna")
+    expect(footer).not.toContain("terra")
+  })
+
   test("a chat that already runs as a bot names the bot's model under the prompt, even when the models answer gives the default", async () => {
     const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : undefined })
     await until(h, "Bots")

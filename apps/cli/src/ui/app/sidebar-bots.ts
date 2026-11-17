@@ -494,6 +494,10 @@ export function createSidebarBots(ctx: AppContext) {
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
     state.pendingBot = { sessionId: sessionId as SessionId, name }
     noteChat(sessionId, name)
+    // The blank chat it reuses may be the one already open (the home screen's), so no session switch reloads the model: the row
+    // under the prompt names the bot's model now.
+    const model = report?.bots.find((bot) => bot.name === name)?.model
+    if (model && state.sessionId === sessionId) { state.effectiveModel = { model }; requestFrame() }
     return sessionId as SessionId
   }
 

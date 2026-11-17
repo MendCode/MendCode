@@ -11,7 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
-- A chat with a bot names the bot's model under the prompt after its first message too, instead of the session's default.
+- A chat with a bot names the bot's model under the prompt after its first message too, and when Enter on the bot reuses the blank chat already open, instead of the session's default.
 - An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
 
 ## v0.0.18 - 2026-11-16
