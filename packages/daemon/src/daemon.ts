@@ -1051,7 +1051,8 @@ export async function startDaemon(options: DaemonOptions) {
    */
   function agentModelOf(sessionId: SessionId, models: { list(): ModelInfo[] }, override?: string): ModelChoice | undefined {
     if (!override && !store.sessionAgent(sessionId)) return undefined
-    const profile = agents.port().primary(sessionId, override)
+    // Only the model is read: the prompt a bot's turn builds (memory, digest, overview) is not, so asking never costs a chat opening that.
+    const profile = agents.port().primary(sessionId, override, { prompt: false })
     if (!profile?.model || !models.list().some((model) => model.id === profile.model)) return undefined
     return { model: profile.model, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.variant ? { variant: profile.variant } : {}) }
   }

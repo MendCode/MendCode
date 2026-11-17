@@ -114,13 +114,15 @@ export function createAgentRegistry(options: {
   }
 
   const port = (): AgentPort => ({
-    primary(sessionId, override) {
+    primary(sessionId, override, detail) {
       const directory = options.directoryOf(sessionId)
       if (!directory) return undefined
       const name = override ?? options.selected(sessionId) ?? "build"
       const agent = usable(directory).find((candidate) => candidate.name === name && (override || options.isChild?.(sessionId) || candidate.mode !== "subagent"))
       if (agent) {
         const profile = toProfile(agent)
+        // A caller that wants the agent's model, permission or tools and not its prompt (a model list, a chat opening) never pays for a bot's memory, digest and overview.
+        if (detail?.prompt === false) return { ...profile, ...(name === "plan" ? { permission: "plan" as const } : {}) }
         const isBot = agent.bot && agent.source === "user"
         const memory = isBot ? options.botMemory?.(agent.name, directory) : undefined
         const live = isBot && options.botsOn?.() === true
