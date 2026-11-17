@@ -406,6 +406,71 @@ describe("the bot card", () => {
     expect(footer).not.toContain("GPT-6-Luna")
   })
 
+  test("Enter on a bot that reuses the blank chat already open names the bot's model under the prompt", async () => {
+    let h!: App
+    h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : command.type === "models.list" ? { ok: true, result: { engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6.1-terra" }, effective: { model: "gpt-6.1-terra" }, roles: {} } } as never : undefined })
+    await until(h, "Bots")
+    await Bun.sleep(20)
+    h.app.render()
+    expect(h.text().at(-1)!.toLowerCase()).toContain("terra")
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    h.app.render()
+    const footer = h.text().at(-1)!.toLowerCase()
+    expect(footer).toContain("luna")
+    expect(footer).not.toContain("terra")
+  })
+
+  test("/new on the blank chat a bot opened is a plain chat: the first message does not give it the bot", async () => {
+    let h!: App
+    h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : undefined })
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    await h.type("/new\r")
+    for (let turn = 0; turn < 40 && h.sentOf("session.create").length < 2; turn++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    await h.type("plain question\r")
+    expect(h.sentOf("user.submit").at(-1)).toMatchObject({ sessionId: h.ids.current, text: "plain question" })
+    expect(h.sentOf("session.agent.set")).toHaveLength(0)
+  })
+
+  test("/new on the blank chat a bot opened also drops the bot's name and accent from the open chat", async () => {
+    let h!: App
+    const agents = { directory: "/work/app", current: "build", agents: [{ name: "build", mode: "primary", source: "builtin" }, { name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] }
+    // The bot list does not know this chat: only what the app itself holds makes it the bot's.
+    const bots = { bots: [{ name: "calm", description: "", identity: { shape: "circle", color: "success", origin: "mendcode" }, model: "claude-sonnet", file: "/d/agents/calm.md", state: "idle", projects: [] }], external: [], problems: [] }
+    // Enter on the bot switches to the new blank chat (the harness answers session.create with it, `/new` reuses it), which loads its agent report.
+    h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: agents } as never : command.type === "bot.list" ? reply(bots) : undefined })
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    for (let turn = 0; turn < 40 && !h.text().at(-1)!.includes("calm"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().at(-1)!).toContain("calm")
+    await h.type("/new\r")
+    for (let turn = 0; turn < 40 && h.sentOf("session.create").length < 2; turn++) await Bun.sleep(5)
+    for (let turn = 0; turn < 40; turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().at(-1)!).not.toContain("calm")
+  })
+
+  test("a chat that already runs as a bot names the bot's model under the prompt, even when the models answer gives the default", async () => {
+    const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : undefined })
+    await until(h, "Bots")
+    for (let turn = 0; turn < 40 && !h.text().at(-1)!.includes("Sonnet"); turn++) { await Bun.sleep(5); h.app.render() }
+    const footer = h.text().at(-1)!
+    expect(footer).toContain("Sonnet")
+    expect(footer).not.toContain("GPT-6-Luna")
+  })
+
+  test("a chat that already runs as a bot keeps the bot's variant in the status row", async () => {
+    const h = chatApp({ height: 30, profile: { statusRight: "variant" }, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", variant: "zenith", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : command.type === "models.list" ? { ok: true, result: { engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6-luna" }, effective: { model: "claude-sonnet", variant: "zenith" }, roles: {} } } as never : undefined })
+    await until(h, "Bots")
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("zenith"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().join("\n")).toContain("zenith")
+  })
+
   test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {
     const h = chatApp()
     await onBot(h)
@@ -417,6 +482,25 @@ describe("the bot card", () => {
     expect(order.lastIndexOf("session.agent.set")).toBeLessThan(order.lastIndexOf("user.submit"))
     await h.type("second\r")
     expect(h.sentOf("session.agent.set")).toHaveLength(1)
+  })
+
+  test("opening another chat while the bot is being assigned leaves that message in its own chat", async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const h = chatApp({ height: 30, extra: (command) => command.type === "session.agent.set" ? held.then(() => ({ ok: true, result: {} }) as never) as never : undefined })
+    await onBot(h)
+    await h.type("\r")
+    expect(h.app.sessionId).toBe(h.ids.created)
+    const sending = h.app.onInput("hello bot\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.agent.set").length; turn++) await Bun.sleep(5)
+    h.app.render()
+    await h.type(click(6, rowOf(h, "Client reconnect")))
+    expect(h.app.sessionId).toBe(h.ids.second)
+    release()
+    await sending
+    await Bun.sleep(10)
+    expect(h.sentOf("user.submit").every((command) => (command as { sessionId: string }).sessionId === h.ids.created)).toBe(true)
+    expect(h.sentOf("user.submit")).toHaveLength(1)
   })
 
   test("a new chat with a bot sits under the bot's chats the moment its summary arrives, never under Projects, and the chats open", async () => {

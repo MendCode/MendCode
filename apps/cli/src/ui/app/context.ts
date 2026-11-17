@@ -627,6 +627,8 @@ export type AppState = {
   contextArea?: { from: number; to: number } | undefined
   sidebarFocus?: boolean
   sidebarSelected?: string | undefined
+  /** Where the wheel put the left list's window, and the window the last frame drew (view/sidebar-window.ts); memory only. */
+  sidebarScroll?: import("../../view/sidebar-window").SidebarScroll | undefined
   sidebarHits?: Array<{ row: number; sessionId: string; /** The cells of a folding row's ▸/▾ glyph, from the sidebar's left edge. */ fold?: { from: number; to: number } }>
   /** The bots' pictures in the left list, at the list's own rows and columns (empty unless the terminal draws images). */
   sidebarImages?: import("../image-layer").ImagePlacement[] | undefined
@@ -647,7 +649,7 @@ export type AppState = {
   /** The open bot page (`page: "bot"`): its drawing and keys. */
   botCard?: import("../../view/bot-card-page").BotCard | undefined
   /** The open bot form (`page: "bot-form"`: new, edit or the delete confirmation): its drawing and keys. */
-  botForm?: { render(input: { width: number; height: number; ascii: boolean; placements?: import("../image-layer").ImagePlacement[] }): import("../theme").Line[]; key(key: string): Promise<void> } | undefined
+  botForm?: { render(input: { width: number; height: number; ascii: boolean; placements?: import("../image-layer").ImagePlacement[] }): import("../theme").Line[]; key(key: string): Promise<void>; paste(text: string): Promise<void> } | undefined
   topbarTimer: ReturnType<typeof setInterval> | undefined
   /** Screen rows of the panels in the last chat frame, for clicks (0-based; rows are relative to `top`). */
   requestArea: { top: number; hits: Array<{ row: number; index: number; from?: number; to?: number }>; kind: "approval" | "question" } | undefined

@@ -10,6 +10,7 @@ import { renderQueuePanel } from "./queue-panel"
 import { approvalOptionRows, renderApprovalPanel, type ApprovalChoice, type PanelRows } from "./request-panel"
 import { questionAnswerBlock, renderQuestionBatch, type QuestionCard, type QuestionDraft, type QuestionField } from "./question-batch"
 import { renderSessionSidebar, SETTLED_MORE, SETTLED_ROW, SIDEBAR_WIDTH } from "./sidebar"
+import type { SidebarScroll } from "./sidebar-window"
 import { renderSlashMenu } from "./slash-menu"
 import type { StatusInput } from "./status-page"
 // Loaded on first use: the status page is a lazy page module and stays out of the startup graph (test/footprint.test.ts).
@@ -168,7 +169,7 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
   },
   topbar: (m) => [renderTopbar({ ...(m as unknown as TopbarInput), width: m.width })],
   "sessions.sidebar": (m, g) => {
-    const side = renderSessionSidebar({ sessions: m.sessions as never, current: m.current, ...(m.selected ? { selected: m.selected } : {}), focused: m.focused, height: m.height, now: m.now, ...(m.extra?.header === false ? { header: false } : {}), ...(m.unread ? { unread: m.unread } : {}), ...(m.spinner ? { spinner: m.spinner } : {}), ...(m.blink !== undefined ? { blink: m.blink } : {}), ...(m.settledOpen ? { settledOpen: true } : {}), ...(typeof m.extra?.settledShown === "number" ? { settledShown: m.extra.settledShown } : {}), ...(m.extra?.folder ? { folder: m.extra.folder as { branch?: string; worktree?: string } } : {}), ascii: m.ascii, glyphs: g })
+    const side = renderSessionSidebar({ sessions: m.sessions as never, current: m.current, ...(m.selected ? { selected: m.selected } : {}), focused: m.focused, height: m.height, now: m.now, ...(m.extra?.header === false ? { header: false } : {}), ...(m.unread ? { unread: m.unread } : {}), ...(m.spinner ? { spinner: m.spinner } : {}), ...(m.blink !== undefined ? { blink: m.blink } : {}), ...(m.settledOpen ? { settledOpen: true } : {}), ...(typeof m.extra?.settledShown === "number" ? { settledShown: m.extra.settledShown } : {}), ...(m.extra?.folder ? { folder: m.extra.folder as { branch?: string; worktree?: string } } : {}), ...(m.extra?.scroll ? { scroll: m.extra.scroll as SidebarScroll } : {}), ascii: m.ascii, glyphs: g })
     // The Settled row folds or unfolds the settled sessions; every other row opens its session.
     return { lines: side.rows, hits: side.hits.map((hit) => hit.sessionId === SETTLED_ROW ? { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "toggle" } : hit.sessionId === SETTLED_MORE ? { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "more" } : { row: hit.row, from: 0, to: SIDEBAR_WIDTH, action: "open", arg: hit.sessionId }) }
   },

@@ -359,6 +359,17 @@ describe("in the app", () => {
     expect(screen(h)).toContain("bot pixel made")
   })
 
+  test("a bracketed paste goes into the field the form is on", async () => {
+    const h = app({ extra: (command) => command.type === "bot.save" ? reply({ file: "/d/agents/pixel.md", agent: { name: "pixel" }, generation: "deterministic", callsProviders: false }) : undefined })
+    await h.type("/bot new pixel\r")
+    await h.type("\t\t\t")
+    await h.type("\x1b[200~Calm\nreviewer.\x1b[201~")
+    for (let turn = 0; turn < 3; turn++) await h.type("\t")
+    await h.type("\r")
+    for (let turn = 0; turn < 20 && h.sentOf("bot.save").length === 0; turn++) await Bun.sleep(5)
+    expect(h.sentOf("bot.save")[0]).toMatchObject({ name: "pixel", prompt: "Calm reviewer." })
+  })
+
   test("Esc discards: nothing is written, whatever was typed", async () => {
     const h = app()
     await h.type("/bot new pixel\r")
@@ -446,6 +457,19 @@ describe("in the app", () => {
     expect(h.app.page).toBe("chat")
     h.app.render()
     expect(screen(h)).toContain("bot calm deleted · memory kept · its 2 sessions stay in /sessions")
+  })
+
+  test("a paste is text for a text field only: in the delete confirmation a pasted `y` or `m` does nothing", async () => {
+    const h = app({ extra: (command) => command.type === "bot.delete" ? reply({ file: "/d/agents/calm.md", memoryRemoved: true, sessions: 0 }) : undefined })
+    await h.type("/bot delete calm\r")
+    await until(h, "Delete bot calm?")
+    await h.type("\x1b[200~y\x1b[201~")
+    await h.type("\x1b[200~m\x1b[201~")
+    await Bun.sleep(20)
+    expect(h.sentOf("bot.delete")).toHaveLength(0)
+    expect(h.app.page).toBe("bot-form")
+    expect(screen(h)).toContain("Delete bot calm?")
+    expect(screen(h)).not.toContain("memory folder (bots/calm) is removed too")
   })
 
   test("m in the confirmation also removes the memory; Esc cancels and sends nothing", async () => {

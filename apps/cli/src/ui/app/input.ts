@@ -115,6 +115,8 @@ export function createInput(ctx: AppContext, actions: {
       else if (actions.planReviewPaste(token.text)) continue
       else if (actions.gitPaste(token.text)) continue
       else if (state.page === "chat") {
+        // The left list's search takes a paste as it takes keys (keys.ts): into its query, never the prompt behind it.
+        if (state.sidebarSearch?.paste(token.text)) continue
         if (state.promptSearch && actions.composer.searchPaste(token.text)) continue
         if (state.find && !state.palette && actions.findPaste(token.text)) continue
         if (state.palette) {
@@ -148,6 +150,10 @@ export function createInput(ctx: AppContext, actions: {
         await actions.compactionPaste(token.text)
       } else if (state.page === "memory-assistant" || state.page === "export" || state.page === "skills" || state.page === "model-picker" || state.page === "history" && state.historyState.editing || state.page === "usage" && state.usageState.weatherInput !== undefined) {
         await onKey(token.text.replace(/\s+/g, " "))
+      } else if (state.page === "bot-form") {
+        // The form's text rows take a paste as typed text, one line (the personality's line breaks become spaces).
+        const line = token.text.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+        if (line.trim()) await state.botForm?.paste(line)
       } else if (state.page === "console" && state.console?.form) {
         await onKey(token.text.replace(/[\x00-\x1f\x7f]/g, ""))
       } else if (state.page === "connect") {
@@ -313,13 +319,15 @@ export function createInput(ctx: AppContext, actions: {
       if (state.pendingBot === botChat) state.pendingBot = undefined
     }
     const sending = live
-    state.attachments = []
+    // The bot assignment above is awaited: another chat may be open by now, and the message stays bound to the one it was written in.
+    const stillHere = state.sessionId === submissionSession
+    if (stillHere) state.attachments = []
     const executable = expanded !== undefined && typeof expanded !== "string" ? expanded : undefined
     const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, sending, executable ? "" : ide.text)
     const contextText = composed.text
     composed.text = ide.text + composed.text
-    state.clearPending = state.tuiProfile.submitScroll === "clear"
-    const reply = await input.send(executable ? { type: "commands.execute", sessionId: state.sessionId, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: state.sessionId, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
+    state.clearPending = stillHere && state.tuiProfile.submitScroll === "clear"
+    const reply = await input.send(executable ? { type: "commands.execute", sessionId: submissionSession, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: submissionSession, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
     // A message that could not go comes back to the prompt it left, unless something newer is there now (another session,
     // text typed while it was sent): that stays, and the message is one ↑ away in the prompt history.
     const restorable = state.sessionId === submissionSession && editor.isEmpty() && state.attachments.length === 0

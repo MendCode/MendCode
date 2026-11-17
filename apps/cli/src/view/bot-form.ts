@@ -186,6 +186,12 @@ function confirmKey(form: BotFormState, key: string): { form: BotFormState | und
   return { form, action: { type: "none" } }
 }
 
+/** Whether pasted text has somewhere to go: a text row of a form that is not busy or asking before a delete. */
+export function botFormTakesText(form: BotFormState): boolean {
+  const row = rowAt(form)
+  return !form.busy && !form.confirm && TEXT_ROWS.has(row) && !(row === "name" && form.mode === "edit")
+}
+
 /** One raw key: the form to keep (undefined closes the page) and what the app should do. */
 export function botFormKey(form: BotFormState, key: string): { form: BotFormState | undefined; action: BotFormAction } {
   const NONE: BotFormAction = { type: "none" }

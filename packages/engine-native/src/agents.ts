@@ -10,7 +10,7 @@ export type AgentProfile = Pick<AgentDefinition, "name" | "description" | "mode"
 /** The engine's view of custom agents; the daemon reads the agent files (and their trust) behind it. */
 export interface AgentPort {
   /** The primary agent selected for a session, `undefined` for the default (`build`). Read at the start of each turn. */
-  primary(sessionId: SessionId, override?: string): AgentProfile | undefined
+  primary(sessionId: SessionId, override?: string, detail?: { prompt: false }): AgentProfile | undefined
   /** The sub-agents `task` may call by name from a project root (trusted ones only). Read at the start of each turn. */
   subagents(cwd: string): AgentProfile[]
   planExit?(sessionId: SessionId, requested?: string): { name: string; profile?: AgentProfile }

@@ -27,14 +27,15 @@ const G = "[●■◆▲⬢]"
 const rows = (input: Parameters<typeof renderHomeBots>[0]) => renderHomeBots(input).lines.map(text)
 
 describe("the Bots block", () => {
-  test("one row per state in order working, waiting, problem, with the names that fit and `+ N more`", () => {
+  test("a Bots title like the Agent View's sections, then one row per state in order working, waiting, problem, the state on the right", () => {
     const out = rows({ entries: homeBotEntries(five, false), width: 54 })
     console.log(out.map((row) => `|${row}|`).join("\n"))
-    expect(out).toHaveLength(3)
-    expect(out[0]).toMatch(new RegExp(`^Bots {3}● working {2}${G} mendy {2}${G} Aurora {2}${G} Kai +\\+ 4 more$`))
-    expect(out[1]).toMatch(new RegExp(`^ {7}\\? waiting {2}${G} Laura$`))
-    expect(out[2]).toMatch(new RegExp(`^ {7}✗ problem {2}${G} Hugo$`))
-    for (const row of out) expect(textWidth(row)).toBeLessThanOrEqual(54)
+    expect(out).toHaveLength(4)
+    expect(out[0]).toBe("Bots")
+    expect(out[1]).toMatch(new RegExp(`^${G} mendy {2}${G} Aurora {2}${G} Kai.* \\+ \\d more +working$`))
+    expect(out[2]).toMatch(new RegExp(`^${G} Laura +waiting$`))
+    expect(out[3]).toMatch(new RegExp(`^${G} Hugo +problem$`))
+    for (const row of out.slice(1)) expect(textWidth(row)).toBe(54)
   })
 
   test("idle bots are not listed, and nothing at all is drawn when every bot is idle", () => {
@@ -46,29 +47,42 @@ describe("the Bots block", () => {
   test("a state nobody is in has no row, and bots of other apps are listed with MendCode's", () => {
     const mixed = report([bot("mendy", "working")], [{ origin: "hermes", id: "p1", name: "Hermes", state: "waiting" }, { origin: "hermes", id: "p2", name: "Idle one", state: "idle" }])
     const out = rows({ entries: homeBotEntries(mixed, false), width: 60 })
-    expect(out).toHaveLength(2)
-    expect(out[0]).toContain("working")
-    expect(out[1]).toMatch(new RegExp(`^ {7}\\? waiting {2}${G} Hermes`))
+    expect(out).toHaveLength(3)
+    expect(out[1]).toMatch(/working$/)
+    expect(out[2]).toMatch(new RegExp(`^${G} Hermes +waiting$`))
   })
 
   test("narrow widths drop the names first, then fold the rest into `+N`", () => {
     const narrow = rows({ entries: homeBotEntries(five, false), width: 28 })
     console.log(narrow.map((row) => `|${row}|`).join("\n"))
-    expect(narrow[0]).not.toContain("mendy")
-    expect(rows({ entries: homeBotEntries(five, false), width: 20 })[0]).toMatch(/\+\d$/)
+    expect(narrow[1]).not.toContain("mendy")
+    // Narrow rows say the state with its mark alone.
+    expect(rows({ entries: homeBotEntries(five, false), width: 20 })[1]).toMatch(/ ●$/)
     // Wide enough for two names they stay; one name of many is not worth the icons it hides.
-    expect(rows({ entries: homeBotEntries(five, false), width: 50 })[0]).toContain("mendy")
+    expect(rows({ entries: homeBotEntries(five, false), width: 50 })[1]).toContain("mendy")
     for (const row of narrow) expect(textWidth(row)).toBeLessThanOrEqual(28)
     const tiny = rows({ entries: homeBotEntries(five, false), width: 14 })
     for (const row of tiny) expect(textWidth(row)).toBeLessThanOrEqual(14)
     expect(tiny.join("\n")).toContain("+")
   })
 
+  test("icon-only rows reserve the gap before `+N`: no row is wider than the block at any width", () => {
+    const many = report(Array.from({ length: 15 }, (_, index) => bot(`Longer-bot-name-${index}`, "working")))
+    for (const count of [14, 15]) {
+      const entries = homeBotEntries(report(many.bots.slice(0, count)), false)
+      for (let width = 16; width <= 60; width++) {
+        for (const row of rows({ entries, width }).slice(1)) expect(textWidth(row), `${count} bots at ${width}`).toBe(width)
+      }
+    }
+  })
+
   test("ASCII terminals get ASCII glyphs and marks", () => {
     const out = rows({ entries: homeBotEntries(five, true), width: 60, ascii: true })
-    expect(out[0]).toMatch(/^Bots {3}\* working {2}(\(\)|\[\]|<>|\/\\|\{\}) mendy/)
-    expect(out[1]).toContain("? waiting")
-    expect(out[2]).toContain("x problem")
+    expect(out[1]).toMatch(/^(\(\)|\[\]|<>|\/\\|\{\}) mendy.* working$/)
+    expect(out[2]).toMatch(/waiting$/)
+    expect(out[3]).toMatch(/problem$/)
+    // A narrow ASCII row says the state with an ASCII mark.
+    expect(rows({ entries: homeBotEntries(five, true), width: 20, ascii: true })[3]).toMatch(/ x$/)
     expect(out.join("")).not.toMatch(/[●■◆▲⬢✗]/)
   })
 
@@ -99,10 +113,23 @@ describe("the Bots block inside the home", () => {
     const out = renderHome({ ...base, width: 100, height: 40, bots: bots((found) => { hits = found as typeof hits }) }).map(text)
     console.log(out.filter((row) => row.trim()).map((row) => `|${row}|`).join("\n"))
     const agentAt = out.findIndex((row) => row.includes("Completed"))
-    const botsAt = out.findIndex((row) => row.includes("Bots   ● working"))
+    const botsAt = out.findIndex((row) => row.trim() === "Bots")
     expect(botsAt).toBeGreaterThan(agentAt)
+    // The title starts in the Agent View's own column.
+    expect(out[botsAt]!.indexOf("Bots")).toBe(out[agentAt]!.indexOf("Completed"))
     const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
     expect(out[mendy.row]!.slice(mendy.from, mendy.to)).toMatch(new RegExp(`^${G} mendy$`))
+  })
+
+  test("a root or a session title that says `Bots` does not take the block's place: the hits stay on the block", () => {
+    for (const layout of ["center", "split"] as const) {
+      let hits: Array<{ row: number; from: number; to: number; id: string }> = []
+      const titled = [{ id: "s0", title: "Bots", state: "working" as const, updatedAt: NOW, startedAt: NOW - 1000 }, ...sessions]
+      const out = renderHome({ ...base, root: "~/Code/Bots", sessions: titled, width: layout === "split" ? 170 : 100, height: 40, look: { layout }, bots: bots((found) => { hits = found as typeof hits }) }).map(text)
+      const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
+      expect(mendy, layout).toBeDefined()
+      expect(out[mendy.row]!.slice(mendy.from, mendy.to), layout).toMatch(new RegExp(`^${G} mendy$`))
+    }
   })
 
   test("the same block is drawn in the split layout", () => {
@@ -139,16 +166,23 @@ describe("the Bots block inside the home", () => {
       const alone = renderHome({ ...base, width: 100, height, screenHeight: 30 }).map(text)
       expect(out.join("\n").includes("Port palette"), `h${height}`).toBe(alone.join("\n").includes("Port palette"))
       expect(out.length).toBeLessThanOrEqual(height)
-      shown.push(out.filter((row) => /^ *(Bots|\?|✗) /.test(row.trimEnd()) || row.includes("Bots   ")).length)
+      shown.push(out.filter((row) => row.trim() === "Bots" || /^\S.*\s(working|waiting|problem)$/.test(row.trim())).length)
     }
     // Never more bot rows as the terminal gets shorter, and none on the shortest.
     expect(shown[0]).toBe(0)
-    expect(shown.at(-1)).toBe(3)
+    expect(shown.at(-1)).toBe(4)
+  })
+
+  test("with no sessions the empty line starts in the Bots block's column, so they read as one list", () => {
+    const out = renderHome({ ...base, sessions: [], width: 100, height: 40, bots: bots() }).map(text)
+    const empty = out.find((row) => row.includes("No sessions yet"))!
+    const title = out.find((row) => row.trim() === "Bots")!
+    expect(empty.indexOf("No sessions yet")).toBe(title.indexOf("Bots"))
   })
 
   test("the actions panel and a home without its panel draw no bots", () => {
-    expect(renderHome({ ...base, width: 100, height: 40, look: { homeRightPanel: "actions" }, bots: bots() }).map(text).join("\n")).not.toContain("Bots   ")
-    expect(renderHome({ ...base, width: 100, height: 40, look: { homePanel: false }, bots: bots() }).map(text).join("\n")).not.toContain("Bots   ")
+    expect(renderHome({ ...base, width: 100, height: 40, look: { homeRightPanel: "actions" }, bots: bots() }).map(text).some((row) => row.trim() === "Bots")).toBe(false)
+    expect(renderHome({ ...base, width: 100, height: 40, look: { homePanel: false }, bots: bots() }).map(text).some((row) => row.trim() === "Bots")).toBe(false)
   })
 })
 
@@ -170,7 +204,7 @@ describe("the Bots block on the home screen of the app", () => {
       return undefined
     } })
     h.app.applySettings(flag ? { experimental: { bots: true } } : {})
-    return { ...h, chat, hermesChat, down }
+    return { ...h, chat, hermesChat, down, bots }
   }
   async function until(h: ReturnType<typeof homeApp>, needle: string) {
     for (let turn = 0; turn < 80; turn++) {
@@ -195,9 +229,9 @@ describe("the Bots block on the home screen of the app", () => {
     const screen = h.text()
     console.log(screen.filter((row) => row.trim()).join("\n"))
     const joined = screen.join("\n")
-    expect(joined).toMatch(new RegExp(`Bots\\s+● working\\s+${G} mendy`))
-    expect(joined).toMatch(new RegExp(`\\? waiting\\s+${G} Laura`))
-    expect(joined).toMatch(new RegExp(`✗ problem\\s+${G} Hermes`))
+    expect(joined).toMatch(new RegExp(`Bots *\\n[│ ]*${G} mendy +working`))
+    expect(joined).toMatch(new RegExp(`${G} Laura +waiting`))
+    expect(joined).toMatch(new RegExp(`${G} Hermes +problem`))
     expect(joined).not.toContain("Hugo")
     // Asked once when the home first drew (the icon sidebar of this width asks for its own list too); more frames ask for nothing.
     const asked = h.sentOf("bot.list").length
@@ -214,8 +248,8 @@ describe("the Bots block on the home screen of the app", () => {
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
     h.app.render()
     const after = h.text().join("\n")
-    expect(after).not.toMatch(/Bots\s+● working/)
-    expect(after).toMatch(new RegExp(`\\? waiting\\s+${G} Laura`))
+    expect(after).not.toMatch(/mendy +working/)
+    expect(after).toMatch(new RegExp(`${G} Laura +waiting`))
     expect(h.sentOf("bot.list")).toHaveLength(asked)
   })
 
@@ -225,8 +259,8 @@ describe("the Bots block on the home screen of the app", () => {
     const asked = h.sentOf("bot.list").length
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.hermesChat, directory: "/work/app", title: "chat", state: "running", updatedAt: NOW + 1000 } as never)
     h.app.render()
-    expect(h.text().join("\n")).toMatch(new RegExp(`● working\\s+${G} mendy, ${G} Hermes|● working[^\\n]*Hermes`))
-    expect(h.text().join("\n")).not.toMatch(/✗ problem/)
+    expect(h.text().join("\n")).toMatch(/Hermes +working/)
+    expect(h.text().join("\n")).not.toMatch(/ problem *(│|$)/m)
     h.app.onGlobal({ type: "session.activity", gseq: 2, at: NOW, sessionId: h.hermesChat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 2000 } as never)
     h.app.render()
     expect(h.text().join("\n")).not.toContain("Hermes")
@@ -274,8 +308,20 @@ describe("the Bots block on the home screen of the app", () => {
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
     await Bun.sleep(5)
     h.app.render()
-    expect(h.text().join("\n")).not.toMatch(/Bots\s+● working/)
+    expect(h.text().join("\n")).not.toMatch(/mendy +working/)
     expect(h.sentOf("bot.list").length).toBe(asked)
+  })
+
+  test("with the left list hidden, the home no longer takes its report: a bot that went idle leaves the working row", async () => {
+    const h = homeApp({ width: 180 })
+    await until(h, "mendy")
+    await Bun.sleep(20)
+    h.app.render()
+    await h.type("/sidebar hidden\r")
+    h.bots.bots[0]!.state = "idle"
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
+    for (let turn = 0; turn < 40; turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().join("\n")).not.toMatch(/mendy +working/)
   })
 
   test("a click on a bot opens its chat", async () => {

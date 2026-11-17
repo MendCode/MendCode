@@ -281,6 +281,7 @@ Also `imageWaitArt` and `imageWaitCanvas` are set in the file. See [web and imag
 | `sidebarSections` | Sidebar sections |
 | `sidebarSide` | Sidebar side |
 | `sidebarHeader` | Sidebar header |
+| `sidebarSwipe` | Sidebar swipe |
 | `sidebarWidth` | Right bar width |
 | `panelStart` | Panel at start |
 | `panelNarrow` | Panel when narrow |

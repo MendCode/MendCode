@@ -15,7 +15,34 @@ Experimental bots (`experimental.bots`) come to stable: bots with a face and a p
 
 ### Upgrade notes
 
-- Same code as v0.0.18-beta.3.
+- Same code as v0.0.18-beta.4.
+
+## v0.0.18-beta.4 - 2026-11-16
+
+A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form. The wheel scrolls the left list and a sideways swipe closes and opens it; a bot's chat opens as fast as any other.
+
+### New
+
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe closes it (toward its edge) or opens it again (from the chat's edge). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
+
+### Changed
+
+- The home screen's Bots block reads like the Agent View's sections: a `Bots` title, then one row per state with the bots on the left and the state on the right, in the Agent View's column (also when there are no sessions).
+
+### Fixed
+
+- A chat with a bot names the bot's model under the prompt after its first message too, and when Enter on the bot reuses the blank chat already open, instead of the session's default.
+- An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
+- `/new` and a project's row in the left list start a plain chat even when the blank chat they reuse was opened from a bot: the first message no longer gives it the bot.
+- A message sent as the first one of a bot's chat stays in that chat when you open another chat while the bot is being assigned.
+- Pasting into the new bot form fills the field it is on, and never answers the delete confirmation: a pasted `y` or `m` does nothing there.
+- Pasting while the left list's search is open goes into the search instead of the prompt.
+- `/new` on the blank chat a bot opened also drops the bot's name, color and agent from the chat, not only its model.
+- A chat with a bot keeps the bot's variant in the status row.
+- The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
+- Clicking and hovering the home screen's bots works when the project's root or a session title holds the word "Bots".
+- The home screen's Bots rows that show icons alone stay within the block's width.
+- Opening a bot's chat from the left list draws it as fast as any other chat: looking up the bot's model no longer holds the chat's first frame.
 
 ## v0.0.18-beta.3 - 2026-11-16
 

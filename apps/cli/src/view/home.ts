@@ -260,15 +260,24 @@ export function renderHome(input: HomeInput): Line[] {
   return lines
 }
 
-/** Where the Bots block landed in the finished rows: its first row is found by its text, the rest follow it. */
+/**
+ * Where the Bots block landed in the finished rows: the place where every row of the block reads the same text in the same
+ * column, one under the other. A root or a session title that holds the heading's word is not that place.
+ */
 function locateBots(lines: readonly Line[], block: HomeBotsBlock): HomeBotHit[] {
-  const first = block.lines[0]?.map((span) => span.text).join("").trimEnd()
-  if (!first) return []
+  const wanted = block.lines.map((line) => line.map((span) => span.text).join("").trimEnd())
+  if (!wanted[0]) return []
   const texts = lines.map((line) => line.map((span) => span.text).join(""))
-  const row = texts.findIndex((text) => text.includes(first))
-  if (row < 0) return []
-  const col = textWidth(texts[row]!.slice(0, texts[row]!.indexOf(first)))
-  return block.hits.map((hit) => ({ ...hit, row: row + hit.row, from: col + hit.from, to: col + hit.to })).filter((hit) => hit.row < lines.length)
+  for (const [row, text] of texts.entries()) {
+    for (let at = text.indexOf(wanted[0]); at >= 0; at = text.indexOf(wanted[0], at + 1)) {
+      // Rows the layout cut off the bottom are not there to read; every row that is there must be whole.
+      const same = wanted.every((want, offset) => texts[row + offset] === undefined || texts[row + offset]!.startsWith(want, at))
+      if (!same) continue
+      const col = textWidth(text.slice(0, at))
+      return block.hits.map((hit) => ({ ...hit, row: row + hit.row, from: col + hit.from, to: col + hit.to }))
+    }
+  }
+  return []
 }
 
 /** The Bots block under an Agent View given `room` rows: as many rows as leave the view `viewMin`, with the blank row that parts them. */
@@ -277,7 +286,8 @@ function botsUnder(input: { bots: HomeBots | undefined; sink: ((block: HomeBotsB
   if (!bots) return { rows: [], held: 0 }
   // Asked only here, so a home with no bots block never lays the Agent View out a second time.
   const viewMin = input.viewMin()
-  for (let maxRows = 3; maxRows >= 1; maxRows--) {
+  // The title row and one to three state rows.
+  for (let maxRows = 4; maxRows >= 2; maxRows--) {
     const block = bots.render({ width, maxRows, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) })
     if (block.lines.length === 0) break
     if (room - block.lines.length - 1 < viewMin) continue
@@ -500,7 +510,8 @@ function centeredHome(input: HomeInput & BotsSink & { below: readonly Line[] }, 
     if (!agentManager) input.botsSink?.(undefined)
     const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : [...(sessions.length
       ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom - bots.held }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
-      : [center([{ text: EMPTY_TITLE, fg: "muted" }])]), ...bots.rows.map((row): Line => [{ text: " ".repeat(inset) }, ...row])]
+      // With a Bots block under it the empty line starts in the same column, so the two read as one list.
+      : [bots.rows.length ? [{ text: " ".repeat(inset) }, { text: EMPTY_TITLE, fg: "muted" }] satisfies Line : center([{ text: EMPTY_TITLE, fg: "muted" }])]), ...bots.rows.map((row): Line => [{ text: " ".repeat(inset) }, ...row])]
     const identity = logo ? [...logo, ...(view.length || promptRows ? blank(gap) : [])] : []
     lead = identity.length
     return [...identity, ...blank(promptRows), ...(promptRows && view.length ? blank(gap) : []), ...view]

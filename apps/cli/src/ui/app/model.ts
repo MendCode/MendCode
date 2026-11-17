@@ -27,9 +27,10 @@ export function createModel(ctx: AppContext, actions: { loadPage(name: Parameter
       const report = agents.result as AgentsReport
       const pending = state.pendingBot?.sessionId === sessionId ? state.pendingBot : undefined
       state.agentReport = pending ? { ...report, current: pending.name } : report
-      // A blank bot chat runs on the bot's model from its first message on, so the row under the prompt names that one already.
-      const bot = pending ? report.agents.find((agent) => agent.name === pending.name) : undefined
-      if (bot?.model) state.effectiveModel = { model: bot.model, ...(bot.effort ? { effort: bot.effort } : {}) }
+      // A bot's chat runs on the bot's model (a blank one from its first message on), so the row under the prompt names that one:
+      // also when the models answer above was asked before the first message gave the session its bot.
+      const bot = pending ? report.agents.find((agent) => agent.name === pending.name) : report.agents.find((agent) => agent.name === report.current && agent.bot)
+      if (bot?.model) state.effectiveModel = { model: bot.model, ...(bot.effort ? { effort: bot.effort } : {}), ...(bot.variant ? { variant: bot.variant } : {}) }
     }
     requestFrame()
   }

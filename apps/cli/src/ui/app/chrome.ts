@@ -40,6 +40,7 @@ import { sessionDisplayTitle } from "./display-title"
 import { boxPanel } from "../../view/deck"
 import { createCacheClock } from "./cache-clock"
 import { usageInForce } from "./usage-in-force"
+import type { SidebarScroll } from "../../view/sidebar-window"
 
 /** The shortest terminal that gives the full view's footer its second row (docs/layout.md "Footer by tier"). */
 const DETAIL_ROW_MIN_HEIGHT = 24
@@ -152,6 +153,20 @@ export function createChrome(ctx: AppContext, actions: {
     return rows
   }
 
+  /**
+   * The left list's scroll record for this frame: the renderers write the window they drew into it and the wheel reads it. The window the
+   * wheel chose holds while the row it follows (the picked row, else the open session) stays; a new one makes the list follow it again.
+   */
+  function sidebarScrollNow(): SidebarScroll {
+    const anchor = (state.sidebarFocus ? state.sidebarSelected : undefined) ?? state.sessionId
+    const scroll = (state.sidebarScroll ??= { anchor, start: 0, max: 0 })
+    if (scroll.anchor !== anchor) {
+      scroll.anchor = anchor
+      scroll.top = undefined
+    }
+    return scroll
+  }
+
   /** The project's sessions, with hit rows for mouse navigation. */
   function sidebarRows(height: number): Line[] {
     // The search (`/` in the list) draws over whichever list shows, in the same cells.
@@ -170,7 +185,7 @@ export function createChrome(ctx: AppContext, actions: {
         if (sidebarKindNow(input.screen.size.width) === "icons") return Array.from({ length: height }, (): Line => [{ text: " ".repeat(ICON_SIDEBAR_WIDTH), bg: "panel" }])
       } else {
         const sessions = multi.sessions()
-        const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader })
+        const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader, scroll: sidebarScrollNow() })
         state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id, ...(hit.fold ? { fold: hit.fold } : {}) }))
         state.sidebarImages = drawn.images
         return drawn.lines
@@ -178,7 +193,7 @@ export function createChrome(ctx: AppContext, actions: {
     }
     // A session whose PR is merged or closed settles by itself (see `autoSettled`), unless it is the open one, pinned or busy.
     const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
-    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder() } })
+    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder(), scroll: sidebarScrollNow() } })
     state.sidebarImages = undefined
     state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "more" ? [{ row: hit.row, sessionId: SETTLED_MORE }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
     return drawn.lines
