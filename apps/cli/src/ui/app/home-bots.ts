@@ -3,6 +3,7 @@ import { botIndex, patchBotReport } from "../../view/bot-live"
 import type { HomeBotHit, HomeBots } from "../../view/home"
 import { homeBotEntries, renderHomeBots, type HomeBotEntry } from "../../view/home-bots"
 import type { ActivityEvent } from "../../view/session-activity"
+import { askBotList } from "./bot-list-ask"
 import type { AppContext } from "./context"
 
 /**
@@ -43,7 +44,7 @@ export function createHomeBots(ctx: AppContext) {
     stale = false
     during.length = 0
     try {
-      const reply = await input.send({ type: "bot.list" })
+      const reply = await askBotList(input)
       if (reply.ok) {
         report = reply.result as BotListReport
         for (const event of during) report = patchBotReport(report, event, now()) ?? report

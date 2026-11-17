@@ -10,7 +10,7 @@ const reply = (result: unknown) => ({ ok: true, result }) as CommandReply
 const MINUTE = 60_000
 
 /** The app with a bots list and sessions in three folders; `bots: false` is a terminal that never turned the flag on. */
-function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect, waitingChild }: { /** A sub-agent of the open session that waits on you with this kind of request. */ waitingChild?: "approval" | "question" | "plan"; bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
+function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect, waitingChild, home = false }: { /** An empty conversation: the home screen with its own Bots block. */ home?: boolean; /** A sub-agent of the open session that waits on you with this kind of request. */ waitingChild?: "approval" | "question" | "plan"; bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
   const current = ids("session")
   const second = ids("session")
   const elsewhere = ids("session")
@@ -49,7 +49,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
   } })
   h.app.applySettings(bots ? { experimental: { bots: true } } : {})
   // A started conversation: with an empty one the arrow keys belong to the home screen's list.
-  conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
+  if (!home) conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
   return { ...h, ids: { current, second, elsewhere, docs, created } }
 }
 type App = ReturnType<typeof chatApp>
@@ -105,6 +105,15 @@ describe("flag on: the bots section and the bot's icon in its project", () => {
     expect(rowOf(h, "Chrome")).toBeLessThan(rowOf(h, "Projects"))
     expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
     expect(h.sentOf("bot.list")).toHaveLength(1)
+  })
+})
+
+describe("the first frames ask for the bots once, with the session lists", () => {
+  test("the left list asks for the bots and the other folders in the same frame, and the home's Bots block waits for that answer instead of asking again", async () => {
+    const h = chatApp({ home: true })
+    for (let turn = 0; turn < 20; turn++) { h.app.render(); await Bun.sleep(5) }
+    expect(h.sentOf("bot.list")).toHaveLength(1)
+    expect(h.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
   })
 })
 

@@ -12,6 +12,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - With a sub-agent's thread open, ← and → change sub-agent even while the left list shows; Alt+← enters the list there.
+- The Bots section of the left list appears as fast as the ordinary chats: the list of other apps' bots (Hermes) no longer holds it back, and the home screen no longer asks for the bots a second time.
 
 ## v0.0.18 - 2026-11-16
 
