@@ -193,6 +193,21 @@ describe("a horizontal swipe on the sidebar", () => {
     expect(shown(h)).toBe(true)
   })
 
+  test("a swipe sets the list hidden or always, never auto, so the next swipe still answers", async () => {
+    const h = chatApp({ multi: false, profile: { sidebar: "auto" } })
+    await settled(h, "chat 00")
+    await flick(h, swipeLeft, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("hidden")
+    h.clock.at += 500
+    await flick(h, swipeRight, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("always")
+    expect(shown(h)).toBe(true)
+    h.clock.at += 500
+    await flick(h, swipeLeft, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("hidden")
+    expect(shown(h)).toBe(false)
+  })
+
   test("sidebarSwipe off leaves the list alone", async () => {
     const h = chatApp({ multi: false, profile: { sidebarSwipe: false } })
     await settled(h, "chat 00")

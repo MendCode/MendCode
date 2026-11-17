@@ -206,7 +206,8 @@ export function createKeys(ctx: AppContext, actions: {
     const direction = swipe.feed(now(), sideways)
     if (!direction) return
     // Toward the edge the list sits on closes it; away from it opens it. The other way round changes nothing.
-    if (open === (direction === edge)) await runSlash("/sidebar")
+    // A set mode, never `auto`: a list the swipe opened stays open whatever the width, and the next swipe reads it the same way.
+    if (open === (direction === edge)) await runSlash(open ? "/sidebar hidden" : "/sidebar always")
   }
 
   /** A plain prompt: not an edit card (scratch, goal, memory, plan), a question or a menu. Only its text counts as a draft. */
