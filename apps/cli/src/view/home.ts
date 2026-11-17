@@ -277,7 +277,8 @@ function botsUnder(input: { bots: HomeBots | undefined; sink: ((block: HomeBotsB
   if (!bots) return { rows: [], held: 0 }
   // Asked only here, so a home with no bots block never lays the Agent View out a second time.
   const viewMin = input.viewMin()
-  for (let maxRows = 3; maxRows >= 1; maxRows--) {
+  // The title row and one to three state rows.
+  for (let maxRows = 4; maxRows >= 2; maxRows--) {
     const block = bots.render({ width, maxRows, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}) })
     if (block.lines.length === 0) break
     if (room - block.lines.length - 1 < viewMin) continue
@@ -500,7 +501,8 @@ function centeredHome(input: HomeInput & BotsSink & { below: readonly Line[] }, 
     if (!agentManager) input.botsSink?.(undefined)
     const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : [...(sessions.length
       ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom - bots.held }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
-      : [center([{ text: EMPTY_TITLE, fg: "muted" }])]), ...bots.rows.map((row): Line => [{ text: " ".repeat(inset) }, ...row])]
+      // With a Bots block under it the empty line starts in the same column, so the two read as one list.
+      : [bots.rows.length ? [{ text: " ".repeat(inset) }, { text: EMPTY_TITLE, fg: "muted" }] satisfies Line : center([{ text: EMPTY_TITLE, fg: "muted" }])]), ...bots.rows.map((row): Line => [{ text: " ".repeat(inset) }, ...row])]
     const identity = logo ? [...logo, ...(view.length || promptRows ? blank(gap) : [])] : []
     lead = identity.length
     return [...identity, ...blank(promptRows), ...(promptRows && view.length ? blank(gap) : []), ...view]

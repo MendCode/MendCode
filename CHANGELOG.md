@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- The home screen's Bots block reads like the Agent View's sections: a `Bots` title, then one row per state with the bots on the left and the state on the right, in the Agent View's column (also when there are no sessions).
+
 ### Fixed
 
 - A chat with a bot names the bot's model under the prompt after its first message too, and when Enter on the bot reuses the blank chat already open, instead of the session's default.

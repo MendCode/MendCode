@@ -83,17 +83,19 @@ function fitCount(widths: readonly number[], room: number, gap: number, more: (l
  */
 export function renderHomeBots(input: { entries: readonly HomeBotEntry[]; width: number; maxRows?: number; ascii?: boolean; selectedId?: string }): HomeBotsBlock {
   const { entries, width, selectedId } = input
-  const groups = HOME_BOT_STATES.map((state) => ({ state, bots: entries.filter((entry) => entry.state === state) })).filter((group) => group.bots.length > 0).slice(0, Math.min(ROWS_MAX, input.maxRows ?? ROWS_MAX))
+  // Laid out like the Agent View's own sections: a "Bots" title, then one row per state with the bots on the left and the state
+  // where a session row has its time, in the state's colour. The title counts as a row.
+  const stateRows = Math.min(ROWS_MAX, (input.maxRows ?? ROWS_MAX + 1) - 1)
+  const groups = stateRows < 1 ? [] : HOME_BOT_STATES.map((state) => ({ state, bots: entries.filter((entry) => entry.state === state) })).filter((group) => group.bots.length > 0).slice(0, stateRows)
+  if (groups.length === 0) return { lines: [], hits: [] }
   const compact = width < COMPACT_BELOW
-  const lines: Line[] = []
+  const lines: Line[] = [[{ text: LABEL, fg: "text" }]]
   const hits: HomeBotHit[] = []
   for (const [index, { state, bots }] of groups.entries()) {
-    const mark = MARK[state][input.ascii ? 1 : 0]
-    const label = (index === 0 ? LABEL : "").padEnd(LABEL.length)
-    const head: Span[] = compact
-      ? [{ text: `${label} ` }, { text: `${mark} `, fg: FG[state] }]
-      : [{ text: `${label}   ` }, { text: `${mark} `, fg: FG[state] }, { text: WORD[state].padEnd(WORD.working.length), fg: FG[state] }, { text: " ".repeat(GAP) }]
-    const room = Math.max(0, width - lineWidth(head))
+    const word = compact ? MARK[state][input.ascii ? 1 : 0] : WORD[state]
+    const tail: Span = { text: word, fg: FG[state] }
+    const head: Span[] = []
+    const room = Math.max(0, width - textWidth(word) - GAP)
     const named = bots.map((bot) => ({ bot, name: truncateEnd(bot.name, NAME_MAX) }))
     const longMore = (left: number) => `+ ${left} more`
     const shortMore = (left: number) => `+${left}`
@@ -115,12 +117,13 @@ export function renderHomeBots(input: { entries: readonly HomeBotEntry[]; width:
         spans.push({ text: name, fg: "text", ...bg })
         col += textWidth(name)
       }
-      hits.push({ row: index, from, to: col, id: bot.id })
+      hits.push({ row: index + 1, from, to: col, id: bot.id })
     }
     if (moreText) {
-      const pad = Math.max(1, width - col - textWidth(moreText))
-      spans.push({ text: " ".repeat(pad) }, { text: moreText, fg: "muted" })
+      spans.push({ text: " ".repeat(GAP) }, { text: moreText, fg: "muted" })
+      col += GAP + textWidth(moreText)
     }
+    spans.push({ text: " ".repeat(Math.max(1, width - col - textWidth(tail.text))) }, tail)
     lines.push(spans)
   }
   return { lines, hits }
