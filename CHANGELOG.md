@@ -9,14 +9,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-### New
-
-- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe closes it (toward its edge) or opens it again (from the chat's edge). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
-
-### Fixed
-
-- Opening a bot's chat from the left list draws it as fast as any other chat: looking up the bot's model no longer holds the chat's first frame.
-
 ## v0.0.18 - 2026-11-16
 
 Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.
@@ -27,7 +19,11 @@ Experimental bots (`experimental.bots`) come to stable: bots with a face and a p
 
 ## v0.0.18-beta.4 - 2026-11-16
 
-A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form.
+A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form. The wheel scrolls the left list and a sideways swipe closes and opens it; a bot's chat opens as fast as any other.
+
+### New
+
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe closes it (toward its edge) or opens it again (from the chat's edge). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
 
 ### Changed
 
@@ -46,6 +42,7 @@ A bot's chat names the bot's model from the start and keeps its first message wh
 - The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
 - Clicking and hovering the home screen's bots works when the project's root or a session title holds the word "Bots".
 - The home screen's Bots rows that show icons alone stay within the block's width.
+- Opening a bot's chat from the left list draws it as fast as any other chat: looking up the bot's model no longer holds the chat's first frame.
 
 ## v0.0.18-beta.3 - 2026-11-16
 
