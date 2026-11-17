@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs"
-import { createIdFactory, type ComputerTarget, type ComputerNode, type ComputerSessionReport, type ComputerObservation } from "@mendcode/protocol"
+import { createIdFactory, type ComputerTarget, type ComputerNode, type ComputerSessionReport, type ComputerObserveReport } from "@mendcode/protocol"
 import type { ComputerActivation, ToolResult } from "@mendcode/tools"
 import type { ComputerAccessibility, SemanticAction } from "../src/computer-accessibility"
 import { computerFixture, signal } from "./b29-fixtures"
@@ -37,6 +37,7 @@ export function b80Fixture(options: Parameters<typeof computerFixture>[0] = {}) 
     const capture = data<{ captureID: string }>(await f.port.capture({}, signal()))
     return data<ComputerSessionReport>(await f.port.session!({ action: "start", mode, bootstrapCaptureID: capture.captureID }, signal(), authority))
   }
-  async function observe(id: string) { return data<ComputerObservation>(await f.port.observe!({ computerSessionID: id }, signal())) }
+  /** Always the whole tree: tests read it, so "unchanged" answers are asked for only where a test means them. */
+  async function observe(id: string) { return data<ComputerObserveReport>(await f.port.observe!({ computerSessionID: id, full: true }, signal())) }
   return { ...f, ax, start, observe, close() { f.control.stop(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }) } }
 }

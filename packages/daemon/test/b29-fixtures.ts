@@ -20,7 +20,7 @@ export function png(width = 800, height = 500, extra = 0) {
 export function fakeComputer() {
   const calls: string[][] = []
   const keys: number[] = []
-  const mac = { displays: 1, foreground: 42, processes: [] as number[], image: png(), resized: png(1600, 1000), failure: "", pause: undefined as (() => Promise<void>) | undefined, topology: undefined as string | undefined }
+  const mac = { displays: 1, foreground: 42, processes: [] as number[], image: png(), resized: png(1280, 800), failure: "", pause: undefined as (() => Promise<void>) | undefined, topology: undefined as string | undefined }
   const run: CommandRunner = async (args, signal) => {
     calls.push(args)
     if (mac.pause) await mac.pause()

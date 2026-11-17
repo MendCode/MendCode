@@ -35,7 +35,7 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   expect(inputs.has("packages/daemon/src/daemon.ts")).toBe(true)
   expect(inputs.has("apps/cli/src/ui/app.ts")).toBe(true)
   for (const file of [
-    "computer", "computer-sessions", "computer-native", "computer-accessibility", "computer-program",
+    "computer", "computer-sessions", "computer-native", "computer-accessibility", "computer-program", "computer-tree",
     "browser", "browser-cdp", "browser-scripts", "setup-import", "debug-db", "diagnostics",
     "git-commit", "git-init", "git-push", "git-publish", "git-pr",
     "pr-review/already-reviewed", "pr-review/commit-status", "pr-review/pr-states",
