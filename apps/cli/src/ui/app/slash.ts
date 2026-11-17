@@ -326,8 +326,11 @@ export function createSlash(ctx: AppContext, actions: {
       }
       case "new": {
         const reply = await input.send({ type: "session.create", directory: input.directory ?? "", title: "", reuseEmpty: true })
-        if (reply.ok) await enterNewSession(reply.result?.sessionId as SessionId)
-        else fail(reply.error.message)
+        if (reply.ok) {
+          // The blank chat it reuses may be a bot's, opened and not yet written to: /new makes it a plain chat.
+          await state.sidebarBots?.releaseChat(reply.result?.sessionId as SessionId)
+          await enterNewSession(reply.result?.sessionId as SessionId)
+        } else fail(reply.error.message)
         break
       }
       case "sessions":

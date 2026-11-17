@@ -359,6 +359,17 @@ describe("in the app", () => {
     expect(screen(h)).toContain("bot pixel made")
   })
 
+  test("a bracketed paste goes into the field the form is on", async () => {
+    const h = app({ extra: (command) => command.type === "bot.save" ? reply({ file: "/d/agents/pixel.md", agent: { name: "pixel" }, generation: "deterministic", callsProviders: false }) : undefined })
+    await h.type("/bot new pixel\r")
+    await h.type("\t\t\t")
+    await h.type("\x1b[200~Calm\nreviewer.\x1b[201~")
+    for (let turn = 0; turn < 3; turn++) await h.type("\t")
+    await h.type("\r")
+    for (let turn = 0; turn < 20 && h.sentOf("bot.save").length === 0; turn++) await Bun.sleep(5)
+    expect(h.sentOf("bot.save")[0]).toMatchObject({ name: "pixel", prompt: "Calm reviewer." })
+  })
+
   test("Esc discards: nothing is written, whatever was typed", async () => {
     const h = app()
     await h.type("/bot new pixel\r")

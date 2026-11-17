@@ -129,6 +129,7 @@ export function createSidebarSearch(ctx: AppContext) {
     const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    await state.sidebarBots?.releaseChat(sessionId as SessionId)
     await deps.switchSession(sessionId as SessionId)
     startNewChatPanel(ctx)
   }
@@ -176,6 +177,15 @@ export function createSidebarSearch(ctx: AppContext) {
     return true
   }
 
+  /** A bracketed paste while the search is open: one line of text added to the query. False when the search is not open. */
+  function paste(text: string): boolean {
+    if (!open) return false
+    const line = text.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+    if (line) setQuery(Array.from(query + line).slice(0, QUERY_MAX).join(""))
+    requestFrame()
+    return true
+  }
+
   /**
    * The sidebar's rows while the search is open; undefined once it is not (another page, or a click that gave the prompt the
    * keyboard, ends it). A frame draws the results of the last key and never rebuilds the index, so a push during a turn costs nothing.
@@ -187,5 +197,5 @@ export function createSidebarSearch(ctx: AppContext) {
     return { lines: drawn.rows, hits: drawn.hits }
   }
 
-  return { isOpen: () => open, show, close, key, activate, draw, query: () => query }
+  return { isOpen: () => open, show, close, key, paste, activate, draw, query: () => query }
 }

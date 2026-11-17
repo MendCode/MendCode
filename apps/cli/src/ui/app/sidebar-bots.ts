@@ -501,6 +501,19 @@ export function createSidebarBots(ctx: AppContext) {
     return sessionId as SessionId
   }
 
+  /**
+   * A plain new chat (`/new`, a project row) may be handed the blank chat a bot opened: it is no bot's chat any more, so the first
+   * message does not give it the bot, it leaves the bot's rows, and the row under the prompt goes back to the session's own model.
+   */
+  async function releaseChat(sessionId: SessionId) {
+    chatHosts.delete(sessionId)
+    if (state.pendingBot?.sessionId !== sessionId) return
+    state.pendingBot = undefined
+    if (state.sessionId !== sessionId) return
+    const models = await input.send({ type: "models.list", sessionId })
+    if (models.ok && models.result && state.sessionId === sessionId && !state.pendingBot) { state.effectiveModel = (models.result as { effective: typeof state.effectiveModel }).effective; requestFrame() }
+  }
+
   /** Enter or a click on a project's name: a blank chat in that folder (the one `/new` opens, reused while empty); the folder is this terminal's from then on. */
   async function startFolderChat(directory: string, deps: SidebarDeps) {
     state.sidebarFocus = false
@@ -508,6 +521,7 @@ export function createSidebarBots(ctx: AppContext) {
     const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    await releaseChat(sessionId as SessionId)
     await deps.switchSession(sessionId as SessionId)
     startNewChatPanel(ctx)
   }
@@ -580,5 +594,6 @@ export function createSidebarBots(ctx: AppContext) {
   /** What the sidebar's search indexes besides this terminal's own list (ui/app/sidebar-search.ts). */
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
-  return { live, report: () => report, sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  // The report is kept current only while the list is on screen (hidden, a push sets a flag and patches nothing), so no one else reads it then.
+  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
 }

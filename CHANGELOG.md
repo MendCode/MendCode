@@ -17,6 +17,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - A chat with a bot names the bot's model under the prompt after its first message too, and when Enter on the bot reuses the blank chat already open, instead of the session's default.
 - An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
+- `/new` and a project's row in the left list start a plain chat even when the blank chat they reuse was opened from a bot: the first message no longer gives it the bot.
+- A message sent as the first one of a bot's chat stays in that chat when you open another chat while the bot is being assigned.
+- Pasting into the new bot form fills the field it is on.
+- Pasting while the left list's search is open goes into the search instead of the prompt.
+- The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
 
 ## v0.0.18 - 2026-11-16
 

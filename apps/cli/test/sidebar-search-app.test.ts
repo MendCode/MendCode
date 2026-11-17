@@ -89,6 +89,19 @@ describe("opening and closing", () => {
     expect(side(h)).toEqual(listed)
   })
 
+  test("a bracketed paste goes into the query, not the prompt behind it", async () => {
+    const h = searchApp()
+    await until(h, "scout")
+    await h.type(LEFT)
+    await h.type("/")
+    await h.type("\x1b[200~docs\x1b[201~")
+    expect(side(h)[0]).toMatch(/^ {3}\/ docs +1 │$/)
+    expect(sidebarText(h)).not.toContain("Client reconnect")
+    await h.type("\x1b")
+    await h.type("\x1b[C")
+    expect(h.text().join("\n")).not.toContain("docs")
+  })
+
   test("Esc after opening from the chat (ctrl+x <) gives the keyboard back to the prompt", async () => {
     const h = searchApp()
     await until(h, "scout")

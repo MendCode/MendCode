@@ -423,6 +423,20 @@ describe("the bot card", () => {
     expect(footer).not.toContain("terra")
   })
 
+  test("/new on the blank chat a bot opened is a plain chat: the first message does not give it the bot", async () => {
+    let h!: App
+    h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : undefined })
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    await h.type("/new\r")
+    for (let turn = 0; turn < 40 && h.sentOf("session.create").length < 2; turn++) await Bun.sleep(5)
+    await Bun.sleep(20)
+    await h.type("plain question\r")
+    expect(h.sentOf("user.submit").at(-1)).toMatchObject({ sessionId: h.ids.current, text: "plain question" })
+    expect(h.sentOf("session.agent.set")).toHaveLength(0)
+  })
+
   test("a chat that already runs as a bot names the bot's model under the prompt, even when the models answer gives the default", async () => {
     const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : undefined })
     await until(h, "Bots")
@@ -443,6 +457,25 @@ describe("the bot card", () => {
     expect(order.lastIndexOf("session.agent.set")).toBeLessThan(order.lastIndexOf("user.submit"))
     await h.type("second\r")
     expect(h.sentOf("session.agent.set")).toHaveLength(1)
+  })
+
+  test("opening another chat while the bot is being assigned leaves that message in its own chat", async () => {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const h = chatApp({ height: 30, extra: (command) => command.type === "session.agent.set" ? held.then(() => ({ ok: true, result: {} }) as never) as never : undefined })
+    await onBot(h)
+    await h.type("\r")
+    expect(h.app.sessionId).toBe(h.ids.created)
+    const sending = h.app.onInput("hello bot\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.agent.set").length; turn++) await Bun.sleep(5)
+    h.app.render()
+    await h.type(click(6, rowOf(h, "Client reconnect")))
+    expect(h.app.sessionId).toBe(h.ids.second)
+    release()
+    await sending
+    await Bun.sleep(10)
+    expect(h.sentOf("user.submit").every((command) => (command as { sessionId: string }).sessionId === h.ids.created)).toBe(true)
+    expect(h.sentOf("user.submit")).toHaveLength(1)
   })
 
   test("a new chat with a bot sits under the bot's chats the moment its summary arrives, never under Projects, and the chats open", async () => {

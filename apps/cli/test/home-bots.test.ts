@@ -183,7 +183,7 @@ describe("the Bots block on the home screen of the app", () => {
       return undefined
     } })
     h.app.applySettings(flag ? { experimental: { bots: true } } : {})
-    return { ...h, chat, hermesChat, down }
+    return { ...h, chat, hermesChat, down, bots }
   }
   async function until(h: ReturnType<typeof homeApp>, needle: string) {
     for (let turn = 0; turn < 80; turn++) {
@@ -289,6 +289,18 @@ describe("the Bots block on the home screen of the app", () => {
     h.app.render()
     expect(h.text().join("\n")).not.toMatch(/mendy +working/)
     expect(h.sentOf("bot.list").length).toBe(asked)
+  })
+
+  test("with the left list hidden, the home no longer takes its report: a bot that went idle leaves the working row", async () => {
+    const h = homeApp({ width: 180 })
+    await until(h, "mendy")
+    await Bun.sleep(20)
+    h.app.render()
+    await h.type("/sidebar hidden\r")
+    h.bots.bots[0]!.state = "idle"
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
+    for (let turn = 0; turn < 40; turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().join("\n")).not.toMatch(/mendy +working/)
   })
 
   test("a click on a bot opens its chat", async () => {
