@@ -321,7 +321,7 @@ export function createSidebarBots(ctx: AppContext) {
     }
   }
 
-  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean }): { lines: Line[]; hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }>; images: ImagePlacement[] } {
+  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean; scroll?: import("../../view/sidebar-window").SidebarScroll }): { lines: Line[]; hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }>; images: ImagePlacement[] } {
     iconsNow = options.icons
     lastFrame = { height: options.height, header: options.header }
     // First show, a show after pushes came while hidden, a flag turned on after this was made, the slow safety refresh: whatever is due.

@@ -17,6 +17,7 @@ import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../.
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
 import { projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
 import { autoSettled, SETTLED_FIRST, SETTLED_PAGE } from "../../view/sidebar-marks"
+import { scrollSidebarWindow } from "../../view/sidebar-window"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -165,6 +166,52 @@ export function createKeys(ctx: AppContext, actions: {
     return button === 64 ? -1 : button === 65 ? 1 : undefined
   }
 
+  /** A mouse report's button and 0-based screen position; undefined for any other key. */
+  function pointerOf(key: string): { button: number; col: number; row: number } | undefined {
+    const match = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(key)
+    return match ? { button: Number(match[1]), col: Number(match[2]) - 1, row: Number(match[3]) - 1 } : undefined
+  }
+
+  /**
+   * Where the left list sits on the chat page: its columns (0 while it does not show), the side, and how far the chat is shifted by it.
+   * The same width the layout gives the right bar (a set `sidebarWidth`, the hysteresis), or the mouse offsets drift from what is drawn.
+   */
+  function sidebarGeometry() {
+    const { width } = input.screen.size
+    const rightWanted = panelWanted(state) || fileInSlot(state)
+    const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
+    const rightWidth = rightCells ? rightCells + 1 : 0
+    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
+    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
+    return { width, rightWidth, sideWidth, onRight, offset: onRight ? 0 : sideWidth }
+  }
+
+  /** The pointer is over the left list's columns. */
+  const overSidebar = (col: number, geometry: ReturnType<typeof sidebarGeometry>) => geometry.sideWidth > 0 && (geometry.onRight ? col >= geometry.width - geometry.sideWidth : col < geometry.sideWidth)
+
+  let swipe: ReturnType<typeof import("./sidebar-swipe").createSwipe> | undefined
+  /**
+   * A sideways wheel report (a trackpad's two-finger swipe, buttons 66 and 67) on the chat page. Toward the list's outer edge it closes
+   * the list and away from it opens it, once per gesture; only over the list, or over the chat's outer edge columns while the list is
+   * closed, so a wide diff or code block keeps whatever sideways scroll it has. Always used up: nothing else reads these reports.
+   */
+  async function sidebarSwipe(pointer: { button: number; col: number; row: number }) {
+    const { swipeButton, SWIPE_EDGE_COLUMNS, createSwipe } = await import("./sidebar-swipe")
+    const sideways = swipeButton(pointer.button)
+    if (!sideways || state.page !== "chat" || !state.tuiProfile.sidebarSwipe) return
+    const geometry = sidebarGeometry()
+    const open = geometry.sideWidth > 0
+    const edge = open ? geometry.onRight ? "right" : "left" : state.tuiProfile.sidebarSide
+    const inRange = open ? overSidebar(pointer.col, geometry) : edge === "right" ? pointer.col >= geometry.width - SWIPE_EDGE_COLUMNS : pointer.col < SWIPE_EDGE_COLUMNS
+    // A right panel takes the room a closed list would open into.
+    if (!inRange || (!open && geometry.rightWidth > 0)) return
+    swipe ??= createSwipe()
+    const direction = swipe.feed(now(), sideways)
+    if (!direction) return
+    // Toward the edge the list sits on closes it; away from it opens it. The other way round changes nothing.
+    if (open === (direction === edge)) await runSlash("/sidebar")
+  }
+
   /** A plain prompt: not an edit card (scratch, goal, memory, plan), a question or a menu. Only its text counts as a draft. */
   const plainPrompt = () => state.page === "chat" && !state.palette && !state.promptSearch && !state.editingScratch && !state.editingGoal && !state.editingMemory && !state.planDraft && !actions.pendingPanelRequest()
 
@@ -288,7 +335,19 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.palette) return paletteInput(key)
     if (state.page === "chat" && await actions.compactionLive.enterKey(key)) return requestFrame()
     if (state.bindings.inline.get(key) === "palette" && state.page === "chat" && !state.transcript.pendingRequests.some((request) => request.kind === "approval")) return openPalette()
+    const pointer = state.page === "chat" ? pointerOf(key) : undefined
+    // A sideways wheel (66, 67): the swipe that closes and opens the left list; no other part of the chat reads it.
+    if (pointer && (pointer.button & ~(4 | 8 | 16)) >= 66 && (pointer.button & ~(4 | 8 | 16)) <= 67) {
+      await sidebarSwipe(pointer)
+      return
+    }
     const wheel = wheelOf(key)
+    // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
+    if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {
+      state.selection = undefined
+      if (!state.sidebarSearch?.isOpen() && scrollSidebarWindow(state.sidebarScroll, wheel * state.tuiProfile.wheelLines)) requestFrame()
+      return
+    }
     if (wheel !== undefined) {
       const notch = state.tuiProfile.wheelLines
       // A transcript selection stays on its text while the wheel moves it, so a drag can reach past one screen.
@@ -350,13 +409,7 @@ export function createKeys(ctx: AppContext, actions: {
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(key)
     // A right click pastes the clipboard into the prompt when `rightClickPaste` is on (the daemon reads it; never for a remote client).
     if (state.page === "chat" && state.tuiProfile.rightClickPaste && rightClick(key) && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !state.editingMemory) return pasteClipboardImage()
-    const rightWanted = panelWanted(state) || fileInSlot(state)
-    // The same width the layout gives the bar (a set `sidebarWidth`, the hysteresis), or the mouse offsets drift from what is drawn.
-    const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
-    const rightWidth = rightCells ? rightCells + 1 : 0
-    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
-    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
-    const offset = onRight ? 0 : sideWidth
+    const { sideWidth, onRight, offset } = sidebarGeometry()
     if (mouse && state.page === "chat" && mouseSelection.onMouse(key, offset)) return
     if (mouse && state.page === "chat") {
       const col = Number(mouse[2]) - 1 - offset

@@ -8,6 +8,7 @@ import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
 import { elapsedLabel, prSpans } from "./sidebar-marks"
 import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
+import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
 import type { SidebarSection } from "./tui-profile"
 import { lineWidth, wrap } from "./wrap"
 
@@ -67,6 +68,8 @@ export type MultiInput = {
   glyphs?: Glyphs
   /** The terminal draws images: bot icons become pictures (see `botIcon`); absent, the glyphs of today. */
   faces?: IconFaces | undefined
+  /** Where the wheel put the list's window; the renderer reports the window it drew in it. */
+  scroll?: SidebarScroll | undefined
 }
 
 const PAD_X = 2
@@ -495,7 +498,7 @@ export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Arr
   const shownRoom = overflow ? Math.max(0, room - 1) : room
   const anchor = picked ?? input.current
   const lastOfPicked = entries.findLastIndex((entry) => entry.id === anchor)
-  const start = overflow && lastOfPicked >= 0 ? Math.max(0, Math.min(lastOfPicked - shownRoom + 1, entries.length - shownRoom)) : 0
+  const start = sidebarWindowStart({ total: entries.length, shownRoom, overflow, anchorIndex: lastOfPicked, scroll: input.scroll })
   const windowed = entries.slice(start, start + shownRoom)
   const body: Entry[] = [...head]
   const hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }> = []

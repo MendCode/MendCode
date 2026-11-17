@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe closes it (toward its edge) or opens it again (from the chat's edge). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
+
 ### Fixed
 
 - Opening a bot's chat from the left list draws it as fast as any other chat: looking up the bot's model no longer holds the chat's first frame.

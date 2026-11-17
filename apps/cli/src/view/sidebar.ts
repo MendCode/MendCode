@@ -9,6 +9,7 @@ import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
 import { draftSizeLabel, labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { lineWidth, textWidth, wrap } from "./wrap"
 import { elapsedLabel, prSpans, SETTLED_FIRST } from "./sidebar-marks"
+import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
 
 /**
  * The left session list uses `auto` from wide (110 columns), with at least 71 cells left for chat.
@@ -272,6 +273,8 @@ export function renderSessionSidebar(input: {
   folder?: { branch?: string; worktree?: string }
   ascii?: boolean
   glyphs?: SidebarGlyphs
+  /** Where the wheel put the list's window; the renderer reports the window it drew in it. */
+  scroll?: SidebarScroll
 }): { rows: Line[]; hits: Array<{ row: number; sessionId: string }> } {
   // One gutter cell, the two-cell margin (current bar or selection mark), the row, then a blank and the rule.
   const inner = SIDEBAR_WIDTH - 1 - PAD_X - 2
@@ -345,7 +348,7 @@ export function renderSessionSidebar(input: {
   const shownRoom = overflow ? Math.max(0, room - 1) : room
   const anchor = picked ?? input.current
   const lastOfPicked = list.findLastIndex((entry) => entry.id === anchor)
-  const start = overflow && lastOfPicked >= 0 ? Math.max(0, Math.min(lastOfPicked - shownRoom + 1, list.length - shownRoom)) : 0
+  const start = sidebarWindowStart({ total: list.length, shownRoom, overflow, anchorIndex: lastOfPicked, scroll: input.scroll })
   const windowed = list.slice(start, start + shownRoom)
   const body: Array<{ line: Line; lead?: Line; fill?: boolean }> = head.map((line) => ({ line }))
   const hits: Array<{ row: number; sessionId: string }> = []
