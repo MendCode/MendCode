@@ -23,7 +23,7 @@ A bot's chat names the bot's model from the start and keeps its first message wh
 
 ### New
 
-- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe closes it (toward its edge) or opens it again (from the chat's edge). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe anywhere on the chat closes it (toward its edge) or opens it again (away from it). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
 
 ### Changed
 

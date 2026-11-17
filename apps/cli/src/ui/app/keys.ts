@@ -192,19 +192,16 @@ export function createKeys(ctx: AppContext, actions: {
   let swipe: ReturnType<typeof import("./sidebar-swipe").createSwipe> | undefined
   /**
    * A sideways wheel report (a trackpad's two-finger swipe, buttons 66 and 67) on the chat page. Toward the list's outer edge it closes
-   * the list and away from it opens it, once per gesture; only over the list, or over the chat's outer edge columns while the list is
-   * closed, so a wide diff or code block keeps whatever sideways scroll it has. Always used up: nothing else reads these reports.
+   * the list and away from it opens it, once per gesture, wherever the pointer is: nothing else on the chat page reads these reports.
+   * Whether the list fits beside a right panel is `/sidebar`'s to say.
    */
-  async function sidebarSwipe(pointer: { button: number; col: number; row: number }) {
-    const { swipeButton, SWIPE_EDGE_COLUMNS, createSwipe } = await import("./sidebar-swipe")
+  async function sidebarSwipe(pointer: { button: number }) {
+    const { swipeButton, createSwipe } = await import("./sidebar-swipe")
     const sideways = swipeButton(pointer.button)
     if (!sideways || state.page !== "chat" || !state.tuiProfile.sidebarSwipe) return
     const geometry = sidebarGeometry()
     const open = geometry.sideWidth > 0
     const edge = open ? geometry.onRight ? "right" : "left" : state.tuiProfile.sidebarSide
-    const inRange = open ? overSidebar(pointer.col, geometry) : edge === "right" ? pointer.col >= geometry.width - SWIPE_EDGE_COLUMNS : pointer.col < SWIPE_EDGE_COLUMNS
-    // A right panel takes the room a closed list would open into.
-    if (!inRange || (!open && geometry.rightWidth > 0)) return
     swipe ??= createSwipe()
     const direction = swipe.feed(now(), sideways)
     if (!direction) return
