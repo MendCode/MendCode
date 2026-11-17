@@ -66,6 +66,16 @@ describe("the Bots block", () => {
     expect(tiny.join("\n")).toContain("+")
   })
 
+  test("icon-only rows reserve the gap before `+N`: no row is wider than the block at any width", () => {
+    const many = report(Array.from({ length: 15 }, (_, index) => bot(`Longer-bot-name-${index}`, "working")))
+    for (const count of [14, 15]) {
+      const entries = homeBotEntries(report(many.bots.slice(0, count)), false)
+      for (let width = 16; width <= 60; width++) {
+        for (const row of rows({ entries, width }).slice(1)) expect(textWidth(row), `${count} bots at ${width}`).toBe(width)
+      }
+    }
+  })
+
   test("ASCII terminals get ASCII glyphs and marks", () => {
     const out = rows({ entries: homeBotEntries(five, true), width: 60, ascii: true })
     expect(out[1]).toMatch(/^(\(\)|\[\]|<>|\/\\|\{\}) mendy.* working$/)
@@ -109,6 +119,17 @@ describe("the Bots block inside the home", () => {
     expect(out[botsAt]!.indexOf("Bots")).toBe(out[agentAt]!.indexOf("Completed"))
     const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
     expect(out[mendy.row]!.slice(mendy.from, mendy.to)).toMatch(new RegExp(`^${G} mendy$`))
+  })
+
+  test("a root or a session title that says `Bots` does not take the block's place: the hits stay on the block", () => {
+    for (const layout of ["center", "split"] as const) {
+      let hits: Array<{ row: number; from: number; to: number; id: string }> = []
+      const titled = [{ id: "s0", title: "Bots", state: "working" as const, updatedAt: NOW, startedAt: NOW - 1000 }, ...sessions]
+      const out = renderHome({ ...base, root: "~/Code/Bots", sessions: titled, width: layout === "split" ? 170 : 100, height: 40, look: { layout }, bots: bots((found) => { hits = found as typeof hits }) }).map(text)
+      const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
+      expect(mendy, layout).toBeDefined()
+      expect(out[mendy.row]!.slice(mendy.from, mendy.to), layout).toMatch(new RegExp(`^${G} mendy$`))
+    }
   })
 
   test("the same block is drawn in the split layout", () => {

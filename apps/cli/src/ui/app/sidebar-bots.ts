@@ -510,8 +510,12 @@ export function createSidebarBots(ctx: AppContext) {
     if (state.pendingBot?.sessionId !== sessionId) return
     state.pendingBot = undefined
     if (state.sessionId !== sessionId) return
-    const models = await input.send({ type: "models.list", sessionId })
-    if (models.ok && models.result && state.sessionId === sessionId && !state.pendingBot) { state.effectiveModel = (models.result as { effective: typeof state.effectiveModel }).effective; requestFrame() }
+    const [models, agents] = await Promise.all([input.send({ type: "models.list", sessionId }), input.send({ type: "agents.list", sessionId })])
+    if (state.sessionId !== sessionId || state.pendingBot) return
+    // The bot's name and accent come from the cached agent report, which named the pending bot as the session's agent: the session's own answer replaces it.
+    if (agents.ok && agents.result) state.agentReport = agents.result as typeof state.agentReport
+    if (models.ok && models.result) state.effectiveModel = (models.result as { effective: typeof state.effectiveModel }).effective
+    requestFrame()
   }
 
   /** Enter or a click on a project's name: a blank chat in that folder (the one `/new` opens, reused while empty); the folder is this terminal's from then on. */

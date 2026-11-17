@@ -27,7 +27,7 @@ async function modelIds({ input, state }: AppContext): Promise<string[]> {
  */
 async function openBotForm(ctx: AppContext, initial: BotFormState) {
   const { input, state, env, say, requestFrame } = ctx
-  const { botFormKey, botSaveFields, renderBotForm } = await import("../../view/bot-form")
+  const { botFormKey, botFormTakesText, botSaveFields, renderBotForm } = await import("../../view/bot-form")
   let form: BotFormState | undefined = initial
   const returnTo = initial.returnTo
 
@@ -114,6 +114,12 @@ async function openBotForm(ctx: AppContext, initial: BotFormState) {
       if (result.action.type === "save") await save()
       else if (result.action.type === "delete") await remove(result.action.memory)
       else if (result.action.type === "editor") await editPrompt()
+      requestFrame()
+    },
+    // Pasted text is typed into a text row and nowhere else: never read as the keys of a confirmation or a picker.
+    async paste(text) {
+      if (!form || !botFormTakesText(form)) return
+      form = botFormKey(form, text).form ?? form
       requestFrame()
     },
   }

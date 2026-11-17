@@ -63,14 +63,14 @@ export function homeBotEntries(report: BotListReport | undefined, ascii: boolean
   return out
 }
 
-/** How many of `widths` fit in `room` with `gap` between them and, when some are left out, the `more` text right after a gap. */
+/** How many of `widths` fit in `room` with `gap` between them and, when some are left out, the `more` text after a `GAP`, as drawn. */
 function fitCount(widths: readonly number[], room: number, gap: number, more: (left: number) => string): number {
   let best = -1
   let used = 0
   for (let count = 0; count <= widths.length; count++) {
     if (count > 0) used += widths[count - 1]! + (count > 1 ? gap : 0)
     const rest = widths.length - count
-    const total = used + (rest > 0 ? (count > 0 ? gap : 0) + textWidth(more(rest)) : 0)
+    const total = used + (rest > 0 ? GAP + textWidth(more(rest)) : 0)
     if (total <= room) best = count
     else break
   }

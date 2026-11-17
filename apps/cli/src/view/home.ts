@@ -260,15 +260,24 @@ export function renderHome(input: HomeInput): Line[] {
   return lines
 }
 
-/** Where the Bots block landed in the finished rows: its first row is found by its text, the rest follow it. */
+/**
+ * Where the Bots block landed in the finished rows: the place where every row of the block reads the same text in the same
+ * column, one under the other. A root or a session title that holds the heading's word is not that place.
+ */
 function locateBots(lines: readonly Line[], block: HomeBotsBlock): HomeBotHit[] {
-  const first = block.lines[0]?.map((span) => span.text).join("").trimEnd()
-  if (!first) return []
+  const wanted = block.lines.map((line) => line.map((span) => span.text).join("").trimEnd())
+  if (!wanted[0]) return []
   const texts = lines.map((line) => line.map((span) => span.text).join(""))
-  const row = texts.findIndex((text) => text.includes(first))
-  if (row < 0) return []
-  const col = textWidth(texts[row]!.slice(0, texts[row]!.indexOf(first)))
-  return block.hits.map((hit) => ({ ...hit, row: row + hit.row, from: col + hit.from, to: col + hit.to })).filter((hit) => hit.row < lines.length)
+  for (const [row, text] of texts.entries()) {
+    for (let at = text.indexOf(wanted[0]); at >= 0; at = text.indexOf(wanted[0], at + 1)) {
+      // Rows the layout cut off the bottom are not there to read; every row that is there must be whole.
+      const same = wanted.every((want, offset) => texts[row + offset] === undefined || texts[row + offset]!.startsWith(want, at))
+      if (!same) continue
+      const col = textWidth(text.slice(0, at))
+      return block.hits.map((hit) => ({ ...hit, row: row + hit.row, from: col + hit.from, to: col + hit.to }))
+    }
+  }
+  return []
 }
 
 /** The Bots block under an Agent View given `room` rows: as many rows as leave the view `viewMin`, with the blank row that parts them. */

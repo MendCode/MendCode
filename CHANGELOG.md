@@ -39,9 +39,13 @@ A bot's chat names the bot's model from the start and keeps its first message wh
 - An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
 - `/new` and a project's row in the left list start a plain chat even when the blank chat they reuse was opened from a bot: the first message no longer gives it the bot.
 - A message sent as the first one of a bot's chat stays in that chat when you open another chat while the bot is being assigned.
-- Pasting into the new bot form fills the field it is on.
+- Pasting into the new bot form fills the field it is on, and never answers the delete confirmation: a pasted `y` or `m` does nothing there.
 - Pasting while the left list's search is open goes into the search instead of the prompt.
+- `/new` on the blank chat a bot opened also drops the bot's name, color and agent from the chat, not only its model.
+- A chat with a bot keeps the bot's variant in the status row.
 - The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
+- Clicking and hovering the home screen's bots works when the project's root or a session title holds the word "Bots".
+- The home screen's Bots rows that show icons alone stay within the block's width.
 
 ## v0.0.18-beta.3 - 2026-11-16
 

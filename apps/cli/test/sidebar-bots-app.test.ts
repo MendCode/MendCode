@@ -437,6 +437,24 @@ describe("the bot card", () => {
     expect(h.sentOf("session.agent.set")).toHaveLength(0)
   })
 
+  test("/new on the blank chat a bot opened also drops the bot's name and accent from the open chat", async () => {
+    let h!: App
+    const agents = { directory: "/work/app", current: "build", agents: [{ name: "build", mode: "primary", source: "builtin" }, { name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] }
+    // The bot list does not know this chat: only what the app itself holds makes it the bot's.
+    const bots = { bots: [{ name: "calm", description: "", identity: { shape: "circle", color: "success", origin: "mendcode" }, model: "claude-sonnet", file: "/d/agents/calm.md", state: "idle", projects: [] }], external: [], problems: [] }
+    // Enter on the bot switches to the new blank chat (the harness answers session.create with it, `/new` reuses it), which loads its agent report.
+    h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: agents } as never : command.type === "bot.list" ? reply(bots) : undefined })
+    await onBot(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
+    for (let turn = 0; turn < 40 && !h.text().at(-1)!.includes("calm"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().at(-1)!).toContain("calm")
+    await h.type("/new\r")
+    for (let turn = 0; turn < 40 && h.sentOf("session.create").length < 2; turn++) await Bun.sleep(5)
+    for (let turn = 0; turn < 40; turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().at(-1)!).not.toContain("calm")
+  })
+
   test("a chat that already runs as a bot names the bot's model under the prompt, even when the models answer gives the default", async () => {
     const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : undefined })
     await until(h, "Bots")
@@ -444,6 +462,13 @@ describe("the bot card", () => {
     const footer = h.text().at(-1)!
     expect(footer).toContain("Sonnet")
     expect(footer).not.toContain("GPT-6-Luna")
+  })
+
+  test("a chat that already runs as a bot keeps the bot's variant in the status row", async () => {
+    const h = chatApp({ height: 30, profile: { statusRight: "variant" }, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "calm", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", variant: "zenith", source: "user", bot: { shape: "square", color: "success", origin: "mendcode" } }], problems: [] } } as never : command.type === "models.list" ? { ok: true, result: { engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6-luna" }, effective: { model: "claude-sonnet", variant: "zenith" }, roles: {} } } as never : undefined })
+    await until(h, "Bots")
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("zenith"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.text().join("\n")).toContain("zenith")
   })
 
   test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {

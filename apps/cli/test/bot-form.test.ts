@@ -459,6 +459,19 @@ describe("in the app", () => {
     expect(screen(h)).toContain("bot calm deleted · memory kept · its 2 sessions stay in /sessions")
   })
 
+  test("a paste is text for a text field only: in the delete confirmation a pasted `y` or `m` does nothing", async () => {
+    const h = app({ extra: (command) => command.type === "bot.delete" ? reply({ file: "/d/agents/calm.md", memoryRemoved: true, sessions: 0 }) : undefined })
+    await h.type("/bot delete calm\r")
+    await until(h, "Delete bot calm?")
+    await h.type("\x1b[200~y\x1b[201~")
+    await h.type("\x1b[200~m\x1b[201~")
+    await Bun.sleep(20)
+    expect(h.sentOf("bot.delete")).toHaveLength(0)
+    expect(h.app.page).toBe("bot-form")
+    expect(screen(h)).toContain("Delete bot calm?")
+    expect(screen(h)).not.toContain("memory folder (bots/calm) is removed too")
+  })
+
   test("m in the confirmation also removes the memory; Esc cancels and sends nothing", async () => {
     const h = app({ extra: (command) => command.type === "bot.delete" ? reply({ file: "/d/agents/calm.md", memoryRemoved: true, sessions: 0 }) : undefined })
     await h.type("/bot delete calm\r")

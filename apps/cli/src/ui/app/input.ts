@@ -153,7 +153,7 @@ export function createInput(ctx: AppContext, actions: {
       } else if (state.page === "bot-form") {
         // The form's text rows take a paste as typed text, one line (the personality's line breaks become spaces).
         const line = token.text.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "")
-        if (line.trim()) await onKey(line)
+        if (line.trim()) await state.botForm?.paste(line)
       } else if (state.page === "console" && state.console?.form) {
         await onKey(token.text.replace(/[\x00-\x1f\x7f]/g, ""))
       } else if (state.page === "connect") {
