@@ -24,6 +24,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A message sent while a tool runs is no longer lost when you cancel the turn before the model reads it: it waits in the queue and goes with your next message.
 - Esc Esc puts the undone message and its images back in the prompt at once, and in a Claude Code session the next message goes through after an undo instead of failing with "did not apply the earlier undo".
 - Computer Use keeps working on an app with no open or focused window (a menu-bar app, or one whose windows were closed): it lists the app's windows, menu bar and status items instead of failing, and menu-bar apps appear in the app list.
 - A long Computer Use task no longer stops at a screenshot limit: older cached captures are removed as new ones arrive.

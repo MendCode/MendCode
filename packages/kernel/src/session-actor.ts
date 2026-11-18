@@ -439,7 +439,16 @@ export function createSessionActor(options: SessionActorOptions) {
     if (!turn || turn.turnId !== turnId || turn.phase !== phase) return
     const unread = sent.filter((each) => each.turnId === turnId)
     if (unread.length) {
-      for (const each of unread) showRead(each)
+      // A turn that ended on its own had the messages written to its engine: they count as read there. One cancelled, interrupted or
+      // failed stopped the engine before it reported them read (Claude Code drops what it had not started): they wait in the queue
+      // again, first and in order, for the next turn, instead of being shown in a turn that never answered them.
+      if (turn.cancelBy || turn.interruptReason || outcome.status === "error") {
+        // A message sent now (`promotion`) was put first to start alone: it keeps that place.
+        let at = 0
+        while (turn.cancelBy === "promotion" && queue[at]?.alone) at++
+        for (const each of unread) sent.splice(sent.indexOf(each), 1)
+        queue.splice(at, 0, ...unread.map((each) => each.entry))
+      } else for (const each of unread) showRead(each)
       emitQueue()
     }
     turn.grace?.cancel()
