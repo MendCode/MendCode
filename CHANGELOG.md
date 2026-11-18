@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `mendcode bot list` and `mendcode bot show <name>` show the bots from a shell: their state, chats by folder, what is running or waiting for you, and their schedules.
+
 ### Changed
 
 - While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.
