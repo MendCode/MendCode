@@ -76,8 +76,20 @@ export function createSession(ctx: AppContext, actions: {
   /** `/undo` and `/redo`: the daemon's report as a card; files changed after the turn make it ask before overwriting them (`force`). */
   async function rewind(kind: RewindKind, force = false, atItemId?: ItemId, prompt?: string, images?: BlobRef[], placed = false) {
     const sessionId = state.sessionId
+    // A message this terminal already holds (Esc Esc, the message actions) is in the prompt at once, images too; the daemon's answer
+    // follows, and a refused undo puts the prompt back as it was.
+    const before = kind === "undo" && prompt !== undefined && !placed ? { text: editor.text, attachments: state.attachments } : undefined
+    if (before) {
+      ctx.editor.replaceAll(prompt!)
+      state.attachments = pendingFromRefs(images ?? [])
+      requestFrame()
+    }
     const reply = await input.send({ type: kind === "undo" ? "session.undo" : "session.redo", sessionId, ...(force ? { force: true } : {}), ...(kind === "undo" && atItemId ? { atItemId } : {}), ...(kind === "undo" && state.transcript.activeTurn ? { cancelRunning: true } : {}) })
     if (sessionId !== state.sessionId) return
+    if ((!reply.ok || !reply.result) && before && editor.text === prompt) {
+      ctx.editor.replaceAll(before.text)
+      state.attachments = before.attachments
+    }
     if (!reply.ok) {
       if (isRewindConflict(reply.error)) state.rewindCard = { kind, state: "conflict", message: reply.error.message, ...(atItemId ? { atItemId } : {}), ...(prompt !== undefined ? { prompt } : {}), ...(images ? { images } : {}) }
       else {
@@ -98,9 +110,12 @@ export function createSession(ctx: AppContext, actions: {
     }
     if (kind === "redo" && report.canRedo !== true) { prompt = ""; images = [] }
     if (placed) return requestFrame()
-    if (prompt !== undefined) {
-      ctx.editor.replaceAll(prompt)
-      state.attachments = pendingFromRefs(images ?? [])
+    // A prompt placed before the answer is left as it is now: what was typed into it meanwhile stays, and so does its draft.
+    if (prompt !== undefined && (!before || editor.text === prompt)) {
+      if (!before) {
+        ctx.editor.replaceAll(prompt)
+        state.attachments = pendingFromRefs(images ?? [])
+      }
       drafts.changed(state.sessionId, { text: prompt, images: images ?? [] })
     }
     void loadDiffTotals()

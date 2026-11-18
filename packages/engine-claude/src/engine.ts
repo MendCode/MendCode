@@ -37,6 +37,15 @@ export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 /** Records of a turn Claude Code runs on its own that are kept until its notice is shown; a runaway one is cut there. */
 const MAX_UNSOLICITED = 2_000
 const UNDO_NOT_APPLIED = "[CLAUDE]: Claude Code did not apply the earlier undo, so this message was not sent; send it again to continue on the conversation as Claude Code has it"
+
+/**
+ * Whether Claude Code's answer to `rewind_conversation` leaves its conversation as the user sees it after the undo: it cut there, or
+ * it holds no message by that uuid (`target_not_found`), so the undone message never reached it (a turn stopped or failed before its
+ * message was written) and there is nothing to cut.
+ */
+export function rewindApplied(response: { rewound?: unknown; reason?: unknown } | undefined): boolean {
+  return response?.rewound === true || response?.reason === "target_not_found"
+}
 /** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
 const MAX_AGENT_TASKS = 256
 /** Command lines of the last calls that can become background tasks (Bash, Monitor, Agent), kept so a task can be listed by what it runs. */
@@ -856,7 +865,7 @@ export function createClaudeEngine(options: {
       // is not sent and the user is told. The undo is asked once; sending again continues on the conversation as Claude Code has it.
       pendingRewinds.delete(input.sessionId)
       const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(cut), interrupt_if_running: true }).catch(() => undefined)
-      if (response?.rewound !== true) {
+      if (!rewindApplied(response)) {
         keepIdle(connection)
         throw new Error(UNDO_NOT_APPLIED)
       }
@@ -866,7 +875,28 @@ export function createClaudeEngine(options: {
       await control(connection, { subtype: "set_permission_mode", mode: wanted })
       connection.permission = wanted
     }
+    // A turn cancelled while this process started leaves it idle once it is ready; this turn holds it now.
+    connection.idle?.cancel()
     return connection
+  }
+
+  /**
+   * The process a turn runs in, or undefined when the turn is cancelled while Claude Code still starts: nothing was sent to it, so
+   * the turn ends at once instead of after the start (an undo of its message waits for that end), and the process starts on, idle.
+   */
+  function unlessCancelled(starting: Promise<Connection>, signal: AbortSignal): Promise<Connection | undefined> {
+    return new Promise((resolve, reject) => {
+      const cancelled = () => {
+        resolve(undefined)
+        starting.then((connection) => { if (!connection.turn) keepIdle(connection) }, () => {})
+      }
+      if (signal.aborted) return cancelled()
+      signal.addEventListener("abort", cancelled, { once: true })
+      starting.then(
+        (connection) => { signal.removeEventListener("abort", cancelled); resolve(connection) },
+        (error: unknown) => { signal.removeEventListener("abort", cancelled); reject(error) },
+      )
+    })
   }
 
   async function content(input: TurnInput): Promise<Array<Record<string, unknown>>> {
@@ -926,7 +956,9 @@ export function createClaudeEngine(options: {
       }
       let connection: Connection
       try {
-        connection = await connectionFor(input)
+        const started = await unlessCancelled(connectionFor(input), input.signal)
+        if (!started) return { status: "ok" }
+        connection = started
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
@@ -1063,7 +1095,7 @@ export function createClaudeEngine(options: {
         return true
       }
       const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(turnId), interrupt_if_running: true }).catch(() => undefined)
-      return response?.rewound === true
+      return rewindApplied(response)
     },
     // Claude Code compacts its own context when it fills up (`claude_compact` sets where).
     needsCompaction: () => false,
