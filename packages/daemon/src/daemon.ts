@@ -5529,6 +5529,8 @@ export async function startDaemon(options: DaemonOptions) {
             }
           }
           if (!definition) throw new Error(`unknown command /${command.name}`)
+          const ambiguous = (await import("./custom-commands")).ambiguousCommand(definition)
+          if (ambiguous) throw new Error(ambiguous)
           const sessionModel = resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
           let invocation = { command: definition, args: command.args }
           const skillText = await skillInvocation(directory, definition, command.args)
@@ -5636,6 +5638,8 @@ export async function startDaemon(options: DaemonOptions) {
           }
           return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: unknown command /${command.name}` })
         }
+        const ambiguous = (await import("./custom-commands")).ambiguousCommand(found)
+        if (ambiguous) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${ambiguous}` })
         let skillText: string | undefined
         try { skillText = await skillInvocation(command.directory, found, command.args) } catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${(error as Error).message}` }) }
         return reply(connection, command.id, { ok: true, result: { prompt: skillText ?? (await import("./custom-commands")).expandCommand(found.body, command.args), ...(found.agent ? { agent: found.agent } : {}), ...(found.model ? { model: found.model } : {}), ...(found.subtask !== undefined ? { subtask: found.subtask } : {}) } })

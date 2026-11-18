@@ -62,9 +62,11 @@ describe("one invalid command file does not stop the rest", () => {
     put(path.join(user, "commands", "fine.md"), "Fine")
     const report = emptyDiagnostics()
     const commands = await loadCustomCommands({ directory: project, userDir: user, report })
-    expect(commands.map((c) => c.name)).toEqual(expect.arrayContaining(["good", "fine"]))
+    // A description too long for the menu is cut there with a note: the command itself still loads.
+    expect(commands.map((c) => c.name)).toEqual(expect.arrayContaining(["good", "fine", "too-long"]))
     expect(commands.map((c) => c.name)).not.toContain("bad-subtask")
-    expect(report.problems.map((p) => path.basename(p.file)).sort()).toEqual(["bad-subtask.md", "empty.md", "mendcode.json", "too-long.md"])
+    expect(report.problems.map((p) => path.basename(p.file)).sort()).toEqual(["bad-subtask.md", "empty.md", "mendcode.json"])
+    expect(report.notes).toMatchObject([{ name: "too-long", note: "description is longer than 120 characters; the menu shows it cut" }])
   })
 
   test("without a report the loader still returns what loaded", async () => {
