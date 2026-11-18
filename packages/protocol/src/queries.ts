@@ -57,6 +57,10 @@ export const SessionSummary = lazySchema(() => z.strictObject({
   pendingKind: z.enum(["approval", "question", "plan"]).optional(),
   /** True while the session is paused (`session.control`): it finishes the running turn and starts nothing until resumed. */
   paused: z.boolean().optional(),
+  /** How many of its sub-agents work right now (as `session.activity` carries it); omitted at none. */
+  agents: z.number().int().nonnegative().max(99).optional(),
+  /** True while the running turn compacts the conversation; omitted otherwise. */
+  compacting: z.boolean().optional(),
   parentId: SessionId.optional(),
   agent: z.string().max(100).optional(),
   model: z.lazy(() => ModelChoice).optional(),

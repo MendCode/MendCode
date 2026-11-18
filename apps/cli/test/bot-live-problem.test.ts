@@ -34,3 +34,9 @@ test("an external bot its app reports busy stays busy when one of its MendCode c
   expect(patchBotReport(external("idle"), push("ses_x", "idle", NOW), NOW)!.external[0]!.state).toBe("idle")
   expect(patchBotReport(external("idle"), push("ses_x", "error", NOW), NOW)!.external[0]!.state).toBe("problem")
 })
+
+test("a chat at rest whose sub-agents still work keeps its bot working, and its last one ending lets the bot rest", () => {
+  const working = patchBotReport(report([["ses_a", "completed", NOW - MINUTE]]), { ...push("ses_a", "idle", NOW), agents: 2 }, NOW)!
+  expect(working.bots[0]).toMatchObject({ state: "working", projects: [{ state: "working", sessions: [{ status: "running" }] }] })
+  expect(patchBotReport(working, push("ses_a", "idle", NOW), NOW)!.bots[0]!.state).toBe("idle")
+})

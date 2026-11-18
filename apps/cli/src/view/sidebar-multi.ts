@@ -6,7 +6,7 @@ import { fit, spread } from "./deck"
 import { relativeTime, truncateEnd } from "./session-list"
 import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
-import { elapsedLabel, prSpans } from "./sidebar-marks"
+import { agentsSpans, elapsedLabel, isCompacting, prSpans } from "./sidebar-marks"
 import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
 import type { SidebarSection } from "./tui-profile"
@@ -19,7 +19,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -270,7 +270,9 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       // A running row counts up from its turn's start (the tick that moves its spinner redraws it); the others show their age.
       const age = value === "running" && session.since !== undefined && input.now >= session.since ? elapsedLabel(input.now - session.since) : relativeTime(input.now, sessionActivityAt(session))
       const pr = session.lifecycle?.pr
-      const metaOf = (withNumber: boolean): Line => [{ text: age, fg: "muted" }, ...(pr ? prSpans(pr, withNumber) : [])]
+      // Compacting takes the time's place, and the sub-agents at work follow it (`↳2`), as in the one-folder list.
+      const clock: Span = isCompacting(session) ? { text: "compacting", fg: "info" } : { text: age, fg: "muted" }
+      const metaOf = (withNumber: boolean): Line => [clock, ...agentsSpans(session, input.ascii), ...(pr ? prSpans(pr, withNumber) : [])]
       const used = indent.length + 2 + room
       // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
       const meta = pr && inner - used - lineWidth(metaOf(true)) - 2 < 10 ? metaOf(false) : metaOf(true)

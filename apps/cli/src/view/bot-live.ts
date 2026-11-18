@@ -43,7 +43,9 @@ function patchBot<T extends { projects?: BotListReport["bots"][number]["projects
 
 /** The report with this push applied to the bot session it names (a MendCode bot's or an external bot's chat), or undefined when no bot lists that session. */
 export function patchBotReport(report: BotListReport, event: ActivityEvent, now: number = Date.now()): BotListReport | undefined {
-  const status = botStatusOf(event.state)
+  // A chat at rest whose sub-agents still work keeps its bot working, as its row in the list does.
+  const own = botStatusOf(event.state)
+  const status = event.agents && own !== "waiting_approval" ? "running" : own
   const bots = report.bots.map((bot) => patchBot(bot, event, status, now))
   const external = report.external.map((bot) => patchBot(bot, event, status, now))
   const found = bots.some((bot, at) => bot !== report.bots[at]) || external.some((bot, at) => bot !== report.external[at])

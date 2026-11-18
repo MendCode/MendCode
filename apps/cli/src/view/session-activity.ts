@@ -11,7 +11,7 @@ export function mergeActivity(list: SessionSummary[], event: ActivityEvent, { ca
   const { sessionId: id, title, directory, state, updatedAt } = event
   const archived = event.archivedAt === null ? { archivedAt: undefined } : event.archivedAt !== undefined ? { archivedAt: event.archivedAt } : {}
   // The live detail of a running turn is replaced by every push: gone from the push means the turn or the request ended.
-  const live = { since: event.since, tool: event.tool, pending: event.pending, pendingKind: event.pendingKind }
+  const live = { since: event.since, tool: event.tool, pending: event.pending, pendingKind: event.pendingKind, agents: event.agents, compacting: event.compacting }
   const known = list.some((session) => session.sessionId === id)
   // The draft of an untitled session labels it in every list: the push carries it when it appeared, changed its first line or went.
   const merged = known

@@ -307,6 +307,8 @@ const DEFAULT_DELTA_IDLE_DAYS = 3
 /** How long a settled session waits, with the daemon idle, before its superseded foreground and queue snapshots are deleted. */
 const SETTLED_PRUNE_DELAY_MS = 10_000
 const BUSY = new Set(["generating", "tool", "waiting_approval", "compacting", "cancelling"])
+/** Sub-agents counted per session for the left list; more than this many at once still shows as this many. */
+const MAX_LIVE_AGENTS = 99
 /** `session.tree`: nodes returned in all, how many forks get their unmerged count, and how deep sub-agents of sub-agents go. */
 const TREE_NODES = 400
 const TREE_MERGE_COUNTS = 50
@@ -1880,27 +1882,64 @@ export async function startDaemon(options: DaemonOptions) {
   })
 
   /** What a running turn is doing right now, for the agent view: when it started, tools in flight, requests waiting. */
-  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string>; kinds: Map<string, "approval" | "question" | "plan"> }>()
-  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; pendingKind?: "approval" | "question" | "plan"; paused?: boolean } {
+  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string>; kinds: Map<string, "approval" | "question" | "plan">; compactions: Set<string> }>()
+  /**
+   * The sub-agents working for each session right now, for the left list: its child sessions with a turn running (`child:<id>`) and
+   * the engine's own sub-agent calls (`item:<id>`, a Claude Code `Agent` call), which outlive the turn while they run in the background.
+   */
+  const liveAgents = new Map<SessionId, Set<string>>()
+  function noteAgent(sessionId: SessionId, key: string, running: boolean) {
+    const set = liveAgents.get(sessionId)
+    if (running) {
+      if (set?.has(key) || (set?.size ?? 0) >= MAX_LIVE_AGENTS) return false
+      liveAgents.set(sessionId, (set ?? new Set()).add(key))
+      return true
+    }
+    if (!set?.delete(key)) return false
+    if (!set.size) liveAgents.delete(sessionId)
+    return true
+  }
+  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; pendingKind?: "approval" | "question" | "plan"; paused?: boolean; agents?: number; compacting?: boolean } {
     const paused = actors.get(sessionId)?.snapshot().paused ? { paused: true } : {}
+    const agents = liveAgents.get(sessionId)?.size ? { agents: liveAgents.get(sessionId)!.size } : {}
     const entry = live.get(sessionId)
-    if (!entry) return paused
+    if (!entry) return { ...paused, ...agents }
     const tool = [...entry.tools.values()].at(-1)
     const pending = [...entry.pending.values()].at(-1)
     const pendingKind = [...entry.kinds.values()].at(-1)
-    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending, ...(pendingKind ? { pendingKind } : {}) } : {}), ...paused }
+    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending, ...(pendingKind ? { pendingKind } : {}) } : {}), ...paused, ...agents, ...(entry.compactions.size ? { compacting: true } : {}) }
+  }
+  /** A sub-agent's turn starting or ending moves its parent's count; a Claude Code agent call is counted until its end is reported. */
+  function trackAgents(event: SessionEvent) {
+    const id = event.sessionId
+    const ended = event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed"
+    if (event.type === "turn.started" || ended) {
+      const parentId = store.sessionInfo(id)?.parentId as SessionId | undefined
+      if (parentId && noteAgent(parentId, `child:${id}`, event.type === "turn.started")) publishActivity(parentId, actors.get(parentId)?.snapshot().foreground ?? "idle")
+      return false
+    }
+    if (event.type === "item.started" && event.kind === "tool_call" && event.meta?.subagent === true) return noteAgent(id, `item:${event.itemId}`, true)
+    if (event.type !== "item.completed") return false
+    // A background agent's call completes as soon as it is launched; its end comes later as an `agentEnd` under that call.
+    if (event.meta?.agentEnd === true && typeof event.meta.agentParent === "string") return noteAgent(id, `item:${event.meta.agentParent}`, false)
+    return event.meta?.background === true && event.status === "ok" ? false : noteAgent(id, `item:${event.itemId}`, false)
   }
   function trackLive(event: SessionEvent) {
     const id = event.sessionId
-    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map(), kinds: new Map() })
+    const agentsMoved = trackAgents(event)
+    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map(), kinds: new Map(), compactions: new Set() })
     if (event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed") return void live.delete(id)
     // The queue length lands right after the event; publish once the actor has settled.
     if (event.type === "queue.added" || event.type === "queue.changed") return void queueMicrotask(() => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle"))
     const entry = live.get(id)
-    if (!entry) return
-    let changed = false
+    if (!entry) {
+      if (agentsMoved) publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle")
+      return
+    }
+    let changed = agentsMoved
     if (event.type === "item.started" && event.kind === "tool_call") (entry.tools.set(event.itemId, String(event.meta?.tool ?? "tool").slice(0, 200)), (changed = true))
-    else if (event.type === "item.completed") changed = entry.tools.delete(event.itemId)
+    else if (event.type === "item.started" && event.kind === "compaction") (entry.compactions.add(event.itemId), (changed = true))
+    else if (event.type === "item.completed") changed = entry.tools.delete(event.itemId) || entry.compactions.delete(event.itemId) || changed
     else if (event.type === "server.request") (entry.pending.set(event.requestId, event.title.slice(0, 200)), entry.kinds.set(event.requestId, event.planReview ? "plan" : event.kind), (changed = true))
     else if (event.type === "server.request.resolved") (entry.kinds.delete(event.requestId), (changed = entry.pending.delete(event.requestId)))
     if (changed) publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle")

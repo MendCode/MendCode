@@ -15,6 +15,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The left list shows how many sub-agents a session (or a bot's chat) has working, `↳2`, and keeps it spinning while they work after its own turn ended; a session compacting says `compacting` where its time was.
+
 - While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.
 - Opening a chat from the left list no longer waits for the previous chat to be released first.
 - In full access a script workflow starts at once, like any other tool; other permission modes still show its source and ask first.
