@@ -1164,6 +1164,12 @@ The default stays `transcript` because it is today's look and the golden frames 
 
 What the status shows is `activityParts`, an ordered, comma separated list (Activity > Activity parts, or `/activity` with part names in the order wanted; `/activity +tps -model` adds and removes, `/activity reset` restores the default).
 
+The verb says what the model does now and never repeats what the chat already shows: `Thinking…` (also between steps, while it reads a result and picks the next), `Writing…` (a message), a command by what it does (`Running tests…`, `Building…`, `Checking…`, `Committing…`, `Pushing…`, `Installing…`, `Searching…`, else `Running <program>…`, never the command line, which is on its card), or the tool's family (`Reading…`, `Editing…`).
+
+From the turn's second step the time part is preceded by the step in progress (`step 24`), and a step that has run 5 seconds or more shows its own time after the verb: `⠋ Running tests… 41s (step 24 · 6m 2s · ↓ 8.2k tokens)`.
+
+An open sub-agent thread shows the same status for that agent: its step, what it does now and its time.
+
 The parts: `spinner`, `verb` (the phase text), `elapsed`, `stalled` (the `no response for 1m 2s` hint), `model`, `tokens` (this turn's tokens, see below), `tps` (output tokens per second, off by default), `interrupt` (the Esc hint), `queue` (`1 queued`, off by default), and the session figures of the table below.
 
 The default list is `spinner,verb,elapsed,stalled,model,tokens,interrupt`.

@@ -44,6 +44,9 @@ export function createTurnState() {
   let startedAt: number | undefined
   let retry: RetryState | undefined
   const running = new Map<ItemId, RunningItem>()
+  /** The main agent's finished steps this turn (tool calls, thoughts, messages) and when the step in progress began (the last item's start or end). */
+  let steps = 0
+  let stepAt: number | undefined
   const requests = new Map<RequestId, RequestExtras>()
   const resolvedRequests = new Set<RequestId>()
   /** Queued entries that are the user's own `!command` (the queue preview does not say so). */
@@ -80,6 +83,8 @@ export function createTurnState() {
     retry = undefined
     sent = undefined
     running.clear()
+    steps = 0
+    stepAt = undefined
   }
 
   return {
@@ -97,6 +102,7 @@ export function createTurnState() {
           cached = 0
           turnId = event.turnId
           startedAt = event.at
+          stepAt = event.at
           totals.turns++
           break
         case "usage.recorded":
@@ -124,6 +130,7 @@ export function createTurnState() {
           const full = typeof event.meta?.tool === "string" ? event.meta.tool : ""
           const detail = tool === "shell" && full.includes(":") ?full.slice(full.indexOf(":") + 1).trim() : ""
           running.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}), ...(detail ? { detail } : {}) })
+          if (startedAt !== undefined) stepAt = event.at
           break
         }
         case "item.delta": {
@@ -134,9 +141,13 @@ export function createTurnState() {
           }
           break
         }
-        case "item.completed":
-          running.delete(event.itemId)
+        case "item.completed": {
+          const kind = running.get(event.itemId)?.kind
+          if (!running.delete(event.itemId) || startedAt === undefined) break
+          if (kind === "tool_call" || kind === "reasoning" || kind === "agent_message") steps++
+          stepAt = event.at
           break
+        }
         case "turn.completed":
         case "turn.cancelled":
         case "turn.interrupted":
@@ -178,6 +189,14 @@ export function createTurnState() {
     /** The provider retry being waited out; cleared by the next item event or the end of the turn. */
     get retry() {
       return retry
+    },
+    /** The main agent's steps finished this turn: tool calls, thoughts and messages. */
+    get steps() {
+      return steps
+    },
+    /** When the step in progress began: the turn's start, or the last item's start or end; undefined between turns. */
+    get stepAt() {
+      return stepAt
     },
     /** The most recently started item that has not completed. */
     get current(): RunningItem | undefined {

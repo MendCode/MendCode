@@ -27,7 +27,7 @@ import { limitBarVisible, limitChips, limitLine } from "../../view/usage-limit"
 import { renderShortcutOverlay, shortcutEntries } from "../../view/shortcut-overlay"
 import { voiceRow } from "../../view/voice-row"
 import { paintMatches } from "../../view/find"
-import { activityPartsOf, phaseOf, renderWorkingReplacement, renderWorkingRow, quietTurn } from "../../view/working-row"
+import { activityPartsOf, phaseOf, renderWorkingReplacement, renderWorkingRow, quietTurn, stepPhase } from "../../view/working-row"
 import type { ActivityPart } from "@mendcode/protocol/wire"
 import { ACTIVITY_MIN_CELLS, insideRoom, placeInside } from "../../view/activity-status"
 import { jumpFrom, jumpPill, jumpText, offsetForThumb, overlayAt, scrollbarGlyphs, scrollbarShown, scrollThumb, SCROLLBAR_LINGER_MS, withScrollbar } from "../../view/scroll-chrome"
@@ -783,7 +783,9 @@ export function createChatRows(ctx: AppContext, actions: {
         ...activityLook(),
         ...(overlay ? { separator: g.sep } : {}),
         spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-        phase: thread.last ? `${truncateEnd(thread.last, 60)}...` : "Working...",
+        // What it does now, by kind, as the main row says it; its last call's title is already on its card in the thread.
+        phase: stepPhase(thread.current, thread.steps),
+        ...(thread.stepAt !== undefined ? { step: { number: thread.steps + 1, ms: now() - thread.stepAt } } : {}),
         ...(state.tuiProfile.showElapsed && !state.accessible && thread.startedAt !== undefined ? { elapsedMs: now() - thread.startedAt } : {}),
         now: now(),
         interruptHint: false,
@@ -843,7 +845,8 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.transcript.queue.length ? { queued: state.transcript.queue.length } : {}),
       ...(elapsedMs !== undefined && elapsedMs >= 2_000 && state.turnState.outputLive > 0 ? { tokensPerSecond: Math.round(state.turnState.outputLive / (elapsedMs / 1000)) } : {}),
       spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-      phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}) })),
+      phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}), steps: state.turnState.steps })),
+      ...(state.turnState.stepAt !== undefined && !retry ? { step: { number: state.turnState.steps + 1, ms: now() - state.turnState.stepAt } } : {}),
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
       ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
       ...(retry ? { retry } : {}),
