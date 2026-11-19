@@ -37,7 +37,15 @@ colour (ASCII `^2`), and spins even while it rests itself; the count covers its 
 calls (Claude Code's `Agent`, background ones until their end is reported), and the selected row's detail line says
 `2 sub-agents working`. With none working, the one-folder list keeps the dim count of its listed child sessions. A bot whose chat
 rests while its sub-agents work stays working. The daemon sends both in `session.activity` and `session.list` (`agents`,
-`compacting`). A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
+`compacting`). Every working row of the list spins, whichever project or bot it belongs to, while the open chat rests.
+
+A workflow's own sessions are not chats in the list. The daemon titles them `workflow · <name>` (the run) and
+`workflow · <name> · <task>` (each task). While a run works or waits, its row reads `◇ <name>`, with the footer's workflow mark,
+and its tasks stay under it. A finished run leaves the list: it is on `/workflows`, and in `/sessions`. Enter or a click on a
+run's row opens `/workflows` on that run, with its tasks, instead of the empty chat that holds them. A task's session still
+opens as a chat. A workflow session you renamed is a session like any other. The open session always shows.
+
+A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
 
 The selected row's detail line adds the PR's branch (or, for the open session, the folder's branch) and, in a linked worktree, `worktree <name>`. Other rows never show them.
 

@@ -24,6 +24,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A working session of another project, or a bot's chat with sub-agents at work, keeps its spinner in the left list after you open another chat, instead of a still mark.
+- Workflows no longer fill the left list with their sessions: a working run shows as one `◇ <name>` row that opens it on `/workflows`, and a finished one leaves the list.
 - When several packages bring a command of the same name, each runs as `/<package>:<name>` and the menu lists all of them; the bare name says which ones exist instead of running one of them.
 - A command whose description is longer than 120 characters loads with the description cut, instead of being left out.
 - A message sent while a tool runs is no longer lost when you cancel the turn before the model reads it: it waits in the queue and goes with your next message.

@@ -749,7 +749,7 @@ export function createApp(input: AppInput) {
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
   const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
   const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
-  const { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
+  const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
   const { diagramLayout, openDiagram } = createDiagram(ctx)
@@ -1061,6 +1061,7 @@ export function createApp(input: AppInput) {
     restoreUnsent,
     scratchKey,
     switchSession,
+    openWorkflowOf,
     homeSessions: (...args) => homeSessions(...args),
     navigateMessage,
     endScratchEdit,

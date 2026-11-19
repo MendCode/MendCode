@@ -29,7 +29,7 @@ import {
   type AuditOutcome,
   type TaskEnd,
 } from "./run"
-import { effectiveScriptBudget, startedQueueIds, WORKFLOW_PERMISSION_RANK } from "@mendcode/protocol"
+import { effectiveScriptBudget, startedQueueIds, WORKFLOW_PERMISSION_RANK, WORKFLOW_SESSION_PREFIX } from "@mendcode/protocol"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type TimerHandle = { cancel(): void }
@@ -342,7 +342,7 @@ export function createWorkflowService(options: {
       task.sessionId ??
       options.createSession({
         directory: execution.directory,
-        title: `workflow · ${run.name} · ${task.title}`,
+        title: `${WORKFLOW_SESSION_PREFIX}${run.name} · ${task.title}`,
         parentId: run.rootSessionId,
         readOnly: execution.readOnly,
         permission: execution.permission,
@@ -573,7 +573,7 @@ export function createWorkflowService(options: {
     }
     const outcome = await verifier.run({
       directory: run.plan.workspace?.mode.includes("worktree") ? run.tasks.find((task) => task.execution)?.execution?.directory ?? run.directory : run.directory,
-      title: `workflow · ${run.name} · audit ${round}`,
+      title: `${WORKFLOW_SESSION_PREFIX}${run.name} · audit ${round}`,
       checks: contract.checks.map((check) => check.command),
       checkTimeouts: contract.checks.map((check) => check.timeoutSeconds),
       signal: controller.signal,
@@ -681,7 +681,7 @@ export function createWorkflowService(options: {
         put(controlRun(previous, "stop", clock.now()))
       }
       const workflowId = ids("workflow")
-      const rootSessionId = options.createSession({ directory: input.directory, title: `workflow · ${input.name ?? input.plan.name}`, ...(input.originSessionId ? { parentId: input.originSessionId } : {}) })
+      const rootSessionId = options.createSession({ directory: input.directory, title: `${WORKFLOW_SESSION_PREFIX}${input.name ?? input.plan.name}`, ...(input.originSessionId ? { parentId: input.originSessionId } : {}) })
       const run = createRun({ workflowId, plan: input.plan, planHash: input.planHash, directory: input.directory, permission: input.permission, rootSessionId, ...(input.originSessionId ? { originSessionId: input.originSessionId } : {}), at: clock.now() })
       if (input.packageRoot) run.packageRoot = input.packageRoot
       if (input.definitionId) Object.assign(run, { definitionId: input.definitionId, revisionId: input.revisionId, revision: input.revision })

@@ -6,7 +6,7 @@ import { clip, fit, spread } from "./deck"
 import { compact } from "./format"
 import type { TodoItem, TodoStatus } from "./dock"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
-import { draftSizeLabel, labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
+import { draftSizeLabel, labelSpans, rowLabel, sessionActivityAt, workflowOf } from "./session-label"
 import { lineWidth, textWidth, wrap } from "./wrap"
 import { agentsSpans, elapsedLabel, isCompacting, liveDetail, prSpans, SETTLED_FIRST } from "./sidebar-marks"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
@@ -181,11 +181,15 @@ export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], m
   return Array.from({ length: height }, (_, row): Line => side === "left" ? [...(sidebar[row] ?? blank), { text: " ".repeat(SIDEBAR_GAP) }, ...fit(main[row] ?? [], mainWidth)] : [...fit(main[row] ?? [], mainWidth), { text: " ".repeat(SIDEBAR_GAP) }, ...(sidebar[row] ?? blank)])
 }
 
-export function projectSessions(sessions: readonly SessionSummary[], directory: string) {
+/** A workflow's session that neither works nor waits: the run lives on /workflows, not as a chat in the list. */
+export const restingWorkflow = (session: SidebarSession & { named?: boolean | undefined }) => workflowOf(session) !== undefined && !markAnimates(sessionMark(session, false))
+
+/** The folder's top sessions in list order; a resting workflow's sessions stay out of it unless one is `current`. */
+export function projectSessions(sessions: readonly SessionSummary[], directory: string, current?: string) {
   const section = (session: SessionSummary) => session.archivedAt !== undefined ? 2 : session.lifecycle?.pinnedAt !== undefined ? 0 : 1
   // The top sessions only: a child listed with its parent (as /sessions lists a folder) stays under it there, not here.
   const listed = new Set(sessions.map((session) => session.sessionId))
-  return sessions.filter((session) => session.directory === directory && !(session.parentId && listed.has(session.parentId))).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
+  return sessions.filter((session) => session.directory === directory && !(session.parentId && listed.has(session.parentId)) && (session.sessionId === current || !restingWorkflow(session))).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
 }
 
 /** The collapsed Settled row's stop among the hits and the keyboard's rows; never a session id (those are ULID-like). */
@@ -200,7 +204,7 @@ const RUNNING_STATES: ReadonlySet<string> = new Set(["generating", "tool", "comp
 const MARK_RANK: Record<SessionMark, number> = { approval: 0, question: 1, plan: 2, error: 3, unread: 4, running: 5, queued: 6, settled: 7, idle: 8 }
 const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", question: "info", plan: "accent", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
 
-type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting">>
+type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting" | "named">>
 
 /**
  * The row's state: waiting for you (to approve, to answer, or to review a plan), working, failed, a reply you have not opened yet, queued
@@ -321,7 +325,7 @@ export function renderSessionSidebar(input: {
     const quiet = mark === "idle" || mark === "settled" || mark === "queued"
     // The meta sits on the right edge with at least two blanks before it; the title gives way with an ellipsis.
     const titleRoom = Math.max(4, inner - 2 - lineWidth(meta) - 2)
-    const title = labelSpans(sessionLabel(session, { untitled: "Untitled session", marker: "Draft" }), titleRoom, { fg: current || selected || !quiet ? "text" : "muted", bold: current || selected })
+    const title = labelSpans(rowLabel(session, { untitled: "Untitled session", marker: "Draft", ascii: input.ascii }), titleRoom, { fg: current || selected || !quiet ? "text" : "muted", bold: current || selected })
     const lead: Line = current ? [{ text: "▌", fg: "primary" }, { text: " " }] : selected ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
     list.push({ line: spread([{ ...symbol(mark), text: `${symbol(mark).text} ` }, ...title], meta, inner), lead, id: session.sessionId, fill: selected })
     if (!selected) return

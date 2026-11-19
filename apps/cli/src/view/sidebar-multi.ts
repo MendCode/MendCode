@@ -4,8 +4,8 @@ import type { ImagePlacement } from "../ui/image-layer"
 import { botIcon, type BotIcon, type IconFaces } from "./bot-icon"
 import { fit, spread } from "./deck"
 import { relativeTime, truncateEnd } from "./session-list"
-import { labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
-import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
+import { labelSpans, rowLabel, sessionActivityAt } from "./session-label"
+import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, restingWorkflow, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
 import { agentsSpans, elapsedLabel, isCompacting, prSpans } from "./sidebar-marks"
 import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
@@ -19,7 +19,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting">>
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting" | "named">>
 
 export type MultiInput = {
   sessions: readonly MultiSession[]
@@ -150,7 +150,7 @@ function groupLabels(directories: readonly string[]): Map<string, string> {
 const unused = (session: MultiSession) => !session.title.trim() && !session.draft && session.queued === 0 && session.state === "idle" && !session.paused && session.lifecycle === undefined && session.lastSeq !== undefined && session.lastSeq <= UNUSED_EVENTS
 
 /** The folder's listed sessions in drawing order, without the unused ones (the open session is always kept). */
-const live = (sessions: readonly MultiSession[], directory: string, input: MultiInput) => (projectSessions(sessions as readonly SessionSummary[], directory) as MultiSession[]).filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
+const live = (sessions: readonly MultiSession[], directory: string, input: MultiInput) => (projectSessions(sessions as readonly SessionSummary[], directory, input.current) as MultiSession[]).filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
 
 /**
  * A session this terminal opened within the last day that has taken part since (its activity moved past the one it had when first
@@ -160,7 +160,8 @@ const usedHere = (session: MultiSession, input: Pick<MultiInput, "now" | "visits
   const visit = input.visits?.get(session.sessionId)
   return visit !== undefined && input.now - visit.at <= FRESH_MS && session.updatedAt > visit.updatedAt
 }
-const hiddenEmpty = (session: MultiSession, input: Pick<MultiInput, "now" | "visits">) => unused(session) && !usedHere(session, input)
+/** Also a workflow's session at rest: the run lives on /workflows, not as a chat here (the open one still shows). */
+const hiddenEmpty = (session: MultiSession, input: Pick<MultiInput, "now" | "visits">) => (unused(session) && !usedHere(session, input)) || restingWorkflow(session as never)
 
 /** The first `limit` sessions, plus any beyond them that is open or busy (`keep`), in the same order. */
 const preview = (list: readonly MultiSession[], limit: number, keep: (session: MultiSession) => boolean) => list.filter((session, index) => index < limit || keep(session))
@@ -277,7 +278,7 @@ function build(raw: MultiInput): { entries: Entry[]; names: Map<string, string>;
       // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
       const meta = pr && inner - used - lineWidth(metaOf(true)) - 2 < 10 ? metaOf(false) : metaOf(true)
       const titleRoom = Math.max(4, inner - used - lineWidth(meta) - 2)
-      const title = labelSpans(sessionLabel(session as never, { untitled: "Untitled session", marker: "Draft" }), titleRoom, { fg: current || session.sessionId === picked || !quiet ? "text" : "muted", bold: current || session.sessionId === picked })
+      const title = labelSpans(rowLabel(session, { untitled: "Untitled session", marker: "Draft", ascii: input.ascii }), titleRoom, { fg: current || session.sessionId === picked || !quiet ? "text" : "muted", bold: current || session.sessionId === picked })
       const before: Line = [{ text: indent }, { ...symbol(value), text: `${symbol(value).text} ` }]
       push(spread([...before, ...(room ? [made.span] : []), ...title], meta, inner), session.sessionId, made.image ? { col: lineWidth(before), at: made.image } : undefined)
     }

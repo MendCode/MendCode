@@ -1,6 +1,9 @@
 // No runtime dependency on zod (imported by wire.ts for thin clients).
 export const PROTOCOL_VERSION = 1 as const
 
+/** The title the daemon gives a workflow's own sessions: `workflow · <name>` for the run, `workflow · <name> · <task>` for each task. */
+export const WORKFLOW_SESSION_PREFIX = "workflow · "
+
 /** Text-only estimate in UTF-16 code units, rounded up. Provider usage remains authoritative. */
 export const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 /** What one attached image counts for when no provider count exists: about what the providers charge for a typical screenshot (Anthropic caps near 1.6k, OpenAI high detail is 0.8k-1.5k). */
