@@ -439,6 +439,28 @@ describe("prompt area in the app", () => {
       expect(rig.sent.some((command) => command.type === "session.undo")).toBe(false)
       expect(rig.text().some((row) => row.includes("already answered · esc esc to edit"))).toBe(true)
     })
+
+    test("past four steps (tool calls, thoughts, short notes) Esc Esc only stops the turn; four still take the message back", async () => {
+      const steps = (rig: ReturnType<typeof sentMessage>, count: number) => {
+        for (let step = 0; step < count; step++) {
+          const itemId = ids("item")
+          const kind = (["tool_call", "reasoning", "agent_message"] as const)[step % 3]!
+          rig.ev({ type: "item.started", turnId: rig.turnId, itemId, kind, ...(kind === "tool_call" ? { title: "read a.ts" } : {}) })
+          rig.ev({ type: "item.delta", itemId, text: "ok" })
+        }
+      }
+      const busy = sentMessage()
+      steps(busy, 5)
+      await busy.app.onKey("\x1b")
+      await busy.app.onKey("\x1b")
+      expect(busy.sent.some((command) => command.type === "turn.cancel")).toBe(true)
+      expect(busy.sent.some((command) => command.type === "session.undo")).toBe(false)
+      const early = sentMessage()
+      steps(early, 4)
+      await early.app.onKey("\x1b")
+      await early.app.onKey("\x1b")
+      expect(early.app.editor.text).toBe(sentText)
+    })
   })
 
   test("a newer build installed under the terminal is said once on the right of the prompt's top rule, taking no row", () => {

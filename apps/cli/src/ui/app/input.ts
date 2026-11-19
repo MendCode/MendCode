@@ -11,7 +11,7 @@ import { removedAliasHint } from "../../view/slash-aliases"
 import { hoistCommand } from "../../view/mentions"
 import type { AppContext } from "./context"
 import type { ItemId, TurnId } from "@mendcode/protocol"
-import { DOUBLE_ESC_MS, RETRACT_NARRATION_CHARS } from "./constants"
+import { DOUBLE_ESC_MS, RETRACT_MAX_STEPS, RETRACT_NARRATION_CHARS } from "./constants"
 import { MAX_DRAFT_CHARS } from "@mendcode/protocol/wire"
 import { moveLongPastes } from "./paste-upload"
 
@@ -357,7 +357,9 @@ export function createInput(ctx: AppContext, actions: {
     if (!message || message.notice || message.shell) return undefined
     // A line of narration ("Checking the routes first.") is not an answer yet: GPT models write one before every first tool call.
     const said = blocks.reduce((total, block) => total + (block.kind === "agent_message" ? block.text.trim().length : 0), 0)
-    return { itemId: message.itemId, answered: said > RETRACT_NARRATION_CHARS }
+    // A turn that already did real work (more than a few tool calls, thoughts or answers) is not a typo to take back: Esc Esc only stops it.
+    const steps = blocks.filter((block) => block.kind === "tool_call" || block.kind === "reasoning" || block.kind === "agent_message").length
+    return { itemId: message.itemId, answered: said > RETRACT_NARRATION_CHARS || steps > RETRACT_MAX_STEPS }
   }
 
   /**

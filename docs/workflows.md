@@ -96,6 +96,12 @@ A headless run targeting a session with an earlier pending approval exits instea
 ### Page keys
 
 The page opens with workflows from all projects. Press Tab to limit it to the current project.
+Each run's row leads with its state mark (`●` working, `?` waiting for you, `✓` done, `✗` failed or blocked, `·` paused,
+stopped or queued), then its name, state, tasks done and time. The selected run shows on the right from 110 columns, past a thin
+rule, and below the list under that: its mark, name, state and time, its objective, a progress bar with what is done, running,
+waiting and failed, then its folder, contract and permissions, then its tasks under their phase or step (`Step 2  0/2`; a run
+of one step has no headings) and the verification. There are no boxes. The footer lists only the keys that act on the selected
+run: `p` reads pause or resume, `t` shows when a task failed, `v` and `a` when they apply.
 After opening a task session from the list, press ↑ at an empty prompt to return to the list.
 
 | Key in `/workflows` | Does |
@@ -221,7 +227,7 @@ Waiting follows pushed events, with the same completion/failure/input/timeout ex
 
 Resume/retry approval shows every frozen check command. Smart permissions always ask for autonomous controls. All model access stays in the current project.
 
-Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity, tasks and verification in the shared bordered panel grid, with header hints and one column below 70 cells.
+Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity, tasks and verification, with its keys in the footer and one column below 110 cells.
 
 ### Protocol and client helpers
 
@@ -386,7 +392,7 @@ Queued time does not consume runtime budgets. Pause/resume cannot bypass the que
 
 Policies use existing approved workflow commands and authenticated local transport. No listener, network service, read-only remote command or dependency is added.
 
-The bordered `/workflows` page shows phase progress/barriers, map child counts, output kinds and queue status, retaining header hints and compact single-column layout.
+The `/workflows` page shows phase progress/barriers, map child counts, output kinds and queue status, with tasks grouped under their phase and a compact single-column layout.
 
 ## Script workflows
 

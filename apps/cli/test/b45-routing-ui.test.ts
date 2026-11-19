@@ -16,7 +16,7 @@ for (const [width, height] of [[60, 20], [100, 30], [160, 45], [180, 50], [220, 
     expect(frame.every((line) => textWidth(line.map((span) => span.text).join("")) <= width)).toBe(true)
     expect(text).toContain("per-run-worktree")
     expect(text).toContain("local/workflow")
-    expect(text).toContain("┌")
+    expect(text).toContain("Tasks")
     await h.app.onKey("\x1b")
   })
 }

@@ -1,7 +1,7 @@
 import type { WorkflowId, WorkflowRunState, WorkflowSummary, WorkflowTaskState, WorkflowTaskSummary } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
-import { clip, fit, panelGrid, spread } from "./deck"
-import { page, type Hint, type PageStatus } from "./page"
+import { clip, fit } from "./deck"
+import { page, pageChrome, type Hint, type PageStatus } from "./page"
 import { shortenMiddle, truncateEnd } from "./session-list"
 import { formatElapsed } from "./time"
 import { textWidth, wrap } from "./wrap"
@@ -44,18 +44,6 @@ const DETAIL_ROWS = 14
 const LABEL_WIDTH = 11
 const NAME_MAX = 16
 const SCRIPT_NAME_MAX = 28
-const HINTS: Hint[] = [
-  { key: "↑↓", label: "run" },
-  { key: "←→", label: "task" },
-  { key: "enter", label: "open" },
-  { key: "p", label: "pause/resume" },
-  { key: "x", label: "stop" },
-  { key: "t", label: "retry" },
-  { key: "v", label: "verify" },
-  { key: "a", label: "accept" },
-  { key: "d", label: "delete" },
-  { key: "tab", label: "scope" },
-]
 const BACK: Hint = { key: "esc", label: "back" }
 
 const STATE: Record<WorkflowRunState, { label: string; fg: ColorName; dot?: boolean }> = {
@@ -259,23 +247,54 @@ function confirmRow(state: WorkflowsPageState, runs: WorkflowSummary[], width: n
 
 type Column = { text: string; fg: ColorName; width: number }
 
+/** A run's state at a glance, leading its row and its detail (as Claude Code leads a task with its status mark). */
+function runMark(state: WorkflowRunState, glyphs: Glyphs): Span {
+  switch (state) {
+    case "running":
+    case "verifying":
+      return { text: glyphs.dot, fg: "primary" }
+    case "needs_input":
+      return { text: glyphs.ask, fg: "warning" }
+    case "completed":
+      return { text: glyphs.ok, fg: "success" }
+    case "failed":
+    case "blocked":
+      return { text: glyphs.fail, fg: "error" }
+    case "paused":
+    case "stopped":
+    case "queued":
+      return { text: glyphs.sep, fg: "muted" }
+  }
+}
+
+/** Finished tasks out of all (a script run: finished calls out of calls so far, as it makes them while it goes). */
+function runProgress(run: WorkflowSummary): { done: number; total: number } {
+  return run.script ? { done: run.script.counts.done, total: run.script.calls } : { done: run.tasks.filter((task) => task.state === "done").length, total: run.tasks.length }
+}
+
+function progressBar(done: number, total: number, cells: number, glyphs: Glyphs): Line {
+  const filled = total > 0 ? Math.min(cells, Math.round((done / total) * cells)) : 0
+  return [{ text: glyphs.barFull.repeat(filled), fg: "success" }, { text: glyphs.barEmpty.repeat(cells - filled), fg: "muted" }]
+}
+
 function runRow(input: { run: WorkflowSummary; selected: boolean; width: number; now: number; glyphs: Glyphs }): Line {
   const { run, selected, width, now, glyphs } = input
   const style = STATE[run.state]
-  const done = run.tasks.filter((task) => task.state === "done").length
+  const progress = runProgress(run)
   const columns: Column[] = [
-    { text: `${style.dot ? `${glyphs.running} ` : ""}${style.label}`, fg: style.fg, width: 13 },
-    // A script run's agent calls are made as it goes: progress is finished calls out of calls so far.
-    { text: run.script ? `${run.script.counts.done}/${run.script.calls}` : `${done}/${run.tasks.length}`, fg: "muted", width: 8 },
-    { text: run.state === "verifying" ? "in review" : runElapsed(run, now), fg: "muted", width: 10 },
+    { text: style.label, fg: style.fg, width: 12 },
+    { text: `${progress.done}/${progress.total}`, fg: "muted", width: 7 },
+    { text: run.state === "verifying" ? "in review" : runElapsed(run, now), fg: "muted", width: 9 },
   ]
   let shown = columns.length
-  const nameRoom = () => width - 2 - columns.slice(0, shown).reduce((sum, column) => sum + column.width, 0)
+  const nameRoom = () => width - 4 - columns.slice(0, shown).reduce((sum, column) => sum + column.width, 0)
   while (shown > 1 && nameRoom() < 14) shown--
   const room = Math.max(4, nameRoom())
   const name = truncateEnd(run.name, room - 1)
   const line: Line = [
     selected ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " },
+    runMark(run.state, glyphs),
+    { text: " " },
     { text: name, fg: selected ? "primary" : "text", bold: selected },
     { text: " ".repeat(Math.max(1, room - textWidth(name))) },
   ]
@@ -340,13 +359,12 @@ function highlighted(line: Line, width: number): Line {
   return fit(line, width).map((span) => ({ ...span, bg: "element" as const }))
 }
 
-function taskRow(input: { entry: Entry; showLevel: boolean; nameWidth: number; byId: Map<string, WorkflowTaskSummary>; cursor: boolean; compact: boolean; width: number; now: number; glyphs: Glyphs }): Line {
-  const { entry, showLevel, nameWidth, byId, cursor, compact, width, now, glyphs } = input
+function taskRow(input: { entry: Entry; nameWidth: number; byId: Map<string, WorkflowTaskSummary>; cursor: boolean; compact: boolean; width: number; now: number; glyphs: Glyphs }): Line {
+  const { entry, nameWidth, byId, cursor, compact, width, now, glyphs } = input
   const { task } = entry
   const note = taskNote(task, byId)
   const time = taskElapsed(task, now)
   const line: Line = [
-    { text: `${showLevel ? `L${entry.level}` : ""}`.padEnd(4), fg: "muted" },
     taskGlyph(task.state, glyphs),
     { text: " " },
     { text: truncateEnd(task.label ?? task.id, nameWidth - 1).padEnd(nameWidth), fg: task.state === "pending" || task.state === "skipped" || task.state === "stopped" ? "muted" : "text", bold: cursor },
@@ -460,9 +478,8 @@ function detailRows(input: { run: WorkflowSummary; state: WorkflowsPageState; wi
   const byId = new Map(run.tasks.map((task) => [task.id, task]))
   const slot = effectiveSlot(run, state, order)
   const contract = contractText(run)
-  const head: Line[] = []
-  if (!compact) head.push([{ text: shortenMiddle(run.directory, width), fg: "muted", dim: true }])
-  head.push(label("objective", run.objective.replace(/\s+/g, " ").trim(), width))
+  const head: Line[] = introRows({ run, width, now, glyphs, compact })
+  if (!compact) head.push([], label("folder", shortenMiddle(run.directory, Math.max(1, width - LABEL_WIDTH)), width, "muted"))
   if (!compact) head.push(label("contract", contract.text, width, contract.fg))
   if (run.revisionId) {
     head.push(label("revision", `#${run.revision} · ${run.revisionId}`, width))
@@ -493,25 +510,52 @@ function detailRows(input: { run: WorkflowSummary; state: WorkflowsPageState; wi
   }
 
   const verification = verificationRows(run, width, glyphs)
-  const shownHead = compact && phaseLine ? [phaseLine, ...head.filter((line) => line !== phaseLine)].slice(0, Math.max(0, rows - 1 - Math.min(order.length, 2))) : head
-  const fixed = shownHead.length + 1
-  const minTasks = Math.min(order.length, 3, Math.max(0, rows - fixed))
-  const verificationRoom = Math.max(0, rows - fixed - minTasks)
-  const shownVerification = verification.slice(0, verificationRoom)
-  const taskRoom = Math.max(0, rows - fixed - shownVerification.length)
-  const cursorIndex = slot === undefined ? 0 : Math.min(slot, order.length - 1)
-  const offset = Math.min(Math.max(0, cursorIndex - taskRoom + 1), Math.max(0, order.length - taskRoom))
-  // A script's calls are labelled by the script and have no levels (no static dependencies): they get a wider name column and no L marker.
+  // The intro (name, state and progress) always stays; in compact mode the phases come right after it, the rest gives way.
+  const intro = head.slice(0, compact ? 2 : 3)
+  const shownHead = compact && phaseLine ? [...intro, phaseLine, ...head.slice(intro.length).filter((line) => line !== phaseLine)].slice(0, Math.max(intro.length, rows - 2 - Math.min(order.length, 2))) : head
+  const fixed = shownHead.length + 2
+  // A script's calls are labelled by the script and have no levels (no static dependencies): they get a wider name column and no steps.
   const nameWidth = Math.min(run.script ? SCRIPT_NAME_MAX : NAME_MAX, Math.max(6, ...order.map((entry) => textWidth(entry.task.label ?? entry.task.id) + 1)))
-
-  const taskRows: Line[] = []
-  for (let index = offset; index < Math.min(order.length, offset + taskRoom); index++) {
-    const entry = order[index]!
-    const showLevel = !run.script && (index === offset || order[index - 1]!.level !== entry.level)
-    taskRows.push(taskRow({ entry, showLevel, nameWidth, byId, cursor: index === slot, compact: compact || width < 60, width, now, glyphs }))
-  }
+  // Tasks under the step (or phase) they belong to, as Claude Code lists a workflow's agents under its phases; one step needs no heading.
+  const steps = new Set(order.map((entry) => entry.level)).size
+  const phaseOf = (entry: Entry) => run.phases?.find((phase) => phase.id === entry.task.phaseId)
+  const groupOf = (entry: Entry) => run.script ? undefined : phaseOf(entry)?.id ?? (steps > 1 ? `step ${entry.level}` : undefined)
+  const listed: Array<{ line: Line; task?: number }> = []
+  order.forEach((entry, index) => {
+    const group = groupOf(entry)
+    if (group !== undefined && (index === 0 || groupOf(order[index - 1]!) !== group)) {
+      const phase = phaseOf(entry)
+      const members = order.filter((other) => groupOf(other) === group)
+      const done = phase ? phase.completed : members.filter((other) => other.task.state === "done").length
+      const total = phase ? phase.total : members.length
+      listed.push({ line: clip([{ text: phase ? phase.title : `Step ${entry.level}`, fg: "muted", bold: true }, { text: `  ${done}/${total}`, fg: "muted" }], width) })
+    }
+    listed.push({ line: taskRow({ entry, nameWidth, byId, cursor: index === slot, compact: compact || width < 60, width, now, glyphs }), task: index })
+  })
+  const minTasks = Math.min(listed.length, 3, Math.max(0, rows - fixed))
+  const verificationRoom = Math.max(0, rows - fixed - minTasks - 1)
+  const shownVerification = verification.slice(0, verificationRoom)
+  const taskRoom = Math.max(0, rows - fixed - shownVerification.length - (shownVerification.length ? 1 : 0))
+  const cursorRow = Math.max(0, listed.findIndex((row) => row.task === (slot === undefined ? 0 : Math.min(slot, order.length - 1))))
+  const offset = Math.min(Math.max(0, cursorRow - taskRoom + 1), Math.max(0, listed.length - taskRoom))
+  const taskRows = listed.slice(offset, offset + taskRoom).map((row) => row.line)
   if (slot === order.length && shownVerification[0]) shownVerification[0] = highlighted(shownVerification[0], width)
-  return [...shownHead, [{ text: "tasks", fg: "muted" }], ...taskRows, ...shownVerification]
+  return [...shownHead, [], clip([{ text: "Tasks", fg: "text", bold: true }, { text: `  ${order.length}`, fg: "muted" }], width), ...taskRows, ...(shownVerification.length ? [[], ...shownVerification] : [])]
+}
+
+/** The run in three rows: its mark, name, state and time; what it is for; how far it got, as a bar and in words. */
+function introRows(input: { run: WorkflowSummary; width: number; now: number; glyphs: Glyphs; compact: boolean }): Line[] {
+  const { run, width, now, glyphs, compact } = input
+  const style = STATE[run.state]
+  const title = clip([runMark(run.state, glyphs), { text: " " }, { text: run.name, fg: "text", bold: true }, { text: "  " }, { text: style.label, fg: style.fg }, { text: ` · ${run.state === "verifying" ? "in review" : runElapsed(run, now)}`, fg: "muted" }], width)
+  const { done, total } = runProgress(run)
+  const count = (state: WorkflowTaskState) => run.tasks.filter((task) => task.state === state).length
+  const waiting = count("needs_input")
+  const facts = [`${done}/${total} done`, count("running") ? `${count("running")} running` : "", waiting ? `${waiting} need${waiting === 1 ? "s" : ""} you` : "", count("failed") ? `${count("failed")} failed` : ""].filter(Boolean).join(" · ")
+  const cells = Math.max(4, Math.min(20, width - textWidth(facts) - 2))
+  const bar = clip([...progressBar(done, total, cells, glyphs), { text: "  " }, { text: facts, fg: "muted" }], width)
+  const objective = wrapped(run.objective, width, compact ? 1 : 2, "", "body")
+  return compact ? [title, bar, ...objective] : [title, ...objective, bar]
 }
 
 function emptyRows(width: number): Line[] {
@@ -534,15 +578,8 @@ export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: Wor
   for (const run of runs) counts.set(run.state, (counts.get(run.state) ?? 0) + 1)
   const summaryParts = SUMMARY_ORDER.filter((s) => counts.get(s)).map((s) => `${counts.get(s)} ${STATE[s].label}`)
   const subtitle = state.scope === "all" ? "all projects" : "this project"
-  const status: PageStatus | undefined = state.confirm
-    ? { label: "Confirm", tone: "warn" }
-    : counts.get("blocked")
-      ? { label: "Blocked", tone: "error" }
-      : counts.get("needs_input")
-        ? { label: "Needs input", tone: "warn" }
-        : counts.get("running") || counts.get("verifying")
-          ? { label: "Live", tone: "live" }
-          : undefined
+  // The counts already say what waits or failed; the title row adds a word only while a stop or delete waits for its yes.
+  const status: PageStatus | undefined = state.confirm ? { label: "Confirm", tone: "warn" } : undefined
   // The most urgent counts that still fit on the title row beside the title and the status.
   let summaryRoom = width - 2 - textWidth(`Workflows · ${subtitle}`) - 1 - (status && status.tone !== "live" ? textWidth(status.label) + 3 : 0)
   const fitted: string[] = []
@@ -557,37 +594,57 @@ export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: Wor
   const inner = Math.max(1, width - 2)
   const wide = width >= 110
   const compact = width < COMPACT_WIDTH || height < COMPACT_HEIGHT
-  const room = Math.max(0, height - 5)
-  const frame = (body: Line[]) => {
-    const lines = page({ title: "Workflows", context: subtitle, summary, ...(status ? { status } : {}), body, hints: [], back: false, width, height })
-    const hints = [{ key: "b", label: "evidence" }, ...(width >= 135 ? [...HINTS, BACK] : width < 70 ? [HINTS[0]!, HINTS[1]!, HINTS[2]!, BACK] : [HINTS[0]!, HINTS[1]!, HINTS[2]!, HINTS[3]!, HINTS[5]!, BACK])]
-    lines[0] = [{ text: " " }, ...spread([], [{ text: hints.map((h) => `${h.key} ${h.label}`).join(" · "), fg: "muted" }], inner), { text: " " }]
-    return lines
+  const hints = hintsFor(runs[selected])
+  const room = Math.max(0, height - pageChrome({ hints, back: false, width }))
+  const frame = (body: Line[]) => page({ title: "Workflows", context: subtitle, summary, ...(status ? { status } : {}), body, hints, back: false, width, height })
+
+  if (runs.length === 0) return frame(emptyRows(inner))
+
+  const run = runs[selected]!
+  const confirm = (rowWidth: number): Line[] => {
+    const row = confirmRow(state, runs, rowWidth)
+    return row ? [row] : []
   }
-
-  if (runs.length === 0) return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [room], rows: [[{ title: "Workflows", body: emptyRows(inner - 4) }]] }))
-
-  const listWidth = Math.min(56, Math.max(40, Math.floor(inner * 0.36)))
-  const confirm = confirmRow(state, runs, wide ? listWidth - 4 : inner - 4)
-  const confirmRows: Line[] = confirm ? [confirm] : []
   const windowed = (listRows: number, rowWidth: number): Line[] => {
     const offset = Math.min(Math.max(0, selected - listRows + 1), Math.max(0, runs.length - listRows))
     const rows: Line[] = []
     for (let index = offset; index < Math.min(runs.length, offset + listRows); index++) rows.push(runRow({ run: runs[index]!, selected: index === selected, width: rowWidth, now, glyphs }))
     return rows
   }
+  const revision = run.revision ? [clip([{ text: `revision #${run.revision}`, fg: "muted" }], inner)] : []
 
+  // Wide: the runs on the left, the selected one on the right, a thin rule between them; no boxes, as Claude Code draws its lists.
   if (wide) {
-    return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [room], rows: [[
-      { title: "Workflows", weight: 2, active: true, body: (w) => [...confirmRows, ...windowed(Math.max(1, room - 4 - confirmRows.length), w)] },
-      { title: runs[selected]!.revision ? `Detail · revision #${runs[selected]!.revision}` : "Detail", weight: 3, body: (w) => detailRows({ run: runs[selected]!, state, width: w, rows: Math.max(1, room - 4), now, glyphs, compact }) },
-    ]] }))
+    const listWidth = Math.min(52, Math.max(38, Math.floor(inner * 0.36)))
+    const detailWidth = Math.max(1, inner - listWidth - 3)
+    const left = [...confirm(listWidth), ...windowed(Math.max(1, room - (state.confirm ? 1 : 0)), listWidth)]
+    const right = [...revision, ...detailRows({ run, state, width: detailWidth, rows: Math.max(1, room - revision.length), now, glyphs, compact })]
+    return frame(Array.from({ length: room }, (_, row): Line => [...fit(left[row] ?? [], listWidth), { text: ` ${glyphs.track} `, fg: "border" }, ...fit(right[row] ?? [], detailWidth)]))
   }
 
-  const listRows = Math.max(1, Math.min(runs.length, room - DETAIL_ROWS - 9))
-  const top = Math.min(room, listRows + confirmRows.length + 4)
-  return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [top, Math.max(0, room - top - 1)], rows: [
-    [{ title: "Workflows", active: true, body: (w) => [...confirmRows, ...windowed(listRows, w)] }],
-    [{ title: runs[selected]!.revision ? `Detail · revision #${runs[selected]!.revision}` : "Detail", body: (w) => detailRows({ run: runs[selected]!, state, width: w, rows: Math.max(1, room - top - 5), now, glyphs, compact }) }],
-  ] }))
+  // Narrow: the runs, a rule, then the selected one.
+  const listRows = Math.max(1, Math.min(runs.length, room - DETAIL_ROWS - 3))
+  const top = [...confirm(inner), ...windowed(listRows, inner)]
+  const detailRoom = Math.max(1, room - top.length - 2 - revision.length)
+  return frame([...top, [{ text: glyphs.rule.repeat(inner), fg: "border" }], [], ...revision, ...detailRows({ run, state, width: inner, rows: detailRoom, now, glyphs, compact })])
+}
+
+/** The keys that do something for the selected run, so the footer never offers one that is refused (Claude Code lists only those). */
+function hintsFor(run: WorkflowSummary | undefined): Hint[] {
+  if (!run) return [{ key: "tab", label: "scope" }, BACK]
+  const order = workflowTaskOrder(run)
+  return [
+    { key: "↑↓", label: "run" },
+    ...(order.length ? [{ key: "←→", label: "task" }] : []),
+    { key: "enter", label: "open" },
+    ...(canPause(run) ? [{ key: "p", label: "pause" }] : canResume(run) ? [{ key: "p", label: "resume" }] : []),
+    ...(canStop(run) ? [{ key: "x", label: "stop" }] : []),
+    ...(run.tasks.some((task) => task.state === "failed") ? [{ key: "t", label: "retry" }] : []),
+    ...(canVerify(run) ? [{ key: "v", label: "verify" }] : []),
+    ...(canAccept(run) ? [{ key: "a", label: "accept" }] : []),
+    ...(run.contract || run.verification ? [{ key: "b", label: "evidence" }] : []),
+    { key: "d", label: "delete" },
+    { key: "tab", label: "scope" },
+    BACK,
+  ]
 }

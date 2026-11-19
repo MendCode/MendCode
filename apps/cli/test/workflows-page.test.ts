@@ -143,27 +143,31 @@ describe("renderWorkflowsPage", () => {
     expect(text(titleRow(render(sample, { selected: 0, scope: "all" })))).toContain("Workflows · all projects")
   })
 
-  test("header status: Confirm, then Blocked, then Needs input, then Live", () => {
+  test("the title row counts the runs by state and says Confirm only while a stop or delete waits; the counts are not repeated as a word", () => {
     const status = (runs: WorkflowSummary[], state: WorkflowsPageState = start) => titleRow(render(runs, state))
     const confirm = status(sample, { selected: 0, scope: "project", confirm: { kind: "delete", workflowId: sample[0]!.workflowId } })
     expect(confirm.find((span) => span.text === "Confirm")).toMatchObject({ fg: "warning", bold: true })
-    expect(confirm.find((span) => span.text === "Blocked")).toBeUndefined()
-    expect(status(sample).find((span) => span.text === "Blocked")).toMatchObject({ fg: "error", bold: true })
-    const noBlocked = sample.filter((run) => run.state !== "blocked")
-    expect(status(noBlocked).find((span) => span.text === "Needs input")).toMatchObject({ fg: "warning", bold: true })
-    const live = sample.filter((run) => run.state === "running" || run.state === "completed")
-    const calm = text(status(live))
+    const calm = text(status(sample))
+    expect(calm).toContain("1 blocked")
     expect(calm).not.toContain("Blocked")
     expect(calm).not.toContain("Needs input")
-    expect(calm).toContain("1 running")
   })
 
-  test("hints live in one header row with every key at wide sizes", () => {
-    const rows = plain(render(sample, start))
-    const keys = rows[0]!
-    expect(keys).toContain("esc back")
-    expect(rows.slice(1).join("\n")).not.toContain("esc back")
-    for (const hint of ["↑↓ run", "←→ task", "enter open", "p pause/resume", "x stop", "t retry", "v verify", "a accept", "d delete", "tab scope"]) expect(keys).toContain(hint)
+  test("the footer offers only the keys that act on the selected run, whole, at the bottom", () => {
+    const keysOf = (name: string, width = 140) => {
+      const rows = plain(render(sample, { selected: sample.indexOf(byName(name)), scope: "project" }, width))
+      return rows.slice(-4).join(" ")
+    }
+    const broken = keysOf("broken")
+    for (const hint of ["↑↓ run", "←→ task", "enter open", "p resume", "x stop", "v verify", "a accept", "b evidence", "d delete", "tab scope", "esc back"]) expect(broken).toContain(hint)
+    const flaky = keysOf("flaky")
+    expect(flaky).toContain("t retry")
+    expect(flaky).not.toContain("x stop")
+    expect(flaky).not.toContain("p pause")
+    expect(keysOf("docs sweep")).toContain("p pause")
+    expect(keysOf("docs sweep")).not.toContain("t retry")
+    // Never cut at the top: the first row is the page's blank margin.
+    expect(plain(render(sample, start, 80))[0]!.trim()).toBe("")
   })
 
   test("list rows show state, done/total and elapsed; verifying reads 'in review'", () => {
@@ -185,7 +189,7 @@ describe("renderWorkflowsPage", () => {
     const spans = render(sample, start).flat()
     const badge = (label: string) => spans.find((span) => span.text.trim() === label)
     expect(badge("needs input")).toMatchObject({ fg: "warning" })
-    expect(badge("• running")).toMatchObject({ fg: "text" })
+    expect(badge("running")).toMatchObject({ fg: "text" })
     expect(badge("completed")).toMatchObject({ fg: "success" })
     expect(badge("blocked")).toMatchObject({ fg: "error" })
     expect(badge("failed")).toMatchObject({ fg: "error" })
@@ -220,36 +224,41 @@ describe("renderWorkflowsPage", () => {
     }
   })
 
-  test("wide layout has Workflows and Detail sections side by side; narrow stacks them", () => {
-    const wide = plain(render(sample, start, 140, 40))
-    const titles = wide.find((line) => line.includes("Detail"))!
-    expect(titles).toContain("Workflows")
-    expect(titles.indexOf("Workflows")).toBeLessThan(titles.indexOf("Detail"))
-    expect(wide.join("\n")).toMatch(/[┌┐└┘]/)
-    const stacked = plain(render(sample, start, 100, 40)).join("\n")
-    expect(stacked).toContain("Detail")
-    expect(stacked).toContain("objective")
-    // The wide breakpoint is 110 columns of terminal width (ui/breakpoints.ts), no longer 120 columns of inner width.
-    expect(plain(render(sample, start, 110, 40)).join("\n")).toContain("Detail")
-    expect(plain(render(sample, start, 109, 40)).find((line) => line.includes("Detail"))).not.toContain("Workflows")
+  test("wide: the runs beside the selected one with a thin rule, no boxes; narrow: the runs, a rule, then the selected one", () => {
+    const wide = render(sample, start, 140, 40).map(text)
+    const row = wide.find((line) => line.includes("❯"))!
+    expect(row).toContain("│")
+    expect(row.indexOf("api rewrite")).toBeLessThan(row.indexOf("│"))
+    expect(row.slice(row.indexOf("│"))).toContain("api rewrite")
+    expect(wide.join("\n")).not.toMatch(/[┌┐└┘]/)
+    // The wide breakpoint is 110 columns of terminal width (ui/breakpoints.ts).
+    expect(render(sample, start, 110, 40).map(text).find((line) => line.includes("❯"))).toContain("│")
+    const stacked = render(sample, start, 109, 40).map(text)
+    expect(stacked.find((line) => line.includes("❯"))).not.toContain("│")
+    expect(stacked.some((line) => /^ ─{20,}/.test(line))).toBe(true)
+    expect(stacked.join("\n")).toContain("Rewrite the API layer")
   })
 
-  test("detail shows directory, objective, contract, perms and the tasks by level", () => {
+  test("detail leads with the run's mark, name, state, time and a progress bar, then folder, contract, perms and the tasks by step", () => {
     const out = plain(render(sample, start, 140, 40)).join("\n")
+    expect(out).toMatch(/\? api rewrite +needs input · 12m 0s/)
+    expect(out).toContain("Rewrite the API layer to use the new client")
+    expect(out).toMatch(/[█░]{4,} +1\/4 done · 1 running · 1 needs you/)
     expect(out).toContain("/Users/dev/Code/app")
-    expect(out).toContain("objective  Rewrite the API layer")
     expect(out).toContain("contract   2 checks · independent audit · 4 criteria")
     expect(out).toContain("perms      edits · concurrency 2 · repairs 0/2")
-    expect(out).toMatch(/L1 +✓ survey +read +34s/)
-    expect(out).toMatch(/L2 +• impl-api +work +4m 10s +▸ edit src\/a\.ts/)
+    expect(out).toMatch(/Step 1 +1\/1\s*\n.*✓ survey +read +34s/)
+    expect(out).toMatch(/Step 2 +0\/2\s*\n.*• impl-api +work +4m 10s +▸ edit src\/a\.ts/)
     expect(out).toMatch(/\? impl-ui +work +4m 0s +needs input/)
-    expect(out).toMatch(/L3 +· tests +check +waits impl-api, impl-ui/)
+    expect(out).toMatch(/Step 3 +0\/1\s*\n.*· tests +check +waits impl-api, impl-ui/)
   })
 
-  test("a level label shows once per level", () => {
+  test("a step heading shows once per step, and a run of one step has none", () => {
     const out = plain(render(sample, start, 140, 40)).join("\n")
-    expect(out.match(/L2/g)).toHaveLength(1)
-    expect(out.match(/L1/g)).toHaveLength(1)
+    expect(out.match(/Step 2/g)).toHaveLength(1)
+    expect(out.match(/Step 1/g)).toHaveLength(1)
+    const single = plain(render([workflow({ tasks: tasksOf([["a", { state: "running" }], ["b", {}]]) })], start, 140, 40)).join("\n")
+    expect(single).not.toContain("Step 1")
   })
 
   test("task glyphs and colors per state", () => {
