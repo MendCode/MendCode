@@ -1,0 +1,3 @@
+[test]
+# The repository's test guards (see the root bunfig.toml): bun reads only the bunfig.toml of the directory a run starts in.
+preload = ["../../scripts/test-tmpdir.ts", "../../scripts/test-kill-guard.ts", "../../scripts/test-scope-guard.ts", "../../scripts/test-memory-guard.ts", "../../scripts/test-terminal-env.ts", "../../scripts/test-glyph-mode.ts"]
