@@ -916,7 +916,8 @@ export function createKeys(ctx: AppContext, actions: {
       return
     }
     const reply = await input.send({ type: "queue.promote", sessionId: state.sessionId, queueId: first.queueId })
-    if (!reply.ok) fail(reply.error.message)
+    // The daemon took the message first (it started or was steered): the send already happened, nothing to report.
+    if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
     requestFrame()
   }
 

@@ -68,12 +68,16 @@ describe("event paging in the terminal app", () => {
     expect(h.before).toEqual([])
   })
 
-  test("PageUp past the oldest loaded line fetches once; wheel and Home cannot duplicate it; prepend keeps the same screen lines", async () => {
+  test("PageUp within a screen of the oldest loaded line fetches once, before the top; wheel and Home cannot duplicate it; prepend keeps the same screen lines", async () => {
     const h = paged()
     await h.app.start()
     for (let page = 0; page < 30 && h.before.length === 0; page++) await h.app.onKey(pageUp)
-    const anchored = content(h)
     expect(h.before).toEqual([{ sessionId: h.sessionId, seq: 401 }])
+    // The page was asked for a screen ahead: the oldest loaded lines are still above, so nothing says it is loading yet.
+    expect(h.text().join("\n")).not.toContain("loading earlier…")
+    // A reader faster than the page reaches the top while it is on its way: only then does the label show.
+    for (let page = 0; page < 3; page++) await h.app.onKey(pageUp)
+    const anchored = content(h)
     expect(h.text().join("\n")).toContain("loading earlier…")
     await h.app.onKey(wheelUp)
     await h.app.onKey(home)
@@ -241,6 +245,8 @@ describe("transcript prepend at event boundaries", () => {
     for (let cut = 1; cut < source.events.length; cut++) {
       const t = createTranscript({ now: () => NOW })
       source.events.slice(cut).forEach(t.apply)
+      // Laid out before the older page arrives: rows kept across the prepend must be the rows a full replay draws.
+      t.viewport(90, 200)
       t.prepend(source.events.slice(0, cut))
       expect(t.blocks()).toEqual(full.blocks())
       expect(t.viewport(90, 200)).toEqual(full.viewport(90, 200))

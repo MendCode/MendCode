@@ -365,6 +365,17 @@ export function createChatRows(ctx: AppContext, actions: {
       bodyHeight -= 1
       visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
     }
+    // The scroll is kept as rows above the bottom: a history that now lays out in fewer rows (a wider terminal, groups folded once more
+    // of it loaded, a thread shorter than the chat) would leave it pointing above the first row and draw an empty screen. It stops at
+    // the first row instead. A reader at the top stays at the top when the body changes height (the jump pill takes or gives back its
+    // row as the last line changes): the top was reckoned with the last frame's height, and the history's first row went out of reach.
+    const total = state.transcript.totalLines(tw)
+    const farthest = Math.max(0, total - bodyHeight)
+    const atTop = localState.offset > 0 && localState.offset >= Math.max(0, total - state.lastBodyHeight)
+    if (!home && !cleared && !inlineBody && (localState.offset > farthest || atTop && localState.offset !== farthest)) {
+      localState.offset = farthest
+      visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
+    }
     state.lastBodyHeight = Math.max(1, bodyHeight)
     if (!inlineBody && !home && !cleared) wantImages(visible)
     const links = state.tuiProfile.hyperlinks ? { cwd: input.directory ?? "", ...(input.home ? { home: input.home } : {}), opener: state.tuiProfile.fileOpener } : undefined
@@ -885,15 +896,18 @@ export function createChatRows(ctx: AppContext, actions: {
   function scrollTranscript(lines: number) {
     noteScrolled()
     state.clearFrom = undefined
-    const pastTop = lines > 0 && view.get(state.sessionId).offset + lines > maxScroll()
-    // Up from the top of the laid-out window lays out the next slice of older blocks (all of them for Home).
+    // Within a screen of the top, what is above is made ready before the reader gets there (as Codex pages when one viewport from its
+    // first row): the next slice of laid-out blocks, else the session's older page. Reaching the top then shows more history, not a
+    // "loading" line over an empty top.
+    const nearTop = lines > 0 && view.get(state.sessionId).offset + lines > maxScroll() - Math.max(1, state.lastBodyHeight)
+    // Up near the top of the laid-out window lays out the next slice of older blocks (all of them for Home).
     if (lines > 0 && state.transcript.olderBlocks > 0) {
       if (lines === Number.MAX_SAFE_INTEGER) while (state.transcript.olderBlocks > 0) state.transcript.loadOlder()
-      else if (view.get(state.sessionId).offset >= maxScroll()) state.transcript.loadOlder()
+      else if (nearTop) state.transcript.loadOlder()
     }
     view.scroll(state.sessionId, lines, maxScroll())
     // A sub-agent's thread pages the session back only until its own start is there; past that its top is the top.
-    if (pastTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
+    if (nearTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
   }
 
   return { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript }
