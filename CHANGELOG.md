@@ -35,6 +35,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A message brought back into the prompt (↑ history, a queued message taken back, Esc Esc, a stash or a draft) shows its large pastes and images as the same chips it was written with, and a message sent after a draft is left and reopened keeps its paste. A bot's unsent new chat is the one you return to from its row.
 - Workflow runs no longer appear in the sessions sidebar, even while they work; they live on the Workflows page.
 - The Workflows page agrees with itself across "This project" and "All projects": a folder written with a trailing slash counts as the same project, "All projects" no longer shrinks to the current folder when the sidebar refreshes, and its title no longer names the current project.
+- A long chat read back to its start no longer keeps all of it in memory: once you are back at the bottom the far older history is let go, and scrolling up loads it again.
 - Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
 - Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
 - A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.

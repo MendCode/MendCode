@@ -88,6 +88,8 @@ export function createChatRows(ctx: AppContext, actions: {
   loadEarlier(): Promise<void>
   /** With a sub-agent's thread open: the session's earlier pages until the thread's start is loaded. */
   loadThreadStart(): Promise<void>
+  /** Back at the bottom: the history far above is let go (paging.ts). */
+  releaseFar(): void
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
   const { input, state, now, editor, view, glyphs: g, homeTipText, leader } = ctx
@@ -908,6 +910,7 @@ export function createChatRows(ctx: AppContext, actions: {
     view.scroll(state.sessionId, lines, maxScroll())
     // A sub-agent's thread pages the session back only until its own start is there; past that its top is the top.
     if (nearTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
+    if (lines < 0) actions.releaseFar()
   }
 
   return { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript }
