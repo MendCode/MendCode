@@ -841,7 +841,10 @@ export function createChatRows(ctx: AppContext, actions: {
     // harness itself, the silence is not called a stall.
     const external = Boolean(modelInfo?.engine)
     const stalledMs = state.tuiProfile.showStalled && !awaited && !external ? silentMs : undefined
-    const elapsedMs = state.turnState.startedAt !== undefined ? now() - state.turnState.startedAt : undefined
+    // A turn that started before this terminal joined it, or longer ago than the loaded events reach, still has its start: the
+    // session's live state carries it.
+    const turnStart = state.turnState.startedAt ?? state.sessions.find((session) => session.sessionId === state.sessionId && session.state !== "idle")?.since
+    const elapsedMs = turnStart !== undefined ? now() - turnStart : undefined
     return renderWorkingRow({
       width,
       margin,
@@ -855,7 +858,7 @@ export function createChatRows(ctx: AppContext, actions: {
       phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}), steps: state.turnState.steps })),
       ...(state.turnState.stepAt !== undefined && !retry ? { step: { number: state.turnState.steps + 1, ms: now() - state.turnState.stepAt } } : {}),
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
-      ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
+      ...(state.tuiProfile.showElapsed && !state.accessible && elapsedMs !== undefined ? { elapsedMs } : {}),
       ...(retry ? { retry } : {}),
       ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive, ...(state.turnState.liveEstimated ? { estimated: true } : {}) } } : {}),
       now: now(),

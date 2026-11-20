@@ -80,6 +80,7 @@ export function createTurnState() {
     liveOutput = 0
     liveEstimated = false
     startedAt = undefined
+    turnId = undefined
     retry = undefined
     sent = undefined
     running.clear()
@@ -148,6 +149,10 @@ export function createTurnState() {
           stepAt = event.at
           break
         }
+        case "foreground.state":
+          // A turn that started before this terminal joined it (or before the loaded events): its live token figure belongs here too.
+          if (startedAt === undefined && event.turnId) turnId = event.state === "idle" ? undefined : event.turnId
+          break
         case "turn.completed":
         case "turn.cancelled":
         case "turn.interrupted":
@@ -217,7 +222,7 @@ export function createTurnState() {
     /** `turn.tokens`: the running output figure for the turn in flight; a push for another turn, or between turns, is dropped. Returns whether it changed. */
     noteLive(event: { turnId: string; output: number; estimated?: boolean | undefined }) {
       const estimated = event.estimated === true
-      if (startedAt === undefined || event.turnId !== turnId || (event.output === liveOutput && estimated === liveEstimated)) return false
+      if (turnId === undefined || event.turnId !== turnId || (event.output === liveOutput && estimated === liveEstimated)) return false
       liveOutput = event.output
       liveEstimated = estimated
       return true
