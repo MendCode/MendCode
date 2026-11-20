@@ -30,7 +30,9 @@ export function formatElapsed(ms: number) {
 const TOOL_PHASES: ReadonlyArray<[RegExp, string]> = [
   [/^advisor\b|__advisor\b/, "Consulting advisor..."],
   [/question/, "Waiting for answer..."],
-  [/^task$|subagent/, "Waiting for subagents..."],
+  [/^task$|subagent|delegate_task/, "Waiting for subagents..."],
+  // Another session (`threads`, `mendcode_threads · thread_read`): its name holds "read", which is not a file read.
+  [/thread/, "Checking sessions..."],
   [/web|fetch|browser|screenshot/, "Browsing..."],
   [/test|typecheck|lint|build/, "Testing..."],
   [/patch|diff/, "Patching..."],

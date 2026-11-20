@@ -1191,7 +1191,7 @@ Plan mode can approve these reads individually.
 
 Explicit deny rules always win.
 
-Other projects (`list scope=all` or `directory`, `message` and `wait` by full id, and `start` to open a session in another folder) follow the always-ask, never-above-the-sender rules of [peers](peers.md#other-projects).
+Other projects (`list scope=all` or `directory`, `message` and `wait` by full id, and `start` to open a session in another folder) follow the ask-outside-full-access, never-above-the-sender rules of [peers](peers.md#other-projects).
 
 ### Read chats from other programs
 

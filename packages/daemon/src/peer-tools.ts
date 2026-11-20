@@ -82,8 +82,8 @@ export const tellTool = defineTool({
     mode: z.enum(["auto", "queue", "steer"]).optional().describe("auto (default) and queue wait for the session's turn to end; steer hands it to the session's running turn after its next tool result. Never interrupts"),
     clientRequestId: z.string().min(1).max(128).optional().describe("Reuse the same id when retrying so the message is not sent twice"),
   }),
-  // A message to another project's session asks in every mode, full access included (see the `threads` tool).
-  approvalFor: ({ sessionId }, context) => context?.peers?.projectOf?.(sessionId) !== undefined,
+  // A message to another project's session asks in every mode but full access (see the `threads` tool).
+  approvalFor: ({ sessionId }, context) => context?.mode !== "full" && context?.peers?.projectOf?.(sessionId) !== undefined,
   refusalFor: ({ sessionId }, context) => context?.peers?.refusal?.(sessionId),
   async preview({ sessionId, text, mode }, context) {
     const project = context.peers?.projectOf?.(sessionId)

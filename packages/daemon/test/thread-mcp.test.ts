@@ -234,8 +234,18 @@ test("approval policy honors denies, explicit asks, read grants, plan ceilings a
   expect(await approve("delegate_task", { prompt: "change" }, false)).toBe(false)
 })
 
-test("bridge history reads need an individual approval in full/edits, even with allow rules or session-scoped answers", async () => {
-  for (const mode of ["full", "edits", "plan"] as const) {
+test("bridge history reads run without asking in full access", async () => {
+  const input = turn()
+  input.permissionMode = () => "full"
+  let asked = 0
+  input.ask = async () => { asked++; return { kind: "approve", scope: "once" } }
+  const authorize = bridgeAuthorizer({ turn: input, directory: "/project", settings: () => ({ tier: "full" }), profile: () => undefined, sessionRules: () => [], allowed: () => true, mask: (text) => text })
+  for (const name of ["thread_read", "thread_search", "thread_wait", "thread_message", "thread_create", "delegate_task"]) expect(await authorize(name, { sessionId: "target" }, false)).toBe(true)
+  expect(asked).toBe(0)
+})
+
+test("bridge history reads need an individual approval in edits and plan, even with allow rules or session-scoped answers", async () => {
+  for (const mode of ["edits", "plan"] as const) {
     const input = turn()
     input.permissionMode = () => mode
     let asked = 0
