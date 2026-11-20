@@ -26,6 +26,7 @@ import {
   chatgptQuota,
   codexSubscriptionHeaders,
   createChatgptModelCatalog,
+  latestCodexRelease,
   createInstructionLoader,
   createNativeEngine,
   createLoopbackJevEvaluator,
@@ -316,7 +317,7 @@ const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" ||
 /** A login the subscription backend's own endpoints (search, images) take; a Sign in with ChatGPT login only reaches api.openai.com's Responses. */
 const subscriptionBackend = () => subscriptionLogin() && providerAuth.chatgpt.route() !== "plan"
 /** The models the ChatGPT account can use, asked of the subscription backend with that same login and kept in `<dir>/chatgpt-models.json` (docs/connect.md#where-each-list-comes-from). */
-const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, planAccount: () => providerAuth.chatgpt.planAccount(), log: (message) => logLine(`[MODELS]: ${message}`) })
+const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, planAccount: () => providerAuth.chatgpt.planAccount(), latestClientVersion: () => latestCodexRelease(), log: (message) => logLine(`[MODELS]: ${message}`) })
 const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({

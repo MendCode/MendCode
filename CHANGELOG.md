@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- New ChatGPT subscription models appear in the native harness by themselves: the list is asked as the latest Codex release, checked once a day, so a model OpenAI adds needs no MendCode update.
 - Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
 - Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
 - A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.
