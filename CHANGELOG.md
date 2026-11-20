@@ -30,6 +30,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- While a turn runs with the galaxy in the panel, the terminal draws less than half as many frames: the galaxy moves on the spinner's frames instead of its own.
+- Switching to another chat of the same folder asks the daemon less: no second read of the session list, and one read of the chat's details instead of two; a bot's chat in another folder opens without a lookup first.
 - The activity line shows how long a turn has run and its tokens also when the turn started before the terminal opened it or longer ago than the loaded history reaches.
 - A bot on the balanced or full tier can message, wait on and interrupt other sessions like the main agent, instead of being limited to reading them.
 - Another session's work no longer redraws the terminal and asks the daemon for its background work several times a second; only a change you can see does.

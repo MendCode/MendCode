@@ -35,7 +35,7 @@ export function createSession(ctx: AppContext, actions: {
   openTranscript(): Promise<void>
   loadEarlier(): Promise<void>
   /** A session was switched to: its age and size decide the resume questions. */
-  checkResume(): Promise<void>
+  checkResume(options?: { detail?: Promise<import("@mendcode/client").CommandReply> }): Promise<void>
   /** The terminal now shows another session: what slash commands showed or hid follows it (session-look.ts). */
   sessionLookSwitched(previous: SessionId): void
   /** `/fork pick`: the tree on the messages, where enter forks. */
@@ -204,13 +204,15 @@ export function createSession(ctx: AppContext, actions: {
    * launching `mendcode` there would: footer, graph, branch, status line, the project's lists and the folder `/new` starts in follow
    * `input.directory`. Its folder comes from the list this terminal holds, else from the daemon; one the daemon cannot tell changes nothing.
    */
-  async function followFolder(next: SessionId) {
-    let folder = state.sessions.find((listed) => listed.sessionId === next)?.directory
+  /** Moves the terminal to `next`'s folder; true when the folder changed. */
+  async function followFolder(next: SessionId): Promise<boolean> {
+    // The sidebar's bots and other projects already know the folder of the chats they list: no request before the switch.
+    let folder = (state.sessions.find((listed) => listed.sessionId === next) ?? state.sidebarBots?.sessions().find((listed) => listed.sessionId === next))?.directory
     if (!folder) {
       const reply = await input.send({ type: "session.get", sessionId: next })
       folder = reply.ok ? (reply.result?.session as SessionSummary | undefined)?.directory : undefined
     }
-    if (!folder || folder === input.directory) return
+    if (!folder || folder === input.directory) return false
     input.directory = folder
     state.gitBranch = undefined
     state.branchRequested = false
@@ -220,6 +222,7 @@ export function createSession(ctx: AppContext, actions: {
     state.liveWorkflows.clear()
     if (!input.remote?.readOnly) void input.send({ type: "status.watch", directory: folder, watching: true })
     void actions.loadProjectLists()
+    return true
   }
 
   async function switchSession(next: SessionId) {
@@ -241,14 +244,16 @@ export function createSession(ctx: AppContext, actions: {
     void releaseBackgroundWriter().catch(() => undefined)
     writerStopped = false
     if (input.subscribe) void input.send({ type: "client.unsubscribe", sessionId: state.sessionId }).catch(() => undefined)
+    let moved = false
     if (input.remote) {
+      moved = true
       const listed = await input.send({ type: "session.list", limit: 500, archived: true })
       const summary = listed.ok ? (listed.result?.sessions as SessionSummary[] | undefined)?.find((session) => session.sessionId === next) : undefined
       if (!summary) return fail("remote session not found")
       input.directory = summary.directory
       state.gitBranch = undefined
       state.branchRequested = false
-    } else await followFolder(next)
+    } else moved = await followFolder(next)
     const previousChat = state.sideChats.get(state.sessionId)
     if (previousChat) previousChat.focused = false
     state.rightFocus = false
@@ -307,12 +312,14 @@ export function createSession(ctx: AppContext, actions: {
     state.placeholder = placeholderFor(random())
     state.page = "chat"
     void loadEffectiveModel()
-    void loadTitle()
+    // One request for the session's detail: the title and the resume questions both read it.
+    const detail = input.send({ type: "session.get", sessionId: next })
+    void loadTitle({ detail, listed: !moved && state.sessions.some((listed) => listed.sessionId === next) })
     requestFrame()
     await actions.openTranscript()
     if (state.sessionId !== next) return
     void restoreDraft(next)
-    void actions.checkResume().catch(() => undefined)
+    void actions.checkResume({ detail }).catch(() => undefined)
     followPet(state)
     state.pet?.cheer("waving")
     requestFrame()
@@ -485,16 +492,20 @@ export function createSession(ctx: AppContext, actions: {
   }
 
   /** The session's title for the top bar and the terminal title; later changes arrive with `session.activity`. */
-  async function loadTitle() {
+  async function loadTitle(options: { detail?: Promise<import("@mendcode/client").CommandReply>; listed?: boolean } = {}) {
     const sessionId = state.sessionId
-    const reply = await input.send({ type: "session.list", limit: 50, archived: true, hideEmpty: true, ...(input.directory ? { directory: input.directory } : {}) })
-    if (sessionId !== state.sessionId) return
-    if (reply.ok) {
-      state.sessions = (reply.result?.sessions as SessionSummary[] | undefined) ?? []
-      for (const listed of state.sessions) if (!state.agentTitles.get(listed.sessionId)?.trim()) state.agentTitles.set(listed.sessionId, listed.title)
-      state.sessionParentId = state.sessions.find((listed) => listed.sessionId === sessionId)?.parentId
-    }
-    const detail = await input.send({ type: "session.get", sessionId })
+    // A switch within the same folder to a session the list already holds: the list is current (activity pushes keep it so), so it is
+    // not read again on every switch.
+    if (!options.listed) {
+      const reply = await input.send({ type: "session.list", limit: 50, archived: true, hideEmpty: true, ...(input.directory ? { directory: input.directory } : {}) })
+      if (sessionId !== state.sessionId) return
+      if (reply.ok) {
+        state.sessions = (reply.result?.sessions as SessionSummary[] | undefined) ?? []
+        for (const listed of state.sessions) if (!state.agentTitles.get(listed.sessionId)?.trim()) state.agentTitles.set(listed.sessionId, listed.title)
+        state.sessionParentId = state.sessions.find((listed) => listed.sessionId === sessionId)?.parentId
+      }
+    } else state.sessionParentId = state.sessions.find((listed) => listed.sessionId === sessionId)?.parentId
+    const detail = await (options.detail ?? input.send({ type: "session.get", sessionId }))
     if (sessionId !== state.sessionId) return
     if (detail.ok && detail.result?.session) state.sessionParentId = (detail.result.session as import("@mendcode/protocol").SessionDetail).parentId
     // The strip lists the parent's sub-agents once this session is known to be one.

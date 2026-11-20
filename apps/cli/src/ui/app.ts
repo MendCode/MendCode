@@ -380,6 +380,7 @@ export function createApp(input: AppInput) {
     frameScheduled: undefined!,
     scrollbarAt: undefined!,
     pulse: undefined!,
+    pulseMs: 0,
     pulseOn: undefined!,
     approvalChoice: undefined!,
     approvalChoiceFor: undefined!,
@@ -729,7 +730,7 @@ export function createApp(input: AppInput) {
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
     loadEarlier,
-    checkResume: () => returnFlow.checkResume(),
+    checkResume: (options) => returnFlow.checkResume(options),
     sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec() },
     openTree: (options) => sessionTree.open(options),
   })
