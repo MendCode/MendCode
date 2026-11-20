@@ -20,7 +20,9 @@ export function sessionChildren(state: AppState, input: { now: number; sep: stri
     return thread?.running && thread.last ? { state: "tool", tool: `${thread.last} ${input.sep} ${thread.tools} tool${thread.tools === 1 ? "" : "s"}` } : undefined
   }
   // What runs in the background of this session (the model's shells, Claude Code's own agents and commands).
-  const running = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId && !threads.some((thread) => thread.running && thread.description === shell.command))
+  // Inside a sub-agent's own session the list is its parent's (`refreshLiveTasks`): the parent's engine agents stay in it too.
+  const owner = (shell: AgentShell) => shell.sessionId === state.sessionId || (shell.kind === "agent" && state.sessionParentId !== undefined && shell.sessionId === state.sessionParentId)
+  const running = state.agentShells.filter((shell) => shell.status === "running" && owner(shell) && !threads.some((thread) => thread.running && thread.description === shell.command))
   // Claude Code's background agents are sub-agents like the others: its call ends at once, so the thread looks done while the
   // agent works on. They join the list as running agents (their thread's row, when the transcript has one).
   const backgroundAgents = running.filter((shell) => shell.kind === "agent")
