@@ -7,6 +7,7 @@ import { BUSY } from "./constants"
 import { stripTasks } from "../../view/agents-strip"
 import { sessionDisplayTitle } from "./display-title"
 import { sidebarListsAll } from "../../view/tui-profile"
+import { restingWorkflow } from "../../view/sidebar"
 
 /** The spinner tick while this chat (or what is open in it) works. */
 export const PULSE_MS = 125
@@ -37,7 +38,7 @@ export function createTicks(ctx: AppContext, actions: {
     const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
     // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
     // The all-projects and bots list keeps the other folders' sessions and the bots' chats itself, so it says whether one of its rows moves.
-    const listed = state.page === "chat" && (state.sidebarBots?.moving() || (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval" || (s.agents ?? 0) > 0) && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true)))) && sidebarShown(ctx.input.screen.size.width)
+    const listed = state.page === "chat" && (state.sidebarBots?.moving() || (state.sessions ?? []).some((s) => !restingWorkflow(s) && (BUSY.has(s.state) || s.state === "waiting_approval" || (s.agents ?? 0) > 0) && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true)))) && sidebarShown(ctx.input.screen.size.width)
     const near = busy || preview || agents || thread || reviewing
     const wanted = (near || home || listed) && !state.reducedMotion
     // Only other sessions working (the list's rows, the home's Agent View): their symbols turn at a quarter of the speed. Each tick

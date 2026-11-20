@@ -88,6 +88,8 @@ export function createChatRows(ctx: AppContext, actions: {
   loadEarlier(): Promise<void>
   /** With a sub-agent's thread open: the session's earlier pages until the thread's start is loaded. */
   loadThreadStart(): Promise<void>
+  /** Back at the bottom: the history far above is let go (paging.ts). */
+  releaseFar(): void
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
   const { input, state, now, editor, view, glyphs: g, homeTipText, leader } = ctx
@@ -387,8 +389,9 @@ export function createChatRows(ctx: AppContext, actions: {
     // The home is laid out as if the slash menu were closed and cut at the bottom, so the logo keeps its size and place while one types.
     const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight + popup.length).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
-    // message and the prompt; once it overflows the view follows the bottom.
-    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight
+    // message and the prompt; once it overflows the view follows the bottom. One with earlier history still to read is only the
+    // newest part of a longer chat: it sits at the bottom, over the prompt, while the pages above it come in.
+    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight && !state.paging?.more
     if (topAnchored && visible.length > 0 && body[0]?.some((span) => span.text.trim())) body.unshift([])
     const blankAbove = topAnchored ? body.length - visible.length : 0
     while (body.length < bodyHeight) home || cleared || topAnchored ? body.push([]) : body.unshift([])
@@ -908,6 +911,7 @@ export function createChatRows(ctx: AppContext, actions: {
     view.scroll(state.sessionId, lines, maxScroll())
     // A sub-agent's thread pages the session back only until its own start is there; past that its top is the top.
     if (nearTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
+    if (lines < 0) actions.releaseFar()
   }
 
   return { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript }

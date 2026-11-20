@@ -1,4 +1,5 @@
 import type { ItemId, SessionDetail, SessionId, TaskRecord } from "@mendcode/protocol"
+import { sameAgentName } from "../../view/background-row"
 import { createAgentView } from "./agent-view"
 import type { AppContext } from "./context"
 
@@ -8,7 +9,7 @@ export type SessionNavigation = "session.child.first" | "session.child.next" | "
 const WORKING_STATUSES: ReadonlySet<string> = new Set(["running", "waiting_for_input", "waiting_for_approval"])
 
 /** Older history pages a click on an engine's agent may load to find the call that started it, before it settles for the command card. */
-export const AGENT_SEARCH_PAGES = 12
+export const AGENT_SEARCH_PAGES = 120
 
 export function createSubagents(ctx: AppContext, actions: { switchSession(id: SessionId): Promise<void>; loadPage(name: "tasks"): Promise<void>; loadWorkflows(): Promise<void>; /** Loads the page of history before the oldest one shown. */ loadEarlier?(): Promise<void> }) {
   const { state, input, fail, requestFrame } = ctx
@@ -112,7 +113,7 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
   async function findThread(description: string): Promise<string | undefined> {
     const sessionId = state.sessionId
     const transcript = () => state.agentRoot ?? state.transcript
-    const named = () => transcript().agentThreads().filter((thread) => thread.description === description).at(-1)?.itemId
+    const named = () => transcript().agentThreads().filter((thread) => sameAgentName(description, thread.description)).at(-1)?.itemId
     for (let page = 0; !named() && page < AGENT_SEARCH_PAGES && actions.loadEarlier && state.paging?.more; page++) {
       const first = state.paging.firstSeq
       await actions.loadEarlier()

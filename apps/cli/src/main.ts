@@ -1020,6 +1020,7 @@ app = createApp({
   events: {
     loadWindow: (id) => client.loadWindow(id),
     loadBefore: (id, firstSeq) => client.loadBefore(id, firstSeq),
+    loadAfter: (id, seq, limit) => client.loadAfter(id, seq, limit, { includeReverted: true }),
   },
   exit: () => exit(0),
   directory: directory!,

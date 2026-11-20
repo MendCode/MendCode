@@ -12,7 +12,32 @@ import { NATIVE_DEFAULTS } from "./defaults"
  * version can run (`GET …/models?client_version=`, codex-rs/codex-api/src/endpoint/models.rs), so it moves with the protocol, not with
  * the Codex CLI installed on the machine.
  */
-export const CHATGPT_CLIENT_VERSION = "0.164.0"
+export const CHATGPT_CLIENT_VERSION = "0.171.0"
+/**
+ * The backend lists a new model only to clients of a version that knows it, so the version asked with follows Codex's latest
+ * release (`latestClientVersion`), checked once a day; CHATGPT_CLIENT_VERSION is the floor when that check has not answered.
+ */
+export const CODEX_RELEASE_CHECK_MS = 86_400_000
+/** Where the latest Codex release is read: the npm registry's `latest` tag of the Codex CLI. */
+export const CODEX_RELEASE_URL = "https://registry.npmjs.org/@openai/codex/latest"
+const VERSION_PATTERN = /^\d+\.\d+\.\d+$/
+
+/** The newer of two `x.y.z` versions. */
+export function newerVersion(a: string, b: string | undefined): string {
+  if (!b || !VERSION_PATTERN.test(b)) return a
+  const left = a.split(".").map(Number)
+  const right = b.split(".").map(Number)
+  for (let index = 0; index < 3; index++) if (left[index] !== right[index]) return left[index]! > right[index]! ? a : b
+  return a
+}
+
+/** The latest Codex CLI release, or undefined when the registry does not answer with one. */
+export async function latestCodexRelease(fetcher: Fetch = fetch): Promise<string | undefined> {
+  const response = await fetcher(CODEX_RELEASE_URL, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
+  if (!response.ok) return undefined
+  const version = (await response.json() as { version?: unknown }).version
+  return typeof version === "string" && VERSION_PATTERN.test(version) ? version : undefined
+}
 /** Codex's own lifetime for its list (codex-rs/models-manager, DEFAULT_MODEL_CACHE_TTL); with the ETag a refresh is a 304. */
 export const CHATGPT_MODELS_TTL_MS = 300_000
 /** After a failed refresh the saved list is kept and the next try waits this long. */
@@ -27,7 +52,7 @@ const PLAN_VERSION = "plan"
 
 const FALLBACK: ModelInfo[] = [{ id: NATIVE_DEFAULTS.model, name: NATIVE_DEFAULTS.model, efforts: ["low", "medium", "high"], defaultEffort: NATIVE_DEFAULTS.effort }]
 
-type Saved = { fetchedAt: number; etag?: string; clientVersion: string; identity: string; models: Record<string, unknown>[] }
+type Saved = { fetchedAt: number; etag?: string; clientVersion: string; identity: string; models: Record<string, unknown>[]; codexVersion?: string; codexCheckedAt?: number }
 export type ChatgptCatalogStatus = { fetchedAt?: number; error?: string; stale: boolean; models: number }
 type Fetch = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -45,6 +70,8 @@ export function createChatgptModelCatalog(options: {
   signedIn(): boolean
   /** The account of a Sign in with ChatGPT login: its list is asked of api.openai.com (developers.openai.com/siwc/token-sharing-open-source/models-and-inference). */
   planAccount?(): string | undefined
+  /** The latest Codex release, asked at most once a day; without it the list is asked as CHATGPT_CLIENT_VERSION. */
+  latestClientVersion?(): Promise<string | undefined>
   fetch?: Fetch
   now?: () => number
   log?(message: string): void
@@ -77,22 +104,31 @@ export function createChatgptModelCatalog(options: {
     renameSync(temp, file)
   }
 
-  const version = () => options.planAccount?.() ? PLAN_VERSION : CHATGPT_CLIENT_VERSION
+  const version = () => options.planAccount?.() ? PLAN_VERSION : newerVersion(CHATGPT_CLIENT_VERSION, read()?.codexVersion)
   const stale = (saved: Saved | undefined) => !saved || saved.clientVersion !== version() || now() - saved.fetchedAt >= CHATGPT_MODELS_TTL_MS
+
+  /** The latest Codex release as last known, asked again once a day; a failed check keeps what was known. */
+  async function codexRelease(saved: Saved | undefined): Promise<{ codexVersion?: string; codexCheckedAt?: number }> {
+    const known = { ...(saved?.codexVersion ? { codexVersion: saved.codexVersion } : {}), ...(saved?.codexCheckedAt ? { codexCheckedAt: saved.codexCheckedAt } : {}) }
+    if (!options.latestClientVersion || saved?.codexCheckedAt !== undefined && now() - saved.codexCheckedAt < CODEX_RELEASE_CHECK_MS) return known
+    const latest = await options.latestClientVersion().catch(() => undefined)
+    return { ...(latest ? { codexVersion: latest } : known.codexVersion ? { codexVersion: known.codexVersion } : {}), codexCheckedAt: now() }
+  }
 
   async function download() {
     const headers = await options.headers()
     const plan = options.planAccount?.()
-    const clientVersion = plan ? PLAN_VERSION : CHATGPT_CLIENT_VERSION
+    const release = plan ? {} : await codexRelease(read())
+    const clientVersion = plan ? PLAN_VERSION : newerVersion(CHATGPT_CLIENT_VERSION, release.codexVersion)
     // The account the list belongs to, hashed: a list is never shown for another account.
     const identity = createHash("sha256").update(plan ?? headers["chatgpt-account-id"] ?? "").digest("hex")
     const saved = read()
     const same = saved?.identity === identity && saved.clientVersion === clientVersion
-    const response = await (options.fetch ?? fetch)(plan ? `${CHATGPT_PLAN_BASE_URL}/models` : `${CHATGPT_CODEX_BASE_URL}/models?client_version=${CHATGPT_CLIENT_VERSION}`, {
+    const response = await (options.fetch ?? fetch)(plan ? `${CHATGPT_PLAN_BASE_URL}/models` : `${CHATGPT_CODEX_BASE_URL}/models?client_version=${clientVersion}`, {
       headers: { ...headers, accept: "application/json", ...(same && saved.etag ? { "if-none-match": saved.etag } : {}) },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
-    if (response.status === 304 && same) { save({ ...saved, fetchedAt: now() }); return }
+    if (response.status === 304 && same) { save({ ...saved, ...release, fetchedAt: now() }); return }
     if (!response.ok) throw new Error(`the subscription backend answered ${response.status}`)
     const body = await response.json() as { models?: unknown }
     // A model the API route does not serve (`supported_in_api: false`) is not offered there.
@@ -100,7 +136,7 @@ export function createChatgptModelCatalog(options: {
     // An answer with no usable model is a broken answer, not an account without models: the last list stays.
     if (!parseCodexModels({ models }).length) throw new Error("the subscription backend listed no models")
     const etag = response.headers.get("etag") ?? undefined
-    save({ fetchedAt: now(), ...(etag ? { etag } : {}), clientVersion, identity, models })
+    save({ fetchedAt: now(), ...(etag ? { etag } : {}), clientVersion, identity, models, ...release })
   }
 
   /** Asks the backend now (one request at a time); a failure is recorded and keeps the saved list. */

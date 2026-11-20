@@ -6,6 +6,7 @@ import { createKeyTokenizer, type KeyToken } from "../keys"
 import { connectPaste } from "../lazy-pages"
 import { runningSubagents, stopSubagents as stopSessionSubagents } from "./subagent-stop"
 import { composeSubmission, liveAttachments, pastedPaths } from "../../view/attachments"
+import { livePastes } from "../../view/paste-placeholders"
 import { parseSlash, slashRefusal } from "../../view/commands"
 import { removedAliasHint } from "../../view/slash-aliases"
 import { hoistCommand } from "../../view/mentions"
@@ -30,6 +31,7 @@ export function createInput(ctx: AppContext, actions: {
   attachPasted: ReturnType<typeof createPrompt>["attachPasted"]
   insertPasted: ReturnType<typeof createPrompt>["insertPasted"]
   expandedPrompt: ReturnType<typeof createPrompt>["expandedPrompt"]
+  rememberComposed: ReturnType<typeof createPrompt>["rememberComposed"]
   pasteClipboardImage: ReturnType<typeof createPrompt>["pasteClipboardImage"]
   syncMentions: ReturnType<typeof createPrompt>["syncMentions"]
   syncDraft: ReturnType<typeof createPrompt>["syncDraft"]
@@ -193,12 +195,14 @@ export function createInput(ctx: AppContext, actions: {
       state.pastes = long.pastes
       state.attachments = [...state.attachments, ...long.attachments]
     }
+    const pasted = state.pastes.length > 0
     if (state.pastes.length) {
       editor.replaceAll(actions.expandedPrompt())
       state.pastes = []
     }
-    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md).
-    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
+    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md). That is for a line
+    // of one's own: a pasted block or a multi-line message that mentions `/name` is a message, never that command's arguments.
+    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || pasted || editor.text.trim().includes("\n") ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
     if (hoisted) editor.replaceAll(hoisted)
     // `/plan <text>` enters plan mode and sends <text> as the message; a bare `/plan` only toggles the mode (slash.ts).
     const planned = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || state.planDraft ? undefined : /^\/plan\s+(\S[\s\S]*)$/i.exec(editor.text.trim())
@@ -326,6 +330,8 @@ export function createInput(ctx: AppContext, actions: {
     const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, sending, executable ? "" : ide.text)
     const contextText = composed.text
     composed.text = ide.text + composed.text
+    // What the message was made of (its pastes, its images and files) is kept for this run, so it comes back into the prompt as it was composed.
+    if (!executable) actions.rememberComposed({ texts: [text, composed.text], pastes: livePastes(typed.pastes, typed.text), attachments: sending })
     state.clearPending = stillHere && state.tuiProfile.submitScroll === "clear"
     const reply = await input.send(executable ? { type: "commands.execute", sessionId: submissionSession, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: submissionSession, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
     // A message that could not go comes back to the prompt it left, unless something newer is there now (another session,

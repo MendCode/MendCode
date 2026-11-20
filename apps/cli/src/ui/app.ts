@@ -1,3 +1,4 @@
+import { sameAgentName } from "../view/background-row"
 import { createConsole } from "./app/console"
 import { applyGlyphMode, asciiChrome, asciiScreen } from "./app/glyph-mode"
 import { subagentRunOf } from "./app/subagent-run"
@@ -281,7 +282,7 @@ export function createApp(input: AppInput) {
     attachments: [],
     pastes: [],
     suggestion: 0,
-    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, shown: "", shell: false },
+    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, draftPastes: [], draftAttachments: [], shown: "", shell: false },
     submits: 0,
     unsent: [],
     mentionPending: undefined,
@@ -444,7 +445,7 @@ export function createApp(input: AppInput) {
     return { shells, agents }
   }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && sameAgentName(shell.command, description)), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}
@@ -656,9 +657,10 @@ export function createApp(input: AppInput) {
   const { loadContext, contextWindowCommand, filesCommand } = createContext(ctx)
   const { loadSecretTails, noteSecretMarkers, loadSecrets, dropRevealedSecret, revealSecret, forgetSecret, secretTail } = createSecrets(ctx)
   const environmentPanel = createEnvironmentPanel(ctx)
-  const { openTranscript, loadEarlier, loadThreadStart } = createPaging(ctx, {
+  const { openTranscript, resumeTranscript, loadEarlier, loadThreadStart, releaseFar } = createPaging(ctx, {
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,
+    loadSecretTails,
     replay: (event) => onEvent(event),
     recoverMissingSession: () => recoverMissingSession(),
   })
@@ -708,7 +710,7 @@ export function createApp(input: AppInput) {
   const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
-  const { attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
+  const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
@@ -726,9 +728,13 @@ export function createApp(input: AppInput) {
     endGoalEdit,
     loadEffectiveModel,
     restoreDraft,
+    expandedWith,
+    chipped,
     loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
+    resumeTranscript,
+    syncAppearance: () => syncAppearance(),
     loadEarlier,
     checkResume: (options) => returnFlow.checkResume(options),
     sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec() },
@@ -746,9 +752,9 @@ export function createApp(input: AppInput) {
   const today = { command: async (args: string) => (await loadToday()).command(args), key: async (key: string) => (await loadToday()).key(key), rows: (width: number, height: number) => todayLoaded?.render(width, height) ?? [] }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
-  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
+  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { chipped, loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
-  const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
+  const composer = createComposerRecovery(ctx, { chipped, composedAttachments, attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
   const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
@@ -1134,6 +1140,7 @@ export function createApp(input: AppInput) {
     attachPasted,
     insertPasted,
     expandedPrompt,
+    rememberComposed,
     pasteClipboardImage,
     syncMentions,
     syncDraft,
@@ -1233,6 +1240,7 @@ export function createApp(input: AppInput) {
     searchBar: composer.searchRow,
     loadEarlier,
     loadThreadStart,
+    releaseFar,
     compactionLive,
     statusRow: (...args) => statusRow(...args),
     statusRows: (...args) => statusRows(...args),
@@ -1263,7 +1271,7 @@ export function createApp(input: AppInput) {
     render,
   })
   const { queueCommand, queueKey, noteQueue } = createQueue(ctx, (...args) => applySettings(...args))
-  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes } = createSettings(ctx, {
+  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes, syncAppearance } = createSettings(ctx, {
     syncSlashDefault: slashMenu.syncDefault,
     syncAudio: audio.sync,
     syncImages: images.syncImages,
@@ -1295,6 +1303,7 @@ export function createApp(input: AppInput) {
     },
     reloadExtensions,
     noteTurnEnded,
+    releaseFar,
     openSession: (sessionId) => switchSession(sessionId),
     loadMcps,
     chatWidth: () => transcriptWidth(),

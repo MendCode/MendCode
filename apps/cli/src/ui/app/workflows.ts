@@ -1,4 +1,5 @@
 import { createWorkflowsPageState, parseWorkflowCommand, preload } from "../lazy-pages"
+import { inProject } from "../../view/project-scope"
 import type { SessionId, WorkflowId, WorkflowSummary } from "@mendcode/protocol"
 import type { WorkflowControlAction } from "../../view/workflows-page"
 import type { AppContext } from "./context"
@@ -168,7 +169,7 @@ export function createWorkflows(ctx: AppContext) {
   }
 
   function noteWorkflow(run: WorkflowSummary, deleted: boolean) {
-    if (input.directory && run.directory !== input.directory) return
+    if (!inProject(run.directory, input.directory)) return
     state.workflows = [...state.workflows.filter((existing) => existing.workflowId !== run.workflowId), ...(deleted ? [] : [run])]
     if (!deleted && !["completed", "failed", "stopped"].includes(run.state)) state.liveWorkflows.set(run.workflowId, run.state === "needs_input" || run.state === "blocked")
     else state.liveWorkflows.delete(run.workflowId)

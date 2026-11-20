@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
-import { CHATGPT_CLIENT_VERSION, CHATGPT_MODELS_RETRY_MS, CHATGPT_MODELS_TTL_MS, createChatgptModelCatalog, NATIVE_DEFAULTS } from "../src"
+import { CHATGPT_CLIENT_VERSION, CHATGPT_MODELS_RETRY_MS, CHATGPT_MODELS_TTL_MS, CODEX_RELEASE_CHECK_MS, createChatgptModelCatalog, NATIVE_DEFAULTS, newerVersion } from "../src"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -178,6 +178,48 @@ describe("MendCode's own ChatGPT model list", () => {
     expect(server.calls[1]!.headers["if-none-match"]).toBeUndefined()
     expect(ids(models.list())).toEqual(["gpt-6.1-sol", "gpt-6-luna"])
     expect(models.status().stale).toBe(false)
+  })
+
+  test("the list follows Codex's latest release: a newer one asks with its version (new models appear), checked once a day, a failed check keeps the last known", async () => {
+    const dir = temp()
+    const clock = { now: 1_000_000 }
+    const server = backend(listed(["gpt-6.2-sol", "gpt-6-luna"]), listed(["gpt-6.2-sol", "gpt-6-luna"]), listed(["gpt-6.3-sol", "gpt-6-luna"]))
+    let latest: string | undefined | Error = "9.1.0"
+    let checks = 0
+    const models = createChatgptModelCatalog({
+      dir, fetch: server.fetch, now: () => clock.now, signedIn: () => true,
+      headers: async () => ({ authorization: "Bearer t", "chatgpt-account-id": "acct-1" }),
+      latestClientVersion: async () => { checks++; if (latest instanceof Error) throw latest; return latest },
+    })
+    await models.settle()
+    expect(server.calls[0]!.url).toEndWith("client_version=9.1.0")
+    expect(ids(models.list())).toContain("gpt-6.2-sol")
+    // Within the day the release is not asked again.
+    clock.now += CHATGPT_MODELS_TTL_MS
+    await models.discover()
+    expect(checks).toBe(1)
+    expect(server.calls[1]!.url).toEndWith("client_version=9.1.0")
+    // A day later the registry fails: the last known version stays.
+    clock.now += CODEX_RELEASE_CHECK_MS
+    latest = new Error("offline")
+    await models.discover()
+    expect(checks).toBe(2)
+    expect(server.calls[2]!.url).toEndWith("client_version=9.1.0")
+    expect(newerVersion(CHATGPT_CLIENT_VERSION, "0.1.0")).toBe(CHATGPT_CLIENT_VERSION)
+    expect(newerVersion("0.171.0", "0.180.2")).toBe("0.180.2")
+    expect(newerVersion("0.171.0", "nightly")).toBe("0.171.0")
+  })
+
+  test("an older or missing release never asks below the floor", async () => {
+    const dir = temp()
+    const server = backend(listed(["gpt-6-luna"]))
+    const models = createChatgptModelCatalog({
+      dir, fetch: server.fetch, signedIn: () => true,
+      headers: async () => ({ authorization: "Bearer t", "chatgpt-account-id": "acct-1" }),
+      latestClientVersion: async () => "0.1.0",
+    })
+    await models.settle()
+    expect(server.calls[0]!.url).toEndWith(`client_version=${CHATGPT_CLIENT_VERSION}`)
   })
 
   test("the Codex CLI's cache is never read", () => {

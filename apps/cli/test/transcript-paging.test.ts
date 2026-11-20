@@ -143,6 +143,59 @@ describe("event paging in the terminal app", () => {
     expect(h.text().join("\n")).toContain("answer 3")
   })
 
+  test("a session whose pages draw a few rows each (sub-agent and streaming records) is read back until the screen is full, not left at the top over an empty band", async () => {
+    const source = log(ids("session"), 40)
+    const bySeq = (from: number, to: number) => source.events.filter((event) => event.seq >= from && event.seq < to)
+    const last = source.events.at(-1)!.seq
+    // Pages of two records: an exchange takes several pages, more than the few a screen usually needs.
+    const h = appHarness({
+      sessionId: source.sessionId, height: 24, mode: "minimal",
+      events: {
+        loadWindow: async () => window(bySeq(last - 1, last + 1), true),
+        loadBefore: async (_id, seq) => {
+          const page = bySeq(seq - 2, seq)
+          return window(page, seq - 2 > source.events[0]!.seq, { firstSeq: seq - 2, lastSeq: seq - 1 })
+        },
+      },
+    })
+    await h.app.start()
+    await settle()
+    h.app.render()
+    const rows = h.text()
+    const lastAnswer = rows.findIndex((row) => row.includes("answer 40"))
+    expect(lastAnswer).toBeGreaterThan(-1)
+    // The newest answer sits at the bottom of the chat: older exchanges fill the rows above it.
+    expect(rows.slice(0, lastAnswer).filter((row) => /question \d+/.test(row)).length).toBeGreaterThanOrEqual(3)
+  })
+
+  test("while older pages are on their way, a chat shorter than the screen sits at the bottom over the prompt, not at the top over an empty band", async () => {
+    const source = log(ids("session"), 40)
+    const last = source.events.at(-1)!.seq
+    const pages: Array<ReturnType<typeof deferred<WindowReply>>> = []
+    const h = appHarness({
+      sessionId: source.sessionId, height: 24, mode: "minimal",
+      events: {
+        // The newest exchange alone: a few rows on a 24-row screen.
+        loadWindow: async () => window(source.events.slice(-source.events.length / 40), true),
+        loadBefore: () => { const page = deferred<WindowReply>(); pages.push(page); return page.promise },
+      },
+    })
+    // Opening waits for the screen to fill; the page it waits for is held.
+    const started = h.app.start()
+    await settle()
+    h.app.render()
+    expect(pages.length).toBe(1)
+    const rows = h.text()
+    const answer = rows.findIndex((row) => row.includes("answer 40"))
+    const prompt = rows.findIndex((row, at) => at > answer && /^\s*[❯›>]/.test(row))
+    expect(answer).toBeGreaterThan(-1)
+    // Only blank rows above the answer, none of the empty band between it and the prompt.
+    expect(rows.slice(0, answer).filter((row) => row.trim()).length).toBeLessThanOrEqual(2)
+    expect(prompt === -1 || prompt - answer <= 3).toBe(true)
+    pages[0]!.resolve(window([], false, { firstSeq: 1, lastSeq: last - 2 }))
+    await started
+  })
+
   test("empty hidden pages advance their raw cursor, and an exhausted empty page shows start of session", async () => {
     const h = paged()
     await h.app.start()
@@ -255,6 +308,141 @@ describe("transcript prepend at event boundaries", () => {
       source.events.forEach(t.apply)
       expect(t.blocks()).toEqual(full.blocks())
       expect(t.lastSeq).toBe(lastSeq)
+    }
+  })
+
+  /**
+   * A session with what reaches across a page cut: tools streaming over several events, model calls whose cache notes read the call
+   * before, sub-agent threads running beside the turn, approvals, a goal, a compaction, an undo and a redo, a deleted message.
+   */
+  function richLog() {
+    const source = log(ids("session"), 2)
+    const { chat } = source
+    const usage = (turnId: string, fields: Record<string, number> = {}) => chat.emit({ type: "usage.recorded", turnId, provider: "p", model: "m", input: 3_000, output: 200, reasoning: 0, cacheRead: 0, cacheWrite: 0, ...fields })
+    const item = (turnId: string, kind: string, text: string, meta?: Record<string, unknown>) => {
+      const itemId = ids("item")
+      chat.emit({ type: "item.started", turnId, itemId, kind, ...(meta ? { meta } : {}) })
+      for (const part of text.split(" ")) chat.emit({ type: "item.delta", itemId, text: `${part} ` })
+      chat.emit({ type: "item.completed", itemId, status: "ok", ...(kind === "tool_call" ? { text: "" } : {}) })
+      return itemId
+    }
+    // A turn of tools whose second call misses the cache the first one wrote.
+    const tools = ids("turn")
+    chat.emit({ type: "turn.started", turnId: tools, queueId: ids("queue") })
+    item(tools, "user_message", "run the tests please")
+    item(tools, "reasoning", "the tests live in test so run them")
+    usage(tools, { cacheWrite: 5_000 })
+    const shell = item(tools, "tool_call", "pass pass pass fail", { tool: "shell: bun test" })
+    usage(tools, { input: 6_000, cacheRead: 10 })
+    chat.emit({ type: "server.request", requestId: ids("request"), turnId: tools, kind: "approval", title: "Run tests", detail: "bun test", itemId: shell })
+    chat.emit({ type: "foreground.state", state: "busy" })
+    item(tools, "agent_message", "one test fails in the parser")
+    chat.emit({ type: "turn.completed", turnId: tools })
+    chat.emit({ type: "queue.changed", queue: [] })
+    // Two sub-agents whose items interleave with the turn's own.
+    const agents = ids("turn")
+    chat.emit({ type: "turn.started", turnId: agents, queueId: ids("queue") })
+    item(agents, "user_message", "ask two agents")
+    const first = ids("item"), second = ids("item")
+    chat.emit({ type: "item.started", turnId: agents, itemId: first, kind: "tool_call", meta: { tool: "agent Read a", subagent: true, agent: "general-purpose", background: false } })
+    chat.emit({ type: "item.started", turnId: agents, itemId: second, kind: "tool_call", meta: { tool: "agent Read b", subagent: true, agent: "general-purpose", background: false } })
+    item(agents, "user_message", "find a", { agentParent: first, agentModel: "model-a" })
+    // A sub-agent's tool still runs while its next item starts: a cut between them hands the tool's end to the thread.
+    const slow = ids("item")
+    chat.emit({ type: "item.started", turnId: agents, itemId: slow, kind: "tool_call", meta: { agentParent: first, tool: "grep a" } })
+    chat.emit({ type: "item.delta", itemId: slow, text: "a.txt:1 " })
+    item(agents, "reasoning", "the grep is slow", { agentParent: first })
+    chat.emit({ type: "item.delta", itemId: slow, text: "a.txt:2" })
+    chat.emit({ type: "item.completed", itemId: slow, status: "ok", text: "" })
+    item(agents, "tool_call", "read a.txt now", { agentParent: first, tool: "read /work/a.txt" })
+    item(agents, "user_message", "find b", { agentParent: second })
+    usage(agents, { cacheRead: 4_000 })
+    item(agents, "tool_call", "find b.txt here", { agentParent: second, tool: "$ find /work -name b.txt" })
+    item(agents, "agent_message", "a is here", { agentParent: first })
+    chat.emit({ type: "item.completed", itemId: first, status: "ok", text: "a found", meta: { tool: "agent Read a", subagent: true, agentParent: first, agentEnd: true, toolCalls: 1, tokens: 900, durationMs: 4000 } })
+    item(agents, "agent_message", "b is there", { agentParent: second })
+    chat.emit({ type: "item.completed", itemId: second, status: "ok", text: "b found" })
+    item(agents, "agent_message", "both found")
+    chat.emit({ type: "turn.completed", turnId: agents })
+    // A goal, a turn the user stopped, a request the user answered.
+    const stopped = ids("turn")
+    const asked = ids("request")
+    chat.emit({ type: "goal.changed", change: "set", goal: { text: "fix the parser", status: "active", setAt: NOW, updatedAt: NOW } })
+    chat.emit({ type: "turn.started", turnId: stopped, queueId: ids("queue") })
+    item(stopped, "user_message", "fix the parser")
+    chat.emit({ type: "server.request", requestId: asked, turnId: stopped, kind: "question", title: "Which?", detail: "a or b" })
+    usage(stopped, { cacheRead: 3_000, input: 3_000 })
+    chat.emit({ type: "server.request.resolved", requestId: asked, resolution: "answered" })
+    item(stopped, "tool_call", "edit parser ts", { tool: "edit parser.ts" })
+    chat.emit({ type: "turn.interrupted", turnId: stopped, reason: "user" })
+    // A compaction: its own calls count as its cost, and the next call's miss is expected.
+    const packed = ids("turn")
+    chat.emit({ type: "turn.started", turnId: packed, queueId: ids("queue") })
+    chat.emit({ type: "compaction.updated", turnId: packed, reason: "manual", state: "writing", followUp: "" })
+    usage(packed, { input: 8_000 })
+    item(packed, "compaction", "summary of the work so far", { compactionMethod: "legacy" })
+    chat.emit({ type: "compaction.updated", turnId: packed, reason: "manual", state: "packed", followUp: "" })
+    chat.emit({ type: "turn.completed", turnId: packed })
+    usage(ids("turn"), { input: 2_500 })
+    // An undone turn, put back, and undone again; a message deleted later.
+    const undone = chat.exchange("try another way", "tried")
+    chat.undo(undone.turnId)
+    chat.redo(undone.turnId)
+    const kept = chat.exchange("and now", "done")
+    chat.undo(undone.turnId)
+    chat.emit({ type: "message.revised", itemId: kept.itemId, turnId: kept.turnId, revision: 1, deleted: true, snapshot: { status: "ok", text: "" } })
+    const last = ids("turn")
+    chat.emit({ type: "turn.started", turnId: last, queueId: ids("queue") })
+    item(last, "user_message", "last question")
+    usage(last, { cacheRead: 2_900, input: 100 })
+    item(last, "agent_message", "last answer with several words")
+    chat.emit({ type: "turn.completed", turnId: last })
+    return { events: source.events, threads: [first, second] }
+  }
+
+  /** What a reader of the projection sees: its blocks, rows, threads and every summary the app reads from it. */
+  function seen(t: ReturnType<typeof createTranscript>, threads: readonly string[]) {
+    const thread = (itemId: string) => (t.agentTranscript(itemId as never) as ReturnType<typeof createTranscript> | undefined)?.blocks()
+    return {
+      blocks: t.blocks(), rows: t.viewport(90, 600), lastSeq: t.lastSeq, agents: t.agentThreads(), threads: threads.map(thread),
+      activeTurn: t.activeTurn, turnClock: t.turnClock, lastUsage: t.lastUsage, usage: t.sessionUsage, models: t.modelUsage, calls: t.recentCalls,
+      lastCall: t.lastCall, cost: t.sessionCost, turnTimes: t.recentTurnTimes, contexts: t.recentContexts, goal: t.goal, limit: t.usageLimit,
+      queue: t.queue, foreground: t.foreground, stop: t.lastStop, permission: t.permissionMode, requests: t.pendingRequests, compactions: t.compactions(),
+    }
+  }
+
+  test("a rich session cut anywhere, joined in one page or in pages of any size, reads exactly as its full replay", () => {
+    const { events, threads } = richLog()
+    const replayOf = (from: number) => {
+      const t = createTranscript({ now: () => NOW })
+      events.slice(from).forEach(t.apply)
+      return seen(t, threads)
+    }
+    const full = replayOf(0)
+    // Notes exist (a cache miss after the cache was written), and the compaction's cost replaced its own.
+    expect(full.blocks.some((block) => block.note?.kind === "cache")).toBe(true)
+    expect(full.blocks.some((block) => block.note?.kind === "compaction")).toBe(true)
+    expect(full.agents.map((agent) => agent.tools)).toEqual([2, 1])
+    expect(full.threads[0]!.find((block) => block.title === "grep a")?.text).toBe("a.txt:1 a.txt:2")
+    for (let cut = 1; cut < events.length; cut++) {
+      const t = createTranscript({ now: () => NOW })
+      events.slice(cut).forEach(t.apply)
+      t.viewport(90, 600)
+      t.prepend(events.slice(0, cut))
+      expect(seen(t, threads)).toEqual(full)
+    }
+    for (const size of [1, 2, 3, 5, 8, 13]) {
+      const t = createTranscript({ now: () => NOW })
+      let from = events.length - size
+      events.slice(from).forEach(t.apply)
+      while (from > 0) {
+        t.viewport(90, 600)
+        const next = Math.max(0, from - size)
+        // Pages overlap the loaded history the way a reply racing a live event can: only the older events join.
+        t.prepend(events.slice(next, from + 1))
+        from = next
+        expect(seen(t, threads)).toEqual(replayOf(from))
+      }
     }
   })
 })

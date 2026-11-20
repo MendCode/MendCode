@@ -181,10 +181,10 @@ export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], m
   return Array.from({ length: height }, (_, row): Line => side === "left" ? [...(sidebar[row] ?? blank), { text: " ".repeat(SIDEBAR_GAP) }, ...fit(main[row] ?? [], mainWidth)] : [...fit(main[row] ?? [], mainWidth), { text: " ".repeat(SIDEBAR_GAP) }, ...(sidebar[row] ?? blank)])
 }
 
-/** A workflow's session that neither works nor waits: the run lives on /workflows, not as a chat in the list. */
-export const restingWorkflow = (session: SidebarSession & { named?: boolean | undefined }) => workflowOf(session) !== undefined && !markAnimates(sessionMark(session, false))
+/** A workflow's own session, working or not: the run lives on /workflows, never as a chat in the list. */
+export const restingWorkflow = (session: { title: string; named?: boolean | undefined }) => workflowOf(session) !== undefined
 
-/** The folder's top sessions in list order; a resting workflow's sessions stay out of it unless one is `current`. */
+/** The folder's top sessions in list order; a workflow's sessions stay out of it unless one is `current`. */
 export function projectSessions(sessions: readonly SessionSummary[], directory: string, current?: string) {
   const section = (session: SessionSummary) => session.archivedAt !== undefined ? 2 : session.lifecycle?.pinnedAt !== undefined ? 0 : 1
   // The top sessions only: a child listed with its parent (as /sessions lists a folder) stays under it there, not here.

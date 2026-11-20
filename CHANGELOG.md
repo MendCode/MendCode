@@ -30,6 +30,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A chat whose latest turns are mostly sub-agent work no longer opens at the top over an empty band: it sits at the bottom over the prompt and older history is read until the screen is full.
+- New ChatGPT subscription models appear in the native harness by themselves: the list is asked as the latest Codex release, checked once a day, so a model OpenAI adds needs no MendCode update.
+- A pasted block or multi-line message that mentions a command such as `/mend-decide` is sent as your message instead of running that command with the whole text as its arguments and showing it as a notice.
+- A message brought back into the prompt (↑ history, a queued message taken back, Esc Esc, a stash or a draft) shows its large pastes and images as the same chips it was written with, and a message sent after a draft is left and reopened keeps its paste. A bot's unsent new chat is the one you return to from its row.
+- Workflow runs no longer appear in the sessions sidebar, even while they work; they live on the Workflows page.
+- The Workflows page agrees with itself across "This project" and "All projects": a folder written with a trailing slash counts as the same project, "All projects" no longer shrinks to the current folder when the sidebar refreshes, and its title no longer names the current project.
+- A long chat read back to its start no longer keeps all of it in memory: once you are back at the bottom the far older history is let go, and scrolling up loads it again.
+- Clicking a background sub-agent of a Claude chat opens its thread even in a long session, and the Background card lines its rows up in one column.
+- Going back to one of the last chats you left is instant: it shows where you were reading and only what came in meanwhile is fetched, instead of the whole chat being loaded and laid out again.
+- Each older page of a long chat joins without reading the rest of the loaded chat again, and a sub-agent's step cut by a page ends with its output instead of staying open and empty.
 - Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
 - Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
 - A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.

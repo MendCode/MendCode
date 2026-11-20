@@ -14,6 +14,7 @@ import { preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
+import { createSessionCache, keepable, type KeptScroll, type KeptSession } from "./session-cache"
 
 export function createSession(ctx: AppContext, actions: {
   resetAudio(): void
@@ -29,10 +30,17 @@ export function createSession(ctx: AppContext, actions: {
   endGoalEdit(): void
   loadEffectiveModel(): Promise<void>
   restoreDraft(target: SessionId): Promise<void>
+  /** A text as a saved message holds it, its pastes expanded and remembered; and a past message's text with its pastes as chips again (ui/app/prompt.ts). */
+  expandedWith(message: { text: string; pastes: readonly import("../../view/paste-placeholders").PendingPaste[] }): string
+  chipped(text: string): string
   /** The live loops and workflows of the terminal's project, asked again after the project changed. */
   loadProjectLists(): Promise<void>
   keepDiscarded(options: { track?: boolean }): Promise<void>
   openTranscript(): Promise<void>
+  /** A kept chat back on screen catches up from its last event (paging.ts); "fallback" asks for a fresh open. */
+  resumeTranscript(kept: KeptSession): Promise<"resumed" | "fallback" | "left">
+  /** Lays the transcript on screen out with the terminal profile's look (settings.ts). */
+  syncAppearance(): void
   loadEarlier(): Promise<void>
   /** A session was switched to: its age and size decide the resume questions. */
   checkResume(options?: { detail?: Promise<import("@mendcode/client").CommandReply> }): Promise<void>
@@ -79,14 +87,17 @@ export function createSession(ctx: AppContext, actions: {
     // A message this terminal already holds (Esc Esc, the message actions) is in the prompt at once, images too; the daemon's answer
     // follows, and a refused undo puts the prompt back as it was.
     const before = kind === "undo" && prompt !== undefined && !placed ? { text: editor.text, attachments: state.attachments } : undefined
+    // The message shows as it was composed (large pastes as their chips); `shown` is what the prompt holds for it.
+    let shown = prompt
     if (before) {
-      ctx.editor.replaceAll(prompt!)
+      shown = actions.chipped(prompt!)
+      ctx.editor.replaceAll(shown)
       state.attachments = pendingFromRefs(images ?? [])
       requestFrame()
     }
     const reply = await input.send({ type: kind === "undo" ? "session.undo" : "session.redo", sessionId, ...(force ? { force: true } : {}), ...(kind === "undo" && atItemId ? { atItemId } : {}), ...(kind === "undo" && state.transcript.activeTurn ? { cancelRunning: true } : {}) })
     if (sessionId !== state.sessionId) return
-    if ((!reply.ok || !reply.result) && before && editor.text === prompt) {
+    if ((!reply.ok || !reply.result) && before && editor.text === shown) {
       ctx.editor.replaceAll(before.text)
       state.attachments = before.attachments
     }
@@ -111,9 +122,10 @@ export function createSession(ctx: AppContext, actions: {
     if (kind === "redo" && report.canRedo !== true) { prompt = ""; images = [] }
     if (placed) return requestFrame()
     // A prompt placed before the answer is left as it is now: what was typed into it meanwhile stays, and so does its draft.
-    if (prompt !== undefined && (!before || editor.text === prompt)) {
+    if (prompt !== undefined && (!before || editor.text === shown)) {
       if (!before) {
-        ctx.editor.replaceAll(prompt)
+        state.pastes = []
+        ctx.editor.replaceAll(actions.chipped(prompt))
         state.attachments = pendingFromRefs(images ?? [])
       }
       drafts.changed(state.sessionId, { text: prompt, images: images ?? [] })
@@ -225,6 +237,34 @@ export function createSession(ctx: AppContext, actions: {
     return true
   }
 
+  /** The chats left last, whole: going back to one is a read of what came after, not a rebuild (session-cache.ts). */
+  const kept = createSessionCache()
+  const profileKey = () => JSON.stringify(state.tuiProfile)
+
+  /** What the chat on screen keeps when it is left; undefined when it is not kept (still opening or paging, too large, no catch-up read). */
+  function keptOnLeave(sessionId: SessionId): KeptSession | undefined {
+    const paging = state.paging
+    if (!input.events?.loadAfter || !paging?.ready || paging.loading) return undefined
+    // With a sub-agent's thread open, the session's own transcript is kept; the return shows the conversation, at its bottom.
+    const transcript = state.agentRoot ?? state.transcript
+    const loaded = paging.loaded ?? 0
+    if (!keepable(transcript, loaded)) return undefined
+    const local = view.get(sessionId)
+    let scroll: KeptScroll = { follow: true }
+    if (!state.agentRoot && !local.follow) {
+      const rows = transcript.viewport(chatWidth(), state.lastBodyHeight, local.offset)
+      const screenRow = rows.findIndex((line) => line.itemId !== undefined && line.row !== undefined)
+      const line = rows[screenRow]
+      scroll = { follow: false, offset: local.offset, unseen: local.unseen, ...(line?.itemId !== undefined && line.row !== undefined ? { anchor: { itemId: line.itemId, row: line.row, screenRow } } : {}) }
+    }
+    return { transcript, turnState: state.turnState, compactionFacts: state.compactionFacts, paging: { firstSeq: paging.firstSeq, more: paging.more, loadedEarlier: paging.loadedEarlier, loaded }, scroll, profile: profileKey(), secrets: state.secretTails.size > 0 || state.secretsMissing.size > 0 }
+  }
+
+  /** A deleted chat is not kept: nothing could catch it up. */
+  function forget(sessionId: SessionId) {
+    kept.drop(sessionId)
+  }
+
   async function switchSession(next: SessionId) {
     if (next === state.sessionId) return
     state.changesSource = undefined
@@ -233,8 +273,9 @@ export function createSession(ctx: AppContext, actions: {
     // The prompt is the leaving session's draft: saved now (a pending save goes out too), and emptied below so the next one starts with its own.
     const promptOwned = !input.remote?.readOnly && !state.editingScratch && !state.editingGoal && state.editingMemory === undefined && !state.planDraft
     // With a sub-agent's thread open, the prompt on screen is the thread's: the conversation's, set aside, is the draft.
-    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments }
-    if (promptOwned) drafts.changed(state.sessionId, { text: leaving.text, images: draftRefs(leaving.attachments, leaving.text) })
+    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments, pastes: state.pastes }
+    // The draft holds the pastes' text, as every draft does; coming back, the chips are rebuilt from the terminal's memory of them.
+    if (promptOwned) drafts.changed(state.sessionId, { text: actions.expandedWith(leaving), images: draftRefs(leaving.attachments, leaving.text) })
     drafts.flush()
     // The history is the project's, shared by its sessions: what is in the prompt is kept as a draft entry, and the next ↑ reads the list again.
     void actions.keepDiscarded({ track: false })
@@ -259,6 +300,9 @@ export function createSession(ctx: AppContext, actions: {
     state.rightFocus = false
     actions.resetAudio()
     const previousSession = state.sessionId
+    const left = keptOnLeave(previousSession)
+    const back = kept.take(next)
+    if (left) kept.keep(previousSession, left)
     state.sessionId = next
     state.liveTasks = undefined
     void refreshLiveTasks(ctx)
@@ -282,10 +326,17 @@ export function createSession(ctx: AppContext, actions: {
     state.environmentPage = undefined
     if (state.page === "env") state.page = "chat"
     dropRevealedSecret()
-    state.transcript = actions.newTranscript()
+    state.transcript = back?.transcript ?? actions.newTranscript()
+    // A new transcript starts with the default look: the profile's (labels, timestamps, renderer) is laid on it, as at start.
+    if (!back) actions.syncAppearance()
     if (previousSession !== next) actions.sessionLookSwitched(previousSession)
-    state.turnState = createTurnState()
-    state.compactionFacts = createCompactionFacts()
+    if (back) {
+      // Kept under another look (the profile changed while it was away) or another mode: laid out again with the current ones.
+      if (profileKey() !== back.profile) actions.syncAppearance()
+      if (back.transcript.mode !== state.mode) back.transcript.setMode(state.mode)
+    }
+    state.turnState = back?.turnState ?? createTurnState()
+    state.compactionFacts = back?.compactionFacts ?? createCompactionFacts()
     state.compactionLive.session = undefined
     state.compactionLive.focused = false
     state.openedAt = now()
@@ -316,7 +367,18 @@ export function createSession(ctx: AppContext, actions: {
     const detail = input.send({ type: "session.get", sessionId: next })
     void loadTitle({ detail, listed: !moved && state.sessions.some((listed) => listed.sessionId === next) })
     requestFrame()
-    await actions.openTranscript()
+    const resumed = back ? await actions.resumeTranscript(back) : "fallback"
+    if (resumed === "left") return
+    if (resumed === "fallback") {
+      // Not kept, or it could not catch up: the chat opens from its newest window, as on a first visit.
+      if (back && state.transcript === back.transcript) {
+        state.transcript = actions.newTranscript()
+        state.turnState = createTurnState()
+        state.compactionFacts = createCompactionFacts()
+        actions.syncAppearance()
+      }
+      await actions.openTranscript()
+    }
     if (state.sessionId !== next) return
     void restoreDraft(next)
     void actions.checkResume({ detail }).catch(() => undefined)
@@ -343,6 +405,7 @@ export function createSession(ctx: AppContext, actions: {
       // What was typed has no chat to be saved in: it comes along to the blank chat instead of being lost.
       const typed = { text: editor.text, attachments: state.attachments }
       await switchSession(next as SessionId)
+      forget(gone)
       if (typed.text && state.sessionId === next && editor.isEmpty() && state.attachments.length === 0) {
         editor.insert(typed.text)
         state.attachments = typed.attachments
@@ -371,6 +434,7 @@ export function createSession(ctx: AppContext, actions: {
       : action.type === "tag" ? { type: "session.agent-view.metadata.patch" as const, sessionId: target, patch: { tags: action.tags, ...(action.color === undefined ? {} : { color: action.color }) } }
       : { type: "session.delete" as const, sessionId: target }
     const reply = await input.send(command)
+    if (reply.ok && action.type === "delete") forget(target)
     if (!reply.ok) fail(reply.error.message)
     else if (action.type === "archive" && !action.restore) say("settled · select it in /sessions, ctrl+o then ctrl+a to undo", "success")
     await reloadSessions()
