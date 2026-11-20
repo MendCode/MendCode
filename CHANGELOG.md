@@ -30,6 +30,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Scrolling to the top of a chat or a sub-agent's thread reaches its first line and stays there, instead of bouncing a row short and hiding the start of the message sent to the sub-agent.
+- An open sub-agent's thread stops loading the session's older history once its own start is shown, and no longer draws "earlier · scroll up" over its first line.
+- The right panel's galaxy and clocks stop redrawing the screen while an open file or another view hides them.
 - A sub-agent's call in the chat shows what it was asked in bright text, like a command, instead of all dim.
 - In a sub-agent's own session, the Agents list keeps the parent's Claude Code background agents instead of dropping them; selecting one opens it in the parent.
 - A working session of another project, or a bot's chat with sub-agents at work, keeps its spinner in the left list after you open another chat, instead of a still mark.

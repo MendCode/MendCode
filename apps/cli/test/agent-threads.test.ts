@@ -566,3 +566,56 @@ test("an open sub-agent that has ended stays in the strip", async () => {
   h.app.render()
   expect(screen(h)).toMatch(/▸Read a\.txt\s+await\s+done/)
 })
+
+test("an open sub-agent's thread whose start is loaded pages the session back no further and draws no 'earlier' label over its brief", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const sessionId = ids("session")
+  const log: SessionEvent[] = []
+  const talk = conversation(sessionId, (event) => void log.push(event))
+  for (let n = 1; n <= 10; n++) talk.exchange(`old question ${n}`, `old answer ${n}`)
+  const oldest = log.length
+  talk.emit({ type: "turn.started", turnId: "turn_9", queueId: "queue_9" })
+  talk.emit({ type: "item.started", turnId: "turn_9", itemId: "item_audit", kind: "tool_call", meta: { tool: "agent Audit the goal", subagent: true, agent: "general-purpose", background: false } })
+  talk.emit({ type: "item.started", turnId: "turn_9", itemId: "item_brief", kind: "user_message", meta: { agentParent: "item_audit" } })
+  talk.emit({ type: "item.completed", itemId: "item_brief", status: "ok", text: `You are a senior advisor auditing the goal. ${"Read the run log fully and say what is wrong. ".repeat(6)}` })
+  for (let n = 1; n <= 30; n++) {
+    talk.emit({ type: "item.started", turnId: "turn_9", itemId: `item_step_${n}`, kind: "tool_call", meta: { tool: `read src/file-${n}.ts`, agentParent: "item_audit" } })
+    talk.emit({ type: "item.completed", turnId: "turn_9", itemId: `item_step_${n}`, status: "ok", text: "ok", meta: { tool: `read src/file-${n}.ts` } })
+  }
+  const windowFrom = log.length - 20
+  const page = (events: SessionEvent[], more: boolean) => ({ ok: true as const, window: { events, firstSeq: events[0]!.seq, lastSeq: events.at(-1)!.seq, sessionLastSeq: log.at(-1)!.seq, more } })
+  const before: number[] = []
+  const h = appHarness({
+    dataDir, sessionId, width: 110, height: 30,
+    events: {
+      loadWindow: async () => page(log.slice(windowFrom), true),
+      // The thread's call and brief are one page back; the session's oldest exchanges another, and the log says more is older still.
+      loadBefore: async (_id, seq) => {
+        before.push(seq)
+        if (seq > log[oldest]!.seq) return page(log.slice(oldest, windowFrom), true)
+        if (seq > log[0]!.seq) return page(log.slice(0, oldest), true)
+        return { ok: true as const, window: { events: [], firstSeq: seq, lastSeq: seq, sessionLastSeq: log.at(-1)!.seq, more: false } }
+      },
+    },
+    reply: (command) => {
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+      if (command.type === "session.children" || command.type === "task.list") return { ok: true, result: { sessions: [], tasks: [] } } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  await h.app.start()
+  await Bun.sleep(5)
+  await h.type("\x18\x1b[B")
+  await Bun.sleep(5)
+  h.app.render()
+  expect(screen(h)).toContain("╭─ sub-agent ")
+  const pagesToOpen = before.length
+  // Up to the thread's top and on past it: the brief shows whole, and the session's oldest page is never asked for.
+  for (let n = 0; n < 20; n++) { await h.type("\x1b[5~"); await Bun.sleep(1); h.app.render() }
+  h.app.render()
+  expect(before.length).toBe(pagesToOpen)
+  expect(screen(h)).toContain("You are a senior advisor auditing the goal.")
+  expect(screen(h)).not.toMatch(/earlier · scroll up|loading earlier/)
+})
