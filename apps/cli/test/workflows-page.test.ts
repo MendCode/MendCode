@@ -188,9 +188,10 @@ describe("the list", () => {
     const out = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("all"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
     expect(out).toContain("one · 2")
     expect(out).not.toContain("one · 1")
-    expect(out).toContain("all projects")
+    expect(out).toContain("Workflows · all ")
+    expect(out).not.toContain("Workflows · one")
     const project = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("project"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
-    expect(project).not.toContain("all projects")
+    expect(project).toContain("Workflows · one")
   })
 
   test("the cursor moves over rows by key, skips headings and stays when runs arrive", () => {

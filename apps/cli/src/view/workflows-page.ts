@@ -1235,7 +1235,8 @@ export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: Wor
     { key: "1", label: "This project", short: "Project", ...(state.scope === "project" && runs.length ? { count: runs.length } : {}) },
     { key: "2", label: "All projects", short: "All", ...(state.scope === "all" && runs.length ? { count: runs.length } : {}) },
   ]
-  const context = !wide && inRun ? (run.subject ?? run.name) : state.scope === "all" ? "all projects" : input.directory ? basename(input.directory) : "this project"
+  // Under "All projects" the title says so in one word (the tabs below name the scope in full), so the key hints keep their room.
+  const context = !wide && inRun ? (run.subject ?? run.name) : state.scope === "all" ? "all" : input.directory ? basename(input.directory) : "this project"
   const confirmRun = state.confirm ? runs.find((each) => each.workflowId === state.confirm!.workflowId) : undefined
   const status: PageStatus | undefined = state.confirm && confirmRun ? { label: `${state.confirm.kind} "${confirmRun.name}${confirmRun.subject ? ` · ${confirmRun.subject}` : ""}"? ${state.confirm.kind === "stop" ? "x" : "d"}/y confirm`, tone: "warn" } : undefined
   const escape = { key: "esc", label: inRun ? "list" : "back" }
