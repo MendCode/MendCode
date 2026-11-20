@@ -44,3 +44,17 @@ test("after its last call a sub-agent is thinking, then writing, never its finis
   expect(thread().steps).toBe(1)
   expect(thread().status).toBe("running")
 })
+
+test("a sub-agent's call in the chat shows what it was asked bright, like a command, with the verb as its label", () => {
+  const transcript = createTranscript()
+  let seq = 0
+  const ev = (patch: Record<string, unknown>) => transcript.apply({ sessionId, seq: ++seq, at: 1_000, ...patch } as SessionEvent)
+  ev({ type: "turn.started", turnId, queueId: "que_01M7C3T9P0JHRKM1" })
+  ev({ type: "item.started", turnId, itemId: call, kind: "tool_call", meta: { tool: "agent Fable audits the repo", subagent: true, agent: "general-purpose", background: true } })
+  ev({ type: "item.completed", itemId: call, status: "ok", text: "running in the background", meta: { subagent: true, background: true, tool: "agent Fable audits the repo" } })
+  const row = transcript.viewport(100, 40).find((line) => line.text.includes("Fable audits the repo"))!
+  const asked = row.spans.find((span) => span.text.includes("Fable audits the repo"))!
+  expect(asked.fg).toBe("text")
+  expect(asked.bold).toBe(true)
+  expect(row.spans.find((span) => span.text === "agent")?.fg).not.toBe("text")
+})

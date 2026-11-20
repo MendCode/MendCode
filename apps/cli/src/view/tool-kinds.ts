@@ -122,17 +122,24 @@ function writingFact(c: CardContext): Span | undefined {
   return { text: `writing ${typeof lines === "number" && lines > 1 ? `${lines} lines · ` : ""}${formatBytes(chars)}`, fg: "muted" }
 }
 
+/** The header's label and target. A sub-agent's call (`agent Fable audits the repo`) reads like a command: the verb stays the label, what it was asked is the bright target. */
+function labelAndTarget(c: CardContext, parts: HeaderParts): { label: string | undefined; target: string | undefined } {
+  const shown = shownLabel(c, parts)
+  const agentCall = c.input.meta?.subagent === true && !parts.target && shown ? /^(\S+)\s+(.+)$/.exec(shown) : null
+  return agentCall ? { label: agentCall[1]!, target: agentCall[2]! } : { label: shown, target: parts.target }
+}
+
 export function header(c: CardContext, parts: HeaderParts, fold = true): Line {
   const time = parts.quiet ? undefined : durationOf(c)
   // A running call's time follows its facts: the bottom-right corner of the transcript belongs to the pet, and the live panel keeps the clock.
   const right = c.running ? undefined : time
   const writing = writingFact(c)
   const facts = [...statusFacts(c, parts.facts), ...(writing ? [writing] : []), ...(c.running && time ? [time] : [])]
-  const label = shownLabel(c, parts)
+  const { label, target } = labelAndTarget(c, parts)
   const row = clip(headerRow({
     glyph: glyphSpan(c),
     ...(label ? { label } : {}),
-    ...(parts.target ? { target: parts.target } : {}),
+    ...(target ? { target } : {}),
     targetTone: parts.targetTone ?? (c.line ? "muted" : c.design.colors.target),
     labelTone: c.design.colors.label,
     ...(c.design.header.call === "parens" ? { parens: true } : {}),
@@ -163,8 +170,9 @@ export function headerRows(c: CardContext, parts: HeaderParts & { wrap?: boolean
   const edge = width - 1
   const glyph = glyphSpan(c)
   const start = INDENT.length + textWidth(glyph.text) + 1
-  const label = shownLabel(c, parts) ?? ""
-  const target = parts.target ?? ""
+  const shown = labelAndTarget(c, parts)
+  const label = shown.label ?? ""
+  const target = shown.target ?? ""
   const parens = c.design.header.call === "parens" && !!label && !!target
   if (start + textWidth(label) + (label && target ? (parens ? 2 : 1) : 0) + textWidth(target) <= edge) return [one]
   const strike = c.cancelled ? { strike: true as const } : {}
