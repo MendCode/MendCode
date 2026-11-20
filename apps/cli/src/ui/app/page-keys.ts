@@ -20,7 +20,7 @@ import type { createStorage } from "./storage"
 import type { createAgents } from "./agents"
 import type { createStatus } from "./status"
 import type { createHooks } from "./hooks"
-import { agentPickerKey, changesPageKey, contextPageStateKey, toolsPageKey, loopsPageKey, mcpsPageKey, memoryGraphCanvas, memoryPageKey, setupPageKey, storagePageKey, usagePageKey, usageSelectedSession, usageWasteAction, usageWasteOpen, agentsPageKey, packagesPageKey, petPickerKey, workflowsPageKey, customizePageKey, settingsPageKey, statusPageKey, extensionItems, extensionsPageKey, hooksPageKey, connectKey, providersPageKey, secretsPageKey, permissionsPageKey, diagramBounds, diagramViewKey } from "../lazy-pages"
+import { agentPickerKey, changesPageKey, contextPageStateKey, toolsPageKey, loopsPageKey, mcpsPageKey, memoryGraphCanvas, memoryPageKey, setupPageKey, storagePageKey, usagePageKey, usageSelectedSession, usageWasteAction, usageWasteOpen, agentsPageKey, packagesPageKey, petPickerKey, workflowsPageKey, selectedWorkflow, customizePageKey, settingsPageKey, statusPageKey, extensionItems, extensionsPageKey, hooksPageKey, connectKey, providersPageKey, secretsPageKey, permissionsPageKey, diagramBounds, diagramViewKey } from "../lazy-pages"
 import { activeTheme, SYSTEM_THEME, themeNames } from "../theme"
 import type { Settings, PermissionMode, SessionId } from "@mendcode/protocol"
 import { modelPageKey } from "../lazy-pages"
@@ -156,7 +156,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     if (state.automationLedger) return actions.automationLedgerKey(key)
     if (await actions.gitKey(key)) { requestFrame(); return }
     if (key === "b" && state.page === "workflows" && state.workflowsLoaded) {
-      const run = state.workflows[state.workflowsState.selected]
+      const run = selectedWorkflow(state.workflowsState, state.workflows)
       if (run) await actions.openAutomationLedger("workflow", run.workflowId, run.name)
       return
     }

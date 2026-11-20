@@ -9,14 +9,19 @@ for (const [width, height] of [[60, 20], [100, 30], [160, 45], [180, 50], [220, 
   test(`B45 workflows routing stays within ${width}x${height}`, async () => {
     const h = b45Harness(width, height)
     await h.type("/workflows\r")
-    h.app.render()
-    const frame = h.frames.at(-1)!
-    const text = frame.map((line) => line.map((span) => span.text).join("")).join("\n")
-    expect(frame).toHaveLength(height)
-    expect(frame.every((line) => textWidth(line.map((span) => span.text).join("")) <= width)).toBe(true)
-    expect(text).toContain("per-run-worktree")
-    expect(text).toContain("local/workflow")
-    expect(text).toContain("Tasks")
+    await h.app.onKey("\r")
+    const shown = () => {
+      h.app.render()
+      const frame = h.frames.at(-1)!
+      expect(frame).toHaveLength(height)
+      expect(frame.every((line) => textWidth(line.map((span) => span.text).join("")) <= width)).toBe(true)
+      return frame.map((line) => line.map((span) => span.text).join("")).join("\n")
+    }
+    // The step's row names the model it runs on; `i` shows the workspace it runs in.
+    expect(shown()).toContain("local/workflow")
+    await h.app.onKey("i")
+    expect(shown()).toContain("per-run-worktree")
+    await h.app.onKey("\x1b")
     await h.app.onKey("\x1b")
   })
 }

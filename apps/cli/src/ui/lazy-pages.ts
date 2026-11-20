@@ -331,6 +331,7 @@ type WorkflowsMod = typeof import("../view/workflows-page")
 export const createWorkflowsPageState: WorkflowsMod["createWorkflowsPageState"] = (...args) => workflows.get().createWorkflowsPageState(...args)
 export const workflowsPageKey: WorkflowsMod["workflowsPageKey"] = (...args) => workflows.get().workflowsPageKey(...args)
 export const renderWorkflowsPage: WorkflowsMod["renderWorkflowsPage"] = (...args) => workflows.get().renderWorkflowsPage(...args)
+export const selectedWorkflow: WorkflowsMod["selectedWorkflow"] = (...args) => workflows.get().selectedWorkflow(...args)
 /** Only meaningful on the workflows page, which is loaded by then; false before that. */
 export const workflowsNeedTick: WorkflowsMod["needsTick"] = (...args) => (workflows.loaded() ? workflows.get().needsTick(...args) : false)
 type WorkflowCommandMod = typeof import("../view/workflow-command")

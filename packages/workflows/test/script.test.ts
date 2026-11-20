@@ -636,11 +636,25 @@ describe("contract and views", () => {
     await settle(60)
     const summary = summarizeWorkflow(h.get(run))
     expect(summary.script).toMatchObject({ host: "done", calls: 2, phase: "Check", budget: { agents: 30 }, logs: ["hi"], counts: { done: 2, pending: 0, running: 0, failed: 0 } })
-    expect(summary.script!.phases).toEqual([
-      { title: "Find", detail: "look", state: "done", completed: 1, total: 1 },
-      { title: "Check", state: "done", completed: 1, total: 1 },
+    expect(summary.script!.phases).toMatchObject([
+      { title: "Find", detail: "look", state: "done", completed: 1, total: 1, agents: 1, checks: 0, checksFailed: 0 },
+      { title: "Check", state: "done", completed: 1, total: 1, agents: 1, checks: 0, checksFailed: 0 },
     ])
+    // Each phase spans its tasks: it starts with its first and ends with its last.
+    for (const phase of summary.script!.phases) expect(phase.endedAt!).toBeGreaterThanOrEqual(phase.startedAt!)
+    expect(summary.script!.outcome).toBeUndefined()
+    expect(summary.subject).toBeUndefined()
     expect(WorkflowSummary.safeParse(summary).success).toBe(true)
     expect(WorkflowRun.safeParse(h.get(run)).success).toBe(true)
+  })
+
+  test("the summary names the work item from the arguments and reads an object result with a state as the outcome", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`await agent("a"); return { state: "draft", reason: "audit unsure", card: {} }`), { item: ".mend/items/cu-vault-probe.json" })
+    await settle(60)
+    const summary = summarizeWorkflow(h.get(run))
+    expect(summary.subject).toBe("cu-vault-probe")
+    expect(summary.script!.outcome).toEqual({ state: "draft", reason: "audit unsure" })
+    expect(WorkflowSummary.safeParse(summary).success).toBe(true)
   })
 })

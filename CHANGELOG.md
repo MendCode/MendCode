@@ -15,6 +15,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `/workflows` follows the page standard, keys on the title row. Runs about the same item are one group, a council's reviewers one row, and each row says where the run is or how it ended. A run reads as a timeline: its phases in a row, then each step with its model, engine, time and what it does now; checks fold into their phase.
 - In full access, sessions talk to each other without asking: Claude Code and Codex reading, searching or waiting on another session, and any session messaging or opening one in another project. The other modes still ask.
 - The activity status says what the model does now instead of repeating the chat: `Thinking…` between steps, `Writing…` while it writes, a command by what it does (`Running tests…`, `Building…`, `Committing…`) rather than its command line, the step in progress (`step 24`) and how long a long step has taken.
 - An open sub-agent's thread shows that agent's step and what it does now, no longer the title of its last call while it thinks or writes its answer.
