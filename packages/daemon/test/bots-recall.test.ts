@@ -155,6 +155,23 @@ describe("a bot reads its own chats and notes", () => {
     expect(JSON.stringify(h.requests.at(-1)!.messages)).toContain("secret other words")
   })
 
+  test("on the full tier, with thread_tools never set, a bot messages another session like the main agent does", async () => {
+    let plain = "" as SessionId
+    const h = await start({ extraTools: [threadsTool], steps: [stop("a"), () => callTool("threads", { action: "message", sessionId: plain, text: "status please" }), ...Array.from({ length: 6 }, () => stop("ok"))] })
+    // Tool discovery stays off so the tool is offered at once, as in the bot that hit the refusal.
+    expect((await h.client.send({ type: "settings.set", patch: { tier: "full" } })).ok).toBe(true)
+    expect((await h.client.send({ type: "settings.set", patch: { experimental: { bots: true, tool_discovery: false } } })).ok).toBe(true)
+    plain = await chat(h, { title: "Plain chat", text: "hi" })
+    const sending = chat(h, { agent: "calm", title: "Sender", text: "ask the plain chat" })
+    // The bot's own permission (smart) asks before it writes to another session, as it does for the main agent.
+    await until(() => h.events.some((event) => event.type === "server.request" && event.title === "Message another session"))
+    const asked = h.events.find((event) => event.type === "server.request" && event.title === "Message another session") as Extract<(typeof h.events)[number], { type: "server.request" }>
+    await h.client.send({ type: "request.resolve", sessionId: asked.sessionId, requestId: asked.requestId, decision: { kind: "approve", scope: "once" } })
+    await sending
+    await until(() => h.requests.some((request) => JSON.stringify(request.messages).includes(`Message queued for ${plain}`)))
+    expect(JSON.stringify(h.requests.map((request) => request.messages))).not.toContain("is not available to a bot")
+  }, 30_000)
+
   test("with the flag off the threads tool is not a bot's: no recall without thread_tools", async () => {
     const h = await start({ extraTools: [threadsTool], steps: [stop("a")] }, false)
     await chat(h, { agent: "calm", title: "Reader", text: "go" })

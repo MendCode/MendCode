@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { CommandReply } from "@mendcode/client"
 import { markAnimates, renderSessionSidebar, SETTLED_MORE, SETTLED_ROW, SIDEBAR_WIDTH, sessionMark, sidebarStops } from "../src/view/sidebar"
-import { mergeActivity } from "../src/view/session-activity"
+import { createActivityMemory, mergeActivity } from "../src/view/session-activity"
 import { autoSettled } from "../src/view/sidebar-marks"
 import { glyphSet } from "../src/ui/theme"
 import { textWidth } from "../src/view/wrap"
@@ -336,5 +336,18 @@ describe("the pushed live detail reaches the list", () => {
     const done = mergeActivity([asking] as never, push({ state: "idle" }), { cap: 50, keep: "a" })[0] as { since?: number; pendingKind?: string }
     expect(done.since).toBeUndefined()
     expect(done.pendingKind).toBeUndefined()
+  })
+
+  test("a push that moves only a working session's clock shows nothing new; a change of tool, state, title or request does", () => {
+    const memory = createActivityMemory()
+    const push = (extra: Record<string, unknown>) => ({ type: "session.activity", sessionId: "a", directory: "/d", title: "One", state: "tool", updatedAt: NOW, ...extra }) as never
+    expect(memory.changed(push({ tool: "Bash" }))).toBe(true)
+    expect(memory.changed(push({ tool: "Bash", updatedAt: NOW + 250, since: NOW }))).toBe(false)
+    expect(memory.changed(push({ tool: "Bash", updatedAt: NOW + 500, since: NOW }))).toBe(false)
+    expect(memory.changed(push({ tool: "Edit", updatedAt: NOW + 750, since: NOW }))).toBe(true)
+    expect(memory.changed(push({ state: "waiting_approval", pending: "Pick one", pendingKind: "question" }))).toBe(true)
+    expect(memory.changed(push({ state: "idle" }))).toBe(true)
+    expect(memory.changed(push({ state: "idle", title: "Renamed" }))).toBe(true)
+    expect(memory.changed({ ...(push({ state: "idle", title: "Renamed" }) as object), sessionId: "b" } as never)).toBe(true)
   })
 })

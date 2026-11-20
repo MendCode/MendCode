@@ -3088,7 +3088,8 @@ export async function startDaemon(options: DaemonOptions) {
     startPlan: (from, directory) => sessionStarter.plan(from, directory),
     // Experimental bots: a bot reads its own chats and notes through the tool (bot-recall.ts, docs/agents.md); nothing here runs with the flag off.
     botOf: botNameOf,
-    threadToolsOn: () => store.settings.get().experimental?.thread_tools === true,
+    // The tier counts like the flag: a bot on balanced or full writes to sessions as the main agent does.
+    threadToolsOn: () => featureOn(store.settings.get(), "threads"),
     botNotes: (bot, query) => botMemoryModule!.searchBotNotes({ dir: options.dir, name: bot, ...(query ? { query } : {}) }),
     peers: (sessionId) => peers.port(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
