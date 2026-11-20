@@ -174,19 +174,21 @@ describe("the laid-out window over a long session", () => {
 })
 
 describe("scrolling up in the app over a long session", () => {
-  test("reaching the top of the window shows a label, the next page up lays out older blocks, Home reaches the very first message", async () => {
+  test("scrolling up lays out older blocks a screen before the window's top, so no label stands in for them; Home reaches the very first message", async () => {
     const h = appHarness({ height: 30 })
     const chat = conversation(h.sessionId, (event) => h.app.onEvent(event))
     for (let n = 1; n <= 300; n++) chat.exchange(`question ${n}`, `answer ${n}`)
     const older = () => h.app.transcript.olderBlocks
     expect(older()).toBe(900 - WINDOW_BLOCKS)
     expect(h.text().join("\n")).not.toContain("earlier")
-    for (let page = 0; page < 200 && !h.text().some((row) => row.includes("earlier · scroll up")); page++) await h.app.onKey("\x1b[5~")
-    expect(h.text().some((row) => row.includes(`↑ ${900 - WINDOW_BLOCKS} earlier · scroll up`))).toBe(true)
-    expect(older()).toBe(900 - WINDOW_BLOCKS)
-    await h.app.onKey("\x1b[5~")
+    let labelled = false
+    for (let page = 0; page < 200 && older() === 900 - WINDOW_BLOCKS; page++) {
+      await h.app.onKey("\x1b[5~")
+      labelled ||= h.text().some((row) => row.includes("earlier · scroll up"))
+    }
     expect(older()).toBe(900 - WINDOW_BLOCKS - WINDOW_STEP)
-    expect(h.text().join("\n")).not.toContain(`${900 - WINDOW_BLOCKS} earlier`)
+    expect(labelled).toBe(false)
+    expect(h.text().join("\n")).not.toContain("earlier · scroll up")
     await h.app.onKey("\x1b[H")
     expect(older()).toBe(0)
     expect(h.text().join("\n")).toContain("question 1\n".trim())

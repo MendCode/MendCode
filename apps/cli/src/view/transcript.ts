@@ -1298,7 +1298,15 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     continuity.clear()
     turns.clear()
     compactionUpdates.clear()
-    cache.clear()
+    // The laid-out rows stay: a block the older page does not touch replays into the same block, and laying out every loaded message
+    // again for each page made each page slower than the last. What the page touches (its items, its turns) is laid out anew below.
+    const touchedItems = new Set<string>()
+    const touchedTurns = new Set<string>()
+    for (const event of older) {
+      if ("itemId" in event && typeof event.itemId === "string") touchedItems.add(event.itemId)
+      if ("turnId" in event && typeof event.turnId === "string") touchedTurns.add(event.turnId)
+    }
+    const laidOut = new Map(cache)
     history.clear()
     deltaSeqs.clear()
     firstSeq = undefined
@@ -1333,6 +1341,18 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       replayed = undefined
       for (const [thread, own] of handed) thread.transcript.prepend(own)
     }
+    // The replay invalidates every block it applies events to, which is all of them: the rows laid out before come back for each block
+    // the older page did not touch.
+    const shown = new Set<string>()
+    for (const block of blocks) {
+      shown.add(block.itemId)
+      if (touchedItems.has(block.itemId) || touchedTurns.has(block.turnId)) cache.delete(block.itemId)
+      else if (!cache.has(block.itemId)) {
+        const before = laidOut.get(block.itemId)
+        if (before) cache.set(block.itemId, before)
+      }
+    }
+    for (const itemId of cache.keys()) if (!shown.has(itemId)) cache.delete(itemId)
     lastSeq = Math.max(lastSeq, previousSeq)
     olderLoaded += Math.max(0, blocks.length - previousCount)
     invalidateCounts()
