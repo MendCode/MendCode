@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.19-beta.1 - 2026-11-20
+
+Long chats scroll, page and switch faster and hold less memory: older history loads before you reach the top without redrawing what is already drawn, a chat read to its start lets the far history go once you are back at the bottom, and going back to one of your last chats is instant. New ChatGPT subscription models appear on their own. Pasted text and images come back as chips when a message returns to the prompt, a bot's unsent chat is kept, workflows leave the left list, sessions talk to each other in full access, and the activity line says what the model is doing.
+
 ### New
 
 - `mendcode bot list` and `mendcode bot show <name>` show the bots from a shell: their state, chats by folder, what is running or waiting for you, and their schedules.
@@ -22,7 +26,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/workflows` is easier to read: no boxes, each run led by its state mark, the selected run with a progress bar and its tasks under their phase or step, and only the keys that apply listed at the bottom.
 - Esc Esc only stops a turn that has taken more than four steps (tool calls, thinking or text); it no longer takes that message back.
 - The left list shows how many sub-agents a session (or a bot's chat) has working, `↳2`, and keeps it spinning while they work after its own turn ended; a session compacting says `compacting` where its time was.
-
 - While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.
 - Opening a chat from the left list no longer waits for the previous chat to be released first.
 - In full access a script workflow starts at once, like any other tool; other permission modes still show its source and ask first.
@@ -56,7 +59,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A sub-agent's call in the chat shows what it was asked in bright text, like a command, instead of all dim.
 - In a sub-agent's own session, the Agents list keeps the parent's Claude Code background agents instead of dropping them; selecting one opens it in the parent.
 - A working session of another project, or a bot's chat with sub-agents at work, keeps its spinner in the left list after you open another chat, instead of a still mark.
-- Workflows no longer fill the left list with their sessions: a working run shows as one `◇ <name>` row that opens it on `/workflows`, and a finished one leaves the list.
 - When several packages bring a command of the same name, each runs as `/<package>:<name>` and the menu lists all of them; the bare name says which ones exist instead of running one of them.
 - A command whose description is longer than 120 characters loads with the description cut, instead of being left out.
 - A message sent while a tool runs is no longer lost when you cancel the turn before the model reads it: it waits in the queue and goes with your next message.
