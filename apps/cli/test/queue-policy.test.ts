@@ -138,3 +138,21 @@ test("send now, drop last and edit last act on the messages the queue panel show
   expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: message })
   expect(h.app.editor.text).toBe("Also check cancellation before sending the next prompt")
 })
+
+test("send now that races with the daemon taking the message leaves no notice behind", async () => {
+  const h = b51Harness(100, 30, "after-tools", false, { ok: false, error: { code: "target_mismatch", message: "[ACTOR]: queued message not found" } })
+  h.app.render()
+  const rows = h.text()
+  const at = rows.findIndex((row) => row.includes("↗ SEND"))
+  await h.app.onKey(`\x1b[<0;${rows[at]!.indexOf("SEND") + 1};${at + 1}M`)
+  expect(h.sentOf("queue.promote")).toHaveLength(1)
+  await h.app.onKey("\x13")
+  expect(h.sentOf("queue.promote")).toHaveLength(2)
+  expect(h.text().join("\n")).not.toContain("queued message not found")
+})
+
+test("send now still reports a failure other than the message having left the queue", async () => {
+  const h = b51Harness(100, 30, "after-tools", false, { ok: false, error: { code: "invalid_command", message: "[DAEMON]: queue is busy" } })
+  await h.app.onKey("\x13")
+  expect(h.text().join("\n")).toContain("queue is busy")
+})
