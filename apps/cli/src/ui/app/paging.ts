@@ -4,6 +4,7 @@ import type { createSecrets } from "./secrets"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { RELEASE_AT, RELEASE_KEEP } from "../../view/transcript"
+import { KEPT_CATCH_UP, type KeptSession } from "./session-cache"
 
 /** Opening a chat pages back until its transcript fills this many screens, at most this many pages. */
 const FILL_SCREENS = 2
@@ -18,6 +19,7 @@ const RELEASE_SCREENS = 3
 export function createPaging(ctx: AppContext, actions: {
   chatWidth(): number
   noteSecretMarkers: ReturnType<typeof createSecrets>["noteSecretMarkers"]
+  loadSecretTails: ReturnType<typeof createSecrets>["loadSecretTails"]
   /** Handles one live event as if it had just arrived (the app's own `onEvent`). */
   replay(event: SessionEvent): void
   /** The session this terminal holds is gone from the daemon: moves to the project's blank chat; false when it could not. */
@@ -31,7 +33,7 @@ export function createPaging(ctx: AppContext, actions: {
     const sessionId = state.sessionId
     const transcript = state.transcript
     view.jump(sessionId, 0, 0)
-    const paging = input.events ? { firstSeq: 0, more: true, loading: true, ready: false, loadedEarlier: false, held: [] } : undefined
+    const paging: AppContext["state"]["paging"] = input.events ? { firstSeq: 0, more: true, loading: true, ready: false, loadedEarlier: false, held: [], loaded: 0 } : undefined
     state.paging = paging
     let afterSeq = 0
     if (input.events && paging) {
@@ -49,6 +51,7 @@ export function createPaging(ctx: AppContext, actions: {
         }
         paging.firstSeq = reply.window.firstSeq
         paging.more = reply.window.more
+        paging.loaded = reply.window.events.length
         paging.ready = true
         afterSeq = reply.window.lastSeq
       } catch (error) {
@@ -72,6 +75,73 @@ export function createPaging(ctx: AppContext, actions: {
     followPet(state)
     requestFrame()
     await fillScreen(transcript)
+  }
+
+  /**
+   * A chat kept from an earlier visit (session-cache.ts) is already on `state.transcript`: only the events after the last one it
+   * holds are read (undo markers too, as a subscriber gets them) and applied the way an opening window is, quietly, then the
+   * subscription goes on from there. "fallback" when it cannot be (the gap is more than one page, the log is shorter than what
+   * it holds, the read failed): the caller opens the chat afresh. "left" when the reader switched away meanwhile.
+   */
+  async function resumeTranscript(kept: KeptSession): Promise<"resumed" | "fallback" | "left"> {
+    const sessionId = state.sessionId
+    const transcript = state.transcript
+    const loadAfter = input.events?.loadAfter
+    if (!loadAfter) return "fallback"
+    const paging = { ...kept.paging, loading: true, ready: false, held: [] as SessionEvent[] }
+    state.paging = paging
+    const from = transcript.lastSeq
+    let afterSeq = from
+    try {
+      const reply = await loadAfter(sessionId, from, KEPT_CATCH_UP)
+      if (state.transcript !== transcript) return "left"
+      if (!reply.ok && reply.error.code === "unknown_session" && await actions.recoverMissingSession()) return "left"
+      if (!reply.ok || reply.window.more || reply.window.sessionLastSeq < from) return "fallback"
+      // An undo or redo made while the chat was away: a fresh open shows the turns as they are now, with no marker of the change.
+      if (reply.window.events.some((event) => event.type === "turn.reverted" || event.type === "turn.restored")) return "fallback"
+      const width = chatWidth()
+      const height = state.lastBodyHeight
+      const scroll = kept.scroll
+      const before = scroll.follow || !reply.window.events.length ? 0 : transcript.totalLines(width)
+      const windowTop = transcript.olderBlocks
+      for (const event of reply.window.events) {
+        transcript.apply(event)
+        state.turnState.apply(event)
+        state.compactionFacts.apply(event)
+        noteSecretMarkers(event)
+      }
+      afterSeq = Math.max(from, reply.window.lastSeq)
+      paging.loaded += reply.window.events.length
+      if (kept.secrets) void actions.loadSecretTails()
+      if (scroll.follow) view.jump(sessionId, 0, 0)
+      else {
+        // As for live events: what came in meanwhile does not push the top of the window the reader was in.
+        transcript.pinWindow(windowTop)
+        const added = reply.window.events.length ? transcript.totalLines(width) - before : 0
+        const offset = (scroll.anchor && transcript.offsetForAnchor(scroll.anchor, width, height)) ?? scroll.offset + added
+        const local = view.get(sessionId)
+        local.offset = Math.max(0, offset)
+        local.follow = local.offset === 0
+        local.unseen = local.follow ? 0 : scroll.unseen + Math.max(0, added)
+      }
+      paging.ready = true
+    } catch {
+      return state.transcript === transcript ? "fallback" : "left"
+    } finally {
+      if (state.transcript === transcript && paging.ready) {
+        paging.loading = false
+        for (const event of paging.held.splice(0)) replay(event)
+        requestFrame()
+      }
+    }
+    const reply = await input.subscribe?.(sessionId, afterSeq)
+    if (state.transcript !== transcript) return "left"
+    if (reply && !reply.ok && reply.error.code === "unknown_session" && await actions.recoverMissingSession()) return "left"
+    if (reply && !reply.ok) fail(reply.error.message)
+    void continuity.load()
+    followPet(state)
+    requestFrame()
+    return "resumed"
   }
 
   /** A window is counted in raw events, so a session of long turns can open on little more than its last exchange: page back until the screen is full. */
@@ -125,6 +195,7 @@ export function createPaging(ctx: AppContext, actions: {
       paging.firstSeq = reply.window.firstSeq
       paging.more = reply.window.more
       paging.loadedEarlier = true
+      paging.loaded = (paging.loaded ?? 0) + reply.window.events.length
     } catch (error) {
       if (sessionTranscript() === transcript) fail(error instanceof Error ? error.message : String(error))
     } finally {
@@ -169,5 +240,5 @@ export function createPaging(ctx: AppContext, actions: {
     paging.more = true
   }
 
-  return { openTranscript, loadEarlier, loadThreadStart, releaseFar }
+  return { openTranscript, resumeTranscript, loadEarlier, loadThreadStart, releaseFar }
 }

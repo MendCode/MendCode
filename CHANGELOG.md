@@ -38,6 +38,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The Workflows page agrees with itself across "This project" and "All projects": a folder written with a trailing slash counts as the same project, "All projects" no longer shrinks to the current folder when the sidebar refreshes, and its title no longer names the current project.
 - A long chat read back to its start no longer keeps all of it in memory: once you are back at the bottom the far older history is let go, and scrolling up loads it again.
 - Clicking a background sub-agent of a Claude chat opens its thread even in a long session, and the Background card lines its rows up in one column.
+- Going back to one of the last chats you left is instant: it shows where you were reading and only what came in meanwhile is fetched, instead of the whole chat being loaded and laid out again.
 - Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
 - Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
 - A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.

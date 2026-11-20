@@ -251,5 +251,5 @@ export function createSettings(ctx: AppContext, actions: {
     input.screen.write?.(mode === "osc9" ? `\x1b]9;${product}: ${clean}\x07` : `\x1b]777;notify;${product};${clean}\x07`)
   }
 
-  return { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes }
+  return { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes, syncAppearance }
 }

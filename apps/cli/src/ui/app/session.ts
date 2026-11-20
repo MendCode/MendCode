@@ -14,6 +14,7 @@ import { preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
+import { createSessionCache, keepable, type KeptScroll, type KeptSession } from "./session-cache"
 
 export function createSession(ctx: AppContext, actions: {
   resetAudio(): void
@@ -36,6 +37,10 @@ export function createSession(ctx: AppContext, actions: {
   loadProjectLists(): Promise<void>
   keepDiscarded(options: { track?: boolean }): Promise<void>
   openTranscript(): Promise<void>
+  /** A kept chat back on screen catches up from its last event (paging.ts); "fallback" asks for a fresh open. */
+  resumeTranscript(kept: KeptSession): Promise<"resumed" | "fallback" | "left">
+  /** Lays the transcript on screen out with the terminal profile's look (settings.ts). */
+  syncAppearance(): void
   loadEarlier(): Promise<void>
   /** A session was switched to: its age and size decide the resume questions. */
   checkResume(options?: { detail?: Promise<import("@mendcode/client").CommandReply> }): Promise<void>
@@ -232,6 +237,34 @@ export function createSession(ctx: AppContext, actions: {
     return true
   }
 
+  /** The chats left last, whole: going back to one is a read of what came after, not a rebuild (session-cache.ts). */
+  const kept = createSessionCache()
+  const profileKey = () => JSON.stringify(state.tuiProfile)
+
+  /** What the chat on screen keeps when it is left; undefined when it is not kept (still opening or paging, too large, no catch-up read). */
+  function keptOnLeave(sessionId: SessionId): KeptSession | undefined {
+    const paging = state.paging
+    if (!input.events?.loadAfter || !paging?.ready || paging.loading) return undefined
+    // With a sub-agent's thread open, the session's own transcript is kept; the return shows the conversation, at its bottom.
+    const transcript = state.agentRoot ?? state.transcript
+    const loaded = paging.loaded ?? 0
+    if (!keepable(transcript, loaded)) return undefined
+    const local = view.get(sessionId)
+    let scroll: KeptScroll = { follow: true }
+    if (!state.agentRoot && !local.follow) {
+      const rows = transcript.viewport(chatWidth(), state.lastBodyHeight, local.offset)
+      const screenRow = rows.findIndex((line) => line.itemId !== undefined && line.row !== undefined)
+      const line = rows[screenRow]
+      scroll = { follow: false, offset: local.offset, unseen: local.unseen, ...(line?.itemId !== undefined && line.row !== undefined ? { anchor: { itemId: line.itemId, row: line.row, screenRow } } : {}) }
+    }
+    return { transcript, turnState: state.turnState, compactionFacts: state.compactionFacts, paging: { firstSeq: paging.firstSeq, more: paging.more, loadedEarlier: paging.loadedEarlier, loaded }, scroll, profile: profileKey(), secrets: state.secretTails.size > 0 || state.secretsMissing.size > 0 }
+  }
+
+  /** A deleted chat is not kept: nothing could catch it up. */
+  function forget(sessionId: SessionId) {
+    kept.drop(sessionId)
+  }
+
   async function switchSession(next: SessionId) {
     if (next === state.sessionId) return
     state.changesSource = undefined
@@ -267,6 +300,9 @@ export function createSession(ctx: AppContext, actions: {
     state.rightFocus = false
     actions.resetAudio()
     const previousSession = state.sessionId
+    const left = keptOnLeave(previousSession)
+    const back = kept.take(next)
+    if (left) kept.keep(previousSession, left)
     state.sessionId = next
     state.liveTasks = undefined
     void refreshLiveTasks(ctx)
@@ -290,10 +326,17 @@ export function createSession(ctx: AppContext, actions: {
     state.environmentPage = undefined
     if (state.page === "env") state.page = "chat"
     dropRevealedSecret()
-    state.transcript = actions.newTranscript()
+    state.transcript = back?.transcript ?? actions.newTranscript()
+    // A new transcript starts with the default look: the profile's (labels, timestamps, renderer) is laid on it, as at start.
+    if (!back) actions.syncAppearance()
     if (previousSession !== next) actions.sessionLookSwitched(previousSession)
-    state.turnState = createTurnState()
-    state.compactionFacts = createCompactionFacts()
+    if (back) {
+      // Kept under another look (the profile changed while it was away) or another mode: laid out again with the current ones.
+      if (profileKey() !== back.profile) actions.syncAppearance()
+      if (back.transcript.mode !== state.mode) back.transcript.setMode(state.mode)
+    }
+    state.turnState = back?.turnState ?? createTurnState()
+    state.compactionFacts = back?.compactionFacts ?? createCompactionFacts()
     state.compactionLive.session = undefined
     state.compactionLive.focused = false
     state.openedAt = now()
@@ -324,7 +367,18 @@ export function createSession(ctx: AppContext, actions: {
     const detail = input.send({ type: "session.get", sessionId: next })
     void loadTitle({ detail, listed: !moved && state.sessions.some((listed) => listed.sessionId === next) })
     requestFrame()
-    await actions.openTranscript()
+    const resumed = back ? await actions.resumeTranscript(back) : "fallback"
+    if (resumed === "left") return
+    if (resumed === "fallback") {
+      // Not kept, or it could not catch up: the chat opens from its newest window, as on a first visit.
+      if (back && state.transcript === back.transcript) {
+        state.transcript = actions.newTranscript()
+        state.turnState = createTurnState()
+        state.compactionFacts = createCompactionFacts()
+        actions.syncAppearance()
+      }
+      await actions.openTranscript()
+    }
     if (state.sessionId !== next) return
     void restoreDraft(next)
     void actions.checkResume({ detail }).catch(() => undefined)
@@ -351,6 +405,7 @@ export function createSession(ctx: AppContext, actions: {
       // What was typed has no chat to be saved in: it comes along to the blank chat instead of being lost.
       const typed = { text: editor.text, attachments: state.attachments }
       await switchSession(next as SessionId)
+      forget(gone)
       if (typed.text && state.sessionId === next && editor.isEmpty() && state.attachments.length === 0) {
         editor.insert(typed.text)
         state.attachments = typed.attachments
@@ -379,6 +434,7 @@ export function createSession(ctx: AppContext, actions: {
       : action.type === "tag" ? { type: "session.agent-view.metadata.patch" as const, sessionId: target, patch: { tags: action.tags, ...(action.color === undefined ? {} : { color: action.color }) } }
       : { type: "session.delete" as const, sessionId: target }
     const reply = await input.send(command)
+    if (reply.ok && action.type === "delete") forget(target)
     if (!reply.ok) fail(reply.error.message)
     else if (action.type === "archive" && !action.restore) say("settled · select it in /sessions, ctrl+o then ctrl+a to undo", "success")
     await reloadSessions()
