@@ -364,7 +364,10 @@ function listRows(runs: WorkflowSummary[], state: WorkflowsPageState): { groups:
   }
   if (state.scope === "all") {
     const folders = new Map<string, Group[]>()
-    for (const group of groups) folders.set(group.directory, [...(folders.get(group.directory) ?? []), group])
+    for (const group of groups) {
+      const folder = group.directory.length > 1 ? group.directory.replace(/\/+$/, "") : group.directory
+      folders.set(folder, [...(folders.get(folder) ?? []), group])
+    }
     for (const [directory, members] of folders) {
       rows.push({ kind: "heading", key: `h:${directory}`, text: basename(directory), count: members.reduce((sum, group) => sum + group.runs.length, 0) })
       members.forEach(groupRows)
@@ -1232,7 +1235,7 @@ export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: Wor
     { key: "1", label: "This project", short: "Project", ...(state.scope === "project" && runs.length ? { count: runs.length } : {}) },
     { key: "2", label: "All projects", short: "All", ...(state.scope === "all" && runs.length ? { count: runs.length } : {}) },
   ]
-  const context = !wide && inRun ? (run.subject ?? run.name) : input.directory ? basename(input.directory) : state.scope === "all" ? "all projects" : "this project"
+  const context = !wide && inRun ? (run.subject ?? run.name) : state.scope === "all" ? "all projects" : input.directory ? basename(input.directory) : "this project"
   const confirmRun = state.confirm ? runs.find((each) => each.workflowId === state.confirm!.workflowId) : undefined
   const status: PageStatus | undefined = state.confirm && confirmRun ? { label: `${state.confirm.kind} "${confirmRun.name}${confirmRun.subject ? ` · ${confirmRun.subject}` : ""}"? ${state.confirm.kind === "stop" ? "x" : "d"}/y confirm`, tone: "warn" } : undefined
   const escape = { key: "esc", label: inRun ? "list" : "back" }

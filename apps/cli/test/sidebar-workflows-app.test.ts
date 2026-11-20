@@ -57,11 +57,12 @@ async function until(h: App, needle: string) {
   throw new Error(`never drew ${needle}:\n${sidebarText(h)}`)
 }
 
-test("a workflow's sessions are not chats in the list: a finished run is gone, a working one reads ◇ <name>, its task stays under it", async () => {
+test("a workflow's sessions are never chats in the list: a finished run and a working one (with its task) are all off the sidebar", async () => {
   const h = workflowApp()
   await until(h, "Answering elsewhere")
   const side = sidebarText(h)
-  expect(side).toContain("◇ mend-council")
+  expect(side).not.toContain("◇")
+  expect(side).not.toContain("mend-council")
   expect(side).not.toContain("workflow · mend")
   expect(side).not.toContain("◇ mend ")
   expect(side).not.toContain("review")
@@ -78,19 +79,5 @@ test("another project's chat that streams moves its spinner while the open chat 
   await Bun.sleep(PULSE_OTHERS_MS + 150)
   h.app.render()
   expect(row()).not.toBe(before)
-  h.app.stop?.()
-})
-
-test("Enter on a working workflow's row opens /workflows on that run, not its empty chat", async () => {
-  const h = workflowApp()
-  await until(h, "◇ mend-council")
-  await h.type("\x1b[D")
-  const picked = () => h.text().map((line) => line.slice(0, SIDEBAR_WIDTH)).find((line) => /^ › /.test(line)) ?? ""
-  for (let turn = 0; turn < 40 && !picked().includes("mend-council"); turn++) await h.type("\x1b[B")
-  expect(picked()).toContain("mend-council")
-  await h.type("\r")
-  expect(h.app.page).toBe("workflows")
-  expect(h.text().join("\n")).toContain("mend-council")
-  expect(h.sentOf("session.subscribe").length).toBe(0)
   h.app.stop?.()
 })

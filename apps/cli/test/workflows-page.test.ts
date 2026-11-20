@@ -183,6 +183,16 @@ describe("the list", () => {
     expect(out).toContain("two · 2")
   })
 
+  test("all projects names no project in the title, and a folder written with a trailing slash is the same folder", () => {
+    const runs = [workflow({ directory: "/w/one" }), workflow({ directory: "/w/one/" }), workflow({ directory: "/w/two" })]
+    const out = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("all"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
+    expect(out).toContain("one · 2")
+    expect(out).not.toContain("one · 1")
+    expect(out).toContain("all projects")
+    const project = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("project"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
+    expect(project).not.toContain("all projects")
+  })
+
   test("the cursor moves over rows by key, skips headings and stays when runs arrive", () => {
     const moved = press(start, ["\x1b[B", "\x1b[B"])
     expect(selectedWorkflow(moved, sample)?.name).toBe("broken")

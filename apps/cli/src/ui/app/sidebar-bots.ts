@@ -1,7 +1,7 @@
 import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
 import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
-import { markAnimates, sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
+import { markAnimates, restingWorkflow, sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
 import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
@@ -256,7 +256,7 @@ export function createSidebarBots(ctx: AppContext) {
    */
   function moving(): boolean {
     if (!live() || !shown()) return false
-    const works = (session: SessionSummary) => markAnimates(sessionMark(session as never, false))
+    const works = (session: SessionSummary) => !restingWorkflow(session) && markAnimates(sessionMark(session as never, false))
     if (allProjects() && others.some(works)) return true
     if (!botsOn() || !report) return false
     const chatWorks = (bot: { projects?: BotListReport["bots"][number]["projects"] | undefined }) => bot.projects?.some((project) => project.sessions.some((chat) => chat.status === "running" || chat.status === "waiting_approval" || chat.status === "waiting_for_input")) === true
