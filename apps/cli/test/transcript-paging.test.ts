@@ -143,6 +143,59 @@ describe("event paging in the terminal app", () => {
     expect(h.text().join("\n")).toContain("answer 3")
   })
 
+  test("a session whose pages draw a few rows each (sub-agent and streaming records) is read back until the screen is full, not left at the top over an empty band", async () => {
+    const source = log(ids("session"), 40)
+    const bySeq = (from: number, to: number) => source.events.filter((event) => event.seq >= from && event.seq < to)
+    const last = source.events.at(-1)!.seq
+    // Pages of two records: an exchange takes several pages, more than the few a screen usually needs.
+    const h = appHarness({
+      sessionId: source.sessionId, height: 24, mode: "minimal",
+      events: {
+        loadWindow: async () => window(bySeq(last - 1, last + 1), true),
+        loadBefore: async (_id, seq) => {
+          const page = bySeq(seq - 2, seq)
+          return window(page, seq - 2 > source.events[0]!.seq, { firstSeq: seq - 2, lastSeq: seq - 1 })
+        },
+      },
+    })
+    await h.app.start()
+    await settle()
+    h.app.render()
+    const rows = h.text()
+    const lastAnswer = rows.findIndex((row) => row.includes("answer 40"))
+    expect(lastAnswer).toBeGreaterThan(-1)
+    // The newest answer sits at the bottom of the chat: older exchanges fill the rows above it.
+    expect(rows.slice(0, lastAnswer).filter((row) => /question \d+/.test(row)).length).toBeGreaterThanOrEqual(3)
+  })
+
+  test("while older pages are on their way, a chat shorter than the screen sits at the bottom over the prompt, not at the top over an empty band", async () => {
+    const source = log(ids("session"), 40)
+    const last = source.events.at(-1)!.seq
+    const pages: Array<ReturnType<typeof deferred<WindowReply>>> = []
+    const h = appHarness({
+      sessionId: source.sessionId, height: 24, mode: "minimal",
+      events: {
+        // The newest exchange alone: a few rows on a 24-row screen.
+        loadWindow: async () => window(source.events.slice(-source.events.length / 40), true),
+        loadBefore: () => { const page = deferred<WindowReply>(); pages.push(page); return page.promise },
+      },
+    })
+    // Opening waits for the screen to fill; the page it waits for is held.
+    const started = h.app.start()
+    await settle()
+    h.app.render()
+    expect(pages.length).toBe(1)
+    const rows = h.text()
+    const answer = rows.findIndex((row) => row.includes("answer 40"))
+    const prompt = rows.findIndex((row, at) => at > answer && /^\s*[❯›>]/.test(row))
+    expect(answer).toBeGreaterThan(-1)
+    // Only blank rows above the answer, none of the empty band between it and the prompt.
+    expect(rows.slice(0, answer).filter((row) => row.trim()).length).toBeLessThanOrEqual(2)
+    expect(prompt === -1 || prompt - answer <= 3).toBe(true)
+    pages[0]!.resolve(window([], false, { firstSeq: 1, lastSeq: last - 2 }))
+    await started
+  })
+
   test("empty hidden pages advance their raw cursor, and an exhausted empty page shows start of session", async () => {
     const h = paged()
     await h.app.start()

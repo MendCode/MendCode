@@ -85,7 +85,9 @@ export function createPaging(ctx: AppContext, actions: {
       // A window of events that draw nothing (a run of status, usage or housekeeping records) leaves the chat blank: reading goes on
       // until something shows. Once something does, the usual few pages are the limit.
       const blank = !transcript.viewport(width, height, 0).some((line) => line.text.trim())
-      if (!blank && page >= FILL_PAGES) return
+      // Short of one screen the chat would sit at the top over an empty band (sub-agent and streaming records draw few rows a
+      // page): reading goes on until it fills the screen. The second screen is the usual few pages at most.
+      if (!blank && page >= FILL_PAGES && transcript.totalLines(width) >= height) return
       const first = paging.firstSeq
       await loadEarlier()
       if (state.transcript !== transcript || state.paging?.firstSeq === first) return
