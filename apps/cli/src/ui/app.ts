@@ -281,7 +281,7 @@ export function createApp(input: AppInput) {
     attachments: [],
     pastes: [],
     suggestion: 0,
-    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, shown: "", shell: false },
+    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, draftPastes: [], draftAttachments: [], shown: "", shell: false },
     submits: 0,
     unsent: [],
     mentionPending: undefined,
@@ -708,7 +708,7 @@ export function createApp(input: AppInput) {
   const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
-  const { attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
+  const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
@@ -726,6 +726,8 @@ export function createApp(input: AppInput) {
     endGoalEdit,
     loadEffectiveModel,
     restoreDraft,
+    expandedWith,
+    chipped,
     loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
@@ -746,9 +748,9 @@ export function createApp(input: AppInput) {
   const today = { command: async (args: string) => (await loadToday()).command(args), key: async (key: string) => (await loadToday()).key(key), rows: (width: number, height: number) => todayLoaded?.render(width, height) ?? [] }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
-  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
+  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { chipped, loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
-  const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
+  const composer = createComposerRecovery(ctx, { chipped, composedAttachments, attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
   const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
@@ -1134,6 +1136,7 @@ export function createApp(input: AppInput) {
     attachPasted,
     insertPasted,
     expandedPrompt,
+    rememberComposed,
     pasteClipboardImage,
     syncMentions,
     syncDraft,

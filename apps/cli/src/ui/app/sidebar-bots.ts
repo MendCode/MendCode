@@ -278,6 +278,8 @@ export function createSidebarBots(ctx: AppContext) {
    * first frame that lists them (never under Projects), before any pushed summary or bot list says so; the bot's chats open to show them.
    */
   const chatHosts = new Map<string, string>()
+  /** The newest blank chat this terminal opened for a bot in a folder (by bot and folder), while it may still hold an unsent message. */
+  const unsentBotChats = new Map<string, SessionId>()
   function noteChat(sessionId: string, host: string) {
     chatHosts.set(sessionId, host)
     if (chatHosts.size > CLASSIFIED_MAX) chatHosts.delete(chatHosts.keys().next().value!)
@@ -503,9 +505,25 @@ export function createSidebarBots(ctx: AppContext) {
    * Until then the daemon lists nothing for it, and no bot or project shows an untitled row. The id, or undefined after saying why not.
    */
   async function createBotSession(name: string, directory: string): Promise<SessionId | undefined> {
+    // A blank chat with this bot that holds an unsent message is not empty to the daemon, so a new chat would be another one: the
+    // user comes back to the chat they left, with the message as they left it.
+    const key = `${name}\n${directory}`
+    const waiting = unsentBotChats.get(key)
+    if (waiting && !sessions().some((session) => session.sessionId === waiting && session.title)) {
+      const held = await input.send({ type: "draft.get", sessionId: waiting })
+      const draft = held.ok ? (held.result?.draft as { text?: unknown; attachments?: unknown } | undefined) : undefined
+      if (draft && (typeof draft.text === "string" && draft.text.trim() !== "" || Array.isArray(draft.attachments) && draft.attachments.length > 0)) {
+        state.pendingBot = { sessionId: waiting, name }
+        noteChat(waiting, name)
+        return waiting
+      }
+    }
+    unsentBotChats.delete(key)
     const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    unsentBotChats.set(key, sessionId as SessionId)
+    if (unsentBotChats.size > CLASSIFIED_MAX) unsentBotChats.delete(unsentBotChats.keys().next().value!)
     state.pendingBot = { sessionId: sessionId as SessionId, name }
     noteChat(sessionId, name)
     // The blank chat it reuses may be the one already open (the home screen's), so no session switch reloads the model: the row

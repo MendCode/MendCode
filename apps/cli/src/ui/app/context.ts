@@ -436,7 +436,7 @@ export type AppState = {
   attachments: PendingAttachment[]
   suggestion: number
   /** ↑/↓ prompt recall for this project (sent messages, commands, shell lines, drafts); loaded from the daemon on first use and again after a session switch. `draft`, `draftCursor` and `shell` are the unsent text at the bottom, where its cursor was and whether it was in shell mode; `shown` is the text the recalled entry put in the prompt (an edit of it ends the browsing). */
-  recall: { prompts: import("../../view/prompt-search").RecallEntry[] | undefined; index: number; draft: string; draftCursor: number; shown: string; shell: boolean }
+  recall: { prompts: import("../../view/prompt-search").RecallEntry[] | undefined; index: number; draft: string; draftCursor: number; draftPastes: import("../../view/paste-placeholders").PendingPaste[]; draftAttachments: import("../../view/attachments").PendingAttachment[]; shown: string; shell: boolean }
   /** Counts the prompts handed on (sent, a command picked from the menu, stashed), so a prompt emptied that way is told apart from one that was discarded. */
   submits: number
   mentionPending: string | undefined
