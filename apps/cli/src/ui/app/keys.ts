@@ -189,27 +189,6 @@ export function createKeys(ctx: AppContext, actions: {
   /** The pointer is over the left list's columns. */
   const overSidebar = (col: number, geometry: ReturnType<typeof sidebarGeometry>) => geometry.sideWidth > 0 && (geometry.onRight ? col >= geometry.width - geometry.sideWidth : col < geometry.sideWidth)
 
-  let swipe: ReturnType<typeof import("./sidebar-swipe").createSwipe> | undefined
-  /**
-   * A sideways wheel report (a trackpad's two-finger swipe, buttons 66 and 67) on the chat page. Toward the list's outer edge it closes
-   * the list and away from it opens it, once per gesture, wherever the pointer is: nothing else on the chat page reads these reports.
-   * Whether the list fits beside a right panel is `/sidebar`'s to say.
-   */
-  async function sidebarSwipe(pointer: { button: number }) {
-    const { swipeButton, createSwipe } = await import("./sidebar-swipe")
-    const sideways = swipeButton(pointer.button)
-    if (!sideways || state.page !== "chat" || !state.tuiProfile.sidebarSwipe) return
-    const geometry = sidebarGeometry()
-    const open = geometry.sideWidth > 0
-    const edge = open ? geometry.onRight ? "right" : "left" : state.tuiProfile.sidebarSide
-    swipe ??= createSwipe()
-    const direction = swipe.feed(now(), sideways)
-    if (!direction) return
-    // Toward the edge the list sits on closes it; away from it opens it. The other way round changes nothing.
-    // A set mode, never `auto`: a list the swipe opened stays open whatever the width, and the next swipe reads it the same way.
-    if (open === (direction === edge)) await runSlash(open ? "/sidebar hidden" : "/sidebar always")
-  }
-
   /** A plain prompt: not an edit card (scratch, goal, memory, plan), a question or a menu. Only its text counts as a draft. */
   const plainPrompt = () => state.page === "chat" && !state.palette && !state.promptSearch && !state.editingScratch && !state.editingGoal && !state.editingMemory && !state.planDraft && !actions.pendingPanelRequest()
 
@@ -334,11 +313,8 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "chat" && await actions.compactionLive.enterKey(key)) return requestFrame()
     if (state.bindings.inline.get(key) === "palette" && state.page === "chat" && !state.transcript.pendingRequests.some((request) => request.kind === "approval")) return openPalette()
     const pointer = state.page === "chat" ? pointerOf(key) : undefined
-    // A sideways wheel (66, 67): the swipe that closes and opens the left list; no other part of the chat reads it.
-    if (pointer && (pointer.button & ~(4 | 8 | 16)) >= 66 && (pointer.button & ~(4 | 8 | 16)) <= 67) {
-      await sidebarSwipe(pointer)
-      return
-    }
+    // A sideways wheel (66, 67) does nothing on the chat page: the left list opens and closes with /sidebar.
+    if (pointer && (pointer.button & ~(4 | 8 | 16)) >= 66 && (pointer.button & ~(4 | 8 | 16)) <= 67) return
     const wheel = wheelOf(key)
     // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
     if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {

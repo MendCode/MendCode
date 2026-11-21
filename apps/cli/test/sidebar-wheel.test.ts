@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import type { CommandInput, CommandReply, SessionSummary } from "@mendcode/protocol"
-import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
+import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_WIDTH } from "../src/view/sidebar"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 
@@ -124,126 +124,17 @@ for (const multi of [true, false]) {
   })
 }
 
-describe("a horizontal swipe on the sidebar", () => {
-  test("two events are not a gesture; three toward the edge close the list", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 5, 2)
-    expect(shown(h)).toBe(true)
-    await flick(h, swipeLeft, 5, 1)
-    expect(shown(h)).toBe(false)
-  })
-
-  test("events spread wider than the gesture window never add up", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 5, 6, 200)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("one gesture is one toggle: the tail of the swipe and an opposite flick in the cooldown do nothing", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 5, 12)
-    expect(shown(h)).toBe(false)
-    // The finger comes back inside the cooldown: not a new gesture.
-    await flick(h, swipeRight, 2, 5, 60)
-    expect(shown(h)).toBe(false)
-    // A later swipe away from the edge opens it again.
-    h.clock.at += 500
-    await flick(h, swipeRight, 2, 3)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("a real trackpad swipe: dozens of reports, a decaying inertia tail, then the swipe back 250 ms after the last one", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 5, 40, 12)
-    for (let gap = 16; gap <= 120; gap += 6) await flick(h, swipeLeft, 5, 1, gap)
-    expect(shown(h)).toBe(false)
-    h.clock.at += 250
-    await flick(h, swipeRight, 2, 25, 12)
-    expect(shown(h)).toBe(true)
-    for (let gap = 16; gap <= 120; gap += 6) await flick(h, swipeRight, 2, 1, gap)
-    h.clock.at += 250
-    await flick(h, swipeLeft, 5, 25, 12)
-    expect(shown(h)).toBe(false)
-  })
-
-  test("away from the edge on an open list does nothing", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeRight, 5, 6)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("on a list at the right, a swipe to the right closes it and a swipe to the left opens it", async () => {
-    const h = chatApp({ multi: false, profile: { sidebarSide: "right" } })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 110, 6)
-    expect(shown(h)).toBe(true)
-    h.clock.at += 500
-    await flick(h, swipeRight, 110, 3)
-    expect(shown(h)).toBe(false)
-    h.clock.at += 500
-    await flick(h, swipeLeft, 117, 3)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("over the chat body it closes the list too: the swipe works anywhere on the chat page", async () => {
-    const h = chatApp({ multi: false })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 60, 8)
-    expect(shown(h)).toBe(false)
-  })
-
-  test("a closed list opens from anywhere on the chat, and a swipe toward its edge leaves it closed", async () => {
-    const h = chatApp({ multi: false, profile: { sidebar: "hidden" } })
-    await settled(h, "answer line")
-    expect(shown(h)).toBe(false)
-    await flick(h, swipeLeft, 60, 6)
-    expect(shown(h)).toBe(false)
-    h.clock.at += 500
-    await flick(h, swipeRight, 60, 6)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("a swipe sets the list hidden or always, never auto, so the next swipe still answers", async () => {
-    const h = chatApp({ multi: false, profile: { sidebar: "auto" } })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 60, 8)
-    expect(h.app.tuiProfile.sidebar).toBe("hidden")
-    h.clock.at += 500
-    await flick(h, swipeRight, 60, 8)
-    expect(h.app.tuiProfile.sidebar).toBe("always")
-    expect(shown(h)).toBe(true)
-    h.clock.at += 500
-    await flick(h, swipeLeft, 60, 8)
-    expect(h.app.tuiProfile.sidebar).toBe("hidden")
-    expect(shown(h)).toBe(false)
-  })
-
-  test("sidebarSwipe off leaves the list alone", async () => {
-    const h = chatApp({ multi: false, profile: { sidebarSwipe: false } })
-    await settled(h, "chat 00")
-    await flick(h, swipeLeft, 5, 8)
-    expect(shown(h)).toBe(true)
-  })
-
-  test("the wheel over the list works with the swipe off", async () => {
-    const h = chatApp({ multi: false, profile: { sidebarSwipe: false } })
-    await settled(h, "chat 00")
-    const before = side(h)
-    for (let n = 0; n < 4; n++) await h.app.onKey(down(5, 8))
-    h.app.render()
-    expect(side(h)).not.toBe(before)
-  })
-})
-
-describe("the sidebarSwipe key", () => {
-  test("is on by default, is read from the profile and a non-boolean falls back to on", () => {
-    expect(DEFAULT_TUI_PROFILE.sidebarSwipe).toBe(true)
-    expect(normalizeTuiProfile({ sidebarSwipe: false }).sidebarSwipe).toBe(false)
-    expect(normalizeTuiProfile({ sidebarSwipe: "no" }).sidebarSwipe).toBe(true)
+describe("a sideways swipe", () => {
+  test("does nothing to the list, open or hidden: /sidebar opens and closes it", async () => {
+    const open = chatApp({ multi: false })
+    await settled(open, "chat 00")
+    await flick(open, swipeLeft, 5, 12)
+    await flick(open, swipeLeft, 60, 12)
+    expect(shown(open)).toBe(true)
+    const hidden = chatApp({ multi: false, profile: { sidebar: "hidden" } })
+    await settled(hidden, "answer line")
+    await flick(hidden, swipeRight, 60, 12)
+    expect(shown(hidden)).toBe(false)
+    expect(hidden.app.tuiProfile.sidebar).toBe("hidden")
   })
 })

@@ -26,11 +26,11 @@ Experimental bots (`experimental.bots`) come to stable: bots with a face and a p
 
 ## v0.0.18-beta.4 - 2026-11-16
 
-A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form. The wheel scrolls the left list and a sideways swipe closes and opens it; a bot's chat opens as fast as any other.
+A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form. The wheel scrolls the left list; a bot's chat opens as fast as any other.
 
 ### New
 
-- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat, and a two-finger sideways swipe anywhere on the chat closes it (toward its edge) or opens it again (away from it). `/customize` › Top & side › Sidebar swipe (`sidebarSwipe`) turns the swipe off.
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat.
 
 ### Changed
 
