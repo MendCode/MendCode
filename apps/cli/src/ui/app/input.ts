@@ -193,12 +193,14 @@ export function createInput(ctx: AppContext, actions: {
       state.pastes = long.pastes
       state.attachments = [...state.attachments, ...long.attachments]
     }
+    const pasted = state.pastes.length > 0
     if (state.pastes.length) {
       editor.replaceAll(actions.expandedPrompt())
       state.pastes = []
     }
-    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md).
-    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
+    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md). That is for a line
+    // of one's own: a pasted block or a multi-line message that mentions `/name` is a message, never that command's arguments.
+    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || pasted || editor.text.trim().includes("\n") ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
     if (hoisted) editor.replaceAll(hoisted)
     // `/plan <text>` enters plan mode and sends <text> as the message; a bare `/plan` only toggles the mode (slash.ts).
     const planned = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || state.planDraft ? undefined : /^\/plan\s+(\S[\s\S]*)$/i.exec(editor.text.trim())
