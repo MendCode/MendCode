@@ -257,7 +257,7 @@ describe("fallbacks in order", () => {
     const rex = { TERM_PROGRAM: "rex", TERM_PROGRAM_VERSION: "0.1.0-preview.19", TERM: "xterm-256color", COLORTERM: "truecolor" }
     expect(faceCapability({ env: rex, depth: "truecolor", mode: "auto" }).images).toBe(false)
     expect(faceCapability({ env: { TERM: "xterm-256color", COLORTERM: "truecolor" }, depth: "truecolor" }).images).toBe(false)
-    const face = botFace({ name: "mendy", state: "idle", size: "card", capability: faceCapability({ env: rex, depth: "truecolor" }) })
+    const face = botFace({ name: "scout", state: "idle", size: "card", capability: faceCapability({ env: rex, depth: "truecolor" }) })
     expect(face.mode).toBe("unicode")
     expect(text(face.lines).join("").trim()).not.toBe("")
     // A terminal that merely lists sixel in its device attributes is not proof that it draws the picture.

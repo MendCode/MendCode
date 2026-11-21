@@ -1926,10 +1926,10 @@ MendCode
   ○ Plugin tests
   ! Provider issue
 
-Vorlen
+weather-app
   ● Tauri bug
 
-GITSA
+sensor-hub
   ○ Modbus parser
 ```
 

@@ -83,7 +83,7 @@ export type PackFacts = {
   context?: { tokens: number; limit: number; approx?: boolean; label?: string }
   quotas?: readonly QuotaSnapshotLike[]
   costMicros?: number
-  /** A PR review running for another session's watch (`reviewing Symbex-1#25`); the watching session shows it at work instead. */
+  /** A PR review running for another session's watch (`reviewing shop-api#25`); the watching session shows it at work instead. */
   reviewing?: string
   jobs?: number
   loops?: number

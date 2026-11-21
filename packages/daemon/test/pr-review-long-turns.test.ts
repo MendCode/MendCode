@@ -320,7 +320,7 @@ describe("a stalled or budget-stopped review keeps the parts it finished", () =>
   })
 
   test("PR #23 as it ran (four parts of JSON results, about 365K counted each, cap 1,000,000): it stops after part 1, not mid part 3 after 1,071,143", async () => {
-    // The real parts of Eden-sudo/Symbex-1#23 at 0afbdcdc (buildReviewContext with a 400K call bound): 180,171 · 192,279 · 193,631 · 121,438.
+    // The real parts of acme/shop-api#23 at 0afbdcdc (buildReviewContext with a 400K call bound): 180,171 · 192,279 · 193,631 · 121,438.
     const parts = [180_171, 192_279, 193_631, 121_438].map((tokens) => ({ tokens }))
     const budgetTokens = 1_000_000
     expect(passShortfall({ parts, index: 0, used: 0, budgetTokens })).toBeUndefined()

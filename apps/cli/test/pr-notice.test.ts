@@ -10,22 +10,22 @@ const links = (rows: ReturnType<typeof userRows>) => rows.flatMap((row) => row.f
 const plain = (rows: ReturnType<typeof userRows>) => rows.map((row) => row.map((span) => span.text).join(""))
 
 test("a PR review notice links the pull request, and a review named after it links into it", () => {
-  const rows = userRows(model("PR review of Eden-sudo/Symbex-1#22: published (posted review 987654 with 2 comments)", 100), glyphSet("unicode"))
+  const rows = userRows(model("PR review of acme/shop-api#22: published (posted review 987654 with 2 comments)", 100), glyphSet("unicode"))
   expect(links(rows)).toEqual([
-    ["Eden-sudo/Symbex-1#22", "https://github.com/Eden-sudo/Symbex-1/pull/22"],
-    ["987654", "https://github.com/Eden-sudo/Symbex-1/pull/22#pullrequestreview-987654"],
+    ["acme/shop-api#22", "https://github.com/acme/shop-api/pull/22"],
+    ["987654", "https://github.com/acme/shop-api/pull/22#pullrequestreview-987654"],
   ])
 })
 
 test("a waiting command notice shows the job by its tail and hints how to open it, at 80 columns", () => {
-  const text = `@mendcode review from Eden-sudo on Eden-sudo/Symbex-1#22 waits: job ${JOB} reviews this head now; the comment is answered by that review.\nfull details`
+  const text = `@mendcode review from acme on acme/shop-api#22 waits: job ${JOB} reviews this head now; the comment is answered by that review.\nfull details`
   const rows = plain(userRows(model(text, 80), glyphSet("unicode"))).map((row) => row.trimEnd())
   const flat = rows.join(" ").replace(/\s+/g, " ")
   expect(flat).toContain("job …e874f568 reviews this head now")
   expect(flat).toContain("/reviews open e874f568")
   expect(flat).not.toContain(JOB)
   expect(rows.every((row) => row.length <= 80)).toBe(true)
-  expect(links(userRows(model(text, 80), glyphSet("unicode")))[0]).toEqual(["Eden-sudo/Symbex-1#22", "https://github.com/Eden-sudo/Symbex-1/pull/22"])
+  expect(links(userRows(model(text, 80), glyphSet("unicode")))[0]).toEqual(["acme/shop-api#22", "https://github.com/acme/shop-api/pull/22"])
 })
 
 test("other notices are left as they are", () => {

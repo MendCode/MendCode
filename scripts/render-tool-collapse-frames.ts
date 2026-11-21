@@ -12,7 +12,7 @@ if (!target) throw new Error("usage: render-tool-collapse-frames.ts <directory>"
 const output: string = target
 mkdirSync(output, { recursive: true })
 
-const COMMAND = "cd /Users/user/Code/repos/heltecv4/heltecv4-32bit-windows && bun scripts/build.ts --base-url https://github.com/Obed0101/heltecv4/releases/download/v1"
+const COMMAND = "cd /Users/user/Code/repos/lorabox4/lorabox4-32bit-windows && bun scripts/build.ts --base-url https://github.com/acme-dev/lorabox4/releases/download/v1"
 const press = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}M`
 const release = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}m`
 

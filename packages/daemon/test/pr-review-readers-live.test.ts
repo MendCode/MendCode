@@ -6,7 +6,7 @@ import { findingId, parseFindings } from "../src/pr-review/findings"
 import { groupFiles, readGroups, READER_TURN_OVERHEAD } from "../src/pr-review/readers"
 
 /**
- * The live review of Eden-sudo/Symbex-1 #23 (a manual `full` review, 116 files: 106 result JSON files, 10 code files) stopped with
+ * The live review of acme/shop-api #23 (a manual `full` review, 116 files: 106 result JSON files, 10 code files) stopped with
  * "could not review" because the model wrote a caveat into `incomplete`: the data files reached it as reader summaries and it has
  * no shell. The diff here has the PR's shape and its real result-file keys; the model's answer is the one the job recorded.
  */

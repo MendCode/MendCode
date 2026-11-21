@@ -421,16 +421,16 @@ describe("every mermaid block a model writes is drawn", () => {
   test("the reported flowchart: a dotted link with its text inside, accents and · / + in the labels", () => {
     const source = [
       "flowchart TD",
-      "  Yo[Tú / mendy en MendCode] --> SW[Oficina Software · Opus · director]",
-      "  SW --> P1[Oficina Proyecto A · Opus + mend-autopilot]",
-      "  SW -.consulta.-> SEC[Ciberseguridad · Opus · solo lectura]",
-      "  P1 --> PR1[PRs para que tú revises]",
+      "  Yo[Tú / asistente] --> SW[Equipo A · modelo · líder]",
+      "  SW --> P1[Equipo B · modelo + revisión]",
+      "  SW -.consulta.-> SEC[Seguridad · modelo · solo lectura]",
+      "  P1 --> PR1[PRs para revisión]",
     ].join("\n")
-    for (const label of ["Tú / mendy en MendCode", "mend-autopilot", "Ciberseguridad · Opus · solo", "PRs para que tú revises", "consulta"]) expect(whole(source, 120)).toContain(label)
+    for (const label of ["Tú / asistente", "modelo + revisión", "Seguridad · modelo · solo", "PRs para revisión", "consulta"]) expect(whole(source, 120)).toContain(label)
     // Narrower, a label wraps inside its box: every word is still there, and the dotted link with its text.
     for (const width of [40, 60, 80, 120]) {
       const drawn = whole(source, width)
-      for (const word of ["Tú", "mendy", "MendCode", "Oficina", "Software", "director", "Proyecto", "mend-autopilot", "Ciberseguridad", "lectura", "PRs", "revises", "consulta"]) expect(drawn).toContain(word)
+      for (const word of ["Tú", "asistente", "Equipo", "líder", "modelo", "revisión", "Seguridad", "lectura", "PRs", "revisión", "consulta"]) expect(drawn).toContain(word)
       expect(drawn).toMatch(/[┄┆]/)
       // From 60 columns the layers fit; narrower, the boxes are stacked with their links beside them.
       expect((drawn.match(/[▼◀]/g) ?? []).length).toBe(4)

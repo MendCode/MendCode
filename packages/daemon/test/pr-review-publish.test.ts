@@ -116,7 +116,7 @@ describe("publishing a review", () => {
     expect(fake.calls.filter((call) => call.body?.query?.startsWith("mutation"))).toHaveLength(1)
   })
   test("the same head asked again: nothing is posted, but a finding the re-check found fixed has its thread resolved", async () => {
-    // Seen live (Symbex #18): the head after a fix was reviewed with nothing new and its threads stayed open; asking again changed nothing.
+    // Seen live (shop-api #18): the head after a fix was reviewed with nothing new and its threads stayed open; asking again changed nothing.
     const fixed = make("The loop skips the first value")
     const previous = { ...emptyState(), lastHead: NEXT, published: { [fixed.id]: { commentId: 500, finding: fixed } } }
     const fake = fakeGh((argv, body) => {
@@ -133,7 +133,7 @@ describe("publishing a review", () => {
     expect(fake.posts()).toHaveLength(0)
   })
   test("a thread this login may not resolve (read access) gets one reply saying the finding is fixed at the head, never a second", async () => {
-    // Seen live (Symbex #18): the publisher had read access, GitHub refused resolveReviewThread and the fixed findings stayed open in silence.
+    // Seen live (shop-api #18): the publisher had read access, GitHub refused resolveReviewThread and the fixed findings stayed open in silence.
     const fixed = make("The loop skips the first value")
     const previous = { ...emptyState(), lastHead: HEAD, published: { [fixed.id]: { commentId: 500, finding: fixed } } }
     let replies: unknown[] = []
