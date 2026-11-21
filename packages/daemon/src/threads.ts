@@ -14,6 +14,8 @@ export const THREAD_SNAPSHOT = { messages: 6, tokens: 3_000, messageChars: 900, 
 const READ_PAGE = 10
 const SEARCH_SCAN = 40
 const MESSAGE_CHARS = 1_500
+/** One message read on its own (`limit=1`): whole up to this many characters, then `offset` reads on. */
+const WHOLE_CHARS = 24_000
 const TOOL_CHARS = 300
 const ANSWER_CHARS = 4_000
 const DEFAULT_WAIT = 60
@@ -348,9 +350,24 @@ export function createThreads(input: ThreadsInput) {
           return stats ? { ok: true, output: sessionStatsText(stats) } : { ok: false, message: "the session is gone" }
         },
         read: (request) => foreignRef(request.sessionId) ? foreignPage(from, request) : target(request.sessionId, (id, title) => {
-          const page = items(id, request.before, Math.min(READ_PAGE, Math.max(1, Math.floor(request.limit ?? READ_PAGE))))
+          const offset = Math.max(0, Math.floor(request.offset ?? 0))
+          const count = offset > 0 ? 1 : Math.min(READ_PAGE, Math.max(1, Math.floor(request.limit ?? READ_PAGE)))
+          const page = items(id, request.before, count)
           if ("error" in page) return { ok: false, message: page.error }
-          const lines = [...page.items].reverse().map((item) => line(item)).filter((value): value is string => value !== undefined)
+          if (count === 1) {
+            const item = page.items[0]
+            const value = item ? excerpt(store.recall.chunks(item), WHOLE_CHARS, offset) : undefined
+            if (!item || !value) return { ok: true, output: [head(id, title), "(no messages)", cursorLine(page.items, page.more)].join("\n") }
+            const next = offset + WHOLE_CHARS
+            const rest = value.truncated ? `cut at ${next} characters; the rest: limit=1${request.before ? ` before=${request.before}` : ""} offset=${next}` : undefined
+            return { ok: true, output: [head(id, title), `[${ROLE[item.kind] ?? item.kind}] ${value.text}`, ...(rest ? [rest] : []), cursorLine(page.items, page.more)].join("\n") }
+          }
+          const lines = page.items.map((item, index) => {
+            const text = line(item)
+            if (!text?.endsWith(" …")) return text
+            const newer = index === 0 ? request.before : page.items[index - 1]!.itemId
+            return `${text.slice(0, -1)}[cut: whole with limit=1${newer ? ` before=${newer}` : ""}]`
+          }).reverse().filter((value): value is string => value !== undefined)
           return { ok: true, output: [head(id, title), ...(lines.length ? lines : ["(no messages)"]), cursorLine(page.items, page.more)].join("\n") }
         }),
         search: (request) => foreignRef(request.sessionId) ? foreignPage(from, request) : target(request.sessionId, (id, title) => {
