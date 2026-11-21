@@ -64,6 +64,29 @@ describe("draft sync", () => {
     expect(sent.at(-1)).toEqual({ type: "draft.set", sessionId, text: "" })
   })
 
+  test("leaving a chat again before its draft came back keeps the draft, and typing there still saves", async () => {
+    const { drafts, sent, fire } = sync({ draft: { text: "mi borrador" } })
+    const chat = ids("session")
+    drafts.changed(chat, { text: "mi borrador", images: [] })
+    fire()
+    // Back to the chat: the prompt is empty while the long chat opens, and the user moves on before its draft is restored.
+    drafts.opening(chat)
+    drafts.changed(chat, { text: "", images: [] })
+    drafts.flush()
+    expect(sent.filter((command) => command.sessionId === chat && command.text === "")).toEqual([])
+    // Typing there is the user's own prompt: it is saved, and emptying it afterwards clears the draft as usual.
+    drafts.changed(chat, { text: "nuevo", images: [] })
+    fire()
+    drafts.changed(chat, { text: "", images: [] })
+    expect(sent.at(-1)).toEqual({ type: "draft.set", sessionId: chat, text: "" })
+    // Once the draft came back, an empty prompt is a real one again.
+    const other = ids("session")
+    drafts.opening(other)
+    await drafts.restore(other)
+    drafts.changed(other, { text: "", images: [] })
+    expect(sent.at(-1)).toEqual({ type: "draft.set", sessionId: other, text: "" })
+  })
+
   test("changing session saves the pending draft of the one left", () => {
     const { drafts, sent } = sync()
     const first = ids("session")
