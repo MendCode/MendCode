@@ -9,8 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- Computer Use reads an app as a compact text tree and, after the first look, sends only what changed; actions say whether a change was seen afterwards, and a window can be restored, reopened or selected while the app stays in the background.
+
 ### Fixed
 
+- Computer Use keeps working on an app with no open or focused window (a menu-bar app, or one whose windows were closed): it lists the app's windows, menu bar and status items instead of failing, and menu-bar apps appear in the app list.
+- A long Computer Use task no longer stops at a screenshot limit: older cached captures are removed as new ones arrive.
 - With a sub-agent's thread open, ← and → change sub-agent even while the left list shows; Alt+← enters the list there.
 - The Bots section of the left list appears as fast as the ordinary chats: the list of other apps' bots (Hermes) no longer holds it back, and the home screen no longer asks for the bots a second time.
 - A pull request review warning (GitHub refusing the commit status) no longer prints over the chat input when the terminal runs the daemon itself; it goes to the daemon's log.

@@ -26,7 +26,7 @@ test("stopping one session keeps the app's window handles while another live ses
   const first = await f.start("control"), second = await f.start("control")
   await f.port.session!({ action: "stop", computerSessionID: second.computerSessionID }, signal())
   expect(released).toEqual([])
-  expect((await f.observe(first.computerSessionID)).nodes.length).toBeGreaterThan(0)
+  expect((await f.observe(first.computerSessionID)).nodeCount).toBeGreaterThan(0)
   await f.port.session!({ action: "stop", computerSessionID: first.computerSessionID }, signal())
   expect(released).toEqual([42])
 })
@@ -95,7 +95,7 @@ test("right after start, an app showing no control yet is observed again until o
   setTimeout(() => f.ax.state.nodes.splice(1, 0, ...loaded.slice(1)), 300)
   const session = await f.start("control")
   const observed = await f.observe(session.computerSessionID)
-  expect(observed.nodes.some((node) => node.name === "Save")).toBe(true)
+  expect(observed.tree).toContain('"Save"')
 })
 
 test("native actions are advertised, revisioned, audited without values and not claimed verified", async () => {
@@ -120,7 +120,7 @@ test("native actions are advertised, revisioned, audited without values and not 
 test("window selection and exact postcondition waiting stay within the approved app", async () => {
   const f = fixture()
   f.ax.os.windows = async () => [{ id: "demo-window", name: "Demo" }]
-  f.ax.os.selectWindow = async (target, windowID) => ({ ...target, windowID, windowName: "Demo" })
+  f.ax.os.selectWindow = async (target, windowID) => ({ ...target, windowID: String(windowID), windowName: "Demo" })
   const session = await f.start("control")
   const code = "const windows = await tools.windows({}); await tools.selectWindow({windowID:windows[0].id}); const o = await tools.observe({}); await tools.setValue({revision:o.revision,nodeID:'0.2',value:'verified'}); const check = await tools.waitFor({name:'Search',value:'verified',timeoutMs:0}); return {matched:check.matched,window:check.observation.target.windowID}"
   const report = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code }, signal()))
@@ -198,11 +198,11 @@ test("observe, waitFor, windows, press and setValue work while the user is in an
   expect((await f.observe(session.computerSessionID)).target).toMatchObject({ pid: 42, bundleID: "local.editor" })
 })
 
-test("key, text, pointer and drag actions reach the bound app while another app is in front; only raising a window waits for it", async () => {
+test("key, text, pointer, drag and window selection reach the bound app while another app is in front", async () => {
   const f = fixture()
   f.ax.state.nodes[1]!.actions = ["press", "click", "key", "scroll", "drag"]
   f.ax.state.nodes[2]!.actions = ["setValue", "typeText", "drag"]
-  f.ax.os.selectWindow = async (target, windowID) => ({ ...target, windowID })
+  f.ax.os.selectWindow = async (target, windowID) => ({ ...target, windowID: String(windowID), report: { focused: true, restored: false, minimized: false } })
   const session = await f.start("control")
   f.ax.state.front = OTHER_APP
   const attempts: Record<string, string> = {
@@ -217,10 +217,9 @@ test("key, text, pointer and drag actions reach the bound app while another app 
     expect(result.isError).toBe(false)
   }
   expect(f.ax.actions.map((a) => a.action)).toEqual(["click", "key", "scroll", "drag", "typeText"])
-  const raise = await f.port.code!({ computerSessionID: session.computerSessionID, code: "await tools.selectWindow({windowID:'w2'})" }, signal())
-  expect(raise.isError).toBe(true)
-  expect(raise.output).toContain("selectWindow needs Local Editor in front")
-  expect((await f.observe(session.computerSessionID)).nodes.length).toBeGreaterThan(0)
+  const raise = data<ComputerCodeReport>(await f.port.code!({ computerSessionID: session.computerSessionID, code: "return await tools.selectWindow({windowID:'w2'})" }, signal()))
+  expect(raise.value).toMatchObject({ target: { windowID: "w2" }, verified: true, focused: true })
+  expect((await f.observe(session.computerSessionID)).nodeCount).toBeGreaterThan(0)
 })
 
 test("a background session ends when its own process exits or its bundle ID differs, whatever app is in front", async () => {
@@ -243,5 +242,5 @@ test("starting from a capture does not need the app to still be in front, only t
   f.ax.state.front = OTHER_APP
   const started = data<ComputerSessionReport>(await f.port.session!({ action: "start", mode: "observe", bootstrapCaptureID: capture.captureID }, signal(), activation))
   expect(started.target).toMatchObject({ pid: 42, bundleID: "local.editor" })
-  expect((await f.observe(started.computerSessionID)).nodes.length).toBeGreaterThan(0)
+  expect((await f.observe(started.computerSessionID)).nodeCount).toBeGreaterThan(0)
 })

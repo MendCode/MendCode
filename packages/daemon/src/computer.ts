@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
-import { chmod, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
+import { chmod, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import path from "node:path"
-import { ComputerCaptureInput, ComputerKeyInput, type ComputerCaptureMetadata, type SessionId } from "@mendcode/protocol"
+import { ComputerCaptureInput, ComputerKeyInput, ComputerObserveInput, type ComputerCaptureMetadata, type ComputerObserveReport, type SessionId } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { fail, runCommand, type ComputerPort, type CommandRunner, type ToolResult } from "@mendcode/tools"
 import { createMacAccessibility, type ComputerAccessibility } from "./computer-accessibility"
@@ -22,7 +22,12 @@ const KEY_SCRIPT = `on run argv
 end run`
 const COORDINATES = "Preview pixels; do not assume these match desktop control coordinates." as const
 const PNG = [137, 80, 78, 71, 13, 10, 26, 10]
+/** In-memory authority maps hold at most this many entries. */
 const LIMIT = 64
+/** Captures kept on disk per chat; older ones are deleted as new ones arrive. */
+export const KEEP = 32
+/** Longest edge of a preview, in pixels: well inside the model's image limits and far fewer tokens than a full Retina frame. */
+const PREVIEW = 1280
 const TTL = 30_000
 const MAX_BYTES = 5 * 1024 * 1024
 
@@ -69,10 +74,46 @@ export function createComputerControl(store: Store, dir: string, options: Comput
   }
   const accessibility = options.accessibility ?? (options.run ? createMacAccessibility(run) : createNativeComputer(dir))
   const semantic = createComputerSessions(accessibility, now, available, stopping.signal, (id) => captures.delete(id))
+  /** Set by the first capture that worked: only then may a poor tree bring a screenshot of its own (no permission is asked unasked). */
+  let captureWorked = false
+  /**
+   * A chat keeps its most recent captures: before a new one is written, the oldest beyond KEEP are deleted with whatever authority
+   * they still carried (a key, a session start), so a long task never stops at a cap.
+   */
+  async function evict(directory: string) {
+    const names = (await readdir(directory)).filter((name) => name.endsWith(".png"))
+    if (names.length < KEEP) return
+    const dated = await Promise.all(names.map(async (name) => ({ name, at: (await stat(path.join(directory, name)).catch(() => undefined))?.mtimeMs ?? 0 })))
+    dated.sort((a, b) => a.at - b.at || a.name.localeCompare(b.name))
+    for (const { name } of dated.slice(0, dated.length - (KEEP - 1))) {
+      await rm(path.join(directory, name), { force: true })
+      const id = name.slice(0, -".png".length)
+      captures.delete(id); lineage.delete(id); semantic.consume(id)
+    }
+  }
   return {
     port(sessionId: SessionId): ComputerPort {
-      return {
-        ...semantic.port(sessionId),
+      const base = semantic.port(sessionId)
+      const port: ComputerPort = {
+        ...base,
+        /**
+         * The accessibility tree first; a screenshot of just the observed window when asked for, or when the tree is poor (a webview
+         * or custom-drawn content) and a capture already worked here, so no permission is ever asked for without a request.
+         */
+        async observe(raw, abort): Promise<ToolResult> {
+          const observed = await base.observe(raw, abort)
+          if (observed.isError) return observed
+          const input = ComputerObserveInput.parse(raw)
+          const window = semantic.observedWindow(input.computerSessionID, sessionId)
+          if (!window?.bounds || !(input.screenshot === true || window.poor && captureWorked)) return observed
+          const { x, y, width, height } = window.bounds
+          const shot = await port.capture({ region: { x: Math.floor(x), y: Math.floor(y), width: Math.min(16384, Math.max(1, Math.ceil(width))), height: Math.min(16384, Math.max(1, Math.ceil(height))) } }, abort)
+          const report = JSON.parse(observed.output) as ComputerObserveReport
+          if (shot.isError) return input.screenshot ? { ...observed, output: JSON.stringify({ ...report, screenshotFallback: `The window screenshot failed: ${shot.output}` }) } : observed
+          const { captureID, width: shotWidth, height: shotHeight, filePath, coordinates } = JSON.parse(shot.output) as ComputerCaptureMetadata
+          const { screenshotFallback: _fallback, ...rest } = report
+          return { ...observed, output: JSON.stringify({ ...rest, screenshot: { captureID, width: shotWidth, height: shotHeight, filePath, region: "the observed window", coordinates } }), ...(shot.images ? { images: shot.images } : {}) }
+        },
         async capture(raw, abort): Promise<ToolResult> {
           const title = "Computer screenshot"
           const signal = AbortSignal.any([abort, stopping.signal])
@@ -87,7 +128,7 @@ export function createComputerControl(store: Store, dir: string, options: Comput
             reserved = true
             const directory = path.join(dir, "computer", sessionId)
             await mkdir(directory, { recursive: true, mode: 0o700 })
-            if ((await readdir(directory)).filter((name) => name.endsWith(".png")).length >= LIMIT) throw new Error("This session reached its 64 screenshot artifact limit. Archive its cached captures before continuing.")
+            await evict(directory)
             let pid: number | undefined
             let target: import("@mendcode/protocol").ComputerTarget | undefined
             if (!input.region && input.windowID == null) {
@@ -112,14 +153,15 @@ export function createComputerControl(store: Store, dir: string, options: Comput
             await chmod(filePath, 0o600)
             let bytes = await readFile(filePath)
             const original = size(bytes)
-            const resized = Math.max(original.width, original.height) > 1600
+            const resized = Math.max(original.width, original.height) > PREVIEW
             if (resized) {
-              await command(["/usr/bin/sips", "-Z", "1600", filePath], signal)
+              // sips runs as its own process: encoding never holds the daemon's thread.
+              await command(["/usr/bin/sips", "-Z", String(PREVIEW), filePath], signal)
               bytes = await readFile(filePath)
               await chmod(filePath, 0o600)
             }
             const dimensions = size(bytes)
-            if (bytes.length > MAX_BYTES || Math.max(dimensions.width, dimensions.height) > 1600) throw new Error("Capture did not produce a bounded PNG; capture a smaller region")
+            if (bytes.length > MAX_BYTES || Math.max(dimensions.width, dimensions.height) > PREVIEW) throw new Error("Capture did not produce a bounded PNG; capture a smaller region")
             if (pid !== undefined && pid !== await processID(signal)) pid = undefined
             if (target && pid !== undefined) {
               const after = await accessibility.foreground(signal).catch(() => undefined)
@@ -139,6 +181,7 @@ export function createComputerControl(store: Store, dir: string, options: Comput
             }
             trim(lineage)
             lineage.set(captureID, { sessionId, sha256 })
+            captureWorked = true
             const { unchangedFrom: previous, computerSessionBootstrapAvailable, ...facts } = metadata
             return { title, output: JSON.stringify(metadata), meta: { ...facts, computerSessionBootstrapAvailable: computerSessionBootstrapAvailable === true, ...(previous ? { unchangedFrom: previous } : {}) }, truncated: false, isError: false, images: [{ mime: "image/png", bytes }] }
           } catch (error) {
@@ -166,6 +209,7 @@ export function createComputerControl(store: Store, dir: string, options: Comput
           }
         },
       }
+      return port
     },
     stop() { stopping.abort(); semantic.stop(); captures.clear(); lineage.clear() },
   }

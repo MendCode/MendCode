@@ -31,7 +31,8 @@ test("a batch runs several actions on one observation in one call, with one indi
   expect(report.toolCalls.map((call) => call.name)).toEqual(["observe", "batch"])
   expect(f.ax.actions.map((step) => [step.action, step.nodeID])).toEqual([["setValue", "0.2"], ["key", "0.2"], ["press", "0.1"]])
   expect(f.ax.calls.filter((call) => call === "indicator")).toHaveLength(1)
-  expect(report.value).toMatchObject({ ok: true, verified: false, steps: [
+  // The field's new value is seen when the app is read again after the batch: the effect is reported verified, with what changed.
+  expect(report.value).toMatchObject({ ok: true, verified: true, after: { effect: "changed", changed: [{ id: "0.2", value: "draft two" }] }, steps: [
     { index: 0, action: "setValue", outcome: "dispatched", delivery: "delivered_unverified", retry: "unsafe" },
     { index: 1, action: "key", outcome: "dispatched" },
     { index: 2, action: "press", outcome: "dispatched" },

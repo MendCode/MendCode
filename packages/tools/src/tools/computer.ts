@@ -17,7 +17,7 @@ export function createComputerTools() {
   return [
     defineTool({
       name: "computer_capture",
-      description: "Capture and view the main display, a known positive macOS windowID, or an integer region. Use null or omit absent selectors; never combine a region and windowID. Returns a private PNG path, captureID and lineage. Preview is at most 1600 pixels. Requires Screen Recording permission.",
+      description: "Capture and view the main display, a known positive macOS windowID, or an integer region. Use null or omit absent selectors; never combine a region and windowID. Returns a private PNG path, captureID and lineage. Preview is at most 1280 pixels. To see one app's window, prefer computer_observe with screenshot:true (just that window). Requires Screen Recording permission.",
       permission: "execute",
       args: ComputerCaptureInput,
       async execute(input, context) {
