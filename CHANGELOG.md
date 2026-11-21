@@ -15,6 +15,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `/workflows` is easier to read: no boxes, each run led by its state mark, the selected run with a progress bar and its tasks under their phase or step, and only the keys that apply listed at the bottom.
+- Esc Esc only stops a turn that has taken more than four steps (tool calls, thinking or text); it no longer takes that message back.
 - The left list shows how many sub-agents a session (or a bot's chat) has working, `↳2`, and keeps it spinning while they work after its own turn ended; a session compacting says `compacting` where its time was.
 
 - While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.

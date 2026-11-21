@@ -12,9 +12,10 @@ test("B21 revision identity, borders and header hints render through the real ap
     expect(lines).toHaveLength(height!)
     for (const line of lines) expect(textWidth(line)).toBeLessThanOrEqual(width!)
     expect(lines.join("\n")).toContain("wfr_api-rewrite-v2")
-    expect(lines.join("\n")).toContain("┌")
-    expect(lines.slice(0, 2).join("\n")).toContain("esc back")
-    expect(lines.slice(-2).join("\n")).not.toContain("esc back")
+    expect(lines.join("\n")).toContain("Tasks")
+    // The keys sit in the page's footer, under the body, never cut on the top row.
+    expect(lines.slice(0, 2).join("\n")).not.toContain("esc back")
+    expect(lines.join("\n")).toContain("esc back")
     expect(lines.join("\n")).toContain("port")
     await h.app.onKey("\x1b")
   }

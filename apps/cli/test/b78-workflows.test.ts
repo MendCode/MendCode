@@ -17,7 +17,7 @@ describe("B78 workflows app frames and keys", () => {
       const text = current.text().join("\n")
       expect(text).not.toContain("\x1b")
       if (screen !== "preview") {
-        expect(text).toContain("┌")
+        expect(text).toContain("Tasks")
         expect(text).toContain("esc back")
         expect(text).toContain("phases")
         if (screen === "queue") expect(text).toContain("queue")

@@ -7,6 +7,8 @@ export const BUSY = new Set<ForegroundState>(["generating", "tool", "compacting"
 export const DOUBLE_ESC_MS = 5_000
 /** How much the model may have said and Esc Esc still takes the message back (a line of narration, not an answer). */
 export const RETRACT_NARRATION_CHARS = 280
+/** How many steps (tool calls, reasoning, answer text) the model may have taken and Esc Esc still takes the message back; past them it only stops. */
+export const RETRACT_MAX_STEPS = 4
 export const MAX_EDITOR_ROWS = 6
 /** SGR mouse report: ESC [ < button ; col ; row (M press | m release). 64/65 = wheel up/down. */
 export const MOUSE_SGR = /^\x1b\[<(\d+);\d+;\d+[Mm]$/
