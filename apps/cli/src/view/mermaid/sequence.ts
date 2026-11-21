@@ -8,12 +8,14 @@ type SeqItem =
   | { kind: "message"; from: string; to: string; text: string; arrow: Arrow }
   | { kind: "note"; place: "over" | "left" | "right"; actors: string[]; text: string }
   | { kind: "block"; op: "open" | "else" | "close"; keyword: string; label: string }
-type Sequence = { participants: Map<string, string>; actors: Set<string>; items: SeqItem[] }
+type Sequence = { participants: Map<string, string>; actors: Set<string>; items: SeqItem[]; /** Lines that were not understood, as written. */ skipped: string[] }
+/** Past this many items the rest of a source is counted as skipped, so a huge source costs a bounded amount. */
+const PARSE_MAX_ITEMS = 2000
 
 const BLOCK_OPEN = /^(loop|alt|opt|par|critical|break|rect)\b\s*(.*)$/i
 const BLOCK_ELSE = /^(else|and|option)\b\s*(.*)$/i
 /** Participant names may contain spaces ("Vista previa"), so the arrow operator, not whitespace, splits a message. */
-const MESSAGE = /^(.+?)(?:\(\))?\s*(<<--?>>|--?>>?|--?x|--?\)|==?>>?|=>>?)\s*([+-])?\s*([^:]+?)\s*:\s*(.*)$/
+const MESSAGE = /^(.+?)(?:\(\))?\s*(<<--?>>|--?>>?|--?x|--?\)|==?>>?|=>>?)\s*([+-])?\s*([^:]+?)\s*(?::\s*(.*))?$/
 const NOTE = /^note\s+(over|left of|right of)\s+([^:]+?)\s*:\s*(.*)$/i
 const PARTICIPANT = /^(?:create\s+)?(participant|actor)\s+(.+?)(?:\s+as\s+(.+))?$/i
 const PARTICIPANT_CONFIG = /\s*@\{.*\}\s*$/
@@ -25,8 +27,9 @@ function arrowOf(op: string): Arrow {
   return { dashed, head: tail === ">>" ? "filled" : tail === ">" ? "open" : tail === "x" ? "cross" : "async" }
 }
 
-export function parseSequence(lines: string[]): Sequence | undefined {
-  const seq: Sequence = { participants: new Map(), actors: new Set(), items: [] }
+export function parseSequence(lines: string[]): Sequence | { skipped: string[] } {
+  const seq: Sequence = { participants: new Map(), actors: new Set(), items: [], skipped: [] }
+  let understood = 0
   const touch = (id: string) => {
     if (!seq.participants.has(id)) seq.participants.set(id, id)
   }
@@ -46,20 +49,29 @@ export function parseSequence(lines: string[]): Sequence | undefined {
   for (const raw of lines) {
     const line = raw.trim()
     if (!line || line.startsWith("%%")) continue
+    if (seq.items.length >= PARSE_MAX_ITEMS) {
+      seq.skipped.push(line)
+      continue
+    }
+    understood++
     if (/^autonumber\s+off$/i.test(line)) {
       numbering = undefined
       continue
     }
     const number = /^autonumber(?:\s+(\d+))?(?:\s+(\d+))?$/.exec(line)
     if (number) {
-      numbering = Number(number[1] ?? 1)
-      step = Number(number[2] ?? 1)
-      if (!Number.isSafeInteger(numbering) || !Number.isSafeInteger(step) || step < 1) return undefined
+      const first = Number(number[1] ?? 1)
+      const by = Number(number[2] ?? 1)
+      if (Number.isSafeInteger(first) && Number.isSafeInteger(by) && by >= 1) {
+        numbering = first
+        step = by
+      }
       continue
     }
     const change = /^(activate|deactivate)\s+(.+)$/.exec(line)
     if (change) {
-      if (!activation(change[2]!.trim(), change[1] === "activate")) return undefined
+      // Closing a bar that was never opened draws nothing; the rest of the diagram is unaffected.
+      activation(change[2]!.trim(), change[1] === "activate")
       continue
     }
     if (/^(title|links?|properties|details|end box)\b/i.test(line) || /^destroy\s/i.test(line)) continue
@@ -80,7 +92,11 @@ export function parseSequence(lines: string[]): Sequence | undefined {
         continue
       }
       const keyword = stack.pop()
-      if (keyword === undefined) return undefined
+      if (keyword === undefined) {
+        understood--
+        seq.skipped.push(line)
+        continue
+      }
       seq.items.push({ kind: "block", op: "close", keyword, label: "" })
       continue
     }
@@ -92,7 +108,11 @@ export function parseSequence(lines: string[]): Sequence | undefined {
     }
     const other = BLOCK_ELSE.exec(line)
     if (other) {
-      if (!stack.length) return undefined
+      if (!stack.length) {
+        understood--
+        seq.skipped.push(line)
+        continue
+      }
       seq.items.push({ kind: "block", op: "else", keyword: other[1]!.toLowerCase(), label: other[2]!.trim() })
       continue
     }
@@ -108,19 +128,24 @@ export function parseSequence(lines: string[]): Sequence | undefined {
     if (message) {
       touch(message[1]!)
       touch(message[4]!)
-      let text = decodeLabel(message[5]!).join(" ")
+      let text = decodeLabel(message[5] ?? "").join(" ")
       if (numbering !== undefined) {
         text = `${numbering}. ${text}`
         numbering += step
       }
-      if (message[3] === "+" && !activation(message[4]!, true)) return undefined
+      if (message[3] === "+") activation(message[4]!, true)
       seq.items.push({ kind: "message", from: message[1]!, to: message[4]!, arrow: arrowOf(message[2]!), text })
-      if (message[3] === "-" && !activation(message[1]!, false)) return undefined
+      if (message[3] === "-") activation(message[1]!, false)
       continue
     }
-    return undefined
+    understood--
+    seq.skipped.push(line)
   }
-  return stack.length === 0 && seq.participants.size ? seq : undefined
+  // A block the source left open closes at the end, as it would have been drawn so far.
+  while (stack.length) seq.items.push({ kind: "block", op: "close", keyword: stack.pop()!, label: "" })
+  // Mostly unread text is not a sequence diagram with a few slips: it is shown as written, with the first line that failed.
+  if (!seq.participants.size || seq.skipped.length > understood) return { skipped: seq.skipped }
+  return seq
 }
 
 export function renderSequence(seq: Sequence, maxWidth: number, { mirror = true }: { mirror?: boolean } = {}): { lines: Line[] } | { note: string } {

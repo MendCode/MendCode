@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import type { Line } from "../src/ui/theme"
-import { MERMAID_NOTES, renderMermaid } from "../src/view/mermaid"
+import { renderMermaid } from "../src/view/mermaid"
 import { textWidth } from "../src/view/wrap"
 
 const text = (line: Line) => line.map((span) => span.text).join("")
@@ -115,18 +115,31 @@ describe("flowchart subgraphs are laid out as clusters", () => {
     for (const label of ["Normalize alpha records", "Join with reference tables", "Write to warehouse"]) expect(rows.join("\n")).toContain(label)
   })
 
-  test("without subgraphs a flow too wide for the chat is laid out top-down; only when nothing fits does it keep the note", () => {
+  test("without subgraphs a flow too wide for the chat is laid out top-down; when no layout fits it is listed", () => {
     const plain = "flowchart LR\n  A[Collect every input source] --> B[Normalize all the records] --> C[Join with reference tables] --> D[Compute derived metrics] --> E[Write to the warehouse]"
     const rows = draw(plain, 100)
     for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(100)
     expect(rows.findIndex((row) => row.includes("Collect every input source"))).toBeLessThan(rows.findIndex((row) => row.includes("Write to the warehouse")))
-    expect(renderMermaid(plain, 12)).toEqual({ note: MERMAID_NOTES.tooWideRotated })
-    expect("lines" in renderMermaid(plain, 200)).toBe(true)
+    const listed = renderMermaid(plain, 12)
+    if (!("lines" in listed)) throw new Error(`fell back (${listed.note})`)
+    expect(listed.note).toContain("listed instead")
+    for (const line of listed.lines) expect(textWidth(text(line))).toBeLessThanOrEqual(12)
+    expect(renderMermaid(plain, 200)).not.toHaveProperty("note")
   })
 
-  test("a chain taller than the canvas allows stays a note through every retry, with or without subgraphs", () => {
+  test("a chain of a hundred boxes is drawn whole, with or without a subgraph; past what a drawing holds it is listed", () => {
     const many = Array.from({ length: 100 }, (_, i) => `n${i} --> n${i + 1}`).join("\n")
-    expect(renderMermaid(`flowchart TD\n${many}`, 200)).toEqual({ note: MERMAID_NOTES.tooComplex })
-    expect(renderMermaid(`flowchart TD\nsubgraph Big\n${many}\nend`, 200)).toEqual({ note: MERMAID_NOTES.tooComplex })
+    for (const source of [`flowchart TD\n${many}`, `flowchart TD\nsubgraph Big\n${many}\nend`]) {
+      const rows = draw(source, 200)
+      expect(renderMermaid(source, 200)).not.toHaveProperty("note")
+      expect(rows.filter((row) => row.includes("▼"))).toHaveLength(100)
+      expect(rows.join("\n")).toContain("n100")
+    }
+    expect(draw(`flowchart TD\nsubgraph Big\n${many}\nend`, 200)[0]).toContain("Big")
+    const more = Array.from({ length: 300 }, (_, i) => `n${i} --> n${i + 1}`).join("\n")
+    const listed = renderMermaid(`flowchart TD\nsubgraph Big\n${more}\nend`, 200)
+    if (!("lines" in listed)) throw new Error(`fell back (${listed.note})`)
+    expect(listed.note).toContain("301 nodes, 300 links")
+    expect(listed.lines.map(text).slice(0, 2)).toEqual(["n0  Big", "└─▶ n1"])
   })
 })

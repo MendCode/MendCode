@@ -17,7 +17,9 @@ export function renderKanbanDiagram(input: string, width: number): string | unde
     const indent = mermaidIndentWidth(raw) - baseIndent
     const node = parseFlowchartNodeExpression(line.replace(/\s*@\{[^}]*\}\s*$/, ""))
     const bracketOnly = /^\[([^\]]+)\](?:\s*@\{[^}]*\})?$/.exec(line)
-    const label = bracketOnly ? cleanMermaidLabel(bracketOnly[1]!) : node?.label
+    // A column written as bare words (`In progress`) is its whole line, not its first word.
+    const bare = /[\[\](){}]/.test(line) ? undefined : cleanMermaidLabel(line.replace(/\s*@\{[^}]*\}\s*$/, ""))
+    const label = bracketOnly ? cleanMermaidLabel(bracketOnly[1]!) : bare || node?.label
     if (!label) continue
     if (indent <= 0 || !current) {
       current = { title: label, tasks: [] }
@@ -28,7 +30,26 @@ export function renderKanbanDiagram(input: string, width: number): string | unde
     current.tasks.push(metadata ? `${label} · ${cleanMermaidLabel(metadata)}` : label)
   }
   if (columns.length === 0) return undefined
-  const visible = columns.slice(0)
+  // More columns than fit side by side at a readable width continue on a second row of columns, and a third.
+  const perRow = Math.max(1, Math.floor((width + 2) / (MIN_COLUMN + 4)))
+  if (columns.length > perRow) {
+    const bands: string[] = []
+    for (let at = 0; at < columns.length; at += perRow) {
+      const band = kanbanBand(columns.slice(at, at + perRow), width)
+      if (!band) return undefined
+      bands.push(...(bands.length ? [""] : []), ...band)
+    }
+    return ["Kanban", ...bands].join("\n")
+  }
+  const band = kanbanBand(columns, width)
+  return band ? ["Kanban", ...band].join("\n") : undefined
+}
+
+/** The narrowest column that still reads; with less room per column, the board wraps onto more rows of columns. */
+const MIN_COLUMN = 18
+
+/** Columns side by side, as tall as the one with most tasks. */
+function kanbanBand(visible: Array<{ title: string; tasks: string[] }>, width: number): string[] | undefined {
   const columnWidth = Math.min(42, Math.floor((width - (visible.length - 1) * 2) / visible.length) - 2, Math.max(18, ...visible.map((column) => Bun.stringWidth(column.title) + 4), ...visible.flatMap((column) => column.tasks.map((task) => Bun.stringWidth(task) + 6))))
   if (columnWidth < 10) return undefined
   const maxTasks = Math.max(1, ...visible.map((column) => column.tasks.length))
@@ -53,8 +74,5 @@ export function renderKanbanDiagram(input: string, width: number): string | unde
     rows.push(`╰${"─".repeat(columnWidth)}╯`)
     return rows
   })
-  return [
-    "Kanban",
-    ...renderedColumns[0]!.map((_, row) => renderedColumns.map((column) => column[row]!).join("  ")),
-  ].join("\n")
+  return renderedColumns[0]!.map((_, row) => renderedColumns.map((column) => column[row]!).join("  "))
 }
