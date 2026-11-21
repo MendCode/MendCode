@@ -1,4 +1,5 @@
-import { expandPastes, livePastes, pasteLabel } from "../../view/paste-placeholders"
+import { expandPastes, livePastes, pasteLabel, type PendingPaste } from "../../view/paste-placeholders"
+import { createCompositionMemory } from "../../view/composition-memory"
 import type { AttachmentPasteResult, BlobRef, SessionId, SessionSummary } from "@mendcode/protocol"
 import { truncateEnd } from "../../view/wrap"
 import { attachmentToken, draftRefs, sentImageNumber, liveAttachments, pendingFromRefs, type PendingAttachment } from "../../view/attachments"
@@ -40,10 +41,39 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   /** The prompt as the model gets it: every paste label still in it replaced by its text. */
   const expandedPrompt = () => expandPastes(editor.text, livePastes(state.pastes, editor.text))
 
+  /** How the messages of this run were composed (pastes, attachments): what lets a message brought back show as it was written. */
+  const composition = createCompositionMemory()
+
+  /**
+   * `text` as a saved or sent message holds it (pastes expanded), its pastes remembered so the same text coming back into the
+   * prompt shows them as chips again. For a prompt that is being left, a stash or a draft.
+   */
+  function expandedWith({ text, pastes }: { text: string; pastes: readonly PendingPaste[] }): string {
+    const live = livePastes(pastes, text)
+    if (live.length) composition.remember({ texts: [], pastes: live, attachments: [] })
+    return expandPastes(text, live)
+  }
+
+  /**
+   * The one way a past message's text goes back into the prompt: each large paste it holds is a chip again, and the prompt's pastes
+   * follow (the ones already there stay, new labels never repeat theirs). Call it before the text is placed.
+   */
+  function chipped(text: string): string {
+    const result = composition.rechip(text, state.pastes)
+    state.pastes = result.pastes
+    return result.text
+  }
+
+  /** The attachments a message of this run carried, for the same text coming back (undefined when this run did not compose it). */
+  const composedAttachments = (text: string) => composition.attachmentsOf(text)
+
+  /** A message just composed, with the pastes and attachments it was made of. */
+  const rememberComposed = (message: Parameters<typeof composition.remember>[0]) => composition.remember(message)
+
   function syncDraft() {
     // A sub-agent's thread has a prompt of its own: the session's saved draft stays the conversation's.
     if (input.remote?.readOnly || state.page !== "chat" || state.editingScratch || state.agentView) return
-    if (drafts.changed(state.sessionId, { text: expandedPrompt(), images: draftRefs(state.attachments, editor.text) })) state.notice = "draft over 64 KB: saved truncated"
+    if (drafts.changed(state.sessionId, { text: expandedWith({ text: editor.text, pastes: state.pastes }), images: draftRefs(state.attachments, editor.text) })) state.notice = "draft over 64 KB: saved truncated"
   }
 
   const attachmentsOf = (images: BlobRef[]): PendingAttachment[] => pendingFromRefs(images)
@@ -77,7 +107,7 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     if (draft && target === state.sessionId) {
       if (editor.isEmpty() && state.attachments.length === 0) {
         // Text, attachments and their tokens come back as they were, the cursor at the end, with no notice: it is simply the session's prompt.
-        editor.insert(draft.text)
+        editor.insert(chipped(draft.text))
         state.attachments = attachmentsOf(draft.images)
         syncMentions()
         requestFrame()
@@ -117,17 +147,17 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     const typed = editor.text
     const hadPrompt = typed.trim() !== "" || liveOnes().length > 0
     if (hadPrompt) {
-      const saved = stash.push(typed, liveOnes())
+      const saved = stash.push(expandedWith({ text: typed, pastes: state.pastes }), liveOnes())
       if (!saved.ok) return fail(saved.error)
     }
+    state.pastes = []
     // A draft with comments on another session's answer: its chips come along (no longer tied to a message) unless some are pending here.
     const withComments = parseCommentDraft(draft.text)
     if (withComments && !ctx.comments.store.count) {
-      editor.replaceAll(withComments.draft)
+      editor.replaceAll(chipped(withComments.draft))
       ctx.comments.restore(withComments.comments.map(({ itemId: _other, ...comment }) => comment), withComments.parked)
-    } else editor.replaceAll(withComments ? readableMessage(draft.text) : draft.text)
+    } else editor.replaceAll(chipped(withComments ? readableMessage(draft.text) : draft.text))
     state.attachments = attachmentsOf(Array.isArray(draft.attachments) ? draft.attachments as BlobRef[] : [])
-    state.pastes = []
     promptReplaced()
     await drafts.settled()
     await input.send({ type: "draft.set", sessionId, text: "" })
@@ -236,11 +266,12 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
 
   function stashPrompt() {
     if (editor.text.trim() === "" && !liveOnes().length) return say("nothing to stash")
-    const saved = stash.push(editor.text, liveOnes())
+    const saved = stash.push(expandedWith({ text: editor.text, pastes: state.pastes }), liveOnes())
     if (!saved.ok) return fail(saved.error)
     // Parked, not discarded: the stash holds it.
     state.submits++
     editor.clear()
+    state.pastes = []
     state.attachments = []
     promptReplaced()
     say(`stashed · ${stash.size} kept · /stash pop restores it`, "success")
@@ -249,12 +280,13 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   /** Brings back the newest stash (or the `number`th of `/stash list`); a prompt being typed is stashed in its place, never lost. */
   function restoreStash(number?: number) {
     const typed = editor.text
-    const replacement = typed.trim() !== "" || liveOnes().length ? { text: typed, at: ctx.now(), attachments: liveOnes() } : undefined
+    const replacement = typed.trim() !== "" || liveOnes().length ? { text: expandedWith({ text: typed, pastes: state.pastes }), at: ctx.now(), attachments: liveOnes() } : undefined
     const { entry, result } = stash.pop(number, replacement)
     if (!result.ok) return fail(result.error)
     if (!entry) return say(number === undefined ? "the stash is empty" : `no stash ${number}`, "warning")
     state.attachments = entry.attachments ?? []
-    editor.replaceAll(entry.text)
+    state.pastes = []
+    editor.replaceAll(chipped(entry.text))
     promptReplaced()
     say(typed.trim() === "" ? "restored from the stash" : "restored · the prompt you had is stashed", "success", { quiet: typed.trim() === "" })
   }
@@ -347,7 +379,10 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   /** A recalled shell line goes back into shell mode (its text is the editor text of shell mode, so `!!cmd` stays `!cmd`); anything else leaves it. */
   function showRecalled(entry: RecallEntry) {
     editor.clear()
-    editor.insert(entry.text)
+    // The message as it was composed: pastes as chips, images and files as chips (when this run composed it); else its plain text.
+    state.pastes = []
+    editor.insert(chipped(entry.text))
+    state.attachments = composedAttachments(entry.text) ?? []
     state.recall.shown = editor.text
     state.shellMode = entry.kind === "shell"
     const truncated = TRUNCATED_RECALL.exec(entry.text)
@@ -384,6 +419,8 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
       state.recall.draft = editor.text
       state.recall.draftCursor = editor.cursorOffset
       state.recall.shell = state.shellMode
+      state.recall.draftPastes = state.pastes
+      state.recall.draftAttachments = state.attachments
       keepDiscarded({ toast: false, track: false })
     }
     state.recall.index++
@@ -396,6 +433,8 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     editor.clear()
     editor.insert(state.recall.draft)
     editor.moveTo(state.recall.draftCursor)
+    state.pastes = state.recall.draftPastes
+    state.attachments = state.recall.draftAttachments
     state.shellMode = state.recall.shell
   }
 
@@ -434,7 +473,7 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
    * terminal's list (not when it is also the unsent text at the bottom of an ongoing recall).
    */
   function keepDiscarded(options: { toast?: boolean; track?: boolean; text?: string } = {}): Promise<void> {
-    const text = options.text ?? editor.text
+    const text = expandedWith({ text: options.text ?? editor.text, pastes: state.pastes })
     if (input.remote || !state.sessionId || !worthKeeping(text)) return Promise.resolve()
     if (options.track !== false) bump(text, "draft")
     return input.send({ type: "prompt.record", sessionId: state.sessionId, text, kind: "draft" }).then((reply) => {
@@ -549,5 +588,5 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     return { name: match[1]!.toLowerCase(), args: match[2] ?? "" }
   }
 
-  return { insertPasted, expandedPrompt, attachmentsOf, liveOnes, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom }
+  return { insertPasted, expandedPrompt, expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, liveOnes, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom }
 }

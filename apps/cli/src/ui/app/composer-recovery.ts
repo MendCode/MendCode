@@ -22,6 +22,8 @@ export const STEER_TAKEN = "already handed to the model: it reads it when the ru
  * existing `queue.remove` and `prompt.history`.
  */
 export function createComposerRecovery(ctx: AppContext, actions: {
+  chipped(text: string): string
+  composedAttachments(text: string): typeof ctx.state.attachments | undefined
   attachmentsOf(images: BlobRef[]): typeof ctx.state.attachments
   syncMentions(): void
   syncDraft(): void
@@ -30,6 +32,8 @@ export function createComposerRecovery(ctx: AppContext, actions: {
   keepDiscarded(options: { text?: string; track?: boolean }): Promise<void>
 }) {
   const { input, state, editor, requestFrame, say, fail, now } = ctx
+  /** The prompt's attachments while the search bar is open: no match puts them back. */
+  const held: { attachments: typeof state.attachments } = { attachments: [] }
 
   /** What the prompt changed to: popups and the draft follow the text. */
   function refresh() {
@@ -72,7 +76,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const shell = entries.find((entry) => entry.kind === "shell")
     if (shell) state.shellMode = true
     const typed = editor.text
-    editor.replaceAll([...composed(entries), ...(typed ? [typed] : [])].join("\n"))
+    editor.replaceAll([...composed(entries).map(actions.chipped), ...(typed ? [typed] : [])].join("\n"))
     state.attachments = [...entries.flatMap((entry) => actions.attachmentsOf(entry.attachments)), ...state.attachments]
     refresh()
   }
@@ -163,7 +167,14 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const search = state.promptSearch
     if (!search) return
     const index = search.matches[search.at]
-    editor.replaceAll(index === undefined ? search.draft : search.prompts[index]!)
+    const shown = index === undefined ? undefined : search.prompts[index]!
+    if (shown === undefined) {
+      editor.replaceAll(search.draft)
+      state.attachments = held.attachments
+    } else {
+      editor.replaceAll(actions.chipped(shown))
+      state.attachments = actions.composedAttachments(shown) ?? []
+    }
     state.shellMode = index === undefined ? search.shell ?? false : search.kinds?.[index] === "shell"
     requestFrame()
   }
@@ -190,6 +201,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     if (!entries.length) return say("no earlier prompts in this project")
     const text = query.slice(0, PROMPT_SEARCH_MAX_QUERY)
     const prompts = entries.map((entry) => entry.text)
+    held.attachments = state.attachments
     state.promptSearch = { query: text, prompts, kinds: entries.map((entry) => entry.kind), ids: entries.map((entry) => entry.id), matches: searchPrompts(prompts, text), at: 0, draft: editor.text, shell: state.shellMode }
     state.shortcuts = false
     show()
@@ -226,6 +238,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     state.promptSearch = undefined
     if (!keep) {
       editor.replaceAll(search.draft)
+      state.attachments = held.attachments
       state.shellMode = search.shell ?? false
     } else if (editor.text !== search.draft) {
       // The match replaces what was typed before the search: that text stays reachable as a draft.

@@ -14,6 +14,7 @@ const FORMAT_CYCLE: ExportRequest["format"][] = ["markdown", "json", "html"]
 const EXTENSIONS: Record<ExportRequest["format"], string> = { markdown: "md", json: "json", html: "html" }
 
 export function createTranscriptActions(ctx: AppContext, actions: {
+  chipped(text: string): string
   loadPage(): Promise<void>
   sessionTitle(): string
   rewind: ReturnType<typeof createSession>["rewind"]
@@ -67,7 +68,8 @@ export function createTranscriptActions(ctx: AppContext, actions: {
   async function forkFrom(selected: MessageEntry) {
     const entry: TimelineEntry = { turnId: selected.turnId, itemId: selected.anchorId, at: selected.at, preview: selected.prompt, reverted: false }
     if (!(await actions.forkAt(entry))) return
-    editor.replaceAll(selected.prompt)
+    state.pastes = []
+    editor.replaceAll(actions.chipped(selected.prompt))
     state.attachments = pendingFromRefs(selected.promptImages)
     ctx.drafts.changed(state.sessionId, { text: editor.text, images: selected.promptImages })
   }

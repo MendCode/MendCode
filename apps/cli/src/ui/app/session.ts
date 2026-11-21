@@ -29,6 +29,9 @@ export function createSession(ctx: AppContext, actions: {
   endGoalEdit(): void
   loadEffectiveModel(): Promise<void>
   restoreDraft(target: SessionId): Promise<void>
+  /** A text as a saved message holds it, its pastes expanded and remembered; and a past message's text with its pastes as chips again (ui/app/prompt.ts). */
+  expandedWith(message: { text: string; pastes: readonly import("../../view/paste-placeholders").PendingPaste[] }): string
+  chipped(text: string): string
   /** The live loops and workflows of the terminal's project, asked again after the project changed. */
   loadProjectLists(): Promise<void>
   keepDiscarded(options: { track?: boolean }): Promise<void>
@@ -79,14 +82,17 @@ export function createSession(ctx: AppContext, actions: {
     // A message this terminal already holds (Esc Esc, the message actions) is in the prompt at once, images too; the daemon's answer
     // follows, and a refused undo puts the prompt back as it was.
     const before = kind === "undo" && prompt !== undefined && !placed ? { text: editor.text, attachments: state.attachments } : undefined
+    // The message shows as it was composed (large pastes as their chips); `shown` is what the prompt holds for it.
+    let shown = prompt
     if (before) {
-      ctx.editor.replaceAll(prompt!)
+      shown = actions.chipped(prompt!)
+      ctx.editor.replaceAll(shown)
       state.attachments = pendingFromRefs(images ?? [])
       requestFrame()
     }
     const reply = await input.send({ type: kind === "undo" ? "session.undo" : "session.redo", sessionId, ...(force ? { force: true } : {}), ...(kind === "undo" && atItemId ? { atItemId } : {}), ...(kind === "undo" && state.transcript.activeTurn ? { cancelRunning: true } : {}) })
     if (sessionId !== state.sessionId) return
-    if ((!reply.ok || !reply.result) && before && editor.text === prompt) {
+    if ((!reply.ok || !reply.result) && before && editor.text === shown) {
       ctx.editor.replaceAll(before.text)
       state.attachments = before.attachments
     }
@@ -111,9 +117,10 @@ export function createSession(ctx: AppContext, actions: {
     if (kind === "redo" && report.canRedo !== true) { prompt = ""; images = [] }
     if (placed) return requestFrame()
     // A prompt placed before the answer is left as it is now: what was typed into it meanwhile stays, and so does its draft.
-    if (prompt !== undefined && (!before || editor.text === prompt)) {
+    if (prompt !== undefined && (!before || editor.text === shown)) {
       if (!before) {
-        ctx.editor.replaceAll(prompt)
+        state.pastes = []
+        ctx.editor.replaceAll(actions.chipped(prompt))
         state.attachments = pendingFromRefs(images ?? [])
       }
       drafts.changed(state.sessionId, { text: prompt, images: images ?? [] })
@@ -233,8 +240,9 @@ export function createSession(ctx: AppContext, actions: {
     // The prompt is the leaving session's draft: saved now (a pending save goes out too), and emptied below so the next one starts with its own.
     const promptOwned = !input.remote?.readOnly && !state.editingScratch && !state.editingGoal && state.editingMemory === undefined && !state.planDraft
     // With a sub-agent's thread open, the prompt on screen is the thread's: the conversation's, set aside, is the draft.
-    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments }
-    if (promptOwned) drafts.changed(state.sessionId, { text: leaving.text, images: draftRefs(leaving.attachments, leaving.text) })
+    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments, pastes: state.pastes }
+    // The draft holds the pastes' text, as every draft does; coming back, the chips are rebuilt from the terminal's memory of them.
+    if (promptOwned) drafts.changed(state.sessionId, { text: actions.expandedWith(leaving), images: draftRefs(leaving.attachments, leaving.text) })
     drafts.flush()
     // The history is the project's, shared by its sessions: what is in the prompt is kept as a draft entry, and the next ↑ reads the list again.
     void actions.keepDiscarded({ track: false })
