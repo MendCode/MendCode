@@ -36,7 +36,8 @@ export function createTicks(ctx: AppContext, actions: {
     // `/reviews` with a review running turns the same spinner on its running rows.
     const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
     // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
-    const listed = state.page === "chat" && (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval") && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true))) && sidebarShown(ctx.input.screen.size.width)
+    // The all-projects and bots list keeps the other folders' sessions and the bots' chats itself, so it says whether one of its rows moves.
+    const listed = state.page === "chat" && (state.sidebarBots?.moving() || (state.sessions ?? []).some((s) => (BUSY.has(s.state) || s.state === "waiting_approval" || (s.agents ?? 0) > 0) && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true)))) && sidebarShown(ctx.input.screen.size.width)
     const near = busy || preview || agents || thread || reviewing
     const wanted = (near || home || listed) && !state.reducedMotion
     // Only other sessions working (the list's rows, the home's Agent View): their symbols turn at a quarter of the speed. Each tick

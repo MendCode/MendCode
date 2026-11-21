@@ -1,7 +1,7 @@
 import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
 import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
-import { sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
+import { markAnimates, sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
 import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
@@ -248,6 +248,19 @@ export function createSidebarBots(ctx: AppContext) {
     if (!allProjects()) return state.sessions
     const known = new Set(state.sessions.map((session) => session.sessionId))
     return [...state.sessions, ...others.filter((session) => !known.has(session.sessionId))]
+  }
+
+  /**
+   * Whether a row this list draws moves on the activity tick: a session of any folder it lists running (sub-agents included) or waiting
+   * for you, or a bot's chat doing so. The other folders' sessions live only here, not in the terminal's own list.
+   */
+  function moving(): boolean {
+    if (!live() || !shown()) return false
+    const works = (session: SessionSummary) => markAnimates(sessionMark(session as never, false))
+    if (allProjects() && others.some(works)) return true
+    if (!botsOn() || !report) return false
+    const chatWorks = (bot: { projects?: BotListReport["bots"][number]["projects"] | undefined }) => bot.projects?.some((project) => project.sessions.some((chat) => chat.status === "running" || chat.status === "waiting_approval" || chat.status === "waiting_for_input")) === true
+    return report.bots.some(chatWorks) || report.external.some(chatWorks)
   }
 
   /** The folder whose group starts open: the open session's, else the one this terminal was started in. */
@@ -600,5 +613,5 @@ export function createSidebarBots(ctx: AppContext) {
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
   // The report is kept current only while the list is on screen (hidden, a push sets a flag and patches nothing), so no one else reads it then.
-  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, resync, noteActivity: () => wantBots(false) }
 }

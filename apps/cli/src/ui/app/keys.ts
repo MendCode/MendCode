@@ -9,7 +9,8 @@ import { sideChat, sideChatKeptKey, type createAside } from "./aside"
 import type { createModel } from "./model"
 import type { createAgents } from "./agents"
 import { noteRecent } from "../../view/model-prefs"
-import type { PermissionMode, ModelsReport } from "@mendcode/protocol"
+import type { PermissionMode, ModelsReport, SessionId } from "@mendcode/protocol"
+import { workflowOf } from "../../view/session-label"
 import { COMMENT_KEY, LEADER_TIMEOUT_MS, resolveKey, type BindingAction } from "../keymap"
 import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
@@ -126,6 +127,8 @@ export function createKeys(ctx: AppContext, actions: {
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]
+  /** A workflow run's own session opens /workflows on that run; false when it is no run's. */
+  openWorkflowOf(sessionId: SessionId): Promise<boolean>
   /** Saves a profile change (`x` on a project row hides the project). */
   changeProfile: (patch: Partial<import("../../view/tui-profile").TuiProfile>) => void
   homeSessions: () => HomeSession[]
@@ -142,6 +145,16 @@ export function createKeys(ctx: AppContext, actions: {
   const mouseSelection = createMouseSelection(ctx, { by: (rows) => actions.scrollTranscript(rows), width: () => actions.transcriptWidth(), offset: () => ctx.view.get(state.sessionId).offset, fold: details.click, card: (itemId) => actions.openAgentCard(itemId), openPath: (text, at) => actions.fileOpen.clickPath(text, at), openUrl: (url) => void input.send({ type: "url.open", url }).then((reply) => { if (!reply.ok) fail(`not opened: ${reply.error.message}`) }), openImage: (path, reveal) => void input.send({ type: "image.open", path, ...(reveal ? { reveal: true } : {}) }).then((reply) => { if (!reply.ok) fail(`not opened: ${reply.error.message.replace(/^\[[A-Z]+\]: /, "")}`) }) })
   const vim = ctx.vim
   const optionKeys = createOptionKeys(ctx)
+  /** A session row of the list opens its chat; a workflow's run opens on /workflows, where its tasks are. */
+  async function openRow(id: SessionId) {
+    const summary = (state.sidebarBots?.sessions() ?? state.sessions).find((session) => session.sessionId === id)
+    if (summary && workflowOf(summary)?.root && (await actions.openWorkflowOf(id))) {
+      state.sidebarFocus = false
+      return
+    }
+    await actions.switchSession(id)
+  }
+  const rowActions = { ...actions, switchSession: openRow }
   /** Vim mode applies to the prompt while the setting is on; switching it off drops back to plain insert. */
   function vimOn() {
     if (!state.tuiProfile.vimMode && vim.mode !== "insert") vim.reset()
@@ -417,8 +430,8 @@ export function createKeys(ctx: AppContext, actions: {
       else if (hit && state.sidebarSearch?.isOpen()) await state.sidebarSearch.activate(hit.sessionId, actions)
       // The ▸/▾ glyph of a folding row folds it; the rest of the row does what Enter does.
       else if (hit?.fold && state.sidebarBots?.live() && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) >= hit.fold.from && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
-      else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, actions)
-      else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
+      else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, rowActions)
+      else if (hit) await openRow(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     const click = screenClick ? { ...screenClick, col: screenClick.col - offset } : undefined
@@ -462,8 +475,8 @@ export function createKeys(ctx: AppContext, actions: {
       }
     }
     if (state.page === "chat" && sideWidth > 0 && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !suggestions.length && !mentionActive) {
-      const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "")
-      const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
+      const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId)
+      const multi =state.sidebarBots?.live() ? state.sidebarBots : undefined
       // Terminals in application-cursor mode send ESC O A..D for the arrows; the list takes both forms.
       const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
       // The key that enters the list. In the multi-project list a session with sub-agents working keeps the plain arrows for them
@@ -502,10 +515,10 @@ export function createKeys(ctx: AppContext, actions: {
           const next = sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown)
           if (!next.includes(SETTLED_MORE)) state.sidebarSelected = next[index]
         } else if (onSettled && (key === "\r" || key === " " || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
-        else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, actions)
+        else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, rowActions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
-          await actions.switchSession(stops[index]! as typeof state.sessionId)
+          await openRow(stops[index]! as typeof state.sessionId)
         } else if (key === "\x1b" || (onRight ? arrow === "\x1b[D" : arrow === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }
