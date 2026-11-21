@@ -30,6 +30,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
+- Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
+- A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.
 - While a turn runs with the galaxy in the panel, the terminal draws less than half as many frames: the galaxy moves on the spinner's frames instead of its own.
 - Switching to another chat of the same folder asks the daemon less: no second read of the session list, and one read of the chat's details instead of two; a bot's chat in another folder opens without a lookup first.
 - The activity line shows how long a turn has run and its tokens also when the turn started before the terminal opened it or longer ago than the loaded history reaches.
