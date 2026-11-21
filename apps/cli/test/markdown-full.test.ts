@@ -453,9 +453,17 @@ describe("diagrams", () => {
   })
 
   test("a diagram that cannot be drawn falls back to its source behind a header", () => {
-    const rows = draw(FENCE("notADiagram\n  x"), 60)
-    expect(plain(rows)[0]!.startsWith("╭─ notADiagram")).toBe(true)
-    expect(plain(rows).join("\n")).toContain("│   x")
+    const rows = draw(FENCE("flowchart TD\n  A -=> B"), 60)
+    expect(plain(rows)[0]!.startsWith("╭─ flowchart")).toBe(true)
+    expect(plain(rows).join("\n")).toContain("│   A -=> B")
+    expect(plain(rows).at(-1)).toBe("1 line not understood: A -=> B · shown as source")
+  })
+
+  test("what a drawing leaves out is said under it, in the muted colour", () => {
+    const rows = draw(FENCE("flowchart TD\n  A --> B\n  B --> C\n  C -=> D"), 60)
+    expect(plain(rows).join("\n")).toContain("│ A │")
+    expect(plain(rows).at(-1)).toBe("1 line not understood: C -=> D")
+    expect(rows.at(-1)!.every((span) => span.fg === "muted")).toBe(true)
   })
 })
 

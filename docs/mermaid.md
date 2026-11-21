@@ -1,6 +1,6 @@
 # Terminal Mermaid diagrams
 
-The `full` message renderer draws Mermaid fences as themed Unicode diagrams. Open a session diagram on a scrollable canvas with `/diagram [n]`; source fences remain available when layout fails.
+The `full` message renderer draws Mermaid fences as themed Unicode diagrams. Open a session diagram on a scrollable canvas with `/diagram [n]`. A fence is drawn whenever anything of it can be; only text that is not read as a diagram shows as source, with the line that was not understood.
 
 ## Explore a diagram
 
@@ -83,8 +83,8 @@ A subgraph is a cluster:
 
 1. If the layered layout exceeds the available columns, the same flow is laid out once more with tight spacing and node labels wrapped at 16 cells. A `<br/>` stays a line break.
 2. A left-to-right flow that still overflows is laid out top-down (RL as BT). This needs the width of one layer instead of the whole chain.
-3. A flowchart with subgraphs then falls back to the stacked single-column scene: each box under the previous one, connections on side channels.
-4. Only when none fits is the source shown, with a note saying it was too wide even compacted or even rotated. `/diagram` draws it at full size.
+3. Then the stacked single-column scene: each box under the previous one, connections on side channels.
+4. When none fits, or the flowchart has more than 120 nodes, it is listed: each node with its links under it, cut to the width, at most 240 rows. The note under it says how many nodes and links it has.
 
 The stacked scene is also what `graph-scene.ts` still provides to the class, state, ER, architecture and event-modeling families.
 
@@ -97,21 +97,32 @@ The stacked scene is also what `graph-scene.ts` still provides to the class, sta
 
 | Input or layout | Limit |
 |---|---|
-| Input characters | 16,000 |
-| Input lines | 256 |
-| Characters per source line | 2,048 |
-| Structural delimiters | 1,500 |
+| Input characters | 400,000; past it the source is shown with a note |
+| Input lines | 8,000; past it, an outline |
+| Characters per source line | 4,096; past it, an outline |
+| Flowchart parse | 2,000 nodes and 4,000 links read; a drawing holds 120 nodes, more are listed |
+| Sequence parse | 2,000 items read |
+| Every other family | 48,000 characters and 800 lines; past it, its links as a plain graph or an outline |
 | Hierarchy depth | 16 |
-| Cell grid, capped **before allocation** | 1,600 columns, 600 rows and 160,000 cells |
+| Cell grid, capped **before allocation** | 1,600 columns, 800 rows and 160,000 cells |
 | Packet fields | Ordered, non-overlapping and within 4,096 bits |
 
 Graph families also bound nodes/edges; path enumeration and annotation searches are bounded. Invalid dates, missing dependency IDs, unknown references, malformed numeric values and unclosed blocks fail safely.
 
-### Source fallback
+### What is shown when the picture does not fit or is not understood
 
-The renderer returns rows within the requested cell width or a one-line reason with the original code fence. Labels wrap where a family supports reflow.
+The renderer returns rows within the requested cell width. A note under the rows says what they leave out or how they were reduced.
 
-Diagrams that need more space render at up to 1,600 columns in `/diagram`, with horizontal/vertical panning. Oversized or unsupported constructs retain source rather than dropping nodes/fields.
+| Case | Shown |
+|---|---|
+| A line the family does not understand | The diagram without that line; the note quotes it (`1 line not understood: …`). |
+| A picture wider than the chat (sequence and the registry families) | The picture laid out a little wider and cut at the right edge with `…`; the note names `/diagram`, which shows it whole at up to 1,600 columns. |
+| A flowchart too wide or too large for every layout | The list of its nodes and links. |
+| A source too large for its family, or one the family reads and cannot draw | Its links as a plain graph when its lines join two names (class, state, ER); otherwise an outline of its statements, at most 240 rows. |
+| A type with no drawing here | The same: links as a plain graph, or an outline. |
+| Most lines not understood, an unclosed block, or text that is not a diagram | The source, with a note that quotes the first line not understood. |
+
+- A line that is not understood is never half drawn: none of its nodes or links appear.
 
 - As in v1, CSS/click directives, C4 layout/update hints, and chart display hints do not control terminal styling.
 - Gantt supports the v1 date/day subset. Browser-only calendars and alternative date formats fall back rather than guessing dates.

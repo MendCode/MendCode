@@ -86,14 +86,28 @@ test("CJK, combining marks and ZWJ emoji keep box geometry and full labels", () 
   }
 })
 
-test("unknown and malformed sources preserve fenced code and a single reason", async () => {
+test("malformed sources preserve fenced code and a single reason that quotes what was not understood", async () => {
   await ui9Harness("flowchart TD\nA --> B").then(closeUi9)
-  for (const source of ["unknownDiagram\nA --> B", "pie\n\"bad\": NaN", "classDiagram\nclass Broken {\n+id", "sequenceDiagram\nelse orphan", "flowchart TD\nA --> ???", "packet-beta\n8-3: reversed", "requirementDiagram\nrequirement a {\nid: 1"]) {
-    expect("note" in renderMermaid(source, 100)).toBe(true)
+  for (const [source, reason] of [
+    ["pie\n\"bad\": NaN", '1 line not understood: "bad": NaN · shown as source'],
+    ["classDiagram\nclass Broken {\n+id", "1 line not understood: a { or a note that is never closed · shown as source"],
+    ["sequenceDiagram\nelse orphan", "1 line not understood: else orphan · shown as source"],
+    ["flowchart TD\nA --> ???", "1 line not understood: A --> ??? · shown as source"],
+    ["packet-beta\n8-3: reversed", "1 line not understood: 8-3: reversed · shown as source"],
+    ["requirementDiagram\nrequirement a {\nid: 1", "1 line not understood: a { or a note that is never closed · shown as source"],
+  ] as const) {
+    expect(renderMermaid(source, 100)).toEqual({ note: reason })
     const rows = renderMarkdown("```mermaid\n" + source + "\n```", 100).map((line) => line.map((span) => span.text).join(""))
     expect(rows.some((row) => row.includes(source.split("\n")[0]!))).toBe(true)
-    expect(rows.filter((row) => /unsupported|invalid|too complex|too wide/.test(row))).toHaveLength(1)
+    expect(rows.filter((row) => /not understood|unsupported|invalid|too complex|too wide/.test(row))).toEqual([reason])
   }
+})
+
+test("a diagram type with no drawing shows its links as a graph and says so once", () => {
+  const rows = renderMarkdown("```mermaid\nunknownDiagram\nA --> B\n```", 100).map((line) => line.map((span) => span.text).join(""))
+  for (const id of ["A", "B"]) expect(rows.join("\n")).toContain(`│ ${id} │`)
+  expect(rows.some((row) => row.includes("unknownDiagram\n"))).toBe(false)
+  expect(rows.filter((row) => /no drawing here/.test(row))).toEqual(["unknownDiagram has no drawing here · its links drawn as a plain graph"])
 })
 
 test("fuzz-ish malformed inputs and adversarial layout stay bounded for every family", () => {
@@ -115,7 +129,10 @@ test("fuzz-ish malformed inputs and adversarial layout stay bounded for every fa
 
 test("oversized layouts really render in the viewer and pan horizontally", () => {
   const source = "flowchart TD\nR --> " + Array.from({ length: 30 }, (_, i) => `N${i}[Step ${i}]`).join(" & ")
-  expect("note" in renderMermaid(source, 100)).toBe(true)
+  // The chat stacks the row of thirty boxes into its hundred columns; the viewer lays the row out as written.
+  const chat = renderMermaid(source, 100)
+  for (const row of plain(chat)) expect(textWidth(row)).toBeLessThanOrEqual(100)
+  expect(plain(chat).join("\n")).toContain("Step 29")
   const layout = layoutDiagram({ source, zoom: 0, render: renderMermaid })
   expect(layout.note).toBeUndefined()
   expect(diagramBounds(layout, 100, 30).maxX).toBeGreaterThan(0)
@@ -178,7 +195,10 @@ test("canvas allocation and cross-product layouts are bounded before memory is r
   expect(() => new Canvas(1600, 600)).toThrow(MERMAID_NOTES.tooComplex)
   const source = "mindmap\nroot\n " + "wide ".repeat(100) + "\n" + Array.from({ length: 100 }, (_, i) => " ".repeat(2 + i % 10) + `Node ${i}`).join("\n")
   const started = performance.now()
-  expect(renderMermaid(source, 1600)).toEqual({ note: MERMAID_NOTES.tooComplex })
+  // No canvas is reserved for it: the statements come back as an outline.
+  const result = renderMermaid(source, 1600)
+  expect(result.note).toBe("too large for its own drawing · shown as an outline")
+  expect(plain(result).slice(0, 2)).toEqual(["mindmap", "├ root"])
   expect(performance.now() - started).toBeLessThan(budgetMs(1000))
 })
 
@@ -220,5 +240,9 @@ test("long sequence fragment headings never clip labels or overwrite closing bor
   expect(rows.join("\n")).toContain(label)
   expect(rows.find((row) => row.includes(label))!.trimEnd().endsWith("┐")).toBe(true)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(100)
-  expect(renderMermaid(source, 60)).toEqual({ note: MERMAID_NOTES.tooWide })
+  // Too wide for 60 columns, it is cut at the right edge and says where to see it whole.
+  const cut = renderMermaid(source, 60)
+  expect(cut.note).toBe("wider than the chat, cut at the right edge · /diagram shows it whole")
+  for (const row of plain(cut)) expect(textWidth(row)).toBeLessThanOrEqual(60)
+  expect(plain(cut).join("\n")).toContain("Retry while the billing service")
 })

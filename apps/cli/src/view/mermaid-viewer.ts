@@ -180,8 +180,11 @@ export function layoutDiagram(input: { source: string; zoom: DiagramZoom; render
     const lines: Line[] = [[{ text: result.note, fg: "muted", dim: true }], [], ...input.source.split("\n").map((text): Line => [{ text, fg: "code" }])]
     return { lines, width: Math.max(...lines.map(cellsOf)), height: lines.length, note: result.note }
   }
+  // What the drawing leaves out is said under it, as in the chat; it is not part of what zooms.
+  const said: Line[] = result.note ? [[], [{ text: result.note, fg: "muted", dim: true }]] : []
   const natural = result.lines
-  const lines = input.zoom === -1 ? foldBraille(natural) : input.zoom === 0 ? natural : natural.map((line) => stretchRow(line, input.zoom + 1))
+  const drawn = input.zoom === -1 ? foldBraille(natural) : input.zoom === 0 ? natural : natural.map((line) => stretchRow(line, input.zoom + 1))
+  const lines = [...drawn, ...said]
   return { lines, width: Math.max(0, ...lines.map(cellsOf)), height: lines.length }
 }
 

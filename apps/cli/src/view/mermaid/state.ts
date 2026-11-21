@@ -496,6 +496,16 @@ function renderCompactRankedVerticalFlowchart(input: {
   return output.join("\n")
 }
 
+/** A state name: letters of any script, digits, `_`, `.` and `-` (a `:` starts a description or a label). */
+const STATE_ID = String.raw`[\p{L}_][\p{L}\p{N}_.-]*`
+const STATE_NOTE = new RegExp(String.raw`^note\s+(?:left|right)\s+of\s+(${STATE_ID})(?:\s*:\s*(.+))?$`, "iu")
+const STATE_COMPOSITE = new RegExp(String.raw`^state\s+(?:"([^"]+)"\s+as\s+)?(${STATE_ID})\s*\{$`, "iu")
+const STATE_ALIAS = new RegExp(String.raw`^state\s+"([^"]+)"\s+as\s+(${STATE_ID})$`, "iu")
+const STATE_STEREOTYPE = new RegExp(String.raw`^state\s+(${STATE_ID})\s+<<(fork|join|choice)>>$`, "iu")
+const STATE_TRANSITION = new RegExp(String.raw`^(\[\*\]|${STATE_ID})\s*-->\s*(\[\*\]|${STATE_ID})(?:\s*:\s*(.*))?$`, "u")
+const STATE_DESCRIPTION = new RegExp(String.raw`^(${STATE_ID})\s*:\s*(.+)$`, "u")
+const STATE_DECLARED = new RegExp(String.raw`^state\s+(${STATE_ID})$`, "iu")
+
 export function renderStateDiagram(input: string, width: number): string | undefined {
   const lines = preparedMermaidLines(input)
   if (!/^stateDiagram(?:-v2)?$/i.test(lines[0]! ?? "")) return undefined
@@ -515,14 +525,16 @@ export function renderStateDiagram(input: string, width: number): string | undef
   let markerIndex = 0
   let direction: "td" | "bt" | "lr" | "rl" = "td"
 
-  for (const line of lines.slice(1)) {
-    if (line.startsWith("%%") || /^(?:classDef|class|style)\b/i.test(line)) continue
+  for (const written of lines.slice(1)) {
+    if (written.startsWith("%%") || /^(?:classDef|class|style|click|hide\s+empty\s+description|scale\s+\d|title\b|accTitle|accDescr)\b/i.test(written)) continue
+    // `Idle:::busy` styles a state; the name is what is drawn.
+    const line = noteState ? written : written.replace(/:::[\w-]+/g, "")
     if (noteState) {
       if (/^end note$/i.test(line)) noteState = undefined
       else fields.set(noteState, [...(fields.get(noteState) ?? []), cleanMermaidLabel(line)])
       continue
     }
-    const note = /^note\s+(?:left|right)\s+of\s+([\w.-]+)(?:\s*:\s*(.+))?$/i.exec(line)
+    const note = STATE_NOTE.exec(line)
     if (note) {
       touch(note[1]!)
       if (note[2]) fields.set(note[1]!, [...(fields.get(note[1]!) ?? []), `Note: ${cleanMermaidLabel(note[2])}`])
@@ -540,7 +552,7 @@ export function renderStateDiagram(input: string, width: number): string | undef
       continue
     }
 
-    const composite = /^state\s+(?:"([^"]+)"\s+as\s+)?([A-Za-z_][\w.:-]*)\s*\{$/i.exec(line)
+    const composite = STATE_COMPOSITE.exec(line)
     if (composite) {
       const id = composite[2]!
       aliases.set(id, cleanMermaidLabel(composite[1]) || id)
@@ -548,29 +560,34 @@ export function renderStateDiagram(input: string, width: number): string | undef
       continue
     }
 
-    const stateAlias = /^state\s+"([^"]+)"\s+as\s+([A-Za-z][\w-]*)$/i.exec(line)
+    const stateAlias = STATE_ALIAS.exec(line)
     if (stateAlias) {
       aliases.set(stateAlias[2]!, cleanMermaidLabel(stateAlias[1]!))
       touch(stateAlias[2]!)
       continue
     }
 
-    const stereotype = /^state\s+([A-Za-z_][\w.:-]*)\s+<<(fork|join|choice)>>$/i.exec(line)
+    const stereotype = STATE_STEREOTYPE.exec(line)
     if (stereotype) {
       touch(stereotype[1]!)
       aliases.set(stereotype[1]!, `${stereotype[2]!.toLowerCase()} · ${stereotype[1]!}`)
       continue
     }
 
-    const transition = /^(\[\*\]|[A-Za-z_][\w.:-]*)\s*-->\s*(\[\*\]|[A-Za-z_][\w.:-]*)(?:\s*:\s*(.+))?$/.exec(line)
+    const transition = STATE_TRANSITION.exec(line)
     if (!transition) {
-      const description = /^([A-Za-z_][\w.-]*)\s*:\s*(.+)$/.exec(line)
+      const description = STATE_DESCRIPTION.exec(line)
       if (description) {
         touch(description[1]!)
         fields.set(description[1]!, [...(fields.get(description[1]!) ?? []), cleanMermaidLabel(description[2])])
         continue
       }
-      if (line === "--") continue
+      const declared = STATE_DECLARED.exec(line)
+      if (declared) {
+        touch(declared[1]!)
+        continue
+      }
+      if (line === "--" || line === "||") continue
       return undefined
     }
     const from = transition[1]! === "[*]" ? `__state_start_${markerIndex++}` : transition[1]!
@@ -589,11 +606,14 @@ export function renderStateDiagram(input: string, width: number): string | undef
   if (noteState || containers.length || (transitions.length === 0 && knownStates.size === 0)) return undefined
   const labels = new Map<string, string>()
   for (const state of knownStates) labels.set(state, aliases.get(state) ?? state)
-  if (groups.size || fields.size) {
+  /** Every state stacked in one column with its transitions on side channels: what fits when a wider layout does not. */
+  const stacked = () => {
     const nodes = [...knownStates].map((id) => ({ id, label: markerKinds.get(id) === "start" ? "●" : markerKinds.get(id) === "end" ? "◉" : labels.get(id)!, ...(groups.has(id) ? { group: groups.get(id)! } : {}), ...(fields.has(id) ? { fields: fields.get(id)! } : {}) }))
     const edges = transitions.map((edge) => ({ from: edge.from, to: edge.to, ...(edge.label ? { label: edge.label } : {}) }))
-    return sceneText(direction === "lr" || direction === "rl" ? horizontalScene(nodes, edges, width, direction === "rl") : graphScene(direction === "bt" ? nodes.reverse() : nodes, edges, width))
+    const sideways = direction === "lr" || direction === "rl" ? sceneText(horizontalScene(nodes, edges, width, direction === "rl")) : undefined
+    return sideways ?? sceneText(graphScene(direction === "bt" ? nodes.reverse() : nodes, edges, width))
   }
+  if (groups.size || fields.size) return stacked()
   const renderNode = (state: string) => {
     const marker = markerKinds.get(state)
     if (marker) return [" ", marker === "start" ? "●" : "◉", " "]
@@ -625,7 +645,7 @@ export function renderStateDiagram(input: string, width: number): string | undef
       }
     }
     for (const start of starts.length > 0 ? starts : [...knownStates].slice(0, 1)) walk(start, [start], [], new Set([start]))
-    if (paths.length > 32) return undefined
+    if (paths.length > 32) return stacked()
     const rendered = paths.flatMap((path, pathIndex) => {
       const orderedNodes = direction === "rl" ? [...path.nodes].reverse() : path.nodes
       const orderedEdges = direction === "rl" ? [...path.edges].reverse() : path.edges
@@ -644,7 +664,7 @@ export function renderStateDiagram(input: string, width: number): string | undef
       })
       return pathIndex === 0 ? rows : ["", ...rows]
     })
-    return rendered.join("\n")
+    return rendered.some((row) => Bun.stringWidth(row) > width) ? stacked() ?? rendered.join("\n") : rendered.join("\n")
   }
   const ranked = renderRankedVerticalFlowchart({
     edges: transitions,
@@ -655,7 +675,7 @@ export function renderStateDiagram(input: string, width: number): string | undef
     renderNode,
   })
   if (ranked && flowchartOutputFits(ranked, width)) return ranked
-  return renderCompactRankedVerticalFlowchart({
+  const compact = renderCompactRankedVerticalFlowchart({
     edges: transitions,
     labels,
     nodes: [...knownStates],
@@ -663,4 +683,5 @@ export function renderStateDiagram(input: string, width: number): string | undef
     width,
     renderNode,
   })
+  return compact && compact.split("\n").every((row) => Bun.stringWidth(row) <= width) ? compact : stacked() ?? compact
 }
