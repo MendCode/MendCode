@@ -62,6 +62,8 @@ export type ToolContext = {
   loops?: LoopPort
   /** A bot's learning (`bot_note`, `bot_skill`, `bot_schedule`); present only on a bot's turn with `experimental.bots` on. */
   bot?: BotPort
+  /** The Today chat's assistant (`today`); present only in a Today chat (docs/today.md). */
+  today?: TodayPort
   /** This session's git worktree (`worktree`); absent where the host has none. */
   worktrees?: WorktreePort
   /** This session's pull request watches (`pr_watch`); absent where the host has none. */
@@ -165,6 +167,12 @@ export type BotPort = {
   scheduleList(): BotResult
   scheduleCancel(loopId: string): BotResult
 }
+
+/** One `today` tool call as the daemon reads it; the tool's schema (daemon, today-tool.ts) says which fields each action takes. */
+export type TodayRequest = { action: string; ids?: string[] | undefined; project?: string | undefined; category?: string | undefined; query?: string | undefined; decision?: "accept" | "decline" | "review" | undefined; text?: string | undefined; id?: string | undefined; offset?: number | undefined }
+export type TodayResult = { ok: true; text: string; meta?: Record<string, string | number | boolean> } | { ok: false; message: string }
+/** What a Today chat may do (docs/today.md): read the brief, decide pending memories, keep memory rules and standing instructions. */
+export type TodayPort = { run(input: TodayRequest): TodayResult | Promise<TodayResult> }
 
 /** What a worktree move did: where the session works now and what to tell the model. */
 export type WorktreeMove = { ok: true; text: string; directory: string } | { ok: false; message: string }

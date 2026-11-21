@@ -745,11 +745,10 @@ export function createApp(input: AppInput) {
   let whatsNewController: Promise<ReturnType<typeof import("./app/whats-new").createWhatsNew>> | undefined
   const loadWhatsNew = () => (whatsNewController ??= import("./app/whats-new").then((module) => module.createWhatsNew(ctx)))
   const whatsNew = { command: async (args: string) => (await loadWhatsNew()).command(args), key: async (key: string) => (await loadWhatsNew()).key(key) }
-  // `/today` too (docs/today.md): its controller and the page load with the first command, and nothing runs before.
+  // `/today` too (docs/today.md): its controller loads with the first command and nothing runs before. It opens a chat, not a page.
   let todayController: Promise<ReturnType<typeof import("./app/today").createToday>> | undefined
-  let todayLoaded: ReturnType<typeof import("./app/today").createToday> | undefined
-  const loadToday = () => (todayController ??= import("./app/today").then((module) => (todayLoaded = module.createToday(ctx, { switchSession: (sessionId) => switchSession(sessionId), runSlash: (text) => runSlash(text).then(() => {}) }))))
-  const today = { command: async (args: string) => (await loadToday()).command(args), key: async (key: string) => (await loadToday()).key(key), rows: (width: number, height: number) => todayLoaded?.render(width, height) ?? [] }
+  const loadToday = () => (todayController ??= import("./app/today").then((module) => module.createToday(ctx, { switchSession: (sessionId) => switchSession(sessionId) })))
+  const today = { command: async (args: string) => (await loadToday()).command(args) }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { chipped, loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
@@ -935,7 +934,6 @@ export function createApp(input: AppInput) {
     slashCommands: () => editableCatalog(suggestionPool(), appState.settingsNow),
     sessionNav,
     whatsNewKey: whatsNew.key,
-    todayKey: today.key,
     sessionTree,
     tasksKey: subagents.tasksKey,
     controlSession,
@@ -1191,7 +1189,6 @@ export function createApp(input: AppInput) {
     planReviewFrame,
     peerCommandRows: peerCommands.render,
     reviewsRows: reviews.render,
-    todayRows: today.rows,
     agentMetadata,
     psItems: ps.items,
     dropRevealedSecret,

@@ -1,6 +1,7 @@
 import type { AgentPort, AgentProfile } from "@mendcode/engine-native"
 import { parseAgentFile, readLayerAgents, type ExtensionLayer, type FoundAgent } from "@mendcode/packages"
 import type { AgentInfo, AgentsReport, PermissionMode, SessionId, Settings } from "@mendcode/protocol"
+import { TODAY_AGENT_PROMPT } from "./today-tool"
 
 /** The agents the engine owns: `build` is today's behaviour, `plan` is plan mode (selecting it sets the permission mode). */
 export const BUILTIN_AGENTS: readonly AgentInfo[] = [
@@ -72,6 +73,8 @@ export function createAgentRegistry(options: {
   botHint?(name: string): string
   /** Experimental bots flag: while on, a bot's turn opens with who it is. */
   botsOn?(): boolean
+  /** Whether the session is a Today chat (docs/today.md): on the default agent its turns get Today's instructions and tool. */
+  today?(sessionId: SessionId): boolean
 }) {
   const found = (directory: string) => {
     const result = readLayerAgents(options.layers(directory), { projectTrusted: options.isTrusted(directory), modelExists: options.modelExists })
@@ -118,6 +121,8 @@ export function createAgentRegistry(options: {
       const directory = options.directoryOf(sessionId)
       if (!directory) return undefined
       const name = override ?? options.selected(sessionId) ?? "build"
+      // A Today chat keeps the default agent's tools, model and permissions and adds what Today is for; an agent the user picks in it wins.
+      if (!override && name === "build" && options.today?.(sessionId)) return { name: "today", description: "Today: the brief of the day and what the user asked it to do", mode: "primary", prompt: detail?.prompt === false ? "" : TODAY_AGENT_PROMPT, todayTurn: true }
       const agent = usable(directory).find((candidate) => candidate.name === name && (override || options.isChild?.(sessionId) || candidate.mode !== "subagent"))
       if (agent) {
         const profile = toProfile(agent)
