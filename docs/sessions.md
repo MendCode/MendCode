@@ -576,7 +576,7 @@ A fork does not copy this history: it points at its parent's rows up to the cut 
 
 Engines that keep their history elsewhere (Claude Code, Codex) have no `engine_messages`: undo and fork still work on the transcript and files.
 
-Claude Code's conversation is cut too: each turn's message carries a uuid derived from its turn id, and an undo of a message asks Claude Code to `rewind_conversation` before it (right away, or before the next message when no Claude Code process runs), so the report says `history.tracked: true`.
+Claude Code's conversation is cut too: each turn's message carries a uuid derived from its turn id, and an undo of a message asks Claude Code to `rewind_conversation` before it (right away, or before the next message when no Claude Code process runs), so the report says `history.tracked: true`. A message Claude Code never received (its turn stopped or failed before the message was written) has nothing to cut: Claude Code answers `target_not_found` and the undo counts as made, so the next message goes. A turn cancelled while its Claude Code process still starts ends at once instead of after the start, and the process stays for the next message.
 
 Codex still remembers the turn (`history.tracked: false`).
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import type { CommandReply } from "@mendcode/client"
 import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { createEditor } from "../src/view/editor"
@@ -321,6 +322,20 @@ describe("Esc Esc backtrack", () => {
     expect(h.sentOf("session.undo").at(-1)).toMatchObject({ atItemId: h.turns[0]!.items[0]!.itemId })
     expect(h.app.page).toBe("chat")
     expect(h.app.editor.text).toBe(h.turns[0]!.items[0]!.text)
+  })
+
+  test("Enter puts the prompt back before the daemon answers the undo, and a refused undo restores the prompt as it was", async () => {
+    const answers: Array<(reply: CommandReply) => void> = []
+    const h = b56Harness({ reply: (command) => (command.type === "session.undo" ? new Promise<CommandReply>((resolve) => answers.push(resolve)) : undefined) })
+    await h.type("\x1b")
+    await h.type("\x1b")
+    void h.app.onInput("\r")
+    await Bun.sleep(5)
+    expect(h.sentOf("session.undo")).toHaveLength(1)
+    expect(h.app.editor.text).toBe(h.turns[1]!.items[0]!.text)
+    answers[0]!({ ok: false, error: { code: "internal", message: "[DAEMON]: undo failed" } } as CommandReply)
+    await Bun.sleep(5)
+    expect(h.app.editor.text).toBe("")
   })
 
   test("f forks from the selected prompt and Esc leaves the picker", async () => {

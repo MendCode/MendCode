@@ -2271,6 +2271,60 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("an undo of a message Claude Code never received lets the next message go; a cut it refuses for another reason still stops it", async () => {
+    const answer = (api: any) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      streamText(api, 0, "ok")
+      api.push(result())
+    }
+    const refusing = (reason: string) => fakeClaude({ onUser: answer, onControl: (_api, request) => request.subtype === "rewind_conversation" ? { rewound: false, prefillText: null, precedingAssistantUuid: null, error: reason, reason } : undefined })
+    const missing = refusing("target_not_found")
+    const h = engineWith([missing])
+    const undone = turnInput()
+    h.bound.set(undone.input.sessionId, "cc-session-1")
+    expect(await h.engine.rewind!({ sessionId: undone.input.sessionId, turnId: undone.input.turnId })).toBe(true)
+    expect(await h.engine.runTurn(turnInput({ sessionId: undone.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(missing.written.filter((written) => written.type === "user")).toHaveLength(1)
+    // With the process running, the undo of such a message is applied at once: there is nothing of it to cut.
+    expect(await h.engine.rewind!({ sessionId: undone.input.sessionId, turnId: ids("turn") })).toBe(true)
+    h.engine.stop()
+
+    const stale = refusing("stale_target")
+    const other = engineWith([stale])
+    const kept = turnInput()
+    other.bound.set(kept.input.sessionId, "cc-session-1")
+    expect(await other.engine.rewind!({ sessionId: kept.input.sessionId, turnId: kept.input.turnId })).toBe(true)
+    expect(await other.engine.runTurn(turnInput({ sessionId: kept.input.sessionId }).input)).toMatchObject({ status: "error", code: "claude_start" })
+    expect(stale.written.filter((written) => written.type === "user")).toHaveLength(0)
+    other.engine.stop()
+  })
+
+  test("a turn cancelled while Claude Code still starts ends at once, sends nothing, and leaves the process for the next turn", async () => {
+    let answerInitialize: (() => void) | undefined
+    const fake = fakeClaude({
+      onUser: (api) => { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "ok"); api.push(result()) },
+      onControl: (api, request) => {
+        if (request.subtype !== "initialize" || answerInitialize) return undefined
+        answerInitialize = () => api.push({ type: "control_response", response: { subtype: "success", request_id: fake.written.find((written) => written.request?.subtype === "initialize").request_id, response: {} } })
+        return null
+      },
+    })
+    const h = engineWith([fake])
+    const stop = new AbortController()
+    const cancelled = turnInput({ signal: stop.signal })
+    const running = h.engine.runTurn(cancelled.input)
+    await Bun.sleep(5)
+    stop.abort()
+    expect(await Promise.race([running, Bun.sleep(200).then(() => "still starting")])).toEqual({ status: "ok" })
+    answerInitialize!()
+    await Bun.sleep(5)
+    expect(fake.written.filter((written) => written.type === "user")).toHaveLength(0)
+    expect(await h.engine.runTurn(turnInput({ sessionId: cancelled.input.sessionId }).input)).toEqual({ status: "ok" })
+    expect(h.spawned).toHaveLength(1)
+    expect(fake.written.filter((written) => written.type === "user")).toHaveLength(1)
+    h.engine.stop()
+  })
+
   test("an idle compaction leaves an undo waiting for the next message alone and starts no process", async () => {
     const fake = fakeClaude({ onUser: () => {}, onControl: () => ({ rewound: false }) })
     const h = engineWith([fake])
