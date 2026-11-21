@@ -39,6 +39,9 @@ import { labelString, sessionLabel } from "../../view/session-label"
 import { fileInSlot } from "./file-slot"
 import type { createFileOpen } from "./file-open"
 
+/** A pulse at least this frequent carries the panel's animation frames (the spinner's 125 ms against the galaxy's 100 ms). */
+const PULSE_RIDE_MS = 125
+
 /**
  * `look` puts a change on screen for this session of this terminal only (session-look.ts): showing, hiding, presets, an added card and
  * the width. `/panel edit` and `/panel reset` edit the panel's file, every terminal's default.
@@ -227,6 +230,9 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
         ensureData()
         if (state.page !== "chat" || !state.tuiProfile.rightSidebar) return
         if (orbit?.orbitAnimating(true, state.rightFocus, isRunning(), state.reducedMotion, firedAt(), now()) && hasOrbit) orbit.stepOrbit(activeCamera(), velocity, state.reducedMotion)
+        // The spinner's pulse already redraws the screen about as often: the galaxy's step shows on its next frame. Two clocks out of
+        // step drew 18 frames a second while a turn ran with the galaxy in sight; one draws 8.
+        if (state.pulse && state.pulseMs > 0 && state.pulseMs <= PULSE_RIDE_MS) return
         requestFrame()
       }, interval)
       state.rightTick.unref?.()

@@ -46,10 +46,12 @@ export function createTicks(ctx: AppContext, actions: {
     if (state.pulse && (!wanted || every !== pulseMs)) {
       clearInterval(state.pulse)
       state.pulse = undefined
+      state.pulseMs = 0
       if (!wanted) state.pulseOn = true
     }
     if (wanted && !state.pulse) {
       pulseMs = every
+      state.pulseMs = every
       const steps = PULSE_MS * 4 / every
       state.pulse = setInterval(() => {
         state.spinFrame++

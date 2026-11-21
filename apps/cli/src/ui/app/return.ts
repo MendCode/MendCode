@@ -1,3 +1,4 @@
+import type { CommandReply } from "@mendcode/client"
 import { isReturnDialog } from "../../view/return-card"
 import type { AppContext } from "./context"
 
@@ -118,11 +119,12 @@ export function createReturn(ctx: AppContext, actions: { submit(): Promise<void>
   }
 
   /** A session was opened (at start with `launch`, or switched to): its age feeds the idle clock, then the resume questions run. */
-  async function checkResume({ launch = false }: { launch?: boolean } = {}) {
+  async function checkResume({ launch = false, detail: asked }: { launch?: boolean; detail?: Promise<CommandReply> } = {}) {
     const token = ++resumeToken
     const sessionId = state.sessionId
     lastTurnEndAt = 0
-    const reply = await input.send({ type: "session.get", sessionId })
+    // A switch already asked for the session's detail: its answer serves here too.
+    const reply = await (asked ?? input.send({ type: "session.get", sessionId }))
     if (token !== resumeToken || sessionId !== state.sessionId) return
     const detail = reply.ok ? (reply.result?.session as { directory?: string; updatedAt?: number } | undefined) : undefined
     if (detail?.updatedAt) lastActivityAt = detail.updatedAt

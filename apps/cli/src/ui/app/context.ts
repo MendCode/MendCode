@@ -594,6 +594,8 @@ export type AppState = {
   /** When the transcript last scrolled (wheel, key or scrollbar drag): the `auto` scrollbar stays up for a moment after. */
   scrollbarAt: number | undefined
   pulse: ReturnType<typeof setInterval> | undefined
+  /** How often the running pulse draws a frame (0 while none runs): a faster animation elsewhere rides those frames instead of adding its own. */
+  pulseMs: number
   pulseOn: boolean
   /** Highlighted option of the pending approval (rich views), reset per request. */
   approvalChoice: number

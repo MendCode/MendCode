@@ -22,3 +22,20 @@ test("a panel hidden behind an open file stops its clock: no frame a second for 
   await Bun.sleep(1_200)
   expect(h.frames.length).toBe(before)
 }, 15_000)
+
+test("while a turn runs with the galaxy in sight, the galaxy moves on the spinner's frames instead of drawing its own", async () => {
+  const { h, talk } = await chat({ width: 220, height: 50, tier: "full", settings: { reducedMotion: false }, profile: { rightSidebar: true, sidebarWidgets: [{ type: "orbit", options: {} }] } })
+  const turnId = "turn_galaxy"
+  talk.emit({ type: "turn.started", turnId, queueId: "queue_galaxy" } as never)
+  talk.emit({ type: "foreground.state", state: "generating", turnId } as never)
+  await settle()
+  h.app.render()
+  await Bun.sleep(600)
+  const before = h.frames.length
+  await Bun.sleep(2_000)
+  // The spinner draws 8 frames a second; the galaxy's own 10 out of step with it made about 18.
+  const perSecond = (h.frames.length - before) / 2
+  expect(perSecond).toBeGreaterThan(5)
+  expect(perSecond).toBeLessThan(11)
+  talk.emit({ type: "turn.completed", turnId } as never)
+}, 15_000)

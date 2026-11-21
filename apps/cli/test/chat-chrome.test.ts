@@ -66,6 +66,18 @@ describe("UI-1 chat chrome", () => {
     expect(sidebar()).toContain("… Review reconnect")
   })
 
+  test("a switch to a listed chat of the same folder asks for its detail once and does not read the session list again", async () => {
+    const h = chatApp()
+    await Bun.sleep(5)
+    const lists = h.sentOf("session.list").length
+    const gets = h.sentOf("session.get").length
+    await h.type("\x1b[D\x1b[B\r")
+    await Bun.sleep(5)
+    expect(h.app.sessionId).toBe(h.next)
+    expect(h.sentOf("session.list").length).toBe(lists)
+    expect(h.sentOf("session.get").slice(gets).filter((command) => (command as { sessionId: string }).sessionId === h.next)).toHaveLength(1)
+  })
+
   test("left arrow focuses sessions, arrows select, Enter switches; a click switches too", async () => {
     const h = chatApp()
     await Bun.sleep(5)
