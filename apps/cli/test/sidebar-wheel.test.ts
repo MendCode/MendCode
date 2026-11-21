@@ -175,25 +175,37 @@ describe("a horizontal swipe on the sidebar", () => {
     expect(shown(h)).toBe(true)
   })
 
-  test("over the chat body it is ignored, so wide code and diffs keep their own sideways scroll", async () => {
+  test("over the chat body it closes the list too: the swipe works anywhere on the chat page", async () => {
     const h = chatApp({ multi: false })
     await settled(h, "chat 00")
     await flick(h, swipeLeft, 60, 8)
-    expect(shown(h)).toBe(true)
+    expect(shown(h)).toBe(false)
   })
 
-  test("a closed list opens from the chat's outer edge columns only", async () => {
+  test("a closed list opens from anywhere on the chat, and a swipe toward its edge leaves it closed", async () => {
     const h = chatApp({ multi: false, profile: { sidebar: "hidden" } })
     await settled(h, "answer line")
     expect(shown(h)).toBe(false)
+    await flick(h, swipeLeft, 60, 6)
+    expect(shown(h)).toBe(false)
+    h.clock.at += 500
     await flick(h, swipeRight, 60, 6)
-    expect(shown(h)).toBe(false)
-    h.clock.at += 500
-    await flick(h, swipeLeft, 2, 6)
-    expect(shown(h)).toBe(false)
-    h.clock.at += 500
-    await flick(h, swipeRight, 2, 3)
     expect(shown(h)).toBe(true)
+  })
+
+  test("a swipe sets the list hidden or always, never auto, so the next swipe still answers", async () => {
+    const h = chatApp({ multi: false, profile: { sidebar: "auto" } })
+    await settled(h, "chat 00")
+    await flick(h, swipeLeft, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("hidden")
+    h.clock.at += 500
+    await flick(h, swipeRight, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("always")
+    expect(shown(h)).toBe(true)
+    h.clock.at += 500
+    await flick(h, swipeLeft, 60, 8)
+    expect(h.app.tuiProfile.sidebar).toBe("hidden")
+    expect(shown(h)).toBe(false)
   })
 
   test("sidebarSwipe off leaves the list alone", async () => {

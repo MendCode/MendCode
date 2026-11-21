@@ -4,8 +4,6 @@ export const SWIPE_GAP_MS = 150
 export const SWIPE_EVENTS = 3
 /** After a swipe fired, sideways events keep being ignored until this long passed without one (the tail of a trackpad's inertia). */
 export const SWIPE_COOLDOWN_MS = 400
-/** Columns of the chat's outer edge that open a closed list. */
-export const SWIPE_EDGE_COLUMNS = 6
 
 export type SwipeDirection = "left" | "right"
 
