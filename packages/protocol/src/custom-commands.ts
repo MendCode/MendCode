@@ -26,4 +26,6 @@ export type CommandSummary = {
   foreign?: boolean
   /** A skill run as `/name`; its body is read when the command runs. */
   skill?: boolean
+  /** Several packages define this name: it runs none of them and names these (`<package>:<name>`), each its own command. */
+  choices?: string[]
 }

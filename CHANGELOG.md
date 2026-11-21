@@ -24,6 +24,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- When several packages bring a command of the same name, each runs as `/<package>:<name>` and the menu lists all of them; the bare name says which ones exist instead of running one of them.
+- A command whose description is longer than 120 characters loads with the description cut, instead of being left out.
 - A message sent while a tool runs is no longer lost when you cancel the turn before the model reads it: it waits in the queue and goes with your next message.
 - Esc Esc puts the undone message and its images back in the prompt at once, and in a Claude Code session the next message goes through after an undo instead of failing with "did not apply the earlier undo".
 - Computer Use keeps working on an app with no open or focused window (a menu-bar app, or one whose windows were closed): it lists the app's windows, menu bar and status items instead of failing, and menu-bar apps appear in the app list.
