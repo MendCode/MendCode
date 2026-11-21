@@ -2,6 +2,7 @@ import type { ForegroundState, Goal, ItemId, ItemKind, PermissionMode, QueueId, 
 import { glyphs as defaultGlyphs, type Glyphs, type Line, type Span } from "../ui/theme"
 import { splitGraftTally } from "./graft-tally"
 import type { ToolView, TranscriptHooks } from "../extensions/hooks"
+import type { RunningItem } from "./turn-state"
 import { toolArgs, type ToolArgs } from "../extensions/tool-args"
 import { errorBox, statusLine, FULL_REASONING_ROWS, type Attachment, type TurnEnd } from "./chat-blocks"
 import { detailsDefaults, markdownStyleFor, renderMarkdown, wrapSpans } from "./markdown"
@@ -145,10 +146,14 @@ export type AgentThread = {
   tools: number
   last: string | undefined
   tokens: number | undefined
+  /** What it does now (its latest open item), its finished steps (tool calls, thoughts, messages) and when the step in progress began. */
+  current: RunningItem | undefined
+  steps: number
+  stepAt: number | undefined
   /** The model it runs on, when its engine says (Claude Code's sub-agents do), or until then the one its call asked for; never its parent's. */
   model?: string
 }
-type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
+type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; open: Map<ItemId, RunningItem>; steps: number; stepAt: number | undefined; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
 
 export type ImageRow = { sha256: string; index: number; row: number; rows: number; cols: number; col: number }
 
@@ -999,7 +1004,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       // A thread opened after the view changed starts the way the conversation reads now.
       const transcript = createTranscript({ ...options, mode })
       if (appearanceChanged) transcript.setAppearance({ ...appearance, reasoning: reasoningVisibility, toolOutput })
-      threads.set(parent, (thread = { transcript, tools: 0, last: undefined, model: undefined, ended: undefined }))
+      threads.set(parent, (thread = { transcript, tools: 0, last: undefined, model: undefined, open: new Map(), steps: 0, stepAt: undefined, ended: undefined }))
     }
     // The thread reads the item as one of its own: without the mark, which would send it to a thread of the thread.
     let own: SessionEvent = event
@@ -1015,6 +1020,19 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if (event.type === "item.started" && event.kind === "tool_call") {
       thread.tools++
       if (typeof event.meta?.tool === "string") thread.last = event.meta.tool
+    }
+    // What it does now, for the activity status of its open thread: the same steps the main agent's row counts.
+    if (event.type === "item.started") {
+      const title = typeof event.meta?.tool === "string" ? event.meta.tool : ""
+      const tool = title ? title.split(":")[0]!.trim() : undefined
+      const detail = tool === "shell" && title.includes(":") ? title.slice(title.indexOf(":") + 1).trim() : ""
+      thread.open.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}), ...(detail ? { detail } : {}) })
+      thread.stepAt = event.at
+    }
+    if (event.type === "item.completed") {
+      const kind = thread.open.get(event.itemId)?.kind
+      if (thread.open.delete(event.itemId) && event.meta?.agentEnd !== true && (kind === "tool_call" || kind === "reasoning" || kind === "agent_message")) thread.steps++
+      thread.stepAt = event.at
     }
     if (event.type === "item.completed" && event.meta?.agentEnd === true) {
       const count = (value: unknown) => (typeof value === "number" ? value : 0)
@@ -1041,6 +1059,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       itemId: block.itemId, description, agent: typeof block.meta?.agent === "string" ? block.meta.agent : "agent", background, running, status,
       ...(stoppedByUser ? { stoppedByUser: true as const } : {}),
       startedAt: block.at, endedAt: thread?.ended?.at ?? block.endAt, tools: thread?.ended?.tools ?? thread?.tools ?? 0, last: thread?.last, tokens: thread?.ended?.tokens || undefined, ...(model ? { model } : {}),
+      current: thread ? [...thread.open.values()].at(-1) : undefined, steps: thread?.steps ?? 0, stepAt: thread?.stepAt,
     }
   }
 
@@ -1301,6 +1320,9 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     for (const thread of threads.values()) {
       thread.tools = 0
       thread.last = undefined
+      thread.open.clear()
+      thread.steps = 0
+      thread.stepAt = undefined
       thread.ended = undefined
     }
     replayed = new Map()
