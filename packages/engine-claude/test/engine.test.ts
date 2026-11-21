@@ -1797,6 +1797,79 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("an agent a message starts again in a new process (its notice names the message's call, its records its first call and its agent id) fills one thread and ends there", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "assistant", message: { id: "msg_send", content: [{ type: "tool_use", id: "toolu_send", name: "SendMessage", input: { to: "a525", message: "phase two" } }] } })
+        api.push({ type: "system", subtype: "task_started", task_id: "a525", tool_use_id: "toolu_send", task_type: "local_agent", description: "Fable redesigns Markets", subagent_type: "claude", prompt: "phase two" })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_send", content: "Resuming agent a525" }] } })
+        streamText(api, 1, "sent")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    const call = turn.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    expect(call).toMatchObject({ kind: "tool_call", meta: { tool: "agent Fable redesigns Markets", background: true } })
+    if (call?.type !== "item.started") throw new Error("no adopted call")
+    const prompt = turn.events.filter((event) => event.type === "item.completed" && event.meta?.agentParent === call.itemId)
+    expect(prompt.map((event) => event.type === "item.completed" ? event.text : "")).toEqual(["phase two"])
+    // After the turn, its records (first call's id, its agent id) and its end (the message's call) reach the same thread.
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_first_agent", agent_id: "a525", message: { content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/work/app/markets.ts" } }] } })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a525", tool_use_id: "toolu_send", status: "completed", summary: "phase two done", usage: { tool_uses: 1, total_tokens: 10, duration_ms: 5 } })
+    await Bun.sleep(10)
+    expect(late.map((entry) => "meta" in entry.event ? entry.event.meta?.agentParent : undefined).every((parent) => parent === call.itemId)).toBe(true)
+    expect(late[0]!.event).toMatchObject({ type: "item.started", meta: { tool: "read: /work/app/markets.ts" } })
+    expect(late.at(-1)!.event).toMatchObject({ text: "phase two done", meta: { agentEnd: true } })
+    h.engine.stop()
+  })
+
+  test("an ended agent a later turn's message starts again in the same process shows the message once, then its work and second end in its first thread", async () => {
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (turns === 1) {
+          streamTool(api, 0, "toolu_agent", "Agent", { description: "Markets", subagent_type: "general-purpose", prompt: "build it", run_in_background: true })
+          api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a694" }] } })
+          api.push({ type: "system", subtype: "task_started", task_id: "a694", tool_use_id: "toolu_agent", task_type: "local_agent", description: "Markets", prompt: "build it" })
+        } else {
+          api.push({ type: "assistant", message: { id: "msg_send", content: [{ type: "tool_use", id: "toolu_send", name: "SendMessage", input: { to: "a694", message: "phase two" } }] } })
+          api.push({ type: "system", subtype: "task_started", task_id: "a694", tool_use_id: "toolu_send", task_type: "local_agent", description: "Markets", prompt: "phase two" })
+          api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_send", content: "Resuming agent a694" }] } })
+        }
+        streamText(api, 1, "ok")
+        api.push(result())
+      },
+    })
+    const late: Array<{ turnId: string; event: EngineEvent }> = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, turnId, event) => void late.push({ turnId, event }) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const call = first.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    if (call?.type !== "item.started") throw new Error("no agent call")
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a694", tool_use_id: "toolu_agent", status: "completed", summary: "first round done", usage: { tool_uses: 1, total_tokens: 10, duration_ms: 5 } })
+    await Bun.sleep(10)
+    const second = turnInput({ sessionId: first.input.sessionId })
+    expect(await h.engine.runTurn(second.input)).toEqual({ status: "ok" })
+    expect(second.events.some((event) => event.type === "item.started" && event.meta?.subagent === true)).toBe(false)
+    const resumedFrom = late.length
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", agent_id: "a694", message: { content: [{ type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "/work/app/markets.ts" } }] } })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a694", tool_use_id: "toolu_send", status: "completed", summary: "phase two done", usage: { tool_uses: 2, total_tokens: 20, duration_ms: 9 } })
+    await Bun.sleep(10)
+    const everything = [...first.events, ...second.events, ...late.map((entry) => entry.event)]
+    const messages = everything.filter((event) => event.type === "item.completed" && event.meta?.agentParent === call.itemId && event.text === "phase two")
+    expect(messages).toHaveLength(1)
+    expect(late.slice(resumedFrom).every((entry) => "meta" in entry.event && entry.event.meta?.agentParent === call.itemId)).toBe(true)
+    expect(late.slice(resumedFrom)[0]!.event).toMatchObject({ type: "item.started", meta: { tool: "read: /work/app/markets.ts" } })
+    expect(late.at(-1)!.event).toMatchObject({ text: "phase two done", meta: { agentEnd: true } })
+    h.engine.stop()
+  })
+
   test("a message the main agent sends to a running sub-agent shows once in that sub-agent's thread, also from a later turn", async () => {
     const sendMessage = (id: string) => ({ type: "assistant", message: { id: `msg_${id}`, content: [{ type: "tool_use", id, name: "SendMessage", input: { to: "a5c8", summary: "fix", message: "caso-87 is part of what is wrong" } }] } })
     let turns = 0

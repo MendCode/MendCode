@@ -647,9 +647,14 @@ export function createClaudeEngine(options: {
     // Only Claude Code's start notice: a sub-agent record can come before the turn's own Agent call is registered.
     if (message.type !== "system" || message.subtype !== "task_started" || message.task_type !== "local_agent" || message.owned_by_subagent === true) return
     const toolUseId = message.tool_use_id
-    if (typeof toolUseId !== "string" || !toolUseId || mapper.knowsToolUse(toolUseId)) return
+    if (typeof toolUseId !== "string" || !toolUseId || mapper.isAgentCall(toolUseId)) return
+    const taskId = typeof message.task_id === "string" && message.task_id ? message.task_id : undefined
+    // Started again by this turn's `SendMessage`: the notice names that call, and the agent's records its first call, which no turn of
+    // this process showed. The agent is then keyed by its id, which both carry.
+    const key = mapper.knowsToolUse(toolUseId) ? taskId && `task:${taskId}` : toolUseId
+    if (!key) return
     const description = typeof message.description === "string" && message.description.trim() ? message.description.trim() : "resumed sub-agent"
-    mapper.adoptAgent({ toolUseId, description, ...(typeof message.subagent_type === "string" ? { agent: message.subagent_type } : {}) })
+    mapper.adoptAgent({ toolUseId: key, ...(taskId ? { taskId } : {}), description, ...(typeof message.subagent_type === "string" ? { agent: message.subagent_type } : {}) })
   }
 
   /** The main agent's `SendMessage` to a sub-agent, from this turn or an earlier one, shows in that sub-agent's thread. */
