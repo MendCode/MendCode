@@ -22,14 +22,18 @@ export function sessionChildren(state: AppState, input: { now: number; sep: stri
   }
   // What runs in the background of this session (the model's shells, Claude Code's own agents and commands).
   // Inside a sub-agent's own session the list is its parent's (`refreshLiveTasks`): the parent's engine agents stay in it too.
-  const owner = (shell: AgentShell) => shell.sessionId === state.sessionId || (shell.kind === "agent" && state.sessionParentId !== undefined && shell.sessionId === state.sessionParentId)
-  const running = state.agentShells.filter((shell) => shell.status === "running" && owner(shell) && !threads.some((thread) => thread.running && sameAgentName(shell.command, thread.description)))
+  const own = (shell: AgentShell) => shell.sessionId === state.sessionId
+  const owner = (shell: AgentShell) => own(shell) || (shell.kind === "agent" && state.sessionParentId !== undefined && shell.sessionId === state.sessionParentId)
+  // `threads` are this session's: only its own agents are the same as one of them. A parent's agent with the same description
+  // is another agent, never merged with (or shown as) a thread of this session.
+  const sameThread = (shell: AgentShell, description: string) => own(shell) && sameAgentName(shell.command, description)
+  const running = state.agentShells.filter((shell) => shell.status === "running" && owner(shell) && !threads.some((thread) => thread.running && sameThread(shell, thread.description)))
   // Claude Code's background agents are sub-agents like the others: its call ends at once, so the thread looks done while the
   // agent works on. They join the list as running agents (their thread's row, when the transcript has one).
   const backgroundAgents = running.filter((shell) => shell.kind === "agent")
   const commands: AgentShell[] = running.filter((shell) => shell.kind !== "agent")
   const agentTasks: StripTask[] = backgroundAgents.map((shell) => {
-    const thread = threadTasks.find((task) => sameAgentName(shell.command, task.description))
+    const thread = threadTasks.find((task) => sameThread(shell, task.description))
     return { ...(thread ?? { taskId: shell.id as never, description: shell.command, agent: "agent", createdAt: shell.startedAt, updatedAt: shell.startedAt }), background: true, state: "running" }
   })
   const tasks: StripTask[] = [...(state.liveTasks ?? []), ...threadTasks.filter((task) => !agentTasks.some((agent) => agent.taskId === task.taskId)), ...agentTasks]
