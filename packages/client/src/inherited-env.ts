@@ -18,7 +18,7 @@ export const HOST_SESSION_ENV = [
 /**
  * What the tuios terminal multiplexer puts in each pane's shell (tuios 0.10.1): that pane's identity, its token and the session it
  * belongs to. A MendCode terminal in a tuios pane starts the daemon when none runs, and every command, hook or `mendcode` the daemon's
- * sessions start would then speak to tuios as that one pane (seen live: a daemon carried a Symbex pane's `TUIOS_PANE_TOKEN`). The
+ * sessions start would then speak to tuios as that one pane (seen live: a daemon carried another project's pane's `TUIOS_PANE_TOKEN`). The
  * terminal itself keeps them (`herdr.ts` reports its own pane), and so does a terminal hosting the daemon in its own process: that
  * daemon is the pane's and ends with it. A daemon of its own process is no pane's. The Rex multiplexer does the same with `REX_SESSION`
  * and `REX_BLOCK` (its guide tells agents they mean "here"); `REX_SERVER` and `REX_BIN_DIR` name the installation, not a pane, and stay.

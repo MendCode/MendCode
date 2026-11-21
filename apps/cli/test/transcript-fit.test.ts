@@ -25,7 +25,7 @@ const SOURCES = {
   grepPattern: words("grp", 20, ","),
   fetchUrl: `example.com/${words("web", 16, "/")}`,
   // The Claude Code engine's titles have no `tool: ` prefix: a bash command is the whole title, the others are `verb argument`.
-  claudeCommand: `cd /srv/claude-code/heltecv4-32bit-windows && make release BASE_URL=${words("bsh", 20, "/")}`,
+  claudeCommand: `cd /srv/claude-code/lorabox4-32bit-windows && make release BASE_URL=${words("bsh", 20, "/")}`,
   claudeRunning: `bun scripts/build.ts --base-url ${words("bsr", 20, "/")}`,
   claudeRead: `read /Users/user/Code/${words("crd", 16, "/")}/index.ts`,
   claudeEdit: `edit /Users/user/Code/${words("ced", 16, "/")}/index.ts`,

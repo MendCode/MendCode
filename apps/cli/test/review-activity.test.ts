@@ -36,7 +36,7 @@ function harness(options: { width?: number; height?: number; mode?: "balanced" |
 }
 
 const running = (sessionId: string, patch: Partial<ReviewActivityJob> = {}): ReviewActivityJob => ({
-  jobId: "prj_1", sessionId: sessionId as never, repo: "Eden-sudo/Symbex-1", number: 25, phase: "analysis", startedAt: NOW - 80 * SEC,
+  jobId: "prj_1", sessionId: sessionId as never, repo: "acme/shop-api", number: 25, phase: "analysis", startedAt: NOW - 80 * SEC,
   steps: [
     { label: "Fetching #25", detail: "head 51fe4047", startedAt: NOW - 80 * SEC, endedAt: NOW - 76 * SEC },
     { label: "Readers", detail: "32 files · gpt-6-luna", startedAt: NOW - 76 * SEC, endedAt: NOW - 60 * SEC },
@@ -50,7 +50,7 @@ describe("a PR review at work", () => {
   beforeAll(() => loadReviewActivity())
   test("the watching session shows one live line: the PR, its phase, the running step's detail and the time", () => {
     const h = harness()
-    h.note("Watching Eden-sudo/Symbex-1.")
+    h.note("Watching acme/shop-api.")
     h.global({ type: "pr.review.activity", jobs: [running(h.sessionId)] })
     const rows = h.text()
     const live = rows.filter((row) => row.includes("Reviewing #25"))
@@ -64,10 +64,10 @@ describe("a PR review at work", () => {
 
     // The run ends: the line goes, and the final note the daemon records is what stays.
     h.global({ type: "pr.review.activity", jobs: [] })
-    h.note("PR review of Eden-sudo/Symbex-1#25: no findings.")
+    h.note("PR review of acme/shop-api#25: no findings.")
     const after = h.text().join("\n")
     expect(after).not.toContain("Reviewing #25")
-    expect(after).toContain("PR review of Eden-sudo/Symbex-1#25: no findings.")
+    expect(after).toContain("PR review of acme/shop-api#25: no findings.")
     if (process.env.CAPTURE_DIR) writeFileSync(`${process.env.CAPTURE_DIR}/watch-session-done-100x30.txt`, h.text().join("\n"))
   })
 
@@ -76,20 +76,20 @@ describe("a PR review at work", () => {
     h.note("Working on something else.")
     h.global({ type: "pr.review.activity", jobs: [running("ses_watch")] })
     const screen = h.text().join("\n")
-    expect(screen).toContain("reviewing Symbex-1#25")
+    expect(screen).toContain("reviewing shop-api#25")
     expect(screen).not.toContain("Reviewing #25")
     if (process.env.CAPTURE_DIR) writeFileSync(`${process.env.CAPTURE_DIR}/other-session-footer-100x30.txt`, h.text().join("\n"))
     h.global({ type: "pr.review.activity", jobs: [] })
-    expect(h.text().join("\n")).not.toContain("reviewing Symbex-1#25")
+    expect(h.text().join("\n")).not.toContain("reviewing shop-api#25")
   })
 
   test("the words: one review, several, and none elsewhere", () => {
     const one = running("ses_a")
-    const two = running("ses_b", { jobId: "prj_2", number: 23, repo: "Eden-sudo/Symbex-1", phase: "corroboration" })
-    expect(reviewFooterWord([one, two], "ses_c")).toBe("reviewing Symbex-1#25 +1")
+    const two = running("ses_b", { jobId: "prj_2", number: 23, repo: "acme/shop-api", phase: "corroboration" })
+    expect(reviewFooterWord([one, two], "ses_c")).toBe("reviewing shop-api#25 +1")
     expect(reviewFooterWord([one], "ses_a")).toBeUndefined()
     // While the watching session's own turn holds the activity status, the footer names its review instead.
-    expect(reviewFooterWord([one], "ses_a", true)).toBe("reviewing Symbex-1#25")
+    expect(reviewFooterWord([one], "ses_a", true)).toBe("reviewing shop-api#25")
     expect(reviewPhase([two])).toBe("Reviewing #23 · corroboration · 112 files · incremental...")
     expect(reviewPhase([one, two])).toBe("Reviewing #25 · analysis · 112 files · incremental · +1...")
   })

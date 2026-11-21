@@ -155,7 +155,7 @@ describe("bot.list", () => {
     const h = await boot({})
     harnesses.push(h)
     const { listBots } = await import("../src/bot-service")
-    const agents = () => ({ directory: h.dir, agents: [{ name: "mendy", description: "d", source: "user", trusted: true, file: "mendy.md", mode: "primary", bot: { shape: "circle", color: "success", origin: "local" } }], problems: [] }) as never
+    const agents = () => ({ directory: h.dir, agents: [{ name: "scout", description: "d", source: "user", trusted: true, file: "scout.md", mode: "primary", bot: { shape: "circle", color: "success", origin: "local" } }], problems: [] }) as never
     const failed = (updatedAt: number) => [{ sessionId: "ses_X", title: "t", directory: "/work", createdAt: 1, updatedAt, lastSeq: 1, queued: 0, status: "failed", permission: "ask" }] as never
     const now = 50 * 60_000
     const fresh = await listBots({ dir: h.dir, agents, sessions: () => failed(now - 2 * 60_000), connectors: () => [], now: () => now })

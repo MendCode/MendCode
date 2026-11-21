@@ -6,7 +6,7 @@ const NOW = 10_000_000
 const MINUTE = 60_000
 const identity = { shape: "circle", color: "success", origin: "mendcode" }
 const report = (statuses: Array<[string, string, number]>) => ({
-  bots: [{ name: "mendy", description: "", identity, file: "/d/mendy.md", state: "idle", schedules: [], projects: [{ directory: "/work", state: "idle", sessions: statuses.map(([sessionId, status, updatedAt]) => ({ sessionId, title: "t", status, updatedAt })) }] }],
+  bots: [{ name: "scout", description: "", identity, file: "/d/scout.md", state: "idle", schedules: [], projects: [{ directory: "/work", state: "idle", sessions: statuses.map(([sessionId, status, updatedAt]) => ({ sessionId, title: "t", status, updatedAt })) }] }],
   external: [],
   problems: [],
 }) as unknown as BotListReport

@@ -12,11 +12,11 @@ export type ReviewActivityJob = Extract<GlobalEvent, { type: "pr.review.activity
 /** The reviews whose watching session is `sessionId`. */
 export const reviewsIn = (jobs: readonly ReviewActivityJob[], sessionId: string) => jobs.filter((job) => job.sessionId === sessionId)
 
-/** `Eden-sudo/Symbex-1` #25 as the footer names it: the repository without its owner. */
+/** `acme/shop-api` #25 as the footer names it: the repository without its owner. */
 const shortName = (job: ReviewActivityJob) => `${job.repo.split("/").at(-1) ?? job.repo}#${job.number}`
 
 /**
- * The footer's word for the reviews it should name (`reviewing Symbex-1#25 +1`), or undefined: those of other sessions, and this
+ * The footer's word for the reviews it should name (`reviewing shop-api#25 +1`), or undefined: those of other sessions, and this
  * session's own while its turn holds the activity status.
  */
 export function reviewFooterWord(jobs: readonly ReviewActivityJob[], sessionId: string, ownBusy = false): string | undefined {
