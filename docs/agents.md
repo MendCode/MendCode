@@ -660,6 +660,12 @@ You review gently…
 
 All of them end in the same file, so writing it by hand is the same bot.
 
+From a shell, `mendcode bot list` prints every bot (yours and an app's, such as Hermes) with its state, how many chats it has and
+in how many folders, how many are running or waiting for you, when the last one moved, its model and its schedules.
+`mendcode bot show <name>` (any case) prints one bot's chats by folder, newest first, each with its status, age, session id (for
+`mendcode attach`) and title, then its schedules. Both are read only, answer from `bot.list`, take `--json`, and fail with the
+daemon's reason while bots are off.
+
 ### The bot form
 
 `/bot new`, `/bot edit` and Edit (`e`) on a bot's page open one form: name (checked like an agent name; fixed when editing), color and shape (`auto` takes them from the name), face (generated, or the path of a `.png` or `.webp` checked by the avatar rules above), personality (the body of the file; with `$VISUAL` or `$EDITOR` set an "open in $EDITOR" row also edits it there), model (the catalog, or the session's own) and permission (`plan`, `ask`, `smart` by default, `edits`, `full`). A live face above the rows follows the name, shape and color: the generated picture (or the bot's own image) where the terminal draws images, else a small pixel-art face of half blocks (plain ASCII with the ASCII glyph setting). Tab or ↑↓ move between rows, ←→ change a choice, Enter on a button presses it, Esc discards. A problem shows under its row; nothing is written while one is open. The bot's page also has Delete (`d`) and the form has a Delete button; both ask first as `/bot delete` does.

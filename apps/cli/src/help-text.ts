@@ -437,6 +437,18 @@ export const AGENT_HELP = text([
   "Also: debug agent <name> [--tool ID] [--params JSON]",
 ])
 
+export const BOT_HELP = text([
+  `usage: ${P} bot list|show NAME [--dir D] [--json]`,
+  "",
+  "  list                    every bot (yours and other apps'): state, chats,",
+  "                          how many run or wait for you, schedules",
+  "  show NAME               one bot: its chats by folder with their status,",
+  "                          and its schedules",
+  "",
+  "Read only; bots are experimental (/experimental bots on in the terminal).",
+  "Make, edit and teach them with /bot in the terminal.",
+])
+
 export const STORAGE_HELP = text([
   `usage: ${P} storage [options] [--json]`,
   "",

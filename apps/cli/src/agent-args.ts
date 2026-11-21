@@ -1,4 +1,4 @@
-import { AGENT_HELP } from "./help-text"
+import { AGENT_HELP, BOT_HELP } from "./help-text"
 import { AGENT_CREATE_NAME, AGENT_CREATE_PERMISSIONS } from "@mendcode/protocol/wire"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
@@ -8,10 +8,30 @@ export type AgentAutomation =
   | { kind: "agent.list" }
   | { kind: "agent.create"; path?: string; description?: string; name?: string; mode?: "all" | "primary" | "subagent"; permissions?: string[]; model?: string; generate?: boolean }
   | { kind: "agent.debug"; name: string; tool?: string; params?: Record<string, unknown> }
+  /** `bot list` (no name) or `bot show NAME`: read-only, from the daemon's `bot.list`. */
+  | { kind: "agent.bots"; name?: string }
 
 export const AGENT_USAGE = AGENT_HELP
+export const BOT_USAGE = BOT_HELP
 const VALUES = new Set(["dir", "data-dir", "engine", "format", "compat", "path", "description", "mode", "permissions", "tools", "model", "name", "tool", "params"])
 const COMMON = ["dir", "data-dir", "engine", "format", "compat", "json", "help"]
+
+function parseBot(words: string[], flags: Map<string, string | true>, error: string | undefined): ParseResult {
+  const bad = (message: string): ParseResult => ({ ok: false, topic: "bot", message })
+  if (error) return bad(error)
+  if (flags.has("help")) return { ok: true, command: { kind: "help", topic: "bot", json: false } }
+  for (const key of flags.keys()) if (!["dir", "data-dir", "format", "json"].includes(key)) return bad(`--${key} does not apply to bot`)
+  const format = flags.get("format")
+  if (format !== undefined && !["text", "json", "table"].includes(String(format))) return bad("--format needs text|json|table")
+  const dir = flags.get("data-dir") ?? flags.get("dir")
+  if (dir !== undefined && (typeof dir !== "string" || !dir)) return bad("Data directory cannot be empty")
+  const common: Common = { json: flags.has("json") || format === "json", ...(typeof dir === "string" ? { dir } : {}) }
+  const [, operation = "list", name, ...extra] = words
+  if (operation === "list" && name === undefined) return { ok: true, command: { ...common, kind: "agent.bots" } }
+  // An app's bot keeps its own name (`Adrián`), so any printable name up to 100 characters is looked up; matching ignores case.
+  if (operation === "show" && name?.trim() && !extra.length && name.length <= 100 && !/[\x00-\x1f\x7f]/.test(name)) return { ok: true, command: { ...common, kind: "agent.bots", name } }
+  return bad(BOT_HELP)
+}
 
 export function parseAgent(argv: string[]): ParseResult | undefined {
   const words: string[] = []
@@ -31,6 +51,7 @@ export function parseAgent(argv: string[]): ParseResult | undefined {
       else flags.set(name!, value)
     } else error ??= `unknown flag ${token}`
   }
+  if (words[0] === "bot" || words[0] === "bots") return parseBot(words, flags, error)
   if (words[0] !== "agent" && !(words[0] === "debug" && words[1] === "agent")) return undefined
   const bad = (message: string): ParseResult => ({ ok: false, topic: "agent", message })
   if (error) return bad(error)

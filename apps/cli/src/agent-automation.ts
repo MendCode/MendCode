@@ -1,6 +1,7 @@
 import path from "node:path"
 import type { CommandInput } from "@mendcode/client"
-import type { AgentsReport, AgentDebugReport } from "@mendcode/protocol"
+import type { AgentsReport, AgentDebugReport, BotListReport } from "@mendcode/protocol"
+import { PROGRAM_NAME } from "@mendcode/program"
 import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import type { AutomationDeps, Common } from "./automation"
 import type { AgentAutomation } from "./agent-args"
@@ -31,6 +32,16 @@ export function createAgentAutomation(ctx: Context) {
         const rows = agents.flatMap((agent) => [`${clean(agent.name)} (${agent.mode})${agent.trusted ? "" : " [untrusted]"}`, `  ${JSON.stringify(agent.permissionRules ?? agent.permission ?? [])}`])
         rows.push(...report.problems.map((problem) => `${clean(problem.file)}: ${clean(problem.message)}`))
         return ctx.result({ ...report, agents }, rows.join("\n") + "\n")
+      }
+      if (command.kind === "agent.bots") {
+        const reply = await ctx.request({ type: "bot.list" })
+        if (!reply.ok) return ctx.fail(reply.message, 1, reply.code)
+        const report = reply.result as unknown as BotListReport
+        const { botListText, botShowText, findBot } = await import("./bot-output")
+        if (!command.name) return ctx.result(reply.result, botListText(report, ctx.now()))
+        const found = findBot(report, command.name)
+        if (!found) return ctx.fail(`No bot named ${command.name}; ${PROGRAM_NAME} bot list shows them`, 1, "not_found")
+        return ctx.result(found as unknown as Record<string, unknown>, botShowText(found, ctx.now()))
       }
       if (ctx.allowFiles === false) throw new Usage("Agent creation and debug are local only")
       if (command.kind === "agent.debug") {

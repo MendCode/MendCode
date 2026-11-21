@@ -29,7 +29,7 @@ import packageJson from "../package.json"
 import { CATALOG_USAGE, parseCatalog, type CatalogAutomation } from "./catalog-args"
 import { THEME_USAGE, parseTheme, type ThemeAutomation } from "./theme-args"
 import { CONFIG_BUNDLE_USAGE, parseConfigBundle, type ConfigBundleAutomation } from "./config-bundle-args"
-import { AGENT_USAGE, parseAgent, type AgentAutomation } from "./agent-args"
+import { AGENT_USAGE, BOT_USAGE, parseAgent, type AgentAutomation } from "./agent-args"
 import { parseTransferExport, parseTransferImport, TRANSFER_EXPORT_USAGE, TRANSFER_IMPORT_USAGE, type TransferImport } from "./session-transfer-args"
 import { jobAliases } from "./job-aliases"
 import { indexText, tidyHelp } from "./help-index"
@@ -334,6 +334,7 @@ export const USAGE: Record<string, string> = {
   theme: THEME_USAGE,
   "config-bundle": CONFIG_BUNDLE_USAGE,
   agent: AGENT_USAGE,
+  bot: BOT_USAGE,
   export: TRANSFER_EXPORT_USAGE,
   import: TRANSFER_IMPORT_USAGE,
   worktree: WORKTREE_USAGE,
@@ -1404,7 +1405,8 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     }
     case "agent.list":
     case "agent.create":
-    case "agent.debug": {
+    case "agent.debug":
+    case "agent.bots": {
       const { createAgentAutomation } = await import("./agent-automation")
       return createAgentAutomation({ ...deps, directory: dir, request: daemon, result, fail })(command)
     }

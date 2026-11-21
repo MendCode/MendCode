@@ -36,6 +36,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     e("providers", "providers list|logout", "signed-in providers"),
     e("mcp", "mcp <command>", "MCP servers: list, add, auth, debug"),
     e("agent", "agent list|create", "agents"),
+    e("bot", "bot list|show NAME", "bots: state, chats, schedules"),
     e("recipe", "recipe list|apply NAME", "model recipes"),
     e("prompt", "prompt <command>", "how the system prompt is built"),
     e("cache", "cache <command>", "prompt cache on or off"),
