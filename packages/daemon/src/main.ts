@@ -107,7 +107,7 @@ import { createCodegraphStatus } from "./codegraph-status"
 import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
-import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
+import { createPromptModes, graphAutopilotPart, graphLocatePart, visiblePlanPart } from "./prompt-modes"
 import { renderingFor, renderingText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { withRunLimitGuard } from "./run-limit-guard"
@@ -200,7 +200,9 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
+const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), searchOn: () => featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
+/** The graph's answer for a text search (docs/code-graph.md, "Graph answers in a text search"); absent with `MENDCODE_CODEGRAPH=0`. */
+const searchHint = graph?.searchHint
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
 const codeGate = graph?.gate
 // Builds the graph of a real project by itself and keeps it fresh (feature `graph_autopilot`, nightly/dev/local by default); the same gate decides where.
@@ -459,6 +461,8 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
       { id: "skills", label: "skills", text: skillBlock, count: (skillBlock.match(/^- /gm) ?? []).length },
       // One line while `todo` is listed (balanced and full, feature `visible_plan`): the user follows the list in the progress row.
       visiblePlanPart(tools),
+      // One line while `graph_find` is listed: a symbol is looked up in the graph first, and what the `[code graph]` block above a search is.
+      graphLocatePart(tools),
       // One line while the feature is on and `graph_find` is listed: the graph is built and kept fresh for the model, which locates code with it first.
       graphAutopilotPart({ tools, on: featureOn(extractionSettings(), "graph_autopilot", { safeMode }) }),
       { id: "capabilities-index", label: "MendCode capabilities", text: tools ? capabilityIndex(tools) : "" },
@@ -690,6 +694,8 @@ export const daemon = await startDaemon({
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
+              // A Grep or a Bash grep/rg for identifiers the code graph knows gets its answer as the call's context (its sub-agents' calls too).
+              ...(searchHint ? { searchHint } : {}),
               replyLanguage,
               // Smart mode decides as it does natively: Claude's tool names become the native ones the rules know.
               smart: ({ sessionId, tool, permission, args, cwd: root }) => {
@@ -903,6 +909,8 @@ export const daemon = await startDaemon({
           afterWrite,
           lateWriteNotes: afterWrite.late,
           oneTree: oneTree.note,
+          // A `grep` or a shell grep/rg for identifiers the code graph knows carries its answer above the search's own output.
+          ...(searchHint ? { searchHint } : {}),
           // The subscription backend runs web search itself: no API key, no local process. MENDCODE_WEB_SEARCH=0 turns it off.
           // The provider-run web search is offered only when no `websearch` tool is registered: the model needs one way to search, and the hosted one has been failing.
           hostedTools: () => [...(process.env.MENDCODE_WEB_SEARCH === "0" || keyedTools.length ? [] : (["web_search"] as const)), ...(process.env.MENDCODE_IMAGE_GEN === "0" ? [] : (["image_generation"] as const))],

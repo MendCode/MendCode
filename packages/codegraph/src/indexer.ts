@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, utimes, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { buildGraph, type Graph } from "./graph"
+import { cacheName } from "./cache-name"
 import { HOSTED_SCAN_FILES, hostedScan } from "./scan-host"
 import { readWiring, wiringStamp } from "./graft"
 import { scanSource } from "./scan"
@@ -47,6 +47,11 @@ export type Indexer = {
   graph(args: { cwd: string; signal: AbortSignal }): Promise<Graph>
   /** Last in-memory graph only: post-edit notes must never rebuild or walk the project. */
   peek(cwd: string): Graph | undefined
+  /**
+   * The graph of `cwd` as it was last indexed: the one in memory, else the one its cache file holds, loaded once and kept like any
+   * other. No walk and no scan, so files changed since are not seen; undefined when the project was never indexed or is being indexed now.
+   */
+  cached(cwd: string): Promise<Graph | undefined>
   /** Path of the JSON cache file for `cwd`. */
   cachePath(cwd: string): string
   /** Where a build or refresh of `cwd` that is running now stands; undefined when none runs. */
@@ -60,7 +65,7 @@ type State = { cache: CacheFile; graph: Graph | undefined; dirty: boolean }
 
 const aborted = () => new DOMException("aborted", "AbortError")
 
-export const cacheName = (cwd: string): string => `${createHash("sha1").update(cwd).digest("hex").slice(0, 16)}.json`
+export { cacheName }
 
 /** A walked file that is not what the cache recorded: new, or another mtime, ctime or size. */
 function differs(current: FileRec | undefined, walked: WalkedFile): boolean {
@@ -132,6 +137,8 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, scan
     sweeper.unref?.()
   }
   const busy = new Set<string>()
+  /** Cache files being loaded by `cached`, one load per project. */
+  const warming = new Map<string, Promise<Graph | undefined>>()
   const progress = new Map<string, IndexProgress>()
   const cachePath = (cwd: string) => join(cacheDir, cacheName(cwd))
 
@@ -244,6 +251,27 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, scan
   return {
     cachePath,
     peek: (cwd) => states.get(cwd)?.graph,
+    cached(cwd) {
+      const held = states.get(cwd)?.graph
+      if (held) { touch(cwd); return Promise.resolve(held) }
+      // A build or refresh that runs now owns the project's state: its graph is there when it ends.
+      if (busy.has(cwd) || states.has(cwd)) return Promise.resolve(undefined)
+      let load = warming.get(cwd)
+      if (!load) {
+        load = loadCache({ file: cachePath(cwd), cwd }).then((cache) => {
+          if (!cache || !Object.keys(cache.files).length) return undefined
+          // A refresh that started meanwhile has loaded the same file: its state wins.
+          if (states.has(cwd)) return states.get(cwd)?.graph
+          const graph = buildGraph({ cwd, files: cache.files, partial: cache.partial, builtAt: cache.builtAt, packages: cache.packages ?? [] })
+          states.set(cwd, { cache, graph, dirty: false })
+          touch(cwd)
+          onIndex?.(indexStatus(graph))
+          return graph
+        }).catch(() => undefined).finally(() => { warming.delete(cwd) })
+        warming.set(cwd, load)
+      }
+      return load
+    },
     progress: (cwd) => progress.get(cwd),
     async drift({ cwd, signal, touchBytes = 0 }) {
       const cache = states.get(cwd)?.cache ?? (await loadCache({ file: cachePath(cwd), cwd }))

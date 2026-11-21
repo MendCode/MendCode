@@ -252,6 +252,8 @@ Claude Code lists MCP tools through its own tool search, so their schemas cost n
 
 Claude Code's sub-agents (Explore, general-purpose, yours) have their own system prompts without server instructions. MendCode registers a `SubagentStart` hook at `initialize` and supplies the same instructions as `additionalContext`.
 
+A `PostToolUse` hook on `Grep` and `Bash` adds the code graph's answer to a search for identifiers, for the main agent and its sub-agents: see [Graph answers in a text search](code-graph.md#graph-answers-in-a-text-search).
+
 They therefore reach for the code graph before `grep`/`sed`. Nothing is added when the feature is off or the session has no MendCode tools.
 
 With [graph autopilot](code-graph.md#autopilot) on (full tier; nightly, dev and local builds by default), instructions also say:
