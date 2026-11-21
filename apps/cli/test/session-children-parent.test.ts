@@ -33,3 +33,16 @@ test("a session with no parent lists only its own", () => {
   const { tasks } = sessionChildren(state(undefined), { now: 2, sep: "·" })
   expect(tasks.map((task) => task.description)).toEqual(["Backend B4: terminar"])
 })
+
+test("a parent's agent is never merged with a thread of the child that has the same description", () => {
+  const thread = (running: boolean) => ({ itemId: "itm_child", description: "Rediseño P1 fiel al escritorio", agent: "general", background: false, running, status: running ? undefined : "ok", startedAt: 1, endedAt: running ? undefined : 2, tools: 0 })
+  for (const running of [true, false]) {
+    const base = state(parent)
+    const withThread = { ...base, transcript: { agentThreads: () => [thread(running)] } } as unknown as AppState
+    const { tasks } = sessionChildren(withThread, { now: 3, sep: "·" })
+    const parentRow = tasks.find((task) => task.taskId === ("bg_fable" as never))
+    expect(parentRow?.state).toBe("running")
+    const childRow = tasks.find((task) => task.taskId === ("itm_child" as never))
+    expect(childRow?.state).toBe(running ? "running" : "completed")
+  }
+})
