@@ -34,6 +34,9 @@
 # handler once the part that is running has ended, which is at once when the signal went to the whole group.
 set -u
 unset CLAUDECODE AGENT REPL_ID
+# This is the split runner the scope guard (scripts/test-scope-guard.ts) points to: each part is one bounded bun process on a runner
+# of its own, so its bun test may load a whole workspace's files on purpose.
+export MENDCODE_TEST_WHOLE=1
 cd "$(dirname "$0")/.."
 others=$(ls -d packages/*/ | grep -v '^packages/daemon/$' | tr '\n' ' ')
 apps=$(ls -d apps/*/ | grep -v '^apps/cli/$' | tr '\n' ' ')
