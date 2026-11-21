@@ -9,8 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- The compaction arcade has new games: Blocks, Mines, Pong and Cycles against the computer, Glide, Stars and Crossing.
+- A game you are playing when compaction ends stays on screen with its score until you close it with Esc.
+
 ### Changed
 
+- Breakout's paddle moves faster, and Snake is drawn with square cells.
 - `/today` is now one chat per day instead of a page with tabs. It opens with a short brief of what was done since yesterday per project, what waits for you and your pending memories as groups with counts, written by your main model, and then you talk to it.
 - In the Today chat you can accept or decline memories by group, project, kind or topic, and tell it to always accept or never keep a project's or a kind's memories from now on, so they stop piling up in Pending.
 - Anything you ask Today to do every day ("tell me how project X ended", "check that my server is up") is kept and carried out in every following Today, with your normal permissions; a check it could not run is reported as such.
@@ -21,6 +27,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
 - A mermaid block in an answer is now drawn whatever the model wrote: every link and node form of a flowchart, names in any language, and diagrams too wide or too large for the chat (wrapped, stacked, cut at the edge with `/diagram` to see them whole, or listed); only text that is not a diagram shows as source, with the line that was not understood instead of "unsupported diagram".
+- Clicking elsewhere or scrolling no longer pauses the arcade game or moves the keys to the prompt; Esc, q or Tab leave it.
 - When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
 - Send now works on a steering message the model already took while a tool runs: it stops that tool and sends the message; Esc gives it back to edit or drop, as the notice now says.
 - A model you pick in a bot's chat now runs there instead of the bot's own model; picking the default again goes back to the bot's.

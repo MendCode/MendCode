@@ -36,6 +36,9 @@ async function compacting(mode: Mode, size: [number, number] = [100, 34], option
   return h
 }
 
+/** Where the half-block pixels of the last frame are: the snake and its food, nothing else on an arcade screen draws them. */
+const pixelsOf = (h: Harness) => h.text().map((row) => [...row].flatMap((char, index) => ("▀▄█".includes(char) ? [index] : [])).join(",")).join(";")
+
 const fits = (h: Harness, width: number, height: number) => {
   const frame = h.frames.at(-1)!
   expect(frame).toHaveLength(height)
@@ -98,7 +101,7 @@ test("arcade mode draws a game board with its controls, the scratchpad mode a no
   const arcade = await compacting("arcade")
   expect(text(arcade)).toContain("╭─ Arcade · Snake · 0 · best 0")
   expect(text(arcade)).toContain("tab · click  play")
-  expect(text(arcade)).toContain("◆")
+  expect(text(arcade)).toContain("Arrow keys start")
   fits(arcade, 100, 34)
   const scratch = await compacting("scratchpad")
   expect(text(scratch)).toContain("╭─ Scratchpad")
@@ -165,18 +168,18 @@ test("the arcade owns the keys only while it has focus, and the prompt never see
 
 test("snake advances on the render loop's frames while focused and stands still when it is not", async () => {
   const harness = await compacting("arcade")
-  const head = () => harness.text().find((row) => row.includes("██"))!.indexOf("██")
+  const board = () => pixelsOf(harness)
   await harness.type("\t")
   await harness.type("\x1b[C")
-  const started = head()
+  const started = board()
   await Bun.sleep(420)
   harness.app.render()
-  expect(head()).toBeGreaterThan(started)
+  expect(board()).not.toBe(started)
   await harness.type("\x1b")
-  const parked = head()
+  const parked = board()
   await Bun.sleep(300)
   harness.app.render()
-  expect(head()).toBe(parked)
+  expect(board()).toBe(parked)
 })
 
 test("n starts another game: breakout takes arrows and space, and its ball moves while focused", async () => {
@@ -192,7 +195,7 @@ test("n starts another game: breakout takes arrows and space, and its ball moves
   expect(text(harness)).toContain("Snake")
 })
 
-test("the arcade stops cleanly when the compaction completes: focus released, game gone, prompt typing back, no timers left", async () => {
+test("a game being played when the compaction completes stays, still moving and keeping its score, until Esc closes it; then no timers are left", async () => {
   await liveIntervals(async (intervals) => {
     const harness = await compacting("arcade")
     expect(intervals.size).toBeGreaterThan(0)
@@ -201,8 +204,20 @@ test("the arcade stops cleanly when the compaction completes: focus released, ga
     expect(text(harness)).toContain("esc / q     leave the game")
     harness.finish()
     harness.app.render()
-    expect(text(harness)).not.toContain("Arcade")
     expect(text(harness)).toContain("Context packed")
+    expect(text(harness)).toContain("Arcade · Snake")
+    expect(text(harness)).toContain("compaction done · esc to close")
+    expect(text(harness)).toContain("esc / q     close the game")
+    // Keys still go to the game, and it keeps moving on frames of its own.
+    await harness.type("ab")
+    expect(harness.app.editor.text).toBe("")
+    const moving = pixelsOf(harness)
+    await Bun.sleep(300)
+    harness.app.render()
+    expect(pixelsOf(harness)).not.toBe(moving)
+    expect(intervals.size).toBeGreaterThan(0)
+    await harness.type("\x1b")
+    expect(text(harness)).not.toContain("Arcade")
     await harness.type("done")
     expect(harness.app.editor.text).toBe("done")
     await Bun.sleep(300)
@@ -210,18 +225,49 @@ test("the arcade stops cleanly when the compaction completes: focus released, ga
   })
 })
 
-test("a cancelled compaction also releases the arcade and its timers", async () => {
+test("a game nobody is playing goes with the compaction: focus released, game gone, prompt typing back, no timers left", async () => {
+  await liveIntervals(async (intervals) => {
+    const harness = await compacting("arcade")
+    await harness.type("\t")
+    await harness.type("\x1b")
+    harness.finish()
+    harness.app.render()
+    expect(text(harness)).not.toContain("Arcade")
+    await harness.type("done")
+    expect(harness.app.editor.text).toBe("done")
+    await Bun.sleep(300)
+    expect(intervals.size).toBe(0)
+  })
+})
+
+test("a cancelled compaction keeps a game in play too, and q closes it and its timers", async () => {
   await liveIntervals(async (intervals) => {
     const harness = await compacting("arcade")
     await harness.type("\t")
     harness.finish("cancelled")
     harness.app.render()
+    expect(text(harness)).toContain("compaction done · esc to close")
+    await harness.type("q")
     expect(text(harness)).not.toContain("Arcade")
     await harness.type("x")
     expect(harness.app.editor.text).toBe("x")
     await Bun.sleep(200)
     expect(intervals.size).toBe(0)
   })
+})
+
+test("a kept game carries on as a normal arcade game when the next compaction starts", async () => {
+  const harness = await compacting("arcade")
+  await harness.type("\t")
+  await harness.type("\x1b[B")
+  harness.finish()
+  harness.app.render()
+  expect(text(harness)).toContain("compaction done")
+  harness.begin({ startedAt: NOW - 1_000 })
+  harness.app.render()
+  expect(text(harness)).toContain("Arcade · Snake")
+  expect(text(harness)).not.toContain("compaction done")
+  expect(text(harness)).toContain("esc / q     leave the game")
 })
 
 test("the scratchpad mode edits the project note in the panel, keeps the prompt clear, and saves through the daemon", async () => {
@@ -244,25 +290,37 @@ test("the scratchpad mode edits the project note in the panel, keeps the prompt 
   expect(text(harness)).not.toContain("Scratchpad")
 })
 
-test("a click on the arcade focuses it and a click elsewhere lets it go", async () => {
+test("a click on the arcade focuses it; clicks elsewhere and the wheel neither pause it nor take its keys", async () => {
   const harness = await compacting("arcade")
   const top = harness.text().findIndex((line) => line.includes("Arcade · Snake"))
   await harness.type(`\x1b[<0;20;${top + 4}M`)
   expect(text(harness)).toContain("esc / q     leave the game")
-  await harness.type("\x1b[<0;20;3M")
+  await harness.type("\x1b[C")
+  const prompt = harness.text().length - 3
+  for (const report of ["\x1b[<0;20;3M", "\x1b[<0;20;3m", `\x1b[<0;10;${prompt}M`, `\x1b[<0;10;${prompt}m`, "\x1b[<64;20;5M", "\x1b[<65;20;5M"]) await harness.type(report)
+  expect(text(harness)).toContain("esc / q     leave the game")
+  const before = pixelsOf(harness)
+  await Bun.sleep(300)
+  harness.app.render()
+  expect(pixelsOf(harness)).not.toBe(before)
+  await harness.type("hi")
+  expect(harness.app.editor.text).toBe("")
+  await harness.type("\x1b")
   expect(text(harness)).toContain("tab · click  play")
 })
 
 test("every game has a field it can be played on and picks are random but never the same game twice in a row", () => {
-  expect(ARCADE_GAMES.map((game) => game.id)).toEqual(["snake", "breakout", "2048"])
+  const ids = ["snake", "breakout", "2048", "blocks", "mines", "pong", "cycles", "glide", "stars", "crossing"]
+  expect(ARCADE_GAMES.map((game) => game.id)).toEqual(ids)
   for (const game of ARCADE_GAMES) expect(arcadeField(game, 100, 14)).toBeDefined()
   expect(arcadeField(snake, 18, 14)).toBeUndefined()
   expect(arcadeField(snake, 100, 6)).toBeUndefined()
-  expect(new Set([0, 0.34, 0.67, 0.99].map((value) => pickGame(() => value).id))).toEqual(new Set(["snake", "breakout", "2048"]))
+  expect(new Set(ids.map((_, index) => pickGame(() => (index + 0.5) / ids.length).id))).toEqual(new Set(ids))
   for (const value of [0, 0.5, 0.99]) expect(pickGame(() => value, "breakout").id).not.toBe("breakout")
   expect(arcadeInput("\x1b[A")).toEqual({ type: "game", key: "up" })
   expect(arcadeInput("A")).toEqual({ type: "game", key: "left" })
   expect(arcadeInput("q")).toEqual({ type: "leave" })
+  expect(arcadeInput("f")).toEqual({ type: "game", key: "alt" })
   expect(arcadeInput("z")).toBeUndefined()
 })
 

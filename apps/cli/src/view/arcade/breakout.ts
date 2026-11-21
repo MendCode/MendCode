@@ -4,6 +4,9 @@ import { seeded, type ArcadeDefinition, type ArcadeKey } from "./types"
 const BRICK_TONES: readonly ColorName[] = ["error", "warning", "success", "info", "accent"]
 const PADDLE = 5
 
+/** Cells the paddle moves per key press: two on small fields, three from sixteen cells wide. */
+export const paddleStride = (cols: number) => (cols >= 16 ? 3 : 2)
+
 /** Breakout: left and right move the paddle, space launches the ball or pauses, `r` restarts. Three lives. */
 export const breakout: ArcadeDefinition = {
   id: "breakout",
@@ -14,6 +17,8 @@ export const breakout: ArcadeDefinition = {
     const next = seeded(Math.floor(random() * 0xffffffff))
     const brickRows = Math.min(BRICK_TONES.length, Math.max(2, Math.floor(rows / 3)))
     const paddleY = rows - 1
+    // A held key repeats about 30 times a second: three cells a press crosses the widest field in under a second.
+    const stride = paddleStride(cols)
     let bricks: boolean[][] = []
     let paddle = 0
     let ball = { x: 0, y: 0, vx: 1, vy: -1 }
@@ -91,7 +96,7 @@ export const breakout: ArcadeDefinition = {
           return
         }
         if (key === "left" || key === "right") {
-          paddle = Math.max(0, Math.min(cols - PADDLE, paddle + (key === "left" ? -1 : 1)))
+          paddle = Math.max(0, Math.min(cols - PADDLE, paddle + (key === "left" ? -stride : stride)))
           if (!launched) ball = { ...ball, x: paddle + Math.floor(PADDLE / 2) }
           if (paused) paused = false
         }

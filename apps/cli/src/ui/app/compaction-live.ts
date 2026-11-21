@@ -12,7 +12,8 @@ type Scratch = { top: number; left: number; width: number; rows: number; first: 
  * progress panel, a stats chart, an arcade of small games, the project scratchpad or one quiet line. This is its
  * controller: it loads the panel code on the first compaction, starts a random game, ticks it from the render
  * loop's frames (never from a timer of its own), owns the keyboard only while the arcade has focus, and lets go of
- * everything the moment the compaction is over.
+ * everything the moment the compaction is over. The one exception: a game that has the keys when the compaction ends
+ * stays (`kept`), score and all, until Esc/q/Tab/ctrl+c closes it.
  */
 export function createCompactionLive(ctx: AppContext, actions: { editScratch(): Promise<void>; endScratchEdit(): void; ensureScratch(): Promise<void> }) {
   const { input, state, random, editor, requestFrame } = ctx
@@ -22,7 +23,10 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
   let arcadeShown = false
 
   const mode = () => (state.mode === "minimal" ? "quiet" : state.tuiProfile.compactionPanel)
-  const visible = () => state.page === "chat" && state.transcript.foreground === "compacting"
+  const compacting = () => state.page === "chat" && state.transcript.foreground === "compacting"
+  /** A game with the keys counts as kept from the moment the compaction ends, before the next frame's `sync` records it. */
+  const playing = () => live.kept || (live.focused && live.session !== undefined && arcadeShown)
+  const visible = () => state.page === "chat" && (state.transcript.foreground === "compacting" || playing())
   const moduleName = () => (mode() === "arcade" ? "compactionArcade" : "compactionLive")
 
   function rememberBest() {
@@ -43,6 +47,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     rememberBest()
     live.session = undefined
     live.focused = false
+    live.kept = false
     live.area = undefined
     arcadeShown = false
     if (live.scratchPanel) {
@@ -53,6 +58,10 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
 
   /** Once per frame before drawing: loads the panel code, and plays the frames since the last one while the arcade has focus. */
   function sync() {
+    if (compacting()) live.kept = false
+    // The compaction just ended while the game had the keys: it stays playable until it is closed.
+    else if (!live.kept && state.page === "chat" && playing()) live.kept = true
+    if (live.kept && (!live.session || !live.focused || mode() !== "arcade")) stop()
     if (!visible()) {
       if (live.session || live.focused || live.scratchPanel || live.area) stop()
       return
@@ -94,7 +103,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       limit: { tokens: state.contextReport?.compactAtTokens ?? compactFallback(state), kind: "threshold" },
       now: ctx.now(),
       spinner: request.indicator ? "" : state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-      ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length } } : {}),
+      ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length, ...(live.kept ? { done: true } : {}) } } : {}),
       scratch: { text: state.scratchNote, editing: state.editingScratch !== undefined, editor: ctx.scratchEditor, readOnly: input.remote?.readOnly === true },
     })
     arcadeShown = out.mode === "arcade" && view !== undefined
@@ -123,7 +132,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     return false
   }
 
-  /** A key while the arcade has focus: moves, space, `r`, `n` for another game, Esc/q/Tab/ctrl+c to leave. Anything else is ignored. */
+  /** A key while the arcade has focus: moves, space, `f`, `r`, `n` for another game, Esc/q/Tab/ctrl+c to leave (to close it once the compaction is over). Anything else is ignored. */
   function playKey(key: string) {
     const session = live.session
     if (!visible() || !session) {
@@ -131,7 +140,8 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       return requestFrame()
     }
     const action = arcadeInput(key)
-    if (action?.type === "leave") live.focused = false
+    if (action?.type === "leave" && live.kept) stop()
+    else if (action?.type === "leave") live.focused = false
     else if (action?.type === "next") startGame(session.definition.id)
     else if (action) {
       session.instance.key(action.key)
@@ -141,7 +151,10 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     requestFrame()
   }
 
-  /** A click inside the panel focuses the arcade; a click anywhere else lets it go. The scratchpad has its own click handler. */
+  /**
+   * A click inside the panel focuses the arcade. A click anywhere else, like the wheel, never takes the game's focus
+   * away or pauses it: only a key (Esc/q/Tab/ctrl+c) gives the keyboard back. The scratchpad has its own click handler.
+   */
   function click(point: { row: number; col: number }): boolean {
     const area = live.area
     const inside = area !== undefined && point.row >= area.top && point.row < area.top + area.rows && point.col >= 0 && point.col < area.width
@@ -149,11 +162,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       live.focused = true
       return true
     }
-    if (!inside && live.focused) {
-      live.focused = false
-      return true
-    }
-    return false
+    return inside && live.focused
   }
 
   /** The panel's screen position, set by the chat layout once it knows where the rows landed. */

@@ -278,7 +278,7 @@ export function createApp(input: AppInput) {
     scratchCursor: undefined,
     dockOpen: false,
     compactionFacts: createCompactionFacts(),
-    compactionLive: { session: undefined, focused: false, best: {}, area: undefined, scratchPanel: false, loading: undefined },
+    compactionLive: { session: undefined, focused: false, kept: false, best: {}, area: undefined, scratchPanel: false, loading: undefined },
     attachments: [],
     pastes: [],
     suggestion: 0,
