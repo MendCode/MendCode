@@ -15,6 +15,7 @@ import type { FaceCapability } from "../../view/bot-face"
 import type { BotColor, BotShape, IconFaces } from "../../view/bot-icon"
 import type { ImagePlacement } from "../image-layer"
 import { activeTheme, colorDepth, type Line } from "../theme"
+import { askBotList } from "./bot-list-ask"
 import type { AppContext } from "./context"
 import { startNewChatPanel } from "./session-look"
 
@@ -147,7 +148,7 @@ export function createSidebarBots(ctx: AppContext) {
     loadingBots = true
     during.length = 0
     try {
-      const reply = await input.send({ type: "bot.list" })
+      const reply = await askBotList(input)
       if (reply.ok) {
         report = reply.result as BotListReport
         // The answer is older than the pushes that came while it was on its way: they move the new report as they moved the old one.

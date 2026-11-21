@@ -120,6 +120,63 @@ describe("the Hermes connector lists the profiles as bots", () => {
     const connector = hermesConnector({ env: { MENDCODE_HERMES_URL: "http://127.0.0.1:9" } })
     await expect(connector.list()).rejects.toThrow("[HERMES]: Hermes does not answer at http://127.0.0.1:9")
   })
+
+  test("a later list answers from what it knew at once and refreshes in the background; it never waits for Hermes", async () => {
+    let clock = 0
+    let slow = false
+    let requests = 0
+    const release: Array<() => void> = []
+    const fetcher = (async (url: string) => {
+      requests++
+      if (slow) await new Promise<void>((resolve) => release.push(resolve))
+      return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [{ name: slow ? "later" : "first" }] })
+    }) as unknown as typeof fetch
+    const connector = hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher, now: () => clock })
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["first"])
+    slow = true
+    clock = 60_000
+    const before = requests
+    const started = performance.now()
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["first"])
+    expect(performance.now() - started).toBeLessThan(50)
+    // One refresh at a time, however many lists come while it runs.
+    await connector.list()
+    await connector.list()
+    await Promise.resolve()
+    expect(requests - before).toBe(2)
+    release.splice(0).forEach((resolve) => resolve())
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["later"])
+  })
+
+  test("a background refresh that fails is reported by the next list, once, and the list after it asks again", async () => {
+    let clock = 0
+    let down = false
+    const fetcher = (async (url: string) => {
+      if (down) throw new Error("refused")
+      return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [{ name: "ada" }] })
+    }) as unknown as typeof fetch
+    const connector = hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher, now: () => clock })
+    await connector.list()
+    down = true
+    clock = 60_000
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["ada"])
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    await expect(connector.list()).rejects.toThrow("[HERMES]: Hermes does not answer")
+    down = false
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["ada"])
+  })
+
+  test("the profiles and the active sessions are requested together", async () => {
+    const order: string[] = []
+    const fetcher = (async (url: string) => {
+      order.push(`start ${url.includes("/sessions") ? "sessions" : "profiles"}`)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [] })
+    }) as unknown as typeof fetch
+    await hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher }).list()
+    expect(order).toEqual(["start sessions", "start profiles"])
+  })
 })
 
 describe("a chat with a Hermes bot", () => {

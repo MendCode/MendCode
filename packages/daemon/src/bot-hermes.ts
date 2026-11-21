@@ -96,22 +96,25 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
     return (await response.json()) as T
   }
 
-  return {
-    id: "hermes",
-    async list() {
-      if (listed && now() - listed.at < LIST_TTL_MS) return listed.bots
+  /** One discovery at a time: the process scan and the two requests to Hermes cost about half a second together. */
+  let running: Promise<ExternalBotInfo[]> | undefined
+  /** Why the last background discovery failed, told once to the next `list()` so the problem still reaches the report. */
+  let failure: unknown
+
+  async function discover(): Promise<ExternalBotInfo[]> {
       const from = await resolve()
       if (!from) {
         offerConnectorAgents("hermes-", {})
+        listed = { at: now(), bots: [] }
         return []
       }
+      // Both requests go out together; the sessions only give the working mark, so a failure of theirs costs only that.
+      const activeRequest = get<{ sessions?: Array<{ profile?: string; profile_name?: string; is_active?: boolean }> }>(from, `/api/profiles/sessions?limit=${ACTIVE_SESSIONS}`)
+        .then((report) => (report.sessions ?? []).filter((session) => session.is_active).map((session) => session.profile ?? session.profile_name ?? ""))
+        .catch(() => [] as string[])
       const profiles = (await get<{ profiles?: Profile[] }>(from, "/api/profiles")).profiles ?? []
-      // Hermes' own rule for "active now" is on its sessions; one that fails only costs the working mark.
-      const active = new Set<string>(
-        await get<{ sessions?: Array<{ profile?: string; profile_name?: string; is_active?: boolean }> }>(from, `/api/profiles/sessions?limit=${ACTIVE_SESSIONS}`)
-          .then((report) => (report.sessions ?? []).filter((session) => session.is_active).map((session) => session.profile ?? session.profile_name ?? ""))
-          .catch(() => []),
-      )
+      // Hermes' own rule for "active now" is on its sessions.
+      const active = new Set<string>(await activeRequest)
       const agents: Record<string, AcpAgentConfig> = {}
       const bots = profiles.filter((profile) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/.test(profile.name ?? "")).map((profile): ExternalBotInfo => {
         const agent = `hermes-${profile.name}`
@@ -135,6 +138,27 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
       offerConnectorAgents("hermes-", agents)
       listed = { at: now(), bots }
       return bots
+  }
+
+  const refresh = () => (running ??= discover().finally(() => { running = undefined }))
+
+  return {
+    id: "hermes",
+    /**
+     * Never makes the caller wait for Hermes once it has answered before: the last answer is returned at once and, when it is older
+     * than `LIST_TTL_MS`, one discovery runs in the background for the next list. Only the first list (nothing known yet) waits.
+     */
+    async list() {
+      if (listed) {
+        if (now() - listed.at >= LIST_TTL_MS && !running) refresh().catch((error) => { listed = undefined; failure = error })
+        return listed.bots
+      }
+      if (failure !== undefined) {
+        const error = failure
+        failure = undefined
+        throw error
+      }
+      return refresh()
     },
   }
 }
