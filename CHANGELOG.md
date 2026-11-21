@@ -29,6 +29,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- In a sub-agent's own session, the Agents list keeps the parent's Claude Code background agents instead of dropping them; selecting one opens it in the parent.
 - A working session of another project, or a bot's chat with sub-agents at work, keeps its spinner in the left list after you open another chat, instead of a still mark.
 - Workflows no longer fill the left list with their sessions: a working run shows as one `◇ <name>` row that opens it on `/workflows`, and a finished one leaves the list.
 - When several packages bring a command of the same name, each runs as `/<package>:<name>` and the menu lists all of them; the bare name says which ones exist instead of running one of them.

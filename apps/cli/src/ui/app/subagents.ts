@@ -124,6 +124,9 @@ export function createSubagents(ctx: AppContext, actions: { switchSession(id: Se
     if (agentView.show(id as never)) return
     if (agentView.open) agentView.close()
     if (id.startsWith("ses_")) return actions.switchSession(id as SessionId)
+    // Inside a sub-agent's own session the strip also lists its parent's engine agents: one of them opens in the parent, where its thread is.
+    const parentAgent = state.sessionParentId ? state.agentShells.find((shell) => shell.id === id && shell.status === "running" && shell.sessionId === state.sessionParentId) : undefined
+    if (parentAgent) await actions.switchSession(parentAgent.sessionId as SessionId)
     const origin = state.sessionId
     const running = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId)
     // An engine's own agent is a sub-agent: its thread opens, never the command card. Its call may sit above the history shown,
