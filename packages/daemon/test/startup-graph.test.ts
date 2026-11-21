@@ -63,6 +63,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   expect(inputs.has("apps/cli/src/ui/app/vim-lazy.ts") || inputs.has("apps/cli/src/view/vim-lazy.ts")).toBe(true)
   // The left list's search (index, matcher, drawing and keys) loads with the first `/` or `sidebar.search`.
   for (const file of ["apps/cli/src/ui/app/sidebar-search.ts", "apps/cli/src/view/sidebar-search.ts"]) expect(inputs.has(file), file).toBe(false)
+  // The folder picker of a new chat loads with the first `N`, `+ New chat…` or bot `+`; a bot's activity page with the first one opened.
+  for (const file of ["apps/cli/src/ui/app/new-chat-picker.ts", "apps/cli/src/view/new-chat-picker.ts", "apps/cli/src/ui/app/bot-activity.ts"]) expect(inputs.has(file), file).toBe(false)
   // The bots listed on the home screen load with the first home frame that has the flag on.
   for (const file of ["apps/cli/src/ui/app/home-bots.ts", "apps/cli/src/view/home-bots.ts"]) expect(inputs.has(file), file).toBe(false)
   // The compaction panel, its arcade and every game load with the first compaction that shows them.

@@ -6423,6 +6423,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "bot.save":
       case "bot.draft":
       case "bot.delete":
+      case "bot.activity":
       case "bot.memory": {
         const service = await import("./bot-service")
         const context: import("./bot-service").BotContext = {
@@ -6452,6 +6453,7 @@ export async function startDaemon(options: DaemonOptions) {
               return reply(connection, command.id, { ok: true, result: service.draftBot({ command, outcome, exists: (name) => context.agents().agents.some((agent) => agent.name === name) }) })
             }
             case "bot.memory": return reply(connection, command.id, { ok: true, result: service.botMemory(context, command) })
+            case "bot.activity": return reply(connection, command.id, { ok: true, result: await service.botActivity(context, command) })
           }
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       }

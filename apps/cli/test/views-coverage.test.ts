@@ -60,6 +60,7 @@ const COVERAGE: Record<string, Entry> = {
   "sidebar.ts": { slot: "sessions.sidebar" },
   "sidebar-multi.ts": { allow: "the experimental bots / all-projects form of the left list; an extension view of sessions.sidebar keeps the classic list instead (chrome.ts multiWanted)" },
   "sidebar-search.ts": { allow: "the left list's search field and matches, drawn in the list's own place (chrome.ts) while `/` is open; an extension view of sessions.sidebar keeps its own list" },
+  "new-chat-picker.ts": { allow: "the left list's folder picker for a new chat, drawn in the list's own place (chrome.ts) while it is open, with the click rows the terminal measures; an extension view of sessions.sidebar keeps its own list" },
   "home-bots.ts": { allow: "the Bots block under the home's Agent View, drawn inside the home view's own rows (home.ts) through its `bots` input; an extension's home view replaces the whole screen" },
   "sidebar-cards.ts": { slot: "panel.widget" },
   "panel-card.ts": { slot: "panel.widget" },

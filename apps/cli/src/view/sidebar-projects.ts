@@ -1,10 +1,10 @@
 import type { SessionSummary } from "@mendcode/protocol"
-import { sessionActivityAt } from "./session-label"
+import { sessionOrderAt } from "./session-label"
 
 /**
  * Which folders the all-projects sidebar groups, and in what order (docs/sidebar.md). A project is a git work tree root (or the
- * opened folder), never the home folder, a hidden folder or a temp folder; ranked by their latest message activity (never by which one
- * is open), the opened and busy ones always showing, the rest up to `sidebarProjectCount` or, when that is 0, as many as fit. Pure functions plus one small cache: the disk is asked once
+ * opened folder), never the home folder, a hidden folder or a temp folder; ranked by the last time a person wrote in one of their sessions
+ * (never by which one is open or by an agent at work), the opened and busy ones always showing, the rest up to `sidebarProjectCount` or, when that is 0, as many as fit. Pure functions plus one small cache: the disk is asked once
  * per folder, asynchronously, and never while a frame draws.
  */
 
@@ -76,7 +76,7 @@ export function createProjectProbe({ home, tmpRoots, inspect, onChange }: { home
   }
 }
 
-type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Partial<Pick<SessionSummary, "lifecycle" | "lastSeq" | "state" | "queued" | "origin" | "lastHumanAt">>
+type Ranked = Pick<SessionSummary, "sessionId" | "directory" | "updatedAt"> & Partial<Pick<SessionSummary, "lifecycle" | "lastSeq" | "state" | "queued" | "origin" | "lastHumanAt" | "createdAt">>
 
 /** Whose projects the all-projects list shows: `you`, the ones where a person typed; `all`, every one. */
 export type SidebarProjectsFrom = "you" | "all"
@@ -92,9 +92,9 @@ export const humanSession = (session: Pick<Ranked, "origin" | "lastHumanAt">) =>
 export const SETTLE_MS = 60_000
 
 /**
- * The projects to draw, newest message activity first. The opened folder, the ones with a session working or waiting and the ones
+ * The projects to draw, the one a person wrote in last first. The opened folder, the ones with a session working or waiting and the ones
  * used today always show; the others fill up to `count` in the same order. Which folder is open never moves a group: the rank is
- * the latest `updatedAt` of its sessions (a new message, not a read, an open or a draft). `rest` keeps the ranking for the "more
+ * the latest `sessionOrderAt` of its sessions (a message a person typed, else a session made; not a reply, a read, an open or a draft). `rest` keeps the ranking for the "more
  * projects" row. `stamps` remembers each folder's rank time between frames, so a folder takes a new place only when its latest
  * activity moved by `SETTLE_MS` or more. `sessions` are the listed, non-archived ones; `directory` is the canonical folder.
  */
@@ -108,7 +108,8 @@ export function rankProjects({ sessions, opened, now, count, busy, isProject, el
     const fresh = directory !== opened && !isProject(directory) && eligible?.(directory) === true && now - at <= FRESH_MS
     if (directory !== opened && !isProject(directory) && !fresh) continue
     const fact = facts.get(directory) ?? { latest: 0, recent: 0, busy: false, fresh: false, human: false }
-    fact.latest = Math.max(fact.latest, at)
+    // The rank is the last time a person wrote in the project (else when its newest session was made): an agent at work never lifts a group.
+    fact.latest = Math.max(fact.latest, sessionOrderAt(session))
     if (now - at <= RECENT_MS) fact.recent++
     if (busy(session)) fact.busy = true
     const human = humanSession(session)

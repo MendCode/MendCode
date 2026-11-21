@@ -18,7 +18,7 @@ import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../.
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
 import { projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
 import { autoSettled, SETTLED_FIRST, SETTLED_PAGE } from "../../view/sidebar-marks"
-import { scrollSidebarWindow } from "../../view/sidebar-window"
+import { scrollSidebarWindow, sidebarClickAllowed } from "../../view/sidebar-window"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -271,6 +271,8 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "chat" && state.promptSearch && await actions.composer.searchKey(key)) return requestFrame()
     // The left list's search takes every key but the mouse while it is open (ui/app/sidebar-search.ts).
     if (state.page === "chat" && state.sidebarSearch?.isOpen() && await state.sidebarSearch.key(key, actions)) return requestFrame()
+    // The "New chat in…" folder picker does the same (ui/app/new-chat-picker.ts).
+    if (state.page === "chat" && state.sidebarPicker?.isOpen() && await state.sidebarPicker.key(key)) return requestFrame()
     if (state.page === "compaction" && state.compactionView?.editing) return pageKey(key)
     const { width, height } = input.screen.size
     // The keymap editor waiting for a key takes ctrl+c too (it is reserved, and says so) instead of quitting.
@@ -330,9 +332,13 @@ export function createKeys(ctx: AppContext, actions: {
     if (pointer && (pointer.button & ~(4 | 8 | 16)) >= 66 && (pointer.button & ~(4 | 8 | 16)) <= 67) return
     const wheel = wheelOf(key)
     // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
+    // Every mouse report says whether the pointer is over the list: the list holds still while it is (ui/app/sidebar-bots.ts).
+    if (pointer) state.sidebarBots?.pointer(overSidebar(pointer.col, sidebarGeometry()))
     if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {
       state.selection = undefined
-      if (!state.sidebarSearch?.isOpen() && scrollSidebarWindow(state.sidebarScroll, wheel * state.tuiProfile.wheelLines)) requestFrame()
+      // The rows the wheel moves are the user's own doing: the click guard lets the next click through.
+      state.sidebarInputAt = now()
+      if (!state.sidebarSearch?.isOpen() && !state.sidebarPicker?.isOpen() && scrollSidebarWindow(state.sidebarScroll, wheel * state.tuiProfile.wheelLines)) requestFrame()
       return
     }
     if (wheel !== undefined) {
@@ -425,11 +431,17 @@ export function createKeys(ctx: AppContext, actions: {
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
+      // A line whose row changed a moment ago without the user's doing: the click was aimed at the row that was there, so it is dropped.
+      if (hit && !sidebarClickAllowed(state.sidebarGuard, screenClick.row, now())) return requestFrame()
+      state.sidebarInputAt = now()
+      const sideCol = onRight ? screenClick.col - (width - sideWidth) : screenClick.col
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
       else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+      else if (hit && state.sidebarPicker?.isOpen()) await state.sidebarPicker.activate(hit.sessionId)
       else if (hit && state.sidebarSearch?.isOpen()) await state.sidebarSearch.activate(hit.sessionId, actions)
-      // The ▸/▾ glyph of a folding row folds it; the rest of the row does what Enter does.
-      else if (hit?.fold && state.sidebarBots?.live() && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) >= hit.fold.from && (onRight ? screenClick.col - (width - sideWidth) : screenClick.col) < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
+      // The `+` that ends a project's or a bot's row starts a chat there; the rest of the row does what Enter does (a header folds).
+      else if (hit?.plus && state.sidebarBots?.live() && sideCol >= hit.plus.from && sideCol < hit.plus.to) await state.sidebarBots.newChat(hit.sessionId, rowActions)
+      else if (hit?.fold && state.sidebarBots?.live() && sideCol >= hit.fold.from && sideCol < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
       else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, rowActions)
       else if (hit) await openRow(hit.sessionId as typeof state.sessionId)
       return requestFrame()
@@ -493,8 +505,13 @@ export function createKeys(ctx: AppContext, actions: {
         const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown ?? SETTLED_FIRST)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
         const onSettled = !multi && stops[index] === SETTLED_ROW
+        state.sidebarInputAt = now()
         // Up from the first row wraps to the last and down from the last to the first.
         if (key === "/") await openSidebarSearch()
+        // `n` starts a chat where the row says (its project at once, its bot after a folder is picked); `N` always asks for the folder; `r` takes the list as it is now.
+        else if (multi && key === "n" && stops[index]) await multi.newChat(stops[index]!, rowActions)
+        else if (multi && key === "N") await multi.newChatAnywhere(rowActions)
+        else if (multi && key === "r") multi.refresh()
         else if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
         else if (multi && (key === "\t" || key === "\x1b[Z")) {
           // Tab and Shift+Tab land on the first row of the next and the previous section, wrapping; a Shift+Tab inside a section goes to its own first row first.

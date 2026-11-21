@@ -48,18 +48,18 @@ describe("sidebar profile keys", () => {
     expect(normalizeTuiProfile({ sidebarSections: "none" }).sidebarSections).toBe("none")
   })
 
-  test("sidebarPreviewCount: a profile written before the key loads with 5, and the protocol agrees", () => {
-    expect(normalizeTuiProfile({ sidebar: "auto" }).sidebarPreviewCount).toBe(5)
-    expect(DEFAULT_TUI_PROFILE.sidebarPreviewCount).toBe(5)
-    expect(TUI_DEFAULTS.sidebarPreviewCount).toBe(5)
+  test("sidebarPreviewCount: a profile written before the key loads with 3, and the protocol agrees", () => {
+    expect(normalizeTuiProfile({ sidebar: "auto" }).sidebarPreviewCount).toBe(3)
+    expect(DEFAULT_TUI_PROFILE.sidebarPreviewCount).toBe(3)
+    expect(TUI_DEFAULTS.sidebarPreviewCount).toBe(3)
   })
 
-  test("sidebarPreviewCount is normalized into 1..50 and a bad value falls back to 5", () => {
+  test("sidebarPreviewCount is normalized into 1..50 and a bad value falls back to 3", () => {
     expect(normalizeTuiProfile({ sidebarPreviewCount: 0 }).sidebarPreviewCount).toBe(1)
     expect(normalizeTuiProfile({ sidebarPreviewCount: 99 }).sidebarPreviewCount).toBe(50)
     expect(normalizeTuiProfile({ sidebarPreviewCount: 7.9 }).sidebarPreviewCount).toBe(7)
-    expect(normalizeTuiProfile({ sidebarPreviewCount: "x" }).sidebarPreviewCount).toBe(5)
-    expect(normalizeTuiProfile({ sidebarPreviewCount: Number.NaN }).sidebarPreviewCount).toBe(5)
+    expect(normalizeTuiProfile({ sidebarPreviewCount: "x" }).sidebarPreviewCount).toBe(3)
+    expect(normalizeTuiProfile({ sidebarPreviewCount: Number.NaN }).sidebarPreviewCount).toBe(3)
   })
 
   test("the protocol's check accepts integers 1..50 only", () => {

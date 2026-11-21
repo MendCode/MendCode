@@ -4,7 +4,7 @@ import { glyphSet } from "../src/ui/theme"
 import type { Line } from "../src/ui/theme"
 import { createBotCard } from "../src/view/bot-card-page"
 import { botListText } from "../src/view/bot"
-import { externalBotId, externalBotOf, multiStops, renderMultiSidebar, type MultiInput } from "../src/view/sidebar-multi"
+import { externalActivityId, externalActivityOf, externalBotId, externalBotOf, isExternalActivityId, multiStops, renderMultiSidebar, type MultiInput } from "../src/view/sidebar-multi"
 import { plain } from "./session-ui-harness"
 
 const NOW = new Date(2026, 10, 16, 15, 0).getTime()
@@ -22,11 +22,34 @@ const input: MultiInput = { sessions: [], current: "", directory: "/work/app", f
 describe("external bots in the sidebar", () => {
   test("one a connector can chat with is a row to pick; one it cannot stays a plain line", () => {
     const opened = { ...input, open: new Map([["xgroup:hermes", true], ["xgroup:other", true]]) }
-    expect(multiStops(opened)).toEqual(["xgroup:hermes", externalBotId({ origin: "hermes", id: "ada" }), "xgroup:other"])
+    expect(multiStops(opened)).toEqual(["new:", "xgroup:hermes", externalBotId({ origin: "hermes", id: "ada" }), "xgroup:other"])
     const rows = renderMultiSidebar({ ...opened, selected: externalBotId({ origin: "hermes", id: "ada" }) }).rows.map(plain)
     expect(rows.find((row) => row.includes("Ada"))).toMatch(/● working/)
     expect(rows.find((row) => row.includes("Listed only"))).toMatch(/◌ idle/)
-    expect(rows.join("\n")).toContain("↵ chat  o page")
+    expect(rows.join("\n")).toContain("n chat o page")
+    // The row that can chat ends in the `+` that starts one; the plain line has none.
+    expect(rows.find((row) => row.includes("Ada"))).toMatch(/ \+ │$/)
+    expect(rows.find((row) => row.includes("Listed only"))).not.toMatch(/ \+ │$/)
+  })
+
+  test("a working bot lists what it runs in its own app: read-only rows, newest first, three at most, each a stop to open", () => {
+    const running = [1, 2, 3, 4].map((n) => ({ id: `run-${n}`, title: n === 2 ? undefined : `Run ${n}`, source: "telegram", startedAt: NOW - n * 3_600_000, activeAt: NOW - n * 60_000 }))
+    const busy: MultiInput = { ...input, bots: { bots: [], external: [{ ...report.external[0]!, activity: running }], problems: [] } }
+    const rows = renderMultiSidebar(busy).rows.map(plain)
+    // A working bot shows under its folded app row, and its sessions with it.
+    expect(rows.find((row) => row.includes("Run 1"))).toMatch(/Run 1 +1m │$/)
+    expect(rows.find((row) => row.includes("telegram session"))).toMatch(/2m │$/)
+    expect(rows.join("\n")).toContain("Run 3")
+    expect(rows.join("\n")).not.toContain("Run 4")
+    const ada = { origin: "hermes", id: "ada" }
+    const stops = multiStops(busy)
+    expect(stops.slice(stops.indexOf(externalBotId(ada)) + 1, stops.indexOf(externalBotId(ada)) + 4)).toEqual([1, 2, 3].map((n) => externalActivityId(ada, `run-${n}`)))
+    expect(externalActivityOf(externalActivityId(ada, "run-1"))).toEqual({ origin: "hermes", bot: "ada", session: "run-1" })
+    expect(isExternalActivityId(externalBotId(ada))).toBe(false)
+    expect(renderMultiSidebar({ ...busy, selected: externalActivityId(ada, "run-1") }).rows.map(plain)[0]).toContain("↵ read")
+    // A bot with nothing running there has no such rows.
+    const idle = renderMultiSidebar({ ...busy, bots: { bots: [], external: [{ ...report.external[0]!, state: "idle" }], problems: [] }, open: new Map([["xgroup:hermes", true]]) }).rows.map(plain).join("\n")
+    expect(idle).not.toContain("Run 1")
   })
 
   describe("the bots of one app share a foldable row", () => {
@@ -38,11 +61,11 @@ describe("external bots in the sidebar", () => {
       const rows = rowsOf().join("\n")
       expect(rows).toMatch(/▸ hermes · 23/)
       expect(rows).not.toContain("Bot 00")
-      expect(multiStops(many)).toEqual(["xgroup:hermes"])
+      expect(multiStops(many)).toEqual(["new:", "xgroup:hermes"])
     })
 
     test("opened, every bot lists; a bot working or with a chat of the last day shows under the folded row", () => {
-      expect(multiStops({ ...many, open: new Map([["xgroup:hermes", true]]) })).toHaveLength(24)
+      expect(multiStops({ ...many, open: new Map([["xgroup:hermes", true]]) })).toHaveLength(25)
       const busy = hermes.map((bot) => bot.id === "b7" ? { ...bot, state: "working" as const } : bot)
       const recent = { sessionId: "s1", title: "Hello", directory: "/work/app", state: "idle", queued: 0, updatedAt: NOW - 60_000, model: { model: "acp:hermes-b3" } }
       const stale = { sessionId: "s2", title: "Old", directory: "/work/app", state: "idle", queued: 0, updatedAt: NOW - 3 * 86_400_000, model: { model: "acp:hermes-b4" } }

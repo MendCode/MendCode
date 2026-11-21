@@ -209,6 +209,104 @@ describe("a chat with a Hermes bot", () => {
   })
 })
 
+describe("what a working profile is doing", () => {
+  /** A Hermes with two live sessions of one profile, one finished one, and the messages of the first. */
+  function busyHermes() {
+    const asked: Array<{ path: string; query: string; token: string | null }> = []
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        const url = new URL(request.url)
+        asked.push({ path: url.pathname, query: url.search, token: request.headers.get("x-hermes-session-token") })
+        if (request.headers.get("x-hermes-session-token") !== TOKEN) return new Response("unauthorized", { status: 401 })
+        if (url.pathname === "/api/profiles") return Response.json(PROFILES)
+        if (url.pathname === "/api/profiles/sessions") return Response.json({ sessions: [
+          { id: "s-old", profile: "ada", is_active: true, title: "Older run", source: "cron", started_at: 1_700_000_000, last_active: 1_700_000_100 },
+          { id: "s-new", profile: "ada", is_active: true, title: null, preview: "Flash the board", source: "telegram", started_at: 1_700_000_200, last_activity_at: 1_700_000_300.5 },
+          { id: "s-done", profile: "ada", is_active: false, title: "Finished" },
+          { id: "bad id", profile: "ada", is_active: true, title: "Odd" },
+        ] })
+        if (url.pathname === "/api/sessions/s-new/messages") return Response.json({ session_id: "s-new", messages: [
+          { id: 1, role: "user", content: "Flash the board", timestamp: 1_700_000_200 },
+          { id: 2, role: "assistant", content: "", tool_calls: [{ function: { name: "terminal" } }], timestamp: 1_700_000_210 },
+          { id: 3, role: "tool", tool_name: "terminal", content: "ok", timestamp: 1_700_000_220 },
+          { id: 4, role: "assistant", content: "Flashed.", timestamp: 1_700_000_230 },
+          { id: 5, role: "system", content: "hidden" },
+        ], pagination: { total: 9 } })
+        return new Response("not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+    return { env: { MENDCODE_HERMES_URL: `http://127.0.0.1:${server.port}`, MENDCODE_HERMES_TOKEN: TOKEN }, asked }
+  }
+
+  test("the list carries the profile's live sessions, newest first, in milliseconds, and nothing of a finished one", async () => {
+    const hermes = busyHermes()
+    const bots = await hermesConnector({ env: hermes.env }).list()
+    const ada = bots.find((bot) => bot.id === "ada")!
+    expect(ada.state).toBe("working")
+    expect(ada.activity).toEqual([
+      { id: "s-new", title: "Flash the board", source: "telegram", startedAt: 1_700_000_200_000, activeAt: 1_700_000_300_500 },
+      { id: "s-old", title: "Older run", source: "cron", startedAt: 1_700_000_000_000, activeAt: 1_700_000_100_000 },
+    ])
+    expect(bots.find((bot) => bot.id === "default")!.activity).toBeUndefined()
+    expect(BotListReport.safeParse({ bots: [], external: bots, problems: [] }).success).toBe(true)
+  })
+
+  test("a session's messages are read with the same token header: who said what, the tool named, nothing of the system", async () => {
+    const hermes = busyHermes()
+    const connector = hermesConnector({ env: hermes.env })
+    const report = await connector.session!({ bot: "ada", session: "s-new", limit: 4 })
+    expect(report.messages.map((message) => [message.role, message.text, message.tool])).toEqual([
+      ["user", "Flash the board", undefined],
+      // The assistant's turn that only called a tool has no words: the tool's own row tells it.
+      ["tool", "ok", "terminal"],
+      ["assistant", "Flashed.", undefined],
+    ])
+    expect(report.messages[0]!.at).toBe(1_700_000_200_000)
+    expect(report.more).toBe(true)
+    const call = hermes.asked.find((entry) => entry.path === "/api/sessions/s-new/messages")!
+    expect(call.token).toBe(TOKEN)
+    expect(call.query).toContain("profile=ada")
+    expect(call.query).toContain("order=latest")
+    expect(call.query).not.toContain(TOKEN)
+    expect(JSON.stringify(report)).not.toContain(TOKEN)
+  })
+
+  test("an id that is no session id never reaches Hermes, and a session Hermes does not know is an error without the token", async () => {
+    const hermes = busyHermes()
+    const connector = hermesConnector({ env: hermes.env })
+    const before = hermes.asked.length
+    await expect(connector.session!({ bot: "ada", session: "../profiles" })).rejects.toThrow("not a Hermes session")
+    await expect(connector.session!({ bot: "bad name", session: "s-new" })).rejects.toThrow("not a Hermes session")
+    expect(hermes.asked.length).toBe(before)
+    const failure = await connector.session!({ bot: "ada", session: "s-missing" }).then(() => "", (error: Error) => error.message)
+    expect(failure).not.toBe("")
+    expect(failure).not.toContain(TOKEN)
+  })
+
+  test("bot.activity answers through the daemon with the bots flag on, and is refused for a connector that cannot be read", async () => {
+    const readable: BotConnector = { id: "hermes", list: async () => [], session: async ({ bot, session }) => ({ messages: [{ role: "assistant", text: `${bot}/${session} token sk-ant-api03-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa` }], more: false }) }
+    const h = await boot({ botConnectors: [readable, { id: "mute", list: async () => [] }] })
+    try {
+      expect((await h.client.send({ type: "bot.activity", origin: "hermes", bot: "ada", session: "s-new" })).ok).toBe(false)
+      await h.client.send({ type: "settings.set", patch: { experimental: { bots: true } } })
+      const reply = await h.client.send({ type: "bot.activity", origin: "hermes", bot: "ada", session: "s-new" })
+      expect(reply.ok).toBe(true)
+      const text = (reply as unknown as { result: { messages: Array<{ text: string }> } }).result.messages[0]!.text
+      expect(text).toContain("ada/s-new")
+      expect(text).not.toContain("sk-ant-api03")
+      expect((await h.client.send({ type: "bot.activity", origin: "mute", bot: "ada", session: "s-new" })).ok).toBe(false)
+      // Reading what a bot does makes no session.
+      const sessions = await h.client.send({ type: "session.list" })
+      expect((sessions as unknown as { result: { sessions: unknown[] } }).result.sessions).toHaveLength(0)
+    } finally {
+      await h.cleanup()
+    }
+  })
+})
+
 describe("nothing loads with the flag off", () => {
   test("bot.list is refused and never asks the connector; with the flag on it carries what the connector lists", async () => {
     let asked = 0

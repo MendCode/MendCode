@@ -44,6 +44,9 @@ function botApp() {
     await h.type("\x1b[D")
     await h.type("b")
     h.app.render()
+    // `n` asks for the folder, the open one on top; Enter takes it.
+    await h.type("n")
+    for (let turn = 0; turn < 40 && !side().join("\n").includes("Chat with"); turn++) { await Bun.sleep(5); h.app.render() }
   }
   return { h, ids: { current, other, created }, rowOf, onBot, drafts }
 }

@@ -641,7 +641,7 @@ export type AppState = {
   sidebarSelected?: string | undefined
   /** Where the wheel put the left list's window, and the window the last frame drew (view/sidebar-window.ts); memory only. */
   sidebarScroll?: import("../../view/sidebar-window").SidebarScroll | undefined
-  sidebarHits?: Array<{ row: number; sessionId: string; /** The cells of a folding row's ▸/▾ glyph, from the sidebar's left edge. */ fold?: { from: number; to: number } }>
+  sidebarHits?: Array<{ row: number; sessionId: string; /** The cells of a folding row's ▸/▾ glyph, from the sidebar's left edge. */ fold?: { from: number; to: number }; /** The cells of the `+` that ends a row a chat can be started from. */ plus?: { from: number; to: number } }>
   /** The bots' pictures in the left list, at the list's own rows and columns (empty unless the terminal draws images). */
   sidebarImages?: import("../image-layer").ImagePlacement[] | undefined
   /** The `updatedAt` each listed session had when the sessions sidebar last showed it as seen; memory only, filled as the list draws. A later one is an unread reply. */
@@ -656,6 +656,12 @@ export type AppState = {
   sidebarBots?: import("./sidebar-bots").SidebarBots
   /** The left list's search, there once the first `/` (or `sidebar.search`) loaded it. */
   sidebarSearch?: import("./sidebar-search").SidebarSearch
+  /** The "New chat in…" folder picker over the left list, there once the first one opened loaded it. */
+  sidebarPicker?: import("./new-chat-picker").NewChatPicker
+  /** Which row each line of the left list showed last and when that changed without the user's doing (view/sidebar-window.ts): a click on a row that just changed is dropped. Memory only. */
+  sidebarGuard?: import("../../view/sidebar-window").SidebarClickGuard
+  /** When the user last acted on the left list (a key in it, a click, the wheel): rows that change right after are their own doing. */
+  sidebarInputAt?: number
   /** Experimental bots: the bots the home's Agent View lists while they work, there once the first home frame with the flag on loaded it. */
   homeBots?: import("./home-bots").HomeBotsLive
   /** The open bot page (`page: "bot"`): its drawing and keys. */

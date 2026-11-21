@@ -36,8 +36,8 @@ describe("/customize sidebar rows", () => {
   test("the preview count is a number row beside the other sidebar rows: shown with the sidebar, stepped within 1..50, typed and checked", () => {
     expect(rowShown("sidebarPreviewCount", DEFAULT_TUI_PROFILE, {})).toBe(true)
     expect(CUSTOMIZE_ROWS.indexOf("sidebarPreviewCount")).toBe(CUSTOMIZE_ROWS.indexOf("sidebarProjects") + 1)
-    expect(press("sidebarPreviewCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 6 } })
-    expect(press("sidebarPreviewCount", "\x1b[D").action).toEqual({ type: "set", patch: { sidebarPreviewCount: 4 } })
+    expect(press("sidebarPreviewCount", RIGHT).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 4 } })
+    expect(press("sidebarPreviewCount", "\x1b[D").action).toEqual({ type: "set", patch: { sidebarPreviewCount: 2 } })
     expect(press("sidebarPreviewCount", RIGHT, { ...DEFAULT_TUI_PROFILE, sidebarPreviewCount: 50 }).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 50 } })
     const open = press("sidebarPreviewCount", "\r").state
     expect(press("sidebarPreviewCount", "\r", DEFAULT_TUI_PROFILE, { ...open, typing: "12" }).action).toEqual({ type: "set", patch: { sidebarPreviewCount: 12 } })

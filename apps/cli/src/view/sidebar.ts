@@ -6,7 +6,7 @@ import { clip, fit, spread } from "./deck"
 import { compact } from "./format"
 import type { TodoItem, TodoStatus } from "./dock"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
-import { draftSizeLabel, labelSpans, rowLabel, sessionActivityAt, workflowOf } from "./session-label"
+import { draftSizeLabel, labelSpans, rowLabel, sessionActivityAt, sessionOrderAt, workflowOf } from "./session-label"
 import { lineWidth, textWidth, wrap } from "./wrap"
 import { agentsSpans, elapsedLabel, isCompacting, liveDetail, prSpans, SETTLED_FIRST } from "./sidebar-marks"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
@@ -184,12 +184,12 @@ export function attachSidebar(main: readonly Line[], sidebar: readonly Line[], m
 /** A workflow's own session, working or not: the run lives on /workflows, never as a chat in the list. */
 export const restingWorkflow = (session: { title: string; named?: boolean | undefined }) => workflowOf(session) !== undefined
 
-/** The folder's top sessions in list order; a workflow's sessions stay out of it unless one is `current`. */
+/** The folder's top sessions in list order (pinned, then the ones a person wrote in last: see `sessionOrderAt`); a workflow's sessions stay out of it unless one is `current`. */
 export function projectSessions(sessions: readonly SessionSummary[], directory: string, current?: string) {
   const section = (session: SessionSummary) => session.archivedAt !== undefined ? 2 : session.lifecycle?.pinnedAt !== undefined ? 0 : 1
   // The top sessions only: a child listed with its parent (as /sessions lists a folder) stays under it there, not here.
   const listed = new Set(sessions.map((session) => session.sessionId))
-  return sessions.filter((session) => session.directory === directory && !(session.parentId && listed.has(session.parentId)) && (session.sessionId === current || !restingWorkflow(session))).sort((a, b) => section(a) - section(b) || sessionActivityAt(b) - sessionActivityAt(a) || a.sessionId.localeCompare(b.sessionId))
+  return sessions.filter((session) => session.directory === directory && !(session.parentId && listed.has(session.parentId)) && (session.sessionId === current || !restingWorkflow(session))).sort((a, b) => section(a) - section(b) || sessionOrderAt(b) - sessionOrderAt(a) || a.sessionId.localeCompare(b.sessionId))
 }
 
 /** The collapsed Settled row's stop among the hits and the keyboard's rows; never a session id (those are ULID-like). */
@@ -204,7 +204,7 @@ const RUNNING_STATES: ReadonlySet<string> = new Set(["generating", "tool", "comp
 const MARK_RANK: Record<SessionMark, number> = { approval: 0, question: 1, plan: 2, error: 3, unread: 4, running: 5, queued: 6, settled: 7, idle: 8 }
 const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", question: "info", plan: "accent", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
 
-type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting" | "named">>
+type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting" | "named" | "createdAt" | "lastHumanAt">>
 
 /**
  * The row's state: waiting for you (to approve, to answer, or to review a plan), working, failed, a reply you have not opened yet, queued
@@ -336,7 +336,8 @@ export function renderSessionSidebar(input: {
   const settled = input.sessions.filter((session) => session.archivedAt !== undefined)
   for (const session of input.sessions) {
     if (session.archivedAt !== undefined) continue
-    const next = session.lifecycle?.pinnedAt !== undefined ? "Pinned" : sessionActivityAt(session) >= today ? "Today" : "Earlier"
+    // The same time the order uses, so a group never repeats and a reply never lifts a row from Earlier to Today.
+    const next = session.lifecycle?.pinnedAt !== undefined ? "Pinned" : sessionOrderAt(session) >= today ? "Today" : "Earlier"
     if (next !== group) { groupHeading(next); group = next }
     sessionRow(session)
   }
