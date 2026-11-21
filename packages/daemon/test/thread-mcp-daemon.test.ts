@@ -259,6 +259,25 @@ test("a Claude Code session's bridge names MendCode's other models by engine, an
   expect(h.daemon.store.sessionModel(task.taskId)?.model).toBe("configured-native")
 })
 
+test("delegate_task takes effort as the child's variant in the same call; a clash or an unknown effort is refused naming the valid ones", async () => {
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
+  const parent = await h.create()
+  const results: any[] = []
+  h.run(async (turn) => {
+    results.push(await h.invoke(turn, "delegate_task", { description: "clash", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "medium", variant: "low", background: false }))
+    results.push(await h.invoke(turn, "delegate_task", { description: "bad", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "nope", background: false }))
+    results.push(await h.invoke(turn, "delegate_task", { description: "ok", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "low", background: false }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(results[0].result.content[0].text).toContain("effort medium and variant low differ")
+  expect(results[1].result.content[0].text).toContain("unknown variant nope for claude-sonnet; use low")
+  expect(h.daemon.store.tasks.list()).toHaveLength(1)
+  const task = h.daemon.store.tasks.list()[0]!
+  expect(h.daemon.store.sessionModel(task.taskId)).toMatchObject({ model: "claude-sonnet", variant: "low" })
+})
+
 test("a delegation that fails says why to the engine that called, and names the engine's models when one is missing", async () => {
   const h = await boot()
   await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
