@@ -987,7 +987,7 @@ export async function startDaemon(options: DaemonOptions) {
     mask: (sessionId, text) => secrets.mask(sessionId as SessionId, text),
     enabled: options.shellHooksEnabled ?? process.env.MENDCODE_HOOKS !== "0",
     continueSession: (sessionId, text) => void actorFor(sessionId as SessionId)?.notify(text),
-    isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId as SessionId) !== undefined || asideSessions.isAside(sessionId as SessionId),
+    isChild: (sessionId) => store.tasks.get(sessionId) !== undefined || workflows.execution(sessionId as SessionId) !== undefined || asideSessions.isAside(sessionId as SessionId),
     // `http` hooks reach only URLs the user listed in `allowedHttpHookUrls`; `prompt` hooks use the budgeted completion (native engine only).
     allowedHttpUrls: () => store.settings.get().allowedHttpHookUrls,
     ...(options.complete ? { complete: ({ sessionId, ...request }: { system: string; prompt: string; signal: AbortSignal; sessionId?: string }) => completeBudgeted!({ ...request, auxiliary: { role: "hook", ...(sessionId && store.hasSession(sessionId as SessionId) ? { sessionId: sessionId as SessionId } : {}) } }) } : {}),
@@ -1059,7 +1059,7 @@ export async function startDaemon(options: DaemonOptions) {
       // Another agent (bot) brings its own model again: a model picked for the previous one no longer overrides it.
       store.meta.set(pickedModelKey(sessionId), "")
     },
-    isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
+    isChild: (sessionId) => store.tasks.get(sessionId) !== undefined || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
     botsOn: () => botsOn(),
     botRecall: (name, sessionId) => {
       const recall = botRecallModule
@@ -1367,7 +1367,7 @@ export async function startDaemon(options: DaemonOptions) {
   /** `@name message` to a child this session already has: it continues that child (docs/agents.md, "`@agent` mentions"). */
   const mentionRouting = createMentionRouting({
     children: (parentId) => tasks.list(parentId),
-    task: (taskId) => store.tasks.list().find((task) => task.taskId === taskId),
+    task: (taskId) => store.tasks.get(taskId),
     file: path.join(options.dir, "agent-mentions.json"),
     resume: (parentId, task, prompt) => tasks.port.run(parentId, { description: task.description, prompt, task_id: task.taskId, background: true }, new AbortController().signal),
     failed: (parentId, task, message) => void actorFor(parentId)?.notify(secrets.mask(parentId, `A message for @${task.agent} (task ${task.taskId}) could not be sent when it finished: ${message}`)),
@@ -2997,7 +2997,7 @@ export async function startDaemon(options: DaemonOptions) {
     settings: () => store.settings.get(),
     provider: (id) => options.providers?.list(true).find((provider) => provider.id === id),
     packs: (sessionId) => engineTakesSteer(sessionId),
-    child: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflowContext(sessionId) !== undefined,
+    child: (sessionId) => store.tasks.get(sessionId) !== undefined || workflowContext(sessionId) !== undefined,
     idle: (sessionId) => {
       const snapshot = actors.get(sessionId)?.snapshot()
       if (snapshot ? snapshot.turnId !== undefined || snapshot.queue.length > 0 || snapshot.paused : store.queueOf(sessionId).length > 0) return false

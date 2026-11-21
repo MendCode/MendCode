@@ -99,7 +99,7 @@ export function createMemoryExtraction(options: {
     if (!directory) return "no folder"
     const info = store.sessionInfo(sessionId as SessionId)
     if (info?.parentId) return "child session"
-    if (store.tasks.list().some((task) => task.taskId === sessionId)) return "task session"
+    if (store.tasks.get(sessionId)) return "task session"
     if (info && dreamMachinery(info.title)) return "loop, workflow or review session"
     if (!(options.eligibleDirectory ? options.eligibleDirectory(directory) : dreamEligibleDirectory(directory, options.dataDir ? { dataDir: options.dataDir } : {}))) return "temporary, missing or linked-worktree folder"
     return options.ineligible?.(sessionId)
