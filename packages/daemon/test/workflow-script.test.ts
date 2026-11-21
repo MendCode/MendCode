@@ -10,6 +10,9 @@ import { createInProcessScriptHost } from "../../workflows/src/script-inprocess"
 import { startDaemon } from "../src"
 import { createWorkflowsHost, type WorkflowCommand } from "../src/workflows"
 import { workflowScriptTool } from "../src/workflow-tools"
+import { createNativeEngine, memoryHistory } from "@mendcode/engine-native"
+import type { PermissionMode } from "@mendcode/protocol"
+import { scriptedProvider, turn } from "../../engine-native/test/harness"
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -146,10 +149,6 @@ describe("who may start a script", () => {
     expect(workflows.execution(run.tasks[0]!.sessionId!)?.packageRoot).toBe(root)
     const inline = await workflows.handle({ type: "workflow.start", directory: project, plan: { script: plan.script, origin: "package" } })
     expect(inline.ok).toBe(true)
-    // The port the approval rule asks: only a script whose winning layer is a package is "installed".
-    const sessionId = createIdFactory()("session")
-    expect(workflows.port(sessionId, project).installed?.("package")).toBe(true)
-    expect(workflows.port(sessionId, project).installed?.("absent")).toBe(false)
     expect(store.workflows.all().find((entry) => entry.workflowId === (inline.ok ? (inline.result?.workflow as WorkflowSummary).workflowId : ""))?.packageRoot).toBeUndefined()
   })
 
@@ -200,18 +199,13 @@ describe("who may start a script", () => {
 })
 
 describe("the workflow_script tool", () => {
-  test("it is lazy, balanced and tier-gated, always asks, and answers help without asking", () => {
+  test("it is lazy, balanced and tier-gated, asks outside full access, and answers help without asking", () => {
     expect(workflowScriptTool.tier).toBe("balanced")
     expect(workflowScriptTool.approvalFor?.({ script: "x" })).toBe(true)
     expect(workflowScriptTool.approvalFor?.({ help: true })).toBe(false)
-    // Full access: a saved script started by name runs like any tool; a script the model wrote still asks.
-    const installed = { workflows: { installed: (name: string) => name === "mend" } as never }
-    expect(workflowScriptTool.approvalFor?.({ name: "mend", args: { item: "a" } }, { mode: "full", ...installed })).toBe(false)
-    expect(workflowScriptTool.approvalFor?.({ script: "x" }, { mode: "full", ...installed })).toBe(true)
-    // A script saved in the project or the user's folder is a file a write creates: it asks, as does any name the port cannot place in a package.
-    expect(workflowScriptTool.approvalFor?.({ name: "model-wrote-this" }, { mode: "full", ...installed })).toBe(true)
-    expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode: "full" })).toBe(true)
-    for (const mode of ["smart", "ask", "edits", undefined]) expect(workflowScriptTool.approvalFor?.({ name: "mend" }, { mode, ...installed })).toBe(true)
+    // Full access: any script starts like any other tool, written by the model or saved by name.
+    for (const args of [{ script: "x" }, { name: "mend", args: { item: "a" } }]) expect(workflowScriptTool.approvalFor?.(args, { mode: "full" })).toBe(false)
+    for (const mode of ["smart", "ask", "edits", "plan", undefined]) for (const args of [{ script: "x" }, { name: "mend" }]) expect(workflowScriptTool.approvalFor?.(args, { mode })).toBe(true)
     expect(workflowScriptTool.permissionFor?.({ help: true })).toBe("read")
     expect(workflowScriptTool.permissionFor?.({ script: "x" })).toBe("execute")
     expect(workflowScriptTool.args.safeParse({}).success).toBe(false)
@@ -226,5 +220,25 @@ describe("the workflow_script tool", () => {
     expect(help.output).toContain("export const meta")
     const started = await workflowScriptTool.execute({ script: "export const meta = { name: 'x' }" }, { cwd: "/", signal: new AbortController().signal, workflows: { start: async (input: unknown) => ({ ok: true, workflowId: "wf1", name: JSON.stringify(input).slice(0, 12), tasks: 0 }) } } as never)
     expect(started.output).toContain("started (wf1)")
+  })
+
+  test("a Claude Code session in full access starts a script without a card; in smart mode it asks", async () => {
+    const starts: unknown[] = []
+    const workflows = { preview: async () => ({ problems: [], detail: "source" }), start: async (input: unknown) => (starts.push(input), { ok: true, workflowId: "wfl_1", name: "mend-lite", tasks: 0 }) }
+    const { provider } = scriptedProvider([])
+    const engine = createNativeEngine({ provider, history: memoryHistory(), tools: [workflowScriptTool], cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", permissionPolicy: () => ({ tier: "balanced" }), workflows: () => workflows as never })
+    const call = (mode: PermissionMode, args: Record<string, unknown>) => {
+      const run = turn({ text: "", mode: () => mode, answers: [{ kind: "deny" }] })
+      return engine.hostCall!({ turn: run.input, name: "workflow_script", args }).then((result) => ({ result, asked: run.asked.length }))
+    }
+    for (const args of [{ name: "mend-lite", args: { item: "a" } }, { script: "export const meta = { name: 'x' }" }]) {
+      const full = await call("full", args)
+      expect(full).toMatchObject({ asked: 0, result: { isError: false } })
+      expect(full.result.output).toContain("started (wfl_1)")
+      const smart = await call("smart", args)
+      expect(smart.asked).toBe(1)
+      expect(smart.result.isError).toBe(true)
+    }
+    expect(starts).toHaveLength(2)
   })
 })
