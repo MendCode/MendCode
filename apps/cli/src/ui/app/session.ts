@@ -221,9 +221,11 @@ export function createSession(ctx: AppContext, actions: {
     // The history is the project's, shared by its sessions: what is in the prompt is kept as a draft entry, and the next ↑ reads the list again.
     void actions.keepDiscarded({ track: false })
     if (!input.remote) state.recall.prompts = undefined
-    await releaseBackgroundWriter()
+    // Sent, not awaited: the daemon reads them in order before the next session's requests, and a daemon busy with a turn no
+    // longer holds the next chat back by two round trips.
+    void releaseBackgroundWriter().catch(() => undefined)
     writerStopped = false
-    if (input.subscribe) await input.send({ type: "client.unsubscribe", sessionId: state.sessionId })
+    if (input.subscribe) void input.send({ type: "client.unsubscribe", sessionId: state.sessionId }).catch(() => undefined)
     if (input.remote) {
       const listed = await input.send({ type: "session.list", limit: 500, archived: true })
       const summary = listed.ok ? (listed.result?.sessions as SessionSummary[] | undefined)?.find((session) => session.sessionId === next) : undefined

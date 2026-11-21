@@ -194,7 +194,7 @@ primary merged, muted closed). The symbols, most urgent first:
 | `·` | muted | idle (`.` with ASCII glyphs) |
 | `◇` | muted | settled |
 
-Only running and approval rows move, on the same tick that animates a busy turn. A list with nothing working draws no frames by itself. The header counts what works and what waits (`Sessions ⠹2 ?1`).
+Only running and approval rows move. While the open chat works they move on its tick (8 a second); while only other sessions work they move on a slower one (2 a second), since each tick redraws the screen. A list with nothing working draws no frames by itself. The header counts what works and what waits (`Sessions ⠹2 ?1`).
 
 Unread is kept in memory only. A session counts as seen when the list first draws it and while it is open, so a fresh start has nothing unread and nothing is written.
 

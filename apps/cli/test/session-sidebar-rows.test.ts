@@ -159,7 +159,7 @@ describe("the sessions sidebar in the app", () => {
     expect(side(h).find((line) => line.includes("Elsewhere"))).toContain("● Elsewhere")
   })
 
-  test("a running session elsewhere moves its symbol on the existing pulse; an idle list draws no frames by itself", async () => {
+  test("a running session elsewhere moves its symbol on a slow pulse (2 frames a second); an idle list draws no frames by itself", async () => {
     const h = sidebarApp()
     await Bun.sleep(50)
     h.app.render()
@@ -169,8 +169,11 @@ describe("the sessions sidebar in the app", () => {
     h.app.onGlobal(activity({ state: "tool", updatedAt: NOW + 1_000 }))
     h.app.render()
     const first = side(h).find((line) => line.includes("Elsewhere"))!
-    await Bun.sleep(300)
+    const before = h.frames.length
+    await Bun.sleep(1_100)
     expect(side(h).find((line) => line.includes("Elsewhere"))).not.toBe(first)
+    // The chat itself rests: two ticks in a second, not the 8 of a chat that works.
+    expect(h.frames.length - before).toBeLessThanOrEqual(3)
     h.app.onGlobal(activity({ state: "idle", updatedAt: NOW + 2_000 }))
     h.app.render()
     // A frame already asked for may still land; after it nothing more is drawn.
