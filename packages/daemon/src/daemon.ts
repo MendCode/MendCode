@@ -475,6 +475,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** Hermetic bridge transport for tests; production binds only 127.0.0.1. */
   /** Tests serve the native-tools bridge without a socket. */
   hostMcpListener?: Parameters<typeof createHostMcp>[0]["listen"]
+  /** One tool-less completion on the user's Claude login (headless `claude -p`), for the cheap helper calls of a Claude Code session. */
+  claudeComplete?: (input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice }) => Promise<{ text: string; usage?: BudgetUsage | undefined }>
   threadMcpListener?: Parameters<typeof import("./thread-mcp")["createThreadMcp"]>[0]["listen"]
   /** Injectable for tests; defaults to the real OS clipboard reader (osascript/sips, wl-paste/xclip). */
   clipboard?: ClipboardReader
@@ -1241,6 +1243,47 @@ export async function startDaemon(options: DaemonOptions) {
     } catch (error) { budgets.record(); throw error }
     finally { auxiliaryUsage.record(auxiliary, usage, model.model); onUsage?.(usage) }
   } : undefined
+  /**
+   * `task_status` action `progress` and the bridge's `task_progress`: asked by the main agent when the user asks how far along a
+   * sub-agent is. The module loads on first use; the cheap model is the `summary` role's (then `small`, then the cheaper peer of the
+   * session's model), or Claude Haiku/Sonnet on the user's Claude login for a Claude Code session with neither set. Counted as `summary`.
+   */
+  async function agentProgress(parentId: SessionId, taskId: string | undefined, signal: AbortSignal): Promise<string> {
+    const { createAgentProgress, PROGRESS_LIMITS } = await import("./agent-progress")
+    return createAgentProgress({
+      now: () => clock.now(),
+      tasks: { get: (id) => tasks.get(id), list: (parent) => tasks.list(parent) },
+      events: {
+        tail: (id, limit) => store.readAfter(id, Math.max(0, (store.lastSeq(id) ?? 0) - limit), limit),
+        head: (id, limit) => store.readAfter(id, 0, limit),
+      },
+      ask: async ({ sessionId, system, prompt, signal: outer }) => {
+        const callSignal = AbortSignal.any([outer, AbortSignal.timeout(PROGRESS_LIMITS.timeoutMs)])
+        const roles = rolesFor(store.settings.get(), store.sessionDirectory(sessionId))
+        const session = store.sessionModel(sessionId)
+        const auxiliary = { role: "summary" as const, sessionId }
+        const claudeTier = session && !roles.summary && !roles.small && options.claudeComplete && modelEngine(session, catalog) === "claude"
+          ? catalog.list().filter((info) => info.engine === "claude" && catalog.allows?.(info.id) !== false)
+          : []
+        const cheap = claudeTier.find((info) => /haiku/i.test(info.id)) ?? claudeTier.find((info) => /sonnet/i.test(info.id))
+        if (cheap) {
+          const model = { model: cheap.id }
+          await budgets.guard({ model: model.model, signal: callSignal })
+          let usage: BudgetUsage | undefined
+          try {
+            const answer = await options.claudeComplete!({ system, prompt, signal: callSignal, model })
+            usage = answer.usage
+            budgets.record(answer.usage)
+            return answer.text
+          } catch (error) { budgets.record(); throw error }
+          finally { auxiliaryUsage.record(auxiliary, usage, model.model) }
+        }
+        if (!completeBudgeted) return undefined
+        const model = options.models?.selectable ? resolveModel({ role: "summary", session, roles, catalog: options.models }) : undefined
+        return completeBudgeted({ system, prompt, signal: callSignal, ...(model ? { model } : {}), auxiliary })
+      },
+    }).progress(parentId, taskId, signal)
+  }
   const extractBudgeted: DaemonOptions["extractMemory"] = options.extractMemory ? async (job, signal) => {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
     await budgets.guard({ model: model.model, signal })
@@ -1408,7 +1451,7 @@ export async function startDaemon(options: DaemonOptions) {
     auxiliary: auxiliaryUsage,
     trace,
     // A side session (`/btw`) runs as a child: its agent's tools and model, no orientation, no recall.
-    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests, readOnly: (sessionId) => asideSessions.isAside(sessionId) },
+    tasks: { ...tasks.modelPort, status: (parentId, input, signal) => input.action === "progress" ? agentProgress(parentId, input.task_id, signal) : tasks.modelPort.status(parentId, input, signal), isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests, readOnly: (sessionId) => asideSessions.isAside(sessionId) },
     clock,
     store,
     grants,
@@ -1673,6 +1716,7 @@ export async function startDaemon(options: DaemonOptions) {
               globalSink.append({ type: "task.changed", sessionId: id, parentId: turn.sessionId })
               return { ok: true, output: `sessionId=${id} state=idle` }
             },
+            progress: (taskId, signal) => agentProgress(turn.sessionId, taskId, signal),
             delegate: async (args, signal) => {
               const safe = captured(turn.sessionId, args.prompt)
               if ("ok" in safe) return { ok: false, message: safe.message }
