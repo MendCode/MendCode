@@ -84,6 +84,36 @@ test("a Claude Code sub-agent thread is read from the main session's items marke
   expect(h.asked[1]!.prompt).toContain("docs/index.md")
 })
 
+test("a Claude Code sub-agent woken after its end is running again, with no report of the earlier run", async () => {
+  const call = "item_agent_3"
+  const events = [
+    started(PARENT, call, "tool_call", NOW - 90_000, { tool: "agent resumed one", subagent: true }),
+    started(PARENT, "e1", "agent_message", NOW - 50_000, { agentParent: call }),
+    completed(PARENT, "e1", NOW - 50_000, "First run done.", { meta: { agentParent: call, agentEnd: true } }),
+    started(PARENT, "r1", "tool_call", NOW - 10_000, { tool: "Read: second.ts", agentParent: call }),
+  ]
+  const h = harness({ threads: { [PARENT]: events } })
+  const text = await h.run()
+  expect(text).not.toContain("It has finished")
+  expect(h.asked).toHaveLength(1)
+  expect(h.asked[0]!.prompt).toContain("tool: Read: second.ts (running)")
+})
+
+test("a finished Claude Code sub-agent whose end marker has no text reports its last message", async () => {
+  const call = "item_agent_4"
+  const events = [
+    started(PARENT, call, "tool_call", NOW - 90_000, { tool: "agent quiet end", subagent: true }),
+    started(PARENT, "s1", "agent_message", NOW - 6_000, { agentParent: call }),
+    completed(PARENT, "s1", NOW - 6_000, "Two bugs found in the parser."),
+    started(PARENT, "e1", "agent_message", NOW - 5_000, { agentParent: call }),
+    completed(PARENT, "e1", NOW - 5_000, "", { meta: { agentParent: call, agentEnd: true } }),
+  ]
+  events[2] = completed(PARENT, "s1", NOW - 6_000, "Two bugs found in the parser.", { meta: { agentParent: call } })
+  const h = harness({ threads: { [PARENT]: events } })
+  expect(await h.run(call)).toContain("It has finished. Result: Two bugs found in the parser.")
+  expect(h.asked).toHaveLength(0)
+})
+
 test("with a single running Claude Code sub-agent no id is needed", async () => {
   const call = "item_agent_1"
   const h = harness({ threads: { [PARENT]: [started(PARENT, call, "tool_call", NOW - 30_000, { tool: "agent check", subagent: true }), started(PARENT, "x1", "tool_call", NOW - 20_000, { tool: "Read: a.ts", agentParent: call }), completed(PARENT, "x1", NOW - 19_000, "ok")] } })

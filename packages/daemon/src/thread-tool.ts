@@ -38,7 +38,7 @@ export const threadsTool = defineTool({
     state: z.enum(["busy", "idle"]).optional().describe("list: only busy or idle"),
     project: z.string().min(1).optional().describe("list: folder contains"),
     before: z.string().max(100).optional().describe("read, search: the `before=` cursor of the previous page"),
-    offset: z.number().int().min(0).optional().describe("read, with limit=1: start this many characters into the message (one message comes whole up to 24000)"),
+    offset: z.number().int().min(0).optional().describe("read, with limit=1 (a session of this project): start this many characters into the message that `before=` names; copy both from the cut line"),
     timeoutSeconds: z.number().int().min(1).max(120).optional().describe("wait: seconds to wait, default 60"),
   }),
   permissionFor(args, context): ToolPermission {

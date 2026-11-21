@@ -171,6 +171,7 @@ export function renderMermaid(source: string, width: number): MermaidResult {
     made = { fail: "undrawn" }
   }
   if ("lines" in made) return made
+  if (made.fail === "unread" && !made.skipped.length) return { note: "empty diagram · shown as source" }
   if (made.fail === "unread") return { note: `${skippedNote(made.skipped)} · shown as source` }
   if (made.fail === "wide") {
     let cut: Drawn | undefined

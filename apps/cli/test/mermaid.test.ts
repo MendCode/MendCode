@@ -283,6 +283,41 @@ describe("fallbacks", () => {
     expect(outline.lines.map(text)).toEqual(["unknownDiagram", '├ "a": 1', '├ "b": 2'])
     expect(outline.note).toBe("unknownDiagram has no drawing here · shown as an outline")
   })
+  test("a rejected flowchart line leaves the nodes declared before it as they were", () => {
+    const result = renderMermaid("flowchart TD\nA --> B\nA[Wrong] -=> C\nA[Correct] --> D", 100)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    const drawn = result.lines.map(text).join("\n")
+    expect(drawn).toContain("Correct")
+    expect(drawn).not.toContain("Wrong")
+    expect(result.note).toContain("1 line not understood")
+  })
+  test("one very long statement still gives an outline of bounded rows", () => {
+    const result = renderMermaid(`unknownDiagram\n${"x".repeat(100000)}`, 80)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    expect(result.lines.length).toBeLessThanOrEqual(242)
+    expect(text(result.lines.at(-1)!)).toMatch(/^… \d+ more lines$/)
+  })
+  test("outline rows stay inside the width, however narrow or deep", () => {
+    const deep = Array.from({ length: 12 }, (_, i) => `${"  ".repeat(i)}word${i} abcdef`).join("\n")
+    for (const [source, width] of [["unknownDiagram\nabcdef", 4], ["unknownDiagram\nabcdef ghijkl", 5], [`unknownDiagram\n${deep}`, 12], [`unknownDiagram\n${deep}`, 30]] as const) {
+      const result = renderMermaid(source, width)
+      if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+      for (const line of result.lines) expect(textWidth(text(line))).toBeLessThanOrEqual(width)
+    }
+  })
+  test("ER aliases that name each other's ids keep two entities and their own fields", () => {
+    const result = renderMermaid("erDiagram\na[b] {\n string first\n}\nb[c] {\n int second\n}\na ||--|| b : owns", 100)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    const drawn = result.lines.map(text).join("\n")
+    for (const label of ["string first", "int second", "owns"]) expect(drawn).toContain(label)
+    expect(drawn).toMatch(/│ +b +│/)
+    expect(drawn).toMatch(/│ +c +│/)
+  })
+  test("a header-only flowchart or sequence is a note, not an exception", () => {
+    for (const source of ["flowchart TD", "graph LR", "sequenceDiagram"]) {
+      expect(renderMermaid(source, 80)).toEqual({ note: "empty diagram · shown as source" })
+    }
+  })
   test("text that is not a diagram is a note that quotes it, never a bare 'unsupported'", () => {
     expect(renderMermaid("", 100)).toEqual({ note: "empty diagram" })
     expect(renderMermaid("not mermaid at all", 100)).toEqual({ note: "not a mermaid diagram type: not mermaid at all · shown as source" })

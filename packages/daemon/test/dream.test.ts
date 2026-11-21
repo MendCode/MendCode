@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
@@ -132,9 +132,10 @@ describe("dream in the daemon", () => {
 })
 
 describe("dream revisions in the daemon", () => {
-  async function boot(complete: (prompt: string) => string) {
+  async function boot(complete: (prompt: string) => string, todayFile?: object) {
     const dir = mkdtempSync(path.join(tmpdir(), "mendd-dream-rev-"))
     cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    if (todayFile) writeFileSync(path.join(dir, "today.json"), JSON.stringify(todayFile))
     const changes: Array<{ memoryId: string; change: string }> = []
     const daemon = await startDaemon({
       dir,
@@ -172,9 +173,25 @@ describe("dream revisions in the daemon", () => {
       const reply = await client.send({ type: "memory.list", directory: "/repo", status })
       return (reply.ok ? (reply.result?.memories as MemoryEntry[]) : []) ?? []
     }
-    return { client, add, dream, list, changes, runs, prompts: () => prompts }
+    return { client, add, dream, list, changes, runs, dir, prompts: () => prompts }
   }
   let prompts: string[] = []
+
+  test("an accept rule applies a revision, but one whose text had a secret redacted waits for review", async () => {
+    let npm = ""
+    let text = "Package manager is pnpm"
+    const h = await boot(() => JSON.stringify({ updates: [{ id: npm, text, why: "w" }] }), { version: 1, onboarded: true, instructions: [], rules: [{ id: "r1", project: "/repo", action: "accept", createdAt: 1 }], sessions: [] })
+    npm = await h.add("Package manager is npm")
+    text = "Package manager is pnpm; the token is sk-abcdEFGH1234ijklMNOP5678"
+    await h.dream()
+    expect((await h.list("pending")).map((m) => m.kind)).toEqual(["update"])
+    expect((await h.list("saved")).map((m) => m.text)).toEqual(["Package manager is npm"])
+    text = "Package manager is yarn"
+    await h.client.send({ type: "memory.update", memoryId: (await h.list("pending"))[0]!.memoryId, status: "archived" })
+    await h.dream()
+    expect(await h.list("pending")).toEqual([])
+    expect((await h.list("saved")).map((m) => m.text)).toEqual(["Package manager is yarn"])
+  })
 
   test("a run stores update and archive proposals as pending rows without touching the saved memories", async () => {
     let npm = ""

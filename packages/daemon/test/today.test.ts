@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIdFactory, type MemoryId, type SessionId } from "@mendcode/protocol"
 import { boot, callTool, jumpClock, say, stop, until, type NativeHarness } from "./native-harness"
-import { buildBrief, emptyTodayPrefs, memoryGroups, readTodayPrefs, suggestedShape, todayRuleFor, writeTodayPrefs, TODAY_FILE, TODAY_KICKOFF, type TodayMemory, type TodayPrefs, type TodaySession } from "../src/today"
+import { buildBrief, createToday, emptyTodayPrefs, memoryGroups, readTodayPrefs, suggestedShape, todayRuleFor, writeTodayPrefs, TODAY_FILE, TODAY_KICKOFF, type TodayMemory, type TodayPrefs, type TodaySession } from "../src/today"
 import { todayTool } from "../src/today-tool"
 
 const ids = createIdFactory()
@@ -79,9 +79,63 @@ describe("today's brief", () => {
     expect(brief({ prefs: { ...emptyTodayPrefs(), onboarded: true } })).not.toContain("## Onboarding")
   })
 
+  test("a long day cuts the activity, never the standing instructions", () => {
+    const prefs: TodayPrefs = { ...emptyTodayPrefs(), onboarded: true, instructions: [{ id: "i1", text: "Check the status page answers", createdAt: 1 }] }
+    const busy = Array.from({ length: 40 }, (_, index) => session({ sessionId: `ses_${index}`, directory: `/work/p${index % 8}`, title: `Task ${index}`, summary: "x".repeat(220) }))
+    const text = brief({ prefs, sessions: busy })
+    expect(text).toContain("(brief cut here)")
+    expect(text).toContain("## Standing instructions")
+    expect(text).toContain("- i1: Check the status page answers")
+  })
+
   test("the day's own Today chats are not reported as work", () => {
     const prefs: TodayPrefs = { ...emptyTodayPrefs(), sessions: [{ day: "2026-11-20", sessionId: "ses_today" }] }
     expect(brief({ prefs, sessions: [session({ sessionId: "ses_today", title: "Today · Fri 20 Nov" })] })).not.toContain("Today · Fri 20 Nov")
+  })
+})
+
+/** `createToday` over in-memory stand-ins for the daemon's sessions and memories, so a selector, a rule or an open is checked without a chat. */
+function service(over: { pending?: TodayMemory[]; prefs?: TodayPrefs } = {}) {
+  const dir = mkdtempSync(path.join(tmpdir(), "mend-today-unit-"))
+  dirs.push(dir)
+  let prefs = over.prefs ?? emptyTodayPrefs()
+  let pending = over.pending ?? []
+  const decided: Array<[string, boolean]> = []
+  const today = createToday({
+    dir, now: () => NOW,
+    prefs: { get: () => prefs, set: (next) => { prefs = next } },
+    sessions: () => [], waiting: () => [],
+    pending: () => ({ memories: pending, drafts: 0 }),
+    decide: (memoryId, accept) => { decided.push([memoryId, accept]); pending = pending.filter((entry) => entry.memoryId !== memoryId); return "done" },
+    ending: () => undefined, loops: () => 0, canonical: (directory) => directory,
+  })
+  return { today, decided, prefs: () => prefs }
+}
+
+describe("today's selectors and rules", () => {
+  test("a whitespace-only query names no memory, so accept and decline decide nothing", () => {
+    const { today, decided } = service({ pending: [memory(1), memory(2)] })
+    for (const action of ["accept", "decline"] as const) expect(today.run({ action, query: "   " })).toMatchObject({ ok: false, message: expect.stringContaining("say which memories") })
+    expect(decided).toEqual([])
+  })
+
+  test("opens at the same time share one chat and one kickoff", async () => {
+    const { today } = service()
+    let created = 0
+    const input = { alive: () => true, turns: () => 0, create: async () => { created++; await Promise.resolve(); return `ses_${created}` } }
+    const [first, second] = await Promise.all([today.open(input), today.open(input)])
+    expect(created).toBe(1)
+    expect(first).toEqual({ sessionId: "ses_1", fresh: true, kickoff: TODAY_KICKOFF })
+    expect(second).toEqual({ sessionId: "ses_1", fresh: false })
+    // An open right after, before the first message lands, does not hand the kickoff out again.
+    expect(await today.open(input)).toEqual({ sessionId: "ses_1", fresh: false })
+  })
+
+  test("a broad rule added after a more specific one leaves the memories the specific rule decides", () => {
+    const specific: TodayPrefs["rules"][number] = { id: "r1", project: "/work/shop", action: "accept", createdAt: 1 }
+    const { today, decided } = service({ prefs: { ...emptyTodayPrefs(), rules: [specific] }, pending: [memory(1), memory(2, { project: "/work/site" })] })
+    expect(today.run({ action: "rule", decision: "decline", category: "conventions" })).toMatchObject({ ok: true })
+    expect(decided).toEqual([["mem_2", false]])
   })
 })
 

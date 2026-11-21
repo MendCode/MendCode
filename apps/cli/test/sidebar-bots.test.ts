@@ -405,6 +405,22 @@ describe("keyboard stops and mouse hits agree with what is drawn", () => {
     expect(multiStops({ ...input(first), hold: undefined })).toEqual(["new:", "group:/work/app", "c", "b", "a"])
   })
 
+  test("a held row whose session fell out of the new preview still shows that session as it is, and the header counts only what the held rows hide", () => {
+    const made = (id: string, createdAt: number, over: Record<string, unknown> = {}) => session(id, `Chat ${id}`, "/work/app", { createdAt, updatedAt: createdAt, lastSeq: 9, ...over })
+    const first = [made("a", NOW - 30 * MINUTE), made("b", NOW - 20 * MINUTE), made("c", NOW - 10 * MINUTE)]
+    const hold = {}
+    const input = (list: unknown[]): MultiInput => ({ ...base, sessions: list as never, current: "none", height: 40, sections: ["projects"], hold, previewCount: 3, spinner: "⠋" })
+    expect(multiStops(input(first))).toEqual(["new:", "group:/work/app", "c", "b", "a"])
+    // d is newer, so the preview is [d, c, b]: a still exists and now works; e (not held) works too and joins the preview of nobody held.
+    const later = [made("a", NOW - 30 * MINUTE, { state: "generating" }), first[1], first[2], made("d", NOW), made("e", NOW - 5 * MINUTE, { state: "generating" })]
+    const rows = renderMultiSidebar(input(later)).rows.map(plain)
+    const rowOfA = rows.find((row) => row.includes("Chat a"))!
+    expect(rowOfA).toContain("⠋")
+    expect(rows.some((row) => row.includes("Chat d") || row.includes("Chat e"))).toBe(false)
+    // Only e works out of sight of the held rows: the header says so.
+    expect(rows.find((row) => row.includes("▾ app"))).toContain("1 active")
+  })
+
   test("each hit names a stop on the row that draws it", () => {
     const out = draw()
     for (const hit of out.hits) {

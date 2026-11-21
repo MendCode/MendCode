@@ -73,6 +73,30 @@ describe("the graph's answer for a text search", () => {
     expect(found?.text).toContain("main  function  src/a.ts:3")
   })
 
+  test("a file that takes the place of a changed one is checked too: promoted declarations and callers past the first ten are never cited stale", async () => {
+    const moved = (files: Record<string, string>, paths: string[], root: string) => { for (const path of paths) put({ root, path, content: `// moved\n${files[path]}`, mtime: 1_800_000_000_000 }) }
+    const cacheDir = tmp()
+    const callers: Record<string, string> = { "lib.ts": "export function work() {}\n" }
+    for (let i = 0; i < 12; i++) callers[`c${String(i).padStart(2, "0")}.ts`] = `import { work } from "./lib"\nexport function call${i}() {\n  work()\n}\n`
+    const callerRoot = project({ root: tmp(), files: callers })
+    await createIndexer({ cacheDir, now: () => 1_700_000_000_000 }).graph({ cwd: callerRoot, signal: signal() })
+    // The first ten callers and the eleventh changed: only the twelfth is a fresh answer.
+    moved(callers, Array.from({ length: 11 }, (_, i) => `c${String(i).padStart(2, "0")}.ts`), callerRoot)
+    const afterCallers = await createSearchHints({ cacheDir, indexer: () => createIndexer({ cacheDir, now: () => 1_700_000_000_000 }), budgetMs: 2000 })({ cwd: callerRoot, terms: ["work"] })
+    expect(afterCallers?.text.split("\n").filter((line) => line.startsWith("  called by "))).toEqual(["  called by call11  c11.ts:2"])
+
+    const declared: Record<string, string> = {}
+    for (let i = 1; i <= 4; i++) declared[`d${i}.ts`] = `export function shared() {}\n`
+    const declaredRoot = project({ root: tmp(), files: declared })
+    await createIndexer({ cacheDir, now: () => 1_700_000_000_000 }).graph({ cwd: declaredRoot, signal: signal() })
+    // The first declaration and the fourth changed: the fourth must not be promoted into the answer unchecked.
+    moved(declared, ["d1.ts", "d4.ts"], declaredRoot)
+    const afterDeclared = await createSearchHints({ cacheDir, indexer: () => createIndexer({ cacheDir, now: () => 1_700_000_000_000 }), budgetMs: 2000 })({ cwd: declaredRoot, terms: ["shared"] })
+    expect(afterDeclared?.text).toContain("d2.ts")
+    expect(afterDeclared?.text).toContain("d3.ts")
+    expect(afterDeclared?.text).not.toMatch(/d[14]\.ts/)
+  })
+
   test("an answer that is not there in time is dropped, and the loaded graph serves the next search", async () => {
     const { root, cacheDir, indexer } = await indexed()
     const slow: Indexer = { ...indexer, cached: async (cwd) => { await new Promise((resolve) => setTimeout(resolve, 60)); return indexer.cached(cwd) } }
