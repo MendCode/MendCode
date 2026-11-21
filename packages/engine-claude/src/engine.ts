@@ -1,4 +1,4 @@
-import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type ItemId, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
@@ -85,6 +85,8 @@ type ActiveTurn = {
    * session first answers its notice that agents of the ended process did not finish, and that run's `result` is not this turn's.
    */
   ownQueued?: boolean
+  /** The compaction item of Claude Code compacting on its own in this turn, from its `status` `compacting` to its `compact_boundary`. */
+  ownCompaction?: ItemId
   watchdog?: TimerHandle
   touch(): void
   finish(outcome: TurnOutcome): void
@@ -586,6 +588,7 @@ export function createClaudeEngine(options: {
       if (typeof facts.pre_tokens === "number") compaction.preTokens = facts.pre_tokens
       if (typeof facts.post_tokens === "number") compaction.postTokens = facts.post_tokens
     } else if (compaction?.done && compaction.summary === undefined && message.type === "user" && message.isSynthetic && typeof message.message?.content === "string") compaction.summary = message.message.content
+    else if (!compaction && message.type === "system" && !message.parent_tool_use_id) showOwnCompaction(turn, message)
     if (message.type === "result" && turn.ownQueued) return void markProcessSpend(connection.spendMark, message)
     accept(turn, message)
     // Claude Code reads a message typed while it works with the running step's tool results. Written once those results are out, it
@@ -706,6 +709,28 @@ export function createClaudeEngine(options: {
       turn.steering = false
       turn.steerAgain = false
     }
+  }
+
+  /**
+   * Claude Code compacting on its own as the context fills, inside a turn: `status` `compacting` opens a compaction item and its
+   * `compact_boundary` closes it with the tokens before and after, so the session shows it as any compaction. A `status` that
+   * reports a failed compaction closes it as an error.
+   */
+  function showOwnCompaction(turn: ActiveTurn, message: ClaudeMessage) {
+    if (message.subtype === "status" && message.status === "compacting") {
+      if (turn.ownCompaction) return
+      turn.ownCompaction = turn.input.newItemId()
+      return void turn.input.emit({ type: "item.started", itemId: turn.ownCompaction, kind: "compaction", meta: { compactionMethod: "Claude Code" } })
+    }
+    const failed = message.subtype === "status" && typeof message.compact_result === "string" && message.compact_result !== "success"
+    if (message.subtype !== "compact_boundary" && !failed) return
+    const itemId = turn.ownCompaction ?? turn.input.newItemId()
+    if (!turn.ownCompaction) turn.input.emit({ type: "item.started", itemId, kind: "compaction", meta: { compactionMethod: "Claude Code" } })
+    delete turn.ownCompaction
+    if (failed) return void turn.input.emit({ type: "item.completed", itemId, status: "error", text: `Claude Code could not compact its context${typeof message.compact_error === "string" ? `: ${message.compact_error}` : "."}`.slice(0, MAX_TEXT) })
+    const facts = message.compact_metadata ?? {}
+    const text = typeof facts.pre_tokens === "number" && typeof facts.post_tokens === "number" ? `Claude Code compacted its context: ~${facts.pre_tokens} → ~${facts.post_tokens} tokens.` : "Claude Code compacted its context."
+    turn.input.emit({ type: "item.completed", itemId, status: "ok", text })
   }
 
   function accept(turn: ActiveTurn, message: ClaudeMessage, final = true) {

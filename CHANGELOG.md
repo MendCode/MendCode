@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
+
 ## v0.0.19-beta.2 - 2026-11-21
 
 Long chats scroll, page and switch faster and hold less memory: older history loads before you reach the top without redrawing what is already drawn, a chat read to its start lets the far history go once you are back at the bottom, and going back to one of your last chats is instant. New ChatGPT subscription models appear on their own. Pasted text and images come back as chips when a message returns to the prompt, a bot's unsent chat is kept, workflows leave the left list, sessions talk to each other in full access, and the activity line says what the model is doing.
