@@ -35,6 +35,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Launching a sub-agent with a given model and reasoning effort is now one call: the `task` tool and the `delegate_task` bridge tool take `effort` (or `variant`) next to `model`, so no agent file is needed, and an effort the model does not have is refused naming the valid ones.
 - Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
 - Interrupting another session with `threads` now says when that session's queue was left held and that the user must release it; before, the answer said the queue was untouched and the calling session waited for work that did not start. The held queue of the interrupted session names the session that cancelled it instead of saying "your cancel".
 - `mendcode session inspect`, `status` and `list` now show a session with no turn and a held queue as `held`, with how many messages wait, instead of `running`.

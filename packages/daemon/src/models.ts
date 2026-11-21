@@ -197,7 +197,10 @@ export function invalidChoice(choice: ModelChoice, catalog: ModelCatalog, role: 
     // Claude Code has no provider variants; a variant naming one of its efforts means that effort.
     if (choice.parameters) return `${choice.model} does not support provider variants`
     if (choice.variant && !info.efforts.includes(choice.variant as never)) return info.efforts.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${info.efforts.join(", ")}` : `${choice.model} does not support provider variants`
-  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) return `unknown variant ${choice.variant} for ${choice.model}`
+  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) {
+    const valid = Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name)
+    return valid.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${valid.join(", ")}` : `unknown variant ${choice.variant} for ${choice.model}`
+  }
   // A sub-agent on an engine model goes through task's `engine`; the refusal says how, so a model does not fall back to another provider's copy.
   // The advisor may name a Claude Code model: Claude Code sessions pass it to `--advisor`, native sessions consult it through the CLI (docs/advisor.md).
   if (info.engine && role !== "main" && role !== "subagent" && role !== "advisor") return `${choice.model} runs whole sessions through Claude Code; use it for main`

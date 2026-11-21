@@ -40,6 +40,18 @@ test("native task tool forwards an explicit configured engine/model to the child
   expect(h.requests[1]!.model).toBe("gpt-6-sol")
 })
 
+test("the task tool's effort starts the child with that effort; a differing variant or an unknown effort is refused naming the valid ones", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Check", prompt: "check", model: "gpt-6-sol", effort: "high" }), stop("child done"), callTool("task", { description: "Clash", prompt: "check", model: "gpt-6-sol", effort: "high", variant: "low" }), callTool("task", { description: "Bad", prompt: "check", model: "gpt-6-sol", effort: "nope" }), stop("parent done")] })
+  const parent = await openSession(h)
+  await say(h, parent, "delegate")
+  const [child] = list(h, parent)
+  expect(h.store.sessionModel(child!.taskId)).toMatchObject({ model: "gpt-6-sol", variant: "high" })
+  expect(list(h, parent)).toHaveLength(1)
+  const outputs = JSON.stringify(h.requests.at(-1)!.messages)
+  expect(outputs).toContain("effort high and variant low differ")
+  expect(outputs).toContain("unknown variant nope for gpt-6-sol; use ")
+})
+
 test("a model that writes Claude Code's subagent_type general-purpose gets the general sub-agent, not an unknown-agent error", async () => {
   const h = await start({ steps: [callTool("task", { description: "Check", prompt: "check", subagent_type: "general-purpose" }), stop("child done"), stop("parent done")] })
   const parent = await openSession(h)
