@@ -328,6 +328,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   let foreground: ForegroundState = "idle"
   /** What ended the last turn when it did not finish on its own: it is why a held queue waits. */
   let lastStop: "cancel" | "restart" | "interrupt" | undefined
+  /** The title of the session whose interrupt cancelled the last turn; undefined when the user cancelled it or it ended another way. */
+  let lastStopBy: string | undefined
   let permissionMode: PermissionMode = "ask"
   /** The session's last model call: its model and the context it used (input + cache read + output tokens). */
   let lastUsage: { provider: string; model: string; contextTokens: number | undefined; /** When the provider received the call: its prompt cache's lifetime counts from here. */ callAt?: number; /** The window the engine states, when it manages its own context. */ contextWindow?: number; /** The engine's figures disagreed and the tokens were clamped to the window. */ contextApprox?: boolean; /** Where MendCode packs this session, as the engine said with that call. */ compactAt?: number } | undefined
@@ -1270,18 +1272,22 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         break
       case "turn.completed":
         lastStop = undefined
+        lastStopBy = undefined
         finishTurn(event, { outcome: "completed" })
         break
       case "turn.cancelled":
         lastStop = "cancel"
+        lastStopBy = event.cancelledBy?.title
         finishTurn(event, { outcome: "cancelled" })
         break
       case "turn.interrupted":
         lastStop = event.reason === "restart" ? "restart" : "interrupt"
+        lastStopBy = undefined
         finishTurn(event, { outcome: "interrupted", reason: event.reason })
         break
       case "turn.failed":
         lastStop = undefined
+        lastStopBy = undefined
         finishTurn(event, { outcome: "failed", error: event.error })
         break
       case "foreground.state":
@@ -1532,7 +1538,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
     // The page on its own, from an empty projection. The maps keyed by item or turn are shared: nothing on the page names a loaded
     // key (checked above), and the loaded keys are kept.
-    const loaded = { all: all.splice(0), undone: [...undoneTurns], deleted: [...deletedItems], firstSeq, lastSeq, queue, foreground, lastStop, permissionMode, lastUsage, turnClock, activeTurn, settledStart, goal, usageLimit, rebuiltAt }
+    const loaded = { all: all.splice(0), undone: [...undoneTurns], deleted: [...deletedItems], firstSeq, lastSeq, queue, foreground, lastStop, lastStopBy, permissionMode, lastUsage, turnClock, activeTurn, settledStart, goal, usageLimit, rebuiltAt }
     blocks.length = 0
     undoneTurns.clear()
     deletedItems.clear()
@@ -1552,6 +1558,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     queue = []
     foreground = "idle"
     lastStop = undefined
+    lastStopBy = undefined
     permissionMode = "ask"
     lastUsage = undefined
     usageNotes.reset()
@@ -1646,6 +1653,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     }
     for (const event of continuityEvents.sort(bySeq)) keepContinuity(event)
     const olderStop = lastStop
+    const olderStopBy = lastStopBy
     settledStart = Math.max(settledStart, loaded.settledStart)
     // The loaded blocks follow the page's; what the loaded events add to the page's items and turns is applied again, in order, a
     // closing line or a note laid where its event was.
@@ -1710,6 +1718,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if (seen.foreground) foreground = loaded.foreground
     if (seen.permission) permissionMode = loaded.permissionMode
     lastStop = seen.end ? loaded.lastStop : olderStop
+    lastStopBy = seen.end ? loaded.lastStopBy : olderStopBy
     if (seen.usage) lastUsage = loaded.lastUsage
     if (seen.goal) goal = loaded.goal
     if (seen.limit) usageLimit = loaded.usageLimit
@@ -1770,6 +1779,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     queue = []
     foreground = "idle"
     lastStop = undefined
+    lastStopBy = undefined
     permissionMode = "ask"
     lastUsage = undefined
     usageNotes.reset()
@@ -1956,6 +1966,9 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     },
     get lastStop() {
       return lastStop
+    },
+    get lastStopBy() {
+      return lastStopBy
     },
     get permissionMode() {
       return permissionMode

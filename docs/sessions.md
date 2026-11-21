@@ -424,7 +424,7 @@ A cancel ends the turn at once on every engine (`turn.cancelled`, then idle) whi
 
 Restart also restores the queue held: no prompt runs until an explicit send or new submission, except behind a turn the restart resumes (`resumeAfterRestart`, [automation](automation.md#background-sessions-b17)): the messages that waited behind it follow the resumed turn.
 
-The panel says why it is held: `Held since your cancel`, `Held since the restart` or `Held since the interruption`.
+The panel says why it is held: `Held since your cancel` (`Held since the cancel by session <title>` when another session interrupted this one with `threads`), `Held since the restart` or `Held since the interruption`.
 
 Settings changes are pushed live; changing the policy alone never releases a held queue.
 

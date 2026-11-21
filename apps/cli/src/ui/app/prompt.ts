@@ -103,7 +103,7 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   async function restoreDraft(target: SessionId, options: { announce?: boolean } = {}) {
     const draft = await drafts.restore(target)
     // Pending comments saved with the draft come back as chips, whatever the prompt holds by now; a parked set stays parked.
-    if (draft?.comments && target === state.sessionId) ctx.comments.restore(draft.comments.list, draft.comments.parked)
+    if (draft?.comments && target === state.sessionId) ctx.comments.restore(draft.comments.list, draft.comments.parked, "draft")
     if (draft && target === state.sessionId) {
       if (editor.isEmpty() && state.attachments.length === 0) {
         // Text, attachments and their tokens come back as they were, the cursor at the end, with no notice: it is simply the session's prompt.
@@ -155,7 +155,7 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     const withComments = parseCommentDraft(draft.text)
     if (withComments && !ctx.comments.store.count) {
       editor.replaceAll(chipped(withComments.draft))
-      ctx.comments.restore(withComments.comments.map(({ itemId: _other, ...comment }) => comment), withComments.parked)
+      ctx.comments.restore(withComments.comments.map(({ itemId: _other, ...comment }) => comment), withComments.parked, "stash")
     } else editor.replaceAll(chipped(withComments ? readableMessage(draft.text) : draft.text))
     state.attachments = attachmentsOf(Array.isArray(draft.attachments) ? draft.attachments as BlobRef[] : [])
     promptReplaced()

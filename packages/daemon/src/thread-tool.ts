@@ -17,7 +17,7 @@ export const threadsTool = defineTool({
   tier: "balanced",
   description: [
     "Work with this project's other local sessions. action=list shows them, newest first (id, state if busy, age, title; 10, limit up to 100; query, state, project narrow it; scope=all or directory=<folder>: other projects'); stats gives a session's figures, this one without sessionId (time per turn, day and hour, usage per model, tools, sub-agents, approval waits; no message text, no approval): use it for how long a session worked or what it spent; search finds text in it (follow `more: before=`);",
-    "message queues a self-contained plain-text message (its answer returns as a notice); wait blocks up to timeoutSeconds until the session is idle and returns its last answer, without stopping it; interrupt cancels its running turn.",
+    "message queues a self-contained plain-text message (its answer returns as a notice); wait blocks up to timeoutSeconds until the session is idle and returns its last answer, without stopping it; interrupt cancels its running turn; what waits in its queue is then held until the user releases it there.",
     "merge_back brings what a fork of this session did since it branched into this session as context for its next message (a fork of this session only; no model call).",
     "list also names this project's chats in other programs (codex:…, claude:…, v1:…): read and search only, each asks the user.",
     "start opens a session in another project's folder (absolute directory) with text as its first message; message and wait take another project's id from list scope=all. Those always ask the user, arrive marked as an agent's, and never reach a session above this one's permission.",

@@ -12,9 +12,11 @@ const QUEUED = " QUEUED "
 const STEER = " STEERING "
 const SEND = " ↗ SEND "
 const HELD_INDENT = "  "
+/** Cells of another session's title in the held label, so the panel's title still fits a narrow terminal. */
+const HELD_AUTHOR_WIDTH = 32
 
 /** v1's queued previews and send chip, inside the shared panel grid. Chip coordinates are local to these rows. */
-export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number>; /** Positions that are the daemon's internal notes for the agent (a child waits for approval): never listed or counted. */ internal?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
+export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; /** The title of the session whose interrupt was the cancel; absent when the user cancelled. */ heldBySession?: string; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number>; /** Positions that are the daemon's internal notes for the agent (a child waits for approval): never listed or counted. */ internal?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
   const { width } = input
   if (input.previews.length === 0) return { rows: [] }
   const shown = input.previews.flatMap((preview, index) => (input.internal?.has(index) ? [] : [{ preview, index }]))
@@ -57,7 +59,10 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
   const mode = input.mode ?? "after-response"
   // Held says why: a cancel stops the queue too, so a message of another session or a task does not restart what the user stopped;
   // a restart or an interruption holds what waited behind the turn it stopped.
-  const held = input.heldBy === "restart" ? "Held since the restart" : input.heldBy === "interrupt" ? "Held since the interruption" : input.heldBy === "cancel" ? "Held since your cancel" : "Held"
+  // A cancel is the user's unless another session interrupted this one (`threads`): the label names who it was.
+  const cancelledBy = input.heldBySession === undefined ? undefined : readableText(input.heldBySession, { quotes: false }).replace(/\s+/g, " ").trim()
+  const cancel = cancelledBy === undefined ? "Held since your cancel" : `Held since the cancel by session ${truncateEnd(cancelledBy || "untitled", HELD_AUTHOR_WIDTH)}`
+  const held = input.heldBy === "restart" ? "Held since the restart" : input.heldBy === "interrupt" ? "Held since the interruption" : input.heldBy === "cancel" ? cancel : "Held"
   const label = input.paused ? "Paused" : input.held ? held : mode === "after-tools" ? "After tools" : mode === "immediate" ? "Sending" : "After response"
   const hints = keyText(input.paused ? padded ? "/unpause to continue · ctrl+k drop last" : "/unpause · ctrl+k drop" : padded ? `ctrl+s ${input.held ? "sends them" : "send now"} · ctrl+k drop last · ${preferChord() ? "ctrl+x ^" : "alt+↑"} edit` : "ctrl+s send · ctrl+k drop")
   const header = fit(spread([{ text: "Queue", fg: "primary" }], [{ text: hints, fg: "muted" }], width), width)
