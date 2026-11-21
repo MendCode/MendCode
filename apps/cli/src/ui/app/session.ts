@@ -339,6 +339,7 @@ export function createSession(ctx: AppContext, actions: {
     state.compactionFacts = back?.compactionFacts ?? createCompactionFacts()
     state.compactionLive.session = undefined
     state.compactionLive.focused = false
+    state.compactionLive.kept = false
     state.openedAt = now()
     state.escArmedAt = 0
     // The third Esc stops the sub-agents of the session that was interrupted, never another's.

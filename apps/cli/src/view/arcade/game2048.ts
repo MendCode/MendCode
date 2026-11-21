@@ -80,7 +80,7 @@ export const game2048: ArcadeDefinition = {
       tick() {},
       key(key: ArcadeKey) {
         if (key === "restart") return reset()
-        if (key === "space") return
+        if (key === "space" || key === "alt") return
         const moved = lines(key)
         if (!moved.some((line) => line.row.some((value, i) => value !== line.before[i]))) return
         place(key, moved)

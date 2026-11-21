@@ -433,6 +433,8 @@ export type AppState = {
     session: import("../../view/compaction-arcade").ArcadeSession | undefined
     /** True while the arcade owns the keyboard; the prompt does not see them. */
     focused: boolean
+    /** The compaction ended while the game had the keys: it stays on screen until it is closed. */
+    kept: boolean
     /** Best score per game for this run of the terminal. */
     best: Record<string, number>
     area: { top: number; rows: number; width: number } | undefined
