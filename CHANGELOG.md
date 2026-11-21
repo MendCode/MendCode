@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- With a sub-agent's thread open, ← and → change sub-agent even while the left list shows; Alt+← enters the list there.
+
 ## v0.0.18 - 2026-11-16
 
 Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.

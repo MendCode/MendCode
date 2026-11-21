@@ -492,7 +492,8 @@ export function createKeys(ctx: AppContext, actions: {
       const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
       // The key that enters the list. In the multi-project list a session with sub-agents working keeps the plain arrows for them
       // (session.child.next/previous, and the list shows the hint), and Alt+arrow enters the list instead.
-      const entering = multi?.holdsArrows() ? (onRight ? key === "\x1b[1;3C" || key === "\x1bf" : key === "\x1b[1;3D" || key === "\x1bb") : arrow === (onRight ? "\x1b[C" : "\x1b[D")
+      // A sub-agent's thread open in the chat holds them too, in either list: the arrows change sibling there.
+      const entering = state.agentView !== undefined || multi?.holdsArrows() ? (onRight ? key === "\x1b[1;3C" || key === "\x1bf" : key === "\x1b[1;3D" || key === "\x1bb") : arrow === (onRight ? "\x1b[C" : "\x1b[D")
       if (!state.sidebarFocus && entering && editor.isEmpty()) {
         state.sidebarFocus = true
         state.sidebarSelected = state.sessionId

@@ -7,11 +7,11 @@ import { textWidth } from "../src/view/wrap"
 afterEach(cleanTemps)
 
 /** A session whose engine reports two sub-agents of its own (the shape packages/engine-claude emits for Claude Code's Agent tool). */
-async function chat(shells: Array<Record<string, unknown>> = []) {
+async function chat(shells: Array<Record<string, unknown>> = [], width = 110) {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
   const h = appHarness({
-    dataDir, width: 110, height: 34,
+    dataDir, width, height: 34,
     reply: (command) => {
       if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
       if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
@@ -86,6 +86,20 @@ test("an open background sub-agent moves after its parent's turn ended: its mode
   expect(text).toMatch(/general-purpose · claude-sonnet-5-5 · await/)
   expect(text).toContain("Checking the size next.")
   expect(text).toMatch(/read \/work\/a\.txt…/)
+})
+
+test("with the left list shown, left in an open sub-agent's thread changes sibling instead of entering the list", async () => {
+  const { h } = await chat([], 150)
+  expect(screen(h)).toContain("Sessions")
+  await h.type("\x18\x1b[B")
+  await h.type("\x1b[C")
+  h.app.render()
+  expect(screen(h)).toContain("Second brief: report b.txt.")
+  await h.type("\x1b[D")
+  h.app.render()
+  const text = screen(h)
+  expect(text).toContain("Locate the file named a.txt and report it.")
+  expect(text).toContain("← focus")
 })
 
 test("a sub-agent that ended says what it took under its call and is no longer listed as at work", async () => {
