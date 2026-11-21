@@ -42,8 +42,11 @@ export function testFileCount(args: readonly string[], cwd: string): number {
 }
 
 const root = path.resolve(import.meta.dir, "..")
-if (process.env.MENDCODE_TEST_WHOLE !== "1") {
-  const args = testArguments(process.pid) ?? []
+// Where the process table cannot be read (Windows has no `ps -o args=`), the run's arguments are unknown: it is let through rather
+// than refused as a whole-suite run it may not be (a release build's one named test file was).
+const knownArgs = process.env.MENDCODE_TEST_WHOLE === "1" ? undefined : testArguments(process.pid)
+if (knownArgs !== undefined) {
+  const args = knownArgs
   const atRoot = path.resolve(process.cwd()) === root
   // From a workspace (`bun test ./test` in apps/cli) a directory of hundreds of files is the same one process of tens of GB.
   const files = testFileCount(args, process.cwd())
