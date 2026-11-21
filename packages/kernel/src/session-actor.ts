@@ -701,6 +701,14 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "queue.promote": {
         const index = queue.findIndex((entry) => entry.queueId === command.queueId)
+        const handed = index < 0 ? sent.find((each) => each.entry.queueId === command.queueId) : undefined
+        if (handed && active && active.turnId === handed.turnId && !active.cancelBy && !active.interruptReason) {
+          // Already written to the engine, waiting for its running tool: sending it now stops that turn, and the message comes back
+          // first (onEngineDone puts unread messages back) to start a turn of its own.
+          handed.entry.alone = true
+          cancel(active, "promotion")
+          return { ok: true }
+        }
         if (index < 0) return { ok: false, code: "target_mismatch", message: "[ACTOR]: queued message not found" }
         const [entry] = queue.splice(index, 1)
         if (entry) queue.unshift({ ...entry, alone: true })
