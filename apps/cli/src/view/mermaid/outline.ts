@@ -25,10 +25,18 @@ export function outlineLines(source: readonly string[], width: number): Line[] {
     const indent = raw.replace(/\t/g, "  ").match(/^\s*/)![0].length
     while (indents.length && indents.at(-1)! > indent) indents.pop()
     if (indents.at(-1) !== indent) indents.push(indent)
-    const depth = Math.min(OUTLINE_MAX_DEPTH, indents.length - 1)
+    // Indent and text room share the width: the text keeps at least two cells, so deep rows are indented less, never wider.
+    const depth = Math.max(0, Math.min(OUTLINE_MAX_DEPTH, indents.length - 1, Math.floor((width - 4) / 2)))
     const lead = "│ ".repeat(depth) + "├ "
-    const room = Math.max(4, width - textWidth(lead))
-    wrap(text, room).forEach((part, at) => rows.push([{ text: at === 0 ? lead : "│ ".repeat(depth + 1), fg: "muted" }, { text: truncateEnd(part, room), fg: "body" }]))
+    const room = Math.max(1, width - textWidth(lead))
+    const parts = wrap(text, room)
+    for (let at = 0; at < parts.length; at++) {
+      if (rows.length >= OUTLINE_MAX_ROWS) {
+        hidden += parts.length - at
+        break
+      }
+      rows.push([{ text: at === 0 ? lead : "│ ".repeat(depth + 1), fg: "muted" }, { text: truncateEnd(parts[at]!, room), fg: "body" }])
+    }
   }
   if (hidden) rows.push([{ text: truncateEnd(`… ${hidden} more lines`, width), fg: "muted" }])
   return rows

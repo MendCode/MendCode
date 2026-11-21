@@ -90,11 +90,15 @@ describe("threads port", () => {
     // The scripted engine streams a 30 KB answer for a few seconds, longer on a busy machine.
     await say(b, `${huge}TAIL`, 30_000)
     const first = text(await port(a).read({ sessionId: b, limit: 1 }))
-    expect(first).toContain("cut at 24000 characters; the rest: limit=1 offset=24000")
+    const cut = /the rest: limit=1 before=(\S+) offset=24000/.exec(first)
+    expect(cut).not.toBeNull()
     expect(first).not.toContain("TAIL")
-    const rest = text(await port(a).read({ sessionId: b, limit: 1, offset: 24_000 }))
+    // Another message completes before the rest is asked for: the continuation is still the message it started in.
+    await say(b, "one more thing")
+    const rest = text(await port(a).read({ sessionId: b, limit: 1, before: cut![1], offset: 24_000 }))
     expect(rest).toContain("xTAIL")
     expect(rest).not.toContain("cut at")
+    expect(rest).not.toContain("one more thing")
   }, 60_000)
 
   test("the end of an id names a session, and an ambiguous or unknown end names none", async () => {

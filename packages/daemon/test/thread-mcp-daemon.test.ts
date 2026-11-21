@@ -7,6 +7,7 @@ import { createIdFactory, type SessionId } from "@mendcode/protocol"
 import type { TaskPort, TurnInput, TurnOutcome } from "@mendcode/kernel"
 import { createAcpEngine } from "@mendcode/engine-acp"
 import { startDaemon } from "../src"
+import { PROGRESS_LIMITS } from "../src/agent-progress"
 import { remoteTokens } from "../src/remote"
 import { until } from "./native-harness"
 
@@ -412,4 +413,31 @@ test("task_progress on a Claude Code session reads its sub-agent's thread and as
   const day = new Date().toISOString().slice(0, 10)
   const rows = h.daemon.store.usageAuxiliary.report({ from: day, to: day })
   expect(rows.filter((row) => row.role === "summary").map((row) => [row.role, row.model, row.input, row.output, row.calls])).toEqual([["summary", "claude-sonnet", 900, 60, 1]])
+})
+
+test("task_progress reads the newest events by count: a long streamed answer after the sub-agent's work does not hide it", async () => {
+  const asked: string[] = []
+  const h = await boot(false, {
+    claudeComplete: async (request) => { asked.push(request.prompt); return { text: "Done: searched.\nNow: writing.\nLeft: nothing.\nEstimate: cannot estimate.", usage: { provider: "claude", model: request.model.model, input: 10, output: 10 } } },
+    complete: async () => { throw new Error("a Claude Code session does not use the native provider here") },
+  })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true } } })
+  const parent = await h.create()
+  h.run(async (turn) => {
+    const call = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent review the API", subagent: true, background: true } })
+    const step = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: step, kind: "tool_call", meta: { tool: "Grep: export", agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: step, status: "ok", text: "found", meta: { agentParent: call } })
+    const streamed = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: streamed, kind: "agent_message" })
+    for (let index = 0; index < PROGRESS_LIMITS.tailEvents * 2 + 100; index++) turn.emit({ type: "item.delta", itemId: streamed, text: "x" })
+    turn.emit({ type: "item.completed", itemId: streamed, status: "ok", text: "long answer" })
+    await until(() => (h.daemon.store.lastSeq(parent) ?? 0) > PROGRESS_LIMITS.tailEvents * 2 + 100)
+    await h.invoke(turn, "task_progress", {})
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]).toContain("tool: Grep: export")
 })

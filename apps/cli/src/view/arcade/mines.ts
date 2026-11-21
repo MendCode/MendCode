@@ -108,6 +108,7 @@ export const mines: ArcadeDefinition = {
           const here = tile(cursor.x, cursor.y)
           if (!here.open) here.flag = !here.flag
         } else if (key === "space") {
+          if (tile(cursor.x, cursor.y).flag) return
           if (!laid) lay(cursor)
           open(cursor.x, cursor.y)
         }

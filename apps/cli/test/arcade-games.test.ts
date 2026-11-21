@@ -313,3 +313,32 @@ test("crossing: lanes shift and wrap, the kerb is safe, traffic knocks you back,
   expect(game.score).toBeGreaterThan(0)
   expect(view(game).status).toContain("Level 2")
 })
+
+test("mines: space on a flagged tile opens nothing, so the first tile really opened is still never a mine", () => {
+  for (const seed of [0.05, 0.15, 0.25, 0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 0.95]) {
+    const game = play(mines, 8, 6, seed)
+    press(game, "alt", "space", "left", "left", "left", "left", "up", "up", "up", "space")
+    expect(view(game).status).not.toContain("Boom")
+    expect(game.score).toBeGreaterThan(0)
+  }
+})
+
+
+test("pong: a ball on a fractional path bounces off the bottom row instead of leaving the field", () => {
+  expect(landing({ x: 10, y: 10.5, vx: 1, vy: 1.25 }, 11, 12)).toBeLessThanOrEqual(11)
+  for (let y = 0; y < 12; y += 0.25) for (const vy of [1.25, 2, 1.5]) expect(Math.round(landing({ x: 0, y, vx: 1, vy }, 1, 12))).toBeLessThanOrEqual(11)
+})
+
+
+test("glide: in reduced motion, where no frame ticks the game, space presses let the crash guard expire and fly again", () => {
+  const game = play(glide)
+  press(game, "space")
+  for (let i = 0; i < 60 && !view(game).status.includes("Crashed"); i++) game.tick()
+  for (let i = 0; i < CRASH_GRACE; i++) {
+    press(game, "space")
+    game.settle?.()
+  }
+  expect(game.moving).toBe(false)
+  press(game, "space")
+  expect(view(game).status).not.toContain("Crashed")
+})

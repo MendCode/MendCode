@@ -107,7 +107,8 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     })
     arcadeShown = out.mode === "arcade" && view !== undefined
     live.scratchPanel = out.mode === "scratchpad" && out.scratch !== undefined
-    if (live.focused && !arcadeShown) live.focused = false
+    // A kept game keeps the keys while the terminal is too narrow for it: letting go would close it for good.
+    if (live.focused && !arcadeShown && !live.kept) live.focused = false
     const margin = { text: " ".repeat(PROMPT_MARGIN) }
     const scratch = out.scratch ? { ...out.scratch, left: out.scratch.left + PROMPT_MARGIN, ...(out.scratch.cursor ? { cursor: { row: out.scratch.cursor.row, col: out.scratch.cursor.col + PROMPT_MARGIN } } : {}) } : undefined
     return { rows: out.rows.map((line): Line => [margin, ...line]), ...(scratch ? { scratch } : {}) }
@@ -146,6 +147,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       pressArcade(session, action.key)
       // Reduced motion draws no frames of its own, so each move key is also one step of the game.
       if (state.reducedMotion && session.definition.ticks && action.key !== "restart" && action.key !== "space") stepArcade(session)
+      else if (state.reducedMotion && action.key === "space") session.instance.settle?.()
     }
     requestFrame()
   }

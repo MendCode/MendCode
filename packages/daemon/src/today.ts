@@ -24,6 +24,8 @@ const MAX_SESSIONS_PER_PROJECT = 5
 const MAX_MEMORY_GROUPS = 12
 const MEMORIES_PAGE = 40
 const BRIEF_MAX_CHARS = 9_000
+/** How long a handed-out kickoff belongs to the client that got it; after that a chat still empty offers it again. */
+const KICKOFF_CLAIM_MS = 30_000
 
 const TodayInstruction = z.strictObject({ id: z.string().min(1).max(20), text: z.string().min(1).max(600), createdAt: z.number().int().nonnegative() })
 const TodayRule = z.strictObject({
@@ -180,6 +182,9 @@ export function buildBrief(input: { now: number; prefs: TodayPrefs; sessions: re
   lines.push(input.prefs.rules.length ? "Memory rules in force:" : "No memory rule is set: every proposal waits for the user unless its kind's policy saves it.")
   for (const rule of input.prefs.rules) lines.push(ruleLine(rule))
 
+  // The budget cuts the activity above; the standing instructions follow it whole, because the model has no other way to read them.
+  const head = clip2(redactSecrets(lines.join("\n")).text, BRIEF_MAX_CHARS)
+  lines.length = 0
   lines.push("", "## Standing instructions (carry out each one now and report what you observed)")
   if (!input.prefs.instructions.length) lines.push("None saved.")
   for (const instruction of input.prefs.instructions) lines.push(`- ${instruction.id}: ${instruction.text}`)
@@ -188,7 +193,7 @@ export function buildBrief(input: { now: number; prefs: TodayPrefs; sessions: re
     lines.push("", "## Onboarding (no Today preference is saved yet)", "Ask the user briefly how they want their Today and propose this shape, built from what they did this week:")
     for (const [index, line] of suggestedShape({ sessions: all, pending: input.pending, loops: input.loops }).entries()) lines.push(`${index + 1}. ${line}`)
   }
-  return clip2(redactSecrets(lines.join("\n")).text, BRIEF_MAX_CHARS)
+  return `${head}\n${redactSecrets(lines.join("\n")).text}`
 }
 const clip2 = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n… (brief cut here)` : text)
 
@@ -238,12 +243,12 @@ export function createToday(deps: TodayDeps) {
       return { memories: all.filter((memory) => wanted.has(memory.memoryId)) }
     }
     const everyProject = input.project?.trim().toLowerCase() === "all"
-    if (needsFilter && !input.project && !input.category && !input.query) return { error: "say which memories: ids, a project (or \"all\"), a category or query words" }
+    const words = input.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
+    if (needsFilter && !input.project && !input.category && !words.length) return { error: "say which memories: ids, a project (or \"all\"), a category or query words" }
     const project = input.project && !everyProject ? resolveProject(input.project) : undefined
     if (project && "error" in project) return project
     const category = input.category ? memoryCategoryId(input.category) : undefined
     if (input.category && category === "other" && input.category.trim().toLowerCase() !== "other") return { error: `unknown memory kind "${input.category}"; use one of: ${MEMORY_CATEGORY_IDS.join(", ")}` }
-    const words = input.query?.toLowerCase().split(/\s+/).filter(Boolean) ?? []
     return { memories: all.filter((memory) => (!project || memory.project === project.directory) && (!category || memoryCategoryId(memory.category) === category) && words.every((word) => memory.text.toLowerCase().includes(word))) }
   }
 
@@ -301,10 +306,11 @@ export function createToday(deps: TodayDeps) {
         }
         if (kept.length >= MAX_RULES) return { ok: false, message: `at most ${MAX_RULES} rules; remove one first` }
         const rule: TodayRule = { id: nextId("r", prefs.rules), ...(project ? { project: project.directory } : {}), ...(category ? { category } : {}), action: input.decision, createdAt: deps.now() }
-        save({ ...prefs, rules: [...kept, rule] })
+        const saved = save({ ...prefs, rules: [...kept, rule] })
         // The rule also decides what already waits there: the pile it was asked to stop is gone now, not from the next proposal on.
+        // A memory a more specific rule decides keeps that rule's say, as a proposal made from now on would.
         const accept = input.decision === "accept"
-        const waiting = deps.pending().memories.filter((memory) => (!rule.project || memory.project === rule.project) && (!rule.category || memoryCategoryId(memory.category) === rule.category))
+        const waiting = deps.pending().memories.filter((memory) => todayRuleFor(saved.rules, memory.project, memory.category)?.id === rule.id)
         const result = decideAll(waiting, accept)
         return { ok: true, text: `rule ${rule.id} saved: from now on memories of ${where} are ${accept ? "saved without waiting" : "not kept"} (a proposal that had a secret redacted still waits). ${waiting.length ? `${decided(accept, result)} that waited there.` : "None waited there."}`, meta: { todayRule: rule.id } }
       }
@@ -337,13 +343,27 @@ export function createToday(deps: TodayDeps) {
    * The Today chat of this day: the one already opened today while it still exists, else a new one. `kickoff` is the first message
    * a client sends for a chat with no turn yet, so the brief is written by the session's own model.
    */
-  async function open(input: { alive(sessionId: string): boolean; turns(sessionId: string): number; create(title: string): Promise<string> | string }): Promise<{ sessionId: string; fresh: boolean; kickoff?: string }> {
-    const prefs = deps.prefs.get()
+  type OpenInput = { alive(sessionId: string): boolean; turns(sessionId: string): number; create(title: string): Promise<string> | string }
+  type Opened = { sessionId: string; fresh: boolean; kickoff?: string }
+  /** The opens in progress per day, and when each chat's kickoff was handed out: two terminals opening at once share one chat and one kickoff. */
+  const opening = new Map<string, Promise<Opened>>()
+  const kickedOff = new Map<string, number>()
+  async function open(input: OpenInput): Promise<Opened> {
     const day = localDay(deps.now())
+    const running = opening.get(day)
+    if (running) return { sessionId: (await running).sessionId, fresh: false }
+    const work = openOnce(input, day)
+    opening.set(day, work)
+    try { return await work } finally { opening.delete(day) }
+  }
+  async function openOnce(input: OpenInput, day: string): Promise<Opened> {
+    const prefs = deps.prefs.get()
     const known = prefs.sessions.find((entry) => entry.day === day && input.alive(entry.sessionId))
     const sessionId = known?.sessionId ?? await input.create(`Today · ${dayLabel(deps.now())}`)
     if (!known) save({ ...prefs, sessions: [...prefs.sessions.filter((entry) => entry.day !== day), { day, sessionId }].slice(-MAX_TODAY_SESSIONS) })
-    const fresh = input.turns(sessionId) === 0
+    const handedOut = kickedOff.get(sessionId)
+    const fresh = input.turns(sessionId) === 0 && (handedOut === undefined || deps.now() - handedOut >= KICKOFF_CLAIM_MS)
+    if (fresh) kickedOff.set(sessionId, deps.now())
     return { sessionId, fresh, ...(fresh ? { kickoff: TODAY_KICKOFF } : {}) }
   }
 

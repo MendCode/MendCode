@@ -1,3 +1,4 @@
+import { resolve } from "node:path"
 import type { CodeOverview, GraphAutopilot, GraphIndexMode, Indexer, IndexStatus, SearchHint } from "@mendcode/codegraph"
 import type { Tool } from "@mendcode/tools"
 import { createIndexGate } from "../../codegraph/src/index-gate"
@@ -59,16 +60,19 @@ export function createLazyCodegraph(options: {
     if (stopped || !options.searchOn?.()) return undefined
     if (input.pattern === undefined && (input.command === undefined || !SEARCH_WORD.test(input.command))) return undefined
     try {
-      const { patternTerms, searchTerms } = await import("../../codegraph/src/search-terms")
-      const terms = input.pattern !== undefined ? patternTerms(input.pattern) : searchTerms(input.command ?? "")
-      if (!terms.length) return undefined
+      const { patternTerms, searchPlan } = await import("../../codegraph/src/search-terms")
+      const plan = input.pattern !== undefined ? { terms: patternTerms(input.pattern), directories: [] as string[] } : searchPlan(input.command ?? "")
+      if (!plan.terms.length || !plan.directories) return undefined
+      const { terms } = plan
+      // The search reads the folder a `cd` or `git -C` moved it to, not the one the command started in: the graph is that folder's.
+      const cwd = plan.directories.reduce((from, directory) => resolve(from, directory), input.cwd)
       hints ??= import("../../codegraph/src/search-hint").then(({ createSearchHints }) => createSearchHints({
         cacheDir: options.cacheDir,
         indexer: async () => (await load()).indexer,
         allowed: (root) => gate.peek({ cwd: root, mode: options.mode(root) })?.index !== false,
         budgetMs: options.searchBudgetMs,
       }))
-      return await (await hints)({ cwd: input.cwd, terms })
+      return await (await hints)({ cwd, terms })
     } catch {
       return undefined
     }

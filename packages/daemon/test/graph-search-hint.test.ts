@@ -95,6 +95,26 @@ describe("a native text search in a project with a code graph", () => {
     const { outputs } = await results(root, codegraph(cacheDir, { mode: "off" }), [{ name: "shell", args: { command: "grep -rn helper src" } }])
     expect(outputs[0]).not.toContain("[code graph]")
   })
+
+  test("a search that moves to another folder with cd or git -C gets that folder's graph, or nothing, never the one it started in", async () => {
+    const cacheDir = temp(), root = project(), other = project()
+    await index(cacheDir, root)
+    const graph = codegraph(cacheDir)
+    const ask = (command: string, cwd = root) => graph.searchHint({ cwd, command })
+    // The project the command runs in answers, whether it stays there or only goes down into it.
+    expect((await ask("rg helper"))?.identifiers).toBe(1)
+    expect((await ask("cd src && rg helper"))?.text).toContain(`(paths are relative to ${root})`)
+    expect((await ask("git -C src grep helper"))?.identifiers).toBe(1)
+    expect((await ask("rg helper", path.join(root, "src")))?.identifiers).toBe(1)
+    // Another project that has no index has no answer, and the first project's declaration is not offered for it.
+    expect(await ask(`cd ${other} && rg helper`)).toBeUndefined()
+    expect(await ask(`git -C ${other} grep helper`)).toBeUndefined()
+    expect(await ask(`cd ${path.relative(root, other)} && rg helper`)).toBeUndefined()
+    // Where the search runs cannot be told: nothing is said.
+    expect(await ask("cd $PROJECT && rg helper")).toBeUndefined()
+    expect(await ask("cd src; rg helper; cd ../.. ; rg helper")).toBeUndefined()
+    expect(await ask(`(cd ${other} && ls); rg helper`)).toBeUndefined()
+  })
 })
 
 describe("where to look for a symbol", () => {

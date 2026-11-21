@@ -247,17 +247,24 @@ function build(raw: MultiInput): Built {
     hold.behind = false
     return live
   }
-  const now = new Map<string, Entry>()
-  for (const entry of live.entries) if (entry.id !== undefined && !now.has(entry.id)) now.set(entry.id, entry)
   const ids = (entries: readonly Entry[]) => entries.map((entry) => entry.id ?? "").join("\n")
   hold.behind = ids(held) !== ids(live.entries)
+  // The preview of the list as it is now may leave out a held session that still exists, or add one that was not held: the sessions
+  // of every group are then the held ones, so a held row shows its session as it is and a header counts what the held rows hide.
+  const heldIds = new Set(held.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
+  const liveIds = new Set(live.entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
+  const same = heldIds.size === liveIds.size && [...heldIds].every((id) => liveIds.has(id))
+  const current = same ? live : buildLive(raw, heldIds)
+  const now = new Map<string, Entry>()
+  for (const entry of current.entries) if (entry.id !== undefined && !now.has(entry.id)) now.set(entry.id, entry)
   // A held row that is gone keeps its place, without the selection's fill, until the list is taken again.
   const entries = held.map((entry): Entry => entry.id === undefined ? entry : now.get(entry.id) ?? { line: entry.line.map((span) => ({ ...span, fg: "muted" as const, bold: false })), id: entry.id, lead: [{ text: "  " }] })
   const shown = new Set(entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
-  return { entries, names: live.names, starts: live.starts.filter((start) => shown.has(start.id)) }
+  return { entries, names: current.names, starts: current.starts.filter((start) => shown.has(start.id)) }
 }
 
-function buildLive(raw: MultiInput): Built {
+/** `only`: the sessions a held list draws; every group lists those instead of its own preview. */
+function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
   const input = canonicalized(raw)
   const g = input.glyphs ?? glyphs()
   const inner = (input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH) - 1 - PAD_X - 2
@@ -366,7 +373,7 @@ function buildLive(raw: MultiInput): Built {
     const expanded = input.expanded?.has(key) === true
     const more = expanded ? Number.POSITIVE_INFINITY : input.revealed?.get(key) ?? 0
     const collapsed = preview(chats, limit, input.current)
-    const rows = !open ? [] : more > 0 ? reveal(chats, collapsed, more) : collapsed
+    const rows = !open ? [] : only ? chats.filter((session) => only.has(session.sessionId)) : more > 0 ? reveal(chats, collapsed, more) : collapsed
     const drawn = new Set(rows.map((session) => session.sessionId))
     names.set(id, `${label} chats`)
     push(spread([{ text: `  ${indent}` }, { text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: "chats", fg: "muted", bold: id === picked }], headerCount(chats.filter((session) => busy(session) && !drawn.has(session.sessionId)).length, chats.length), inner), id, undefined, { col: 2 + indent.length, open }, { holds: !open && chats.some((session) => session.sessionId === input.current) })
@@ -479,7 +486,7 @@ function buildLive(raw: MultiInput): Built {
         const keep = (session: MultiSession) => session.sessionId === input.current || session.lifecycle?.pinnedAt !== undefined
         const recent = input.icons || recentMs === Number.POSITIVE_INFINITY ? list : list.filter((session) => keep(session) || input.now - sessionActivityAt(session as never) <= recentMs)
         const collapsed = input.icons ? list : preview(recent, limit, input.current)
-        const rows = !open ? [] : more > 0 ? reveal(list, collapsed, more) : collapsed
+        const rows = !open ? [] : only ? list.filter((session) => only.has(session.sessionId)) : more > 0 ? reveal(list, collapsed, more) : collapsed
         if (!input.icons) {
           const id = `${GROUP}${directory}`
           names.set(id, labels.get(directory) ?? baseName(directory))

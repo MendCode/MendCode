@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { patternTerms, searchTerms } from "../src"
+import { patternTerms, searchPlan, searchTerms } from "../src"
 
 describe("the identifiers of a text search", () => {
   test("come from the pattern of grep, rg and git grep, quoted or not", () => {
@@ -49,6 +49,17 @@ describe("the identifiers of a text search", () => {
       "grep -c '' file", "rg --files", "grep -rn \"it's broken", "rg 'ab'", "grep -rn error logs/", "rg -n '\\d+ms'",
     ]) expect(searchTerms(command)).toEqual([])
     expect(patternTerms("a".repeat(500))).toEqual([])
+  })
+
+  test("the folder a search moved to with cd or git -C is kept, and unknown places are said to be unknown", () => {
+    expect(searchPlan("rg helper")).toEqual({ terms: ["helper"], directories: [] })
+    expect(searchPlan("cd ../B && rg helper")).toEqual({ terms: ["helper"], directories: ["../B"] })
+    expect(searchPlan("cd a; cd b; grep -rn helper .")).toEqual({ terms: ["helper"], directories: ["a", "b"] })
+    expect(searchPlan("git -C ../B grep helper")).toEqual({ terms: ["helper"], directories: ["../B"] })
+    expect(searchPlan("grep -rn helper . && cd ../B")).toEqual({ terms: ["helper"], directories: [] })
+    for (const command of ["cd $DIR && rg helper", "cd ~/x && rg helper", "cd && rg helper", "cd - && rg helper", "cd a && rg helper; cd b && rg helper", "(cd a && ls); rg helper", "git --git-dir=../B/.git grep helper"]) {
+      expect(searchPlan(command).directories, command).toBeUndefined()
+    }
   })
 
   test("at most six candidate names leave one search", () => {

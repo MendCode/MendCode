@@ -57,12 +57,16 @@ export function foldThread(events: readonly Event[], parent?: string): Pick<Agen
   let tools = 0
   let todos: string | undefined
   let report: string | undefined
+  /** The agent's latest ordinary text: the report when its end marker carries none (the summary repeated it). */
+  let lastSaid: string | undefined
   let ended: { status: string } | undefined
   let startedAt: number | undefined
   let endedAt: number | undefined
   for (const event of events) {
     if (event.type === "item.started") {
       if (parent !== undefined && event.meta?.agentParent !== parent) continue
+      // New activity after an end: the agent was woken again (Claude Code does on a later message) and is running, not finished.
+      if (ended) { ended = undefined; report = undefined; lastSaid = undefined }
       const title = typeof event.meta?.tool === "string" ? event.meta.tool : ""
       const entry: { kind: string; title: string; step?: Step } = { kind: event.kind, title }
       owned.set(event.itemId, entry)
@@ -90,10 +94,13 @@ export function foldThread(events: readonly Event[], parent?: string): Pick<Agen
     if (entry.kind === "agent_message") {
       if (event.meta?.agentEnd === true) {
         ended = { status: event.status === "ok" ? "completed" : event.status === "cancelled" ? "cancelled" : "failed" }
-        if (text.trim()) report = oneLine(text, PROGRESS_LIMITS.textChars)
+        report = text.trim() ? oneLine(text, PROGRESS_LIMITS.textChars) : lastSaid
         const index = steps.indexOf(entry.step!)
         if (index >= 0) steps.splice(index, 1)
-      } else if (entry.step) { entry.step.text = oneLine(text, PROGRESS_LIMITS.textChars); entry.step.done = true }
+      } else if (entry.step) {
+        entry.step.text = oneLine(text, PROGRESS_LIMITS.textChars); entry.step.done = true
+        if (entry.step.text) lastSaid = entry.step.text
+      }
     }
   }
   return {

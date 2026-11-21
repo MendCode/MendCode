@@ -1845,6 +1845,8 @@ describe("claude engine background tasks", () => {
     const fake = fakeClaude({
       onUser(api) {
         api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        // Streamed first, as the real process does: the mapper then knows the call and must key the agent by its id.
+        streamTool(api, 0, "toolu_send", "SendMessage", { to: "a525", message: "phase two" })
         api.push({ type: "assistant", message: { id: "msg_send", content: [{ type: "tool_use", id: "toolu_send", name: "SendMessage", input: { to: "a525", message: "phase two" } }] } })
         api.push({ type: "system", subtype: "task_started", task_id: "a525", tool_use_id: "toolu_send", task_type: "local_agent", description: "Fable redesigns Markets", subagent_type: "claude", prompt: "phase two" })
         api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_send", content: "Resuming agent a525" }] } })

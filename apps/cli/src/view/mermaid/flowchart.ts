@@ -98,6 +98,9 @@ function parseOperator(source: string, pos: number): { line: LineStyle; head: He
   return undefined
 }
 
+/** While a statement is parsed, how to put back the declarations it made on nodes that already existed. */
+let declarationUndo: Array<() => void> | undefined
+
 function registerNode(flow: Flow, id: string, text: string | undefined, shape: Shape | undefined) {
   const existing = flow.nodes.get(id)
   if (!existing) {
@@ -105,6 +108,12 @@ function registerNode(flow: Flow, id: string, text: string | undefined, shape: S
     return
   }
   if (text !== undefined && !existing.explicit) {
+    const { lines, shape: before } = existing
+    declarationUndo?.push(() => {
+      existing.lines = lines
+      existing.shape = before
+      existing.explicit = false
+    })
     existing.lines = decodeLabel(text)
     existing.shape = shape ?? existing.shape
     existing.explicit = true
@@ -222,8 +231,17 @@ export function parseFlowchart(lines: string[], direction: Direction): Flow | Un
       const known = flow.nodes.size
       const implicit = groups.length ? [...flow.nodes.values()].filter((node) => !node.explicit).map((node) => node.id) : []
       const edges = flow.edges.length
-      if (parseFlowStatement(text, flow)) statements++
+      const undo: Array<() => void> = []
+      declarationUndo = undo
+      let understood: boolean
+      try {
+        understood = parseFlowStatement(text, flow)
+      } finally {
+        declarationUndo = undefined
+      }
+      if (understood) statements++
       else {
+        for (const restore of undo.reverse()) restore()
         // Nothing of a line that was not understood is drawn: a half-read line would show a link the source does not have.
         flow.skipped!.push(text)
         flow.edges.length = edges
