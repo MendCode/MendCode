@@ -1,3 +1,4 @@
+import { sameAgentName } from "../view/background-row"
 import { createConsole } from "./app/console"
 import { applyGlyphMode, asciiChrome, asciiScreen } from "./app/glyph-mode"
 import { subagentRunOf } from "./app/subagent-run"
@@ -444,7 +445,7 @@ export function createApp(input: AppInput) {
     return { shells, agents }
   }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && sameAgentName(shell.command, description)), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}

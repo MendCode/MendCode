@@ -18,6 +18,7 @@ const CARD: ColorName = "panel"
 const PADDING = 2
 const MAX_WIDTH = 100
 const MAX_PATHS = 4
+const MARKER_WIDTH = 2
 /** `send force to do it anyway`: the daemon's refusal for files changed after the turn (docs/sessions.md, Conflicts). */
 const CONFLICT_MARK = /send force/
 
@@ -73,7 +74,7 @@ function content(card: RewindCard, inner: number): { title: string; body: Array<
 }
 
 /** A card's content: a title, rows (labelled ones keep their text in a column) and the one line of keys under them. */
-export type InfoCard = { title: string; body: Array<{ text: string; fg: ColorName; label?: string }>; hint: string }
+export type InfoCard = { title: string; body: Array<{ text: string; fg: ColorName; label?: string; marker?: string }>; hint: string }
 
 /** The undo/redo card floating over the transcript with its bottom at `bottom`; undefined when there is no room for it. */
 export function renderRewindCard(input: { card: RewindCard; width: number; bottom: number }): RewindCardView | undefined {
@@ -103,6 +104,8 @@ export function renderInfoCard(input: { card: InfoCard; width: number; bottom: n
   const { title, body, hint } = input.card
   const lines: Line[] = body.flatMap((row): Line[] => {
     const { label } = row
+    // A marked row keeps its marker in a column of two cells; what wraps under it hangs from the same cell.
+    if (row.marker !== undefined) return wrap(row.text, Math.max(8, inner - MARKER_WIDTH)).map((piece, index) => painted([{ text: (index === 0 ? row.marker! : "").padEnd(MARKER_WIDTH), fg: row.fg }, { text: piece, fg: row.fg }]))
     if (!label) return wrap(row.text, inner).map((piece) => painted([{ text: piece, fg: row.fg }]))
     const pieces = wrap(row.text, Math.max(8, inner - 10))
     return pieces.map((piece, index) => painted([{ text: (index === 0 ? label : "").padEnd(10), fg: "muted" }, { text: piece, fg: row.fg }]))
