@@ -49,8 +49,10 @@ export const threadsTool = defineTool({
     if (["read", "search", "wait"].includes(args.action) && args.sessionId && context?.threads?.ownTask?.(args.sessionId)) return false
     return ["read", "search", "wait", "merge_back"].includes(args.action) && !(args.sessionId && context?.threads?.granted(args.sessionId))
   },
-  // A message to another project's session, and a session opened there, ask in every mode, full access included: they reach folders and rules this session was not started in.
+  // A message to another project's session, and a session opened there, ask in every mode but full access: they reach folders and rules
+  // this session was not started in, and only full access is the user's word that threads run unattended.
   approvalFor(args, context) {
+    if (context?.mode === "full") return false
     if (args.action === "start") return true
     return args.action === "message" && args.sessionId !== undefined && context?.threads?.projectOf?.(args.sessionId) !== undefined
   },

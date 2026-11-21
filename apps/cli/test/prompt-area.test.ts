@@ -138,6 +138,8 @@ describe("working row", () => {
     expect(shell("git diff --stat")).toBe("Checking git...")
     expect(shell("FOO=1 /usr/local/bin/mendcode daemon status")).toBe("Running mendcode...")
     expect(shell("x".repeat(80))).toBe(`Running ${"x".repeat(23)}…...`)
+    expect(toolPhase("mendcode_threads · delegate_task")).toBe("Waiting for subagents...")
+    expect(toolPhase("mendcode_threads · thread_read")).toBe("Checking sessions...")
     // Between steps the model is thinking; a message being written says so.
     expect(phaseOf({ state: "generating", steps: 3 })).toBe("Thinking...")
     expect(phaseOf({ state: "generating", current: { kind: "agent_message" }, steps: 3 })).toBe("Writing...")
