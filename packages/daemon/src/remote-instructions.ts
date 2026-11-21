@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { warnLine } from "./hosting"
 
 /**
  * Instruction URLs from the user's own settings (`instructions: ["https://…"]`, as v1 and opencode read them). The prompt is
@@ -81,7 +82,7 @@ function createCache(input: { dir: string; fetch: Fetch; now: () => number; log:
 export function remoteInstructions(dir: string, overrides: { fetch?: Fetch; now?: () => number; log?: (line: string) => void } = {}) {
   let cache = caches.get(dir)
   if (!cache || Object.keys(overrides).length) {
-    cache = createCache({ dir, fetch: overrides.fetch ?? ((url, init) => fetch(url, init)), now: overrides.now ?? Date.now, log: overrides.log ?? ((line) => console.error(line)) })
+    cache = createCache({ dir, fetch: overrides.fetch ?? ((url, init) => fetch(url, init)), now: overrides.now ?? Date.now, log: overrides.log ?? warnLine })
     caches.set(dir, cache)
   }
   return cache

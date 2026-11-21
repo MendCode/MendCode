@@ -14,3 +14,9 @@ export type Hosting = {
 }
 
 export const hosting: Hosting = { active: false }
+
+/** A warning for whoever runs the daemon: its log when a terminal hosts it (that terminal's screen is the chat), stderr otherwise. */
+export function warnLine(message: string) {
+  if (hosting.log) hosting.log("warn", message)
+  else process.stderr.write(`${message}\n`)
+}
