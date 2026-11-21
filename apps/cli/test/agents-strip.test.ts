@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import type { TaskRecord } from "@mendcode/protocol"
 import { glyphs } from "../src/ui/theme"
-import { AGENT_DONE_MS, AGENTS_SHOWN, renderAgentsStrip, stripActive, stripTasks, type AgentActivity } from "../src/view/agents-strip"
+import { AGENT_DONE_MS, AGENTS_SHOWN, COMMANDS_SHOWN, renderAgentsStrip, STRIP_ROWS, stripActive, stripTasks, type AgentActivity } from "../src/view/agents-strip"
 import { textWidth } from "../src/view/wrap"
 
 const NOW = 1_800_000_000_000
@@ -15,19 +15,21 @@ test("no sub-agents, or only ones that ended a while ago, draw nothing", () => {
   expect(stripActive([task({ taskId: "ses_a", state: "completed" })])).toBe(false)
 })
 
-test("under a working line the sub-agents are its tree: what each was asked, await or bg, what it does now and for how long; no spinner of their own", () => {
+test("under a working line the sub-agents are its tree: what each was asked, await or async, what it does now and for how long; no spinner of their own", () => {
   const tasks = [task({ taskId: "ses_a" }), task({ taskId: "ses_b", description: "Implement the settings pane", agent: "general", background: true, createdAt: NOW - 123_000 }), task({ taskId: "ses_c", description: "Rank the feed", agent: "general", background: true, state: "needs_input", createdAt: NOW - 40_000 })]
   const activity = { ses_a: { state: "tool", tool: "read BrowserModel.swift" }, ses_b: { state: "generating" }, ses_c: { state: "waiting_approval", pending: "Run command" } } as const
   const rows = draw(tasks, activity)
   expect(rows).toHaveLength(3)
   expect(rows[0]).toMatch(/^   ├ Review the Swift sources\s+explore\s+await\s+read BrowserModel\.swift\s+1m 12s$/)
-  expect(rows[1]).toMatch(/^   ├ Implement the settings pane\s+general\s+bg\s+thinking\s+2m 3s$/)
-  expect(rows[2]).toMatch(/^   └ Rank the feed\s+general\s+bg\s+needs you: Run command\s+40s$/)
+  expect(rows[1]).toMatch(/^   ├ Implement the settings pane\s+general\s+async\s+thinking\s+2m 3s$/)
+  expect(rows[2]).toMatch(/^   └ Rank the feed\s+general\s+async\s+needs you: Run command\s+40s$/)
+  // A sub-agent that runs on its own is not a background command: `bg` would read as one.
+  for (const row of rows) expect(row).not.toMatch(/\sbg\s/)
   // The columns line up from row to row.
-  expect(new Set(rows.map((row) => row.search(/await|bg {3}/))).size).toBe(1)
+  expect(new Set(rows.map((row) => row.search(/await|async/))).size).toBe(1)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(120)
   // Agents that are all the same kind do not spend a column saying so.
-  expect(draw(tasks.slice(1), activity)[0]).toMatch(/^   ├ Implement the settings pane\s+bg\s+thinking\s+2m 3s$/)
+  expect(draw(tasks.slice(1), activity)[0]).toMatch(/^   ├ Implement the settings pane\s+async\s+thinking\s+2m 3s$/)
 })
 
 test("while the session rests, a head line counts them and names the key that opens one", () => {
@@ -47,11 +49,11 @@ test("one that just ended shows its outcome under the ones at work, with the tim
 })
 
 test("more sub-agents than rows are counted, and a narrow terminal keeps every row inside its width", () => {
-  const many = Array.from({ length: AGENTS_SHOWN + 3 }, (_, i) => task({ taskId: `ses_${i}`, description: `A long description of what sub-agent number ${i} was asked to do in this project` }))
+  const many = Array.from({ length: STRIP_ROWS + 3 }, (_, i) => task({ taskId: `ses_${i}`, description: `A long description of what sub-agent number ${i} was asked to do in this project` }))
   expect(draw(many).at(-1)).toMatch(/└ \+3 more · \/tasks$/)
   for (const width of [40, 60, 80, 100]) {
     const rows = draw(many, { ses_0: { state: "tool", tool: "shell bun test packages/engine-native/test/queue-policy.test.ts" } }, width)
-    expect(rows).toHaveLength(AGENTS_SHOWN + 1)
+    expect(rows).toHaveLength(STRIP_ROWS + 1)
     for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(width)
     expect(rows[0]).toMatch(/\d+s$/)
   }
@@ -164,9 +166,9 @@ test("background commands join the sub-agents' tree: one block, the head counts 
   const rows = renderAgentsStrip({ tasks, activity: () => ({ state: "generating" }), now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: true, openHint: "ctrl+x ↓ open · /tasks", commands: [{ command: "bun run dev", kind: "command", startedAt: NOW - 673_000 }] }).rows.map((line) => line.map((span) => span.text).join(""))
   expect(rows).toHaveLength(3)
   expect(rows[0]).toMatch(/^   Agents  1 running · 1 command\s+ctrl\+x ↓ open · \/tasks · \/ps$/)
-  expect(rows[1]).toMatch(/^   ├ Corregir catálogo y continuidad visual\s+bg\s+thinking\s+26h 48m$/)
+  expect(rows[1]).toMatch(/^   ├ Corregir catálogo y continuidad visual\s+async\s+thinking\s+26h 48m$/)
   expect(rows[2]).toMatch(/^   └ bun run dev\s+cmd\s+11m 13s$/)
-  expect(rows[1]!.indexOf("bg ")).toBe(rows[2]!.indexOf("cmd"))
+  expect(rows[1]!.indexOf("async")).toBe(rows[2]!.indexOf("cmd"))
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(120)
 })
 
@@ -182,9 +184,9 @@ test("each row names what it opens: the head and `+N more` nothing, a sub-agent 
   expect(strip(false).ids).toEqual(["ses_a", "ses_b", "bg_1"])
   expect(strip(true).ids).toEqual([undefined, "ses_a", "ses_b", "bg_1"])
   for (const root of [false, true]) expect(strip(root).ids).toHaveLength(strip(root).rows.length)
-  const crowd = Array.from({ length: AGENTS_SHOWN + 2 }, (_, at) => task({ taskId: `ses_${at}` }))
+  const crowd = Array.from({ length: STRIP_ROWS + 2 }, (_, at) => task({ taskId: `ses_${at}` }))
   const many = renderAgentsStrip({ tasks: crowd, activity: () => undefined, now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: false, openHint: "" })
-  expect(many.ids).toEqual([...crowd.slice(0, AGENTS_SHOWN).map((entry) => entry.taskId), undefined])
+  expect(many.ids).toEqual([...crowd.slice(0, STRIP_ROWS).map((entry) => entry.taskId), undefined])
 })
 
 test("what a sub-agent runs on is a line under its row, in its own colours, and its id opens the same agent; past the row budget the model goes on the row", () => {
@@ -203,7 +205,7 @@ test("what a sub-agent runs on is a line under its row, in its own colours, and 
   const tight = renderAgentsStrip({ tasks: crowd, run, activity: () => undefined, now: NOW, width: 80, inset: 3, glyphs: glyphs({}), root: false, openHint: "", commands })
   const rows = tight.rows.map((line) => line.map((span) => span.text).join(""))
   expect(rows).toHaveLength(AGENTS_SHOWN + 2)
-  expect(rows[0]).toMatch(/Review the Swift sources\s+bg\s+Opus 5\.5\s+thinking/)
+  expect(rows[0]).toMatch(/Review the Swift sources\s+async\s+Opus 5\.5\s+thinking/)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(80)
 })
 
@@ -217,6 +219,33 @@ test("a running sub-agent says how full its context is: a percentage against a k
   // A narrow strip leaves the column out before it crowds the description.
   expect(draw(tasks, {}, 60).join("\n")).not.toContain("ctx")
   for (const width of [60, 80, 120]) for (const row of draw(tasks, {}, width)) expect(textWidth(row)).toBeLessThanOrEqual(width)
+})
+
+test("sub-agents and commands share the rows: a short list gives its rows to the other, both full keep their shares, never more rows than before", () => {
+  const agents = (count: number) => Array.from({ length: count }, (_, at) => task({ taskId: `ses_${at}`, description: `Front ${at + 1}`, background: true }))
+  const commands = (count: number) => Array.from({ length: count }, (_, at) => ({ id: `bg_${at}`, command: `bun test part-${at}`, kind: "command" as const, startedAt: NOW - 60_000 }))
+  const strip = (tasks: TaskRecord[], cmds: ReturnType<typeof commands>, open?: string) => renderAgentsStrip({ tasks, ...(open ? { open } : {}), activity: () => undefined, now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: false, openHint: "", commands: cmds })
+  // Five fronts and one suite: every row fits, nothing folds into `+N more`.
+  expect(strip(agents(5), commands(1)).ids).toEqual(["ses_0", "ses_1", "ses_2", "ses_3", "ses_4", "bg_0"])
+  // Two sub-agents and six commands: the commands take the rows the sub-agents leave.
+  const fewAgents = strip(agents(2), commands(6))
+  expect(fewAgents.ids).toEqual(["ses_0", "ses_1", "bg_0", "bg_1", "bg_2", "bg_3", "bg_4", undefined])
+  expect(fewAgents.rows.at(-1)!.map((span) => span.text).join("")).toMatch(/└ \+1 more · \/ps$/)
+  // Both crowded: the same shares as before, and the strip is no taller.
+  const crowded = strip(agents(9), commands(9))
+  expect(crowded.ids.filter((id) => id?.startsWith("ses_"))).toHaveLength(AGENTS_SHOWN)
+  expect(crowded.ids.filter((id) => id?.startsWith("bg_"))).toHaveLength(COMMANDS_SHOWN)
+  expect(crowded.rows).toHaveLength(STRIP_ROWS + 1)
+})
+
+test("the sub-agent being read keeps its row when more sub-agents than rows run", () => {
+  const fronts = Array.from({ length: 9 }, (_, at) => task({ taskId: `ses_${at}`, description: `Front ${at + 1}`, background: true }))
+  const commands = Array.from({ length: 3 }, (_, at) => ({ id: `bg_${at}`, command: `bun test part-${at}`, kind: "command" as const, startedAt: NOW }))
+  const drawn = renderAgentsStrip({ tasks: fronts, open: "ses_8", activity: () => undefined, now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: false, openHint: "", commands })
+  expect(drawn.ids.slice(0, AGENTS_SHOWN)).toEqual(["ses_0", "ses_1", "ses_2", "ses_8"])
+  const text = drawn.rows.map((line) => line.map((span) => span.text).join(""))
+  expect(text[AGENTS_SHOWN - 1]).toMatch(/├▸Front 9/)
+  expect(text.at(-1)).toMatch(/└ \+5 more · \/tasks$/)
 })
 
 test("the sub-agent open in the chat is marked and stays listed after it ended", () => {

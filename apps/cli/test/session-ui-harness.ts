@@ -57,6 +57,8 @@ export type HarnessOptions = {
   terminalConfig?: Parameters<typeof createApp>[0]["terminalConfig"]
   pets?: Parameters<typeof createApp>[0]["pets"]
   imageAnswers?: Parameters<typeof createApp>[0]["imageAnswers"]
+  /** Answers whether a folder is a git work tree for the sidebar's project list; unset reads the disk. */
+  inspectProject?: Parameters<typeof createApp>[0]["inspectProject"]
   version?: string
   width?: number
   height?: number
@@ -109,6 +111,7 @@ export function appHarness(options: HarnessOptions = {}) {
     ...(options.terminalConfig ? { terminalConfig: options.terminalConfig } : {}),
     ...(options.pets ? { pets: options.pets } : {}),
     ...(options.imageAnswers ? { imageAnswers: options.imageAnswers } : {}),
+    ...(options.inspectProject ? { inspectProject: options.inspectProject } : {}),
     send: async (command) => {
       sent.push(command)
       return options.reply?.(command) ?? { ok: true }

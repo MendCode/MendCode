@@ -66,7 +66,7 @@ export function createSessionStarter(input: {
       if (!found.ok) return found
       const sessionId = input.id()
       const title = request.title?.trim().slice(0, 120)
-      input.store.createSession({ id: sessionId, directory: found.directory, title: title ?? "" })
+      input.store.createSession({ id: sessionId, directory: found.directory, title: title ?? "", origin: "agent" })
       // Opened on purpose: never reused, hidden or removed as an empty chat before its first message lands.
       input.store.emptySessions.markExplicit(sessionId)
       if (title) input.store.meta.set(`session.title.manual:${sessionId}`, "true")

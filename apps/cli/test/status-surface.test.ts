@@ -280,7 +280,7 @@ describe("status surface in the app", () => {
     advance(1_000)
     app.render()
     // One tree under the working line: the agent as a sub-agent row, the command as a row of the same tree.
-    expect(all()).toMatch(/├ Studio hub, shell and settings +bg/)
+    expect(all()).toMatch(/├ Studio hub, shell and settings +async/)
     const span = (needle: string) => frame().flat().find((each) => each.text.includes(needle))
     expect(span("Studio hub, shell and settings")?.fg).not.toBe("muted")
     expect(span("bun test --watch")?.fg).toBe("body")

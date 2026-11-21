@@ -2,6 +2,7 @@ import type { ForegroundState, Goal, ItemId, ItemKind, PermissionMode, QueueId, 
 import { glyphs as defaultGlyphs, type Glyphs, type Line, type Span } from "../ui/theme"
 import { splitGraftTally } from "./graft-tally"
 import type { ToolView, TranscriptHooks } from "../extensions/hooks"
+import type { RunningItem } from "./turn-state"
 import { toolArgs, type ToolArgs } from "../extensions/tool-args"
 import { errorBox, statusLine, FULL_REASONING_ROWS, type Attachment, type TurnEnd } from "./chat-blocks"
 import { detailsDefaults, markdownStyleFor, renderMarkdown, wrapSpans } from "./markdown"
@@ -97,6 +98,8 @@ export type Block = {
   limit?: LimitCard
   /** On the synthetic line a usage event leaves (cache miss, thinking left off, what a compaction cost); drawn only when the `cacheNotices` setting is on. */
   note?: UsageNote
+  /** The seq of the event that made the block: older history let go (`release`) is everything before a seq. */
+  seq?: number
 }
 
 /** `spans` carry style; `text` is the same content as plain text (tests, search, width). */
@@ -145,10 +148,21 @@ export type AgentThread = {
   tools: number
   last: string | undefined
   tokens: number | undefined
+  /** What it does now (its latest open item), its finished steps (tool calls, thoughts, messages) and when the step in progress began. */
+  current: RunningItem | undefined
+  steps: number
+  stepAt: number | undefined
   /** The model it runs on, when its engine says (Claude Code's sub-agents do), or until then the one its call asked for; never its parent's. */
   model?: string
 }
-type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last?: string; model?: string; ended?: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser?: true } }
+type ItemEvent = Extract<SessionEvent, { type: "item.started" | "item.delta" | "item.completed" }>
+type TurnEndEvent = Extract<SessionEvent, { type: "turn.completed" | "turn.cancelled" | "turn.interrupted" | "turn.failed" }>
+const TURN_ENDS = new Set<string>(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
+const isTurnEnd = (event: SessionEvent): event is TurnEndEvent => TURN_ENDS.has(event.type)
+const bySeq = (a: SessionEvent, b: SessionEvent) => a.seq - b.seq
+/** Blocks named after the event that made them (`note:<seq>:<i>`, `goal:<seq>`, …): the seq the walk in `joinOlder` reads. */
+const SEQ_NAMED = /^(?:note|goal|limit|checkpoint):(\d+)/
+type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[], missed?: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; open: Map<ItemId, RunningItem>; steps: number; stepAt: number | undefined; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
 
 export type ImageRow = { sha256: string; index: number; row: number; rows: number; cols: number; col: number }
 
@@ -186,7 +200,7 @@ const GUTTER = 2
 /** How little of a tool card the full view shows: one row (`line`) or a short preview capped by kind (`brief`). */
 type ToolDensity = "line" | "brief"
 /** Calls whose card is a plan, a question or a lookup the reader acts on: the full view's density leaves them as they are. */
-const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code"])
+const DENSITY_EXEMPT = new Set(["todo", "question", "plan_submit", "remember", "session_search", "session_read", "session_notes", "computer_capture", "computer_key", "computer_session", "computer_observe", "computer_code", "bot_note", "bot_skill", "bot_schedule"])
 const DEFAULT_REASONING_ROWS = 7
 /**
  * Blocks laid out at first: the newest ones. Already loaded older blocks are laid out when the reader reaches
@@ -195,6 +209,17 @@ const DEFAULT_REASONING_ROWS = 7
 export const WINDOW_BLOCKS = 400
 /** Blocks added to the window each time the reader reaches its top. */
 export const WINDOW_STEP = 200
+/**
+ * Blocks a chat keeps once the reader is back at the bottom after reading far up (`release`): the default window and one step above
+ * it, the same 600 blocks whose rows `ROWS_CACHE_BLOCKS` keeps, so nothing kept is laid out again. Like Codex's bounded window, unlike
+ * opencode's, which holds every message it ever loaded: the older history is fetched again, page by page, when the reader goes back up.
+ */
+export const RELEASE_KEEP = WINDOW_BLOCKS + WINDOW_STEP
+/**
+ * Older history is let go only past two more steps: a reader who went a few pages up and back keeps them, and each release frees at
+ * least that much, so going up and down near the top of the kept part never fetches the same pages over and over.
+ */
+export const RELEASE_AT = RELEASE_KEEP + 2 * WINDOW_STEP
 
 /** v1's reasoning body height: clamp(floor(viewport × 0.32), 4, 14) rows. */
 function reasoningRowsFor(height: number) {
@@ -325,6 +350,12 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   const history = new Map<number, SessionEvent>()
   const deltaSeqs = new Map<ItemId, number>()
   let firstSeq: number | undefined
+  /** The seq of the event being applied: the blocks it makes carry it (`Block.seq`). */
+  let applying = 0
+  /** How many blocks were shown when `release` last ran: it looks again only once another step of them has arrived. */
+  let releasedAt = 0
+  /** How many log blocks there were at the last `rebuild` (undefined before one): `listBlocks` marks undone runs up to there. */
+  let rebuiltAt: number | undefined
 
   function remember(event: SessionEvent) {
     switch (event.type) {
@@ -383,6 +414,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** A log block joins the list; one of an undone turn is kept but not shown. */
   function add(block: Block) {
+    block.seq ??= applying
     all.push(block)
     byItem.set(block.itemId, block)
     if (undoneTurns.has(block.turnId) || deletedItems.has(block.itemId)) return
@@ -398,17 +430,31 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** The undone turns changed: the visible list is rebuilt from the log's blocks, a marker standing in each run of undone turns. */
   function rebuild() {
+    cache.clear()
+    rebuiltAt = all.length
+    listBlocks()
+    invalidateCounts()
+  }
+
+  /**
+   * The visible list from the log's blocks: up to `rebuiltAt` (the log's length at the last undo, redo or revision) a marker
+   * stands in each run of undone turns; a block added after it is hidden without one, as `add` hides it.
+   */
+  function listBlocks() {
     blocks.length = 0
     index.clear()
-    cache.clear()
+    const marked = rebuiltAt ?? 0
     let marker: Block | undefined
     let runMessages = 0
     let runTurns = new Set<TurnId>()
-    for (const block of all) {
+    for (let at = 0; at < all.length; at++) {
+      const block = all[at]!
       if (deletedItems.has(block.itemId)) continue
       if (undoneTurns.has(block.turnId)) {
+        if (at >= marked) continue
         if (!marker) {
           marker = { itemId: `undone:${block.turnId}` as ItemId, turnId: block.turnId, kind: "status", text: "", status: "ok", undone: 1, ...(block.at !== undefined ? { at: block.at } : {}) }
+          cache.delete(marker.itemId)
           index.set(marker.itemId, blocks.length)
           blocks.push(marker)
           runMessages = 0
@@ -423,7 +469,6 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       index.set(block.itemId, blocks.length)
       blocks.push(block)
     }
-    invalidateCounts()
   }
 
   /** ctrl+o in balanced opens every fold (tool rows, long messages); full starts with tool details open and messages folded. */
@@ -781,6 +826,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   function styledBody(block: Block, width: number): Line[] {
     // Thinking whose text the provider keeps (Claude Code, a Codex item without a summary) has nothing to show: the working row says "Thinking...".
     if (block.kind === "reasoning" && !block.text.trim()) return []
+    // A sub-agent's end that repeats its last text carries only its totals: no empty bullet for it.
+    if (block.kind === "agent_message" && block.status !== "running" && !block.text.trim() && block.meta?.agentEnd === true) return []
     const role = block.kind === "user_message" && !block.notice ? "user" : block.kind === "agent_message" ? "assistant" : block.kind === "tool_call" ? "tool" : "meta"
     // A custom view of the block's slot comes first (docs/views.md); finished blocks are memoised on their whole input.
     const slot = slotOf(block)
@@ -971,6 +1018,36 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     invalidateCounts()
   }
 
+  /** A turn's own item, for its closing line: how many it made and whether one was a `!command`. */
+  function countTurnItem(event: Extract<SessionEvent, { type: "item.started" }>) {
+    const turn = turns.get(event.turnId)
+    if (turn) turn.items++
+    if (turn && event.meta?.shell === true) turn.shell = true
+  }
+
+  /** A model call of a turn, for its closing line: its model, tokens and cost. */
+  function countTurnUsage(event: Extract<SessionEvent, { type: "usage.recorded" }>) {
+    const turn = turns.get(event.turnId)
+    if (!turn) return
+    turn.model = event.model
+    turn.input += event.input + event.cacheRead + event.cacheWrite
+    turn.output += event.output
+    turn.reasoning += event.reasoning
+    turn.calls = (turn.calls ?? 0) + 1
+    turn.cacheRead = (turn.cacheRead ?? 0) + event.cacheRead
+    turn.costMicros = turn.costMicros === null || event.costMicros === undefined ? null : (turn.costMicros ?? 0) + event.costMicros
+    turn.usage = true
+  }
+
+  function keepRequest(event: Extract<SessionEvent, { type: "server.request" }>) {
+    requests.set(event.requestId, { kind: event.kind, title: event.title, detail: event.detail, ...(event.itemId ? { itemId: event.itemId } : {}) })
+  }
+
+  function keepContinuity(event: Extract<SessionEvent, { type: "continuity.updated" }>) {
+    continuity.set(event.record.id, event.record)
+    if (continuity.size > 256) continuity.delete(continuity.keys().next().value!)
+  }
+
   /** What a `task` call's sub-agent runs on, when the app says it (the full tier): it takes the place of the model the call named. */
   const taskRun = (block: Block): { run: Span[] } | undefined => {
     if (!options.subagentRun || block.kind !== "tool_call") return undefined
@@ -997,28 +1074,52 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       // A thread opened after the view changed starts the way the conversation reads now.
       const transcript = createTranscript({ ...options, mode })
       if (appearanceChanged) transcript.setAppearance({ ...appearance, reasoning: reasoningVisibility, toolOutput })
-      threads.set(parent, (thread = { transcript, tools: 0 }))
+      threads.set(parent, (thread = { transcript, tools: 0, last: undefined, model: undefined, open: new Map(), steps: 0, stepAt: undefined, ended: undefined }))
     }
     // The thread reads the item as one of its own: without the mark, which would send it to a thread of the thread.
     let own: SessionEvent = event
     if (event.type === "item.started" && event.meta) {
-      const { agentParent: _parent, agentModel, ...meta } = event.meta
-      if (typeof agentModel === "string") thread.model = agentModel
+      const { agentParent: _parent, agentModel: _model, ...meta } = event.meta
       own = { ...event, meta }
     }
-    if (replayed) replayed.set(thread, [...(replayed.get(thread) ?? []), own])
+    if (replayed) {
+      const list = replayed.get(thread)
+      if (list) list.push(own)
+      else replayed.set(thread, [own])
+    }
     else thread.transcript.apply(own)
+    countThread(thread, event)
+    cache.delete(parent)
+    invalidateCounts()
+    return true
+  }
+
+  /** What one of a sub-agent's items changes in its thread's counters (model, tools, steps, what it does now, its end). */
+  function countThread(thread: ThreadState, event: ItemEvent) {
+    if (event.type === "item.started" && typeof event.meta?.agentModel === "string") thread.model = event.meta.agentModel
+    // A message sent to an ended sub-agent starts it again (Claude Code's SendMessage): its new work reopens the thread, until it ends again.
+    if (event.type === "item.started" && thread.ended && !thread.ended.byUser) thread.ended = undefined
     if (event.type === "item.started" && event.kind === "tool_call") {
       thread.tools++
       if (typeof event.meta?.tool === "string") thread.last = event.meta.tool
     }
+    // What it does now, for the activity status of its open thread: the same steps the main agent's row counts.
+    if (event.type === "item.started") {
+      const title = typeof event.meta?.tool === "string" ? event.meta.tool : ""
+      const tool = title ? title.split(":")[0]!.trim() : undefined
+      const detail = tool === "shell" && title.includes(":") ? title.slice(title.indexOf(":") + 1).trim() : ""
+      thread.open.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}), ...(detail ? { detail } : {}) })
+      thread.stepAt = event.at
+    }
+    if (event.type === "item.completed") {
+      const kind = thread.open.get(event.itemId)?.kind
+      if (thread.open.delete(event.itemId) && event.meta?.agentEnd !== true && (kind === "tool_call" || kind === "reasoning" || kind === "agent_message")) thread.steps++
+      thread.stepAt = event.at
+    }
     if (event.type === "item.completed" && event.meta?.agentEnd === true) {
       const count = (value: unknown) => (typeof value === "number" ? value : 0)
-      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), ...(event.meta.stoppedBy === "user" ? { byUser: true as const } : {}) }
+      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), byUser: event.meta.stoppedBy === "user" }
     }
-    cache.delete(parent)
-    invalidateCounts()
-    return true
   }
 
   function agentThread(block: Block): AgentThread {
@@ -1037,6 +1138,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       itemId: block.itemId, description, agent: typeof block.meta?.agent === "string" ? block.meta.agent : "agent", background, running, status,
       ...(stoppedByUser ? { stoppedByUser: true as const } : {}),
       startedAt: block.at, endedAt: thread?.ended?.at ?? block.endAt, tools: thread?.ended?.tools ?? thread?.tools ?? 0, last: thread?.last, tokens: thread?.ended?.tokens || undefined, ...(model ? { model } : {}),
+      current: thread ? [...thread.open.values()].at(-1) : undefined, steps: thread?.steps ?? 0, stepAt: thread?.stepAt,
     }
   }
 
@@ -1058,8 +1160,16 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     firstSeq ??= event.seq
     lastSeq = event.seq
     revision++
+    project(event)
+    remember(event)
+  }
+
+  /** What one event changes in the projection: `apply` without its order check and without keeping the event in `history`. */
+  function project(event: SessionEvent) {
+    // The blocks this event makes carry its seq, whether it is applied live or re-applied when an older page joins.
+    applying = event.seq
     // A sub-agent's item is part of the loaded history too: a rebuild for an older page gives the thread its beginning.
-    if (routeAgent(event)) return remember(event)
+    if (routeAgent(event)) return
     if (["turn.started", "turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"].includes(event.type)) usageNotes.apply(event)
     switch (event.type) {
       case "compaction.updated":
@@ -1079,9 +1189,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         if (previous) cache.delete(previous.itemId)
         const title = typeof event.meta?.tool === "string" ? event.meta.tool : typeof event.meta?.title === "string" ? event.meta.title : undefined
         add({ itemId: event.itemId, turnId: event.turnId, kind: event.kind, text: "", status: "running", at: event.at, ...(event.meta?.subagent === true ? { meta: event.meta } : {}), ...(title ? { title } : {}), ...(event.meta?.notice === true ? { notice: true as const } : {}), ...(event.kind === "tool_call" && event.meta?.injected === true ? { injected: true as const } : {}), ...(event.meta?.shell === true ? { shell: true as const } : {}), ...(event.meta?.shell === true && event.meta.local === true ? { local: true as const } : {}), ...(event.kind === "compaction" && event.meta ? { meta: event.meta } : {}) })
-        const turn = turns.get(event.turnId)
-        if (turn) turn.items++
-        if (turn && event.meta?.shell === true) turn.shell = true
+        countTurnItem(event)
         invalidateCounts()
         break
       }
@@ -1187,17 +1295,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         break
       case "usage.recorded": {
         lastUsage = { provider: event.provider, model: event.model, contextTokens: usageContext(event), callAt: event.at - (event.profile?.durationMs ?? 0), ...(event.contextWindow ? { contextWindow: event.contextWindow } : {}), ...(event.contextApprox ? { contextApprox: true } : {}), ...(event.compactAt ? { compactAt: event.compactAt } : {}) }
-        const turn = turns.get(event.turnId)
-        if (turn) {
-          turn.model = event.model
-          turn.input += event.input + event.cacheRead + event.cacheWrite
-          turn.output += event.output
-          turn.reasoning += event.reasoning
-          turn.calls = (turn.calls ?? 0) + 1
-          turn.cacheRead = (turn.cacheRead ?? 0) + event.cacheRead
-          turn.costMicros = turn.costMicros === null || event.costMicros === undefined ? null : (turn.costMicros ?? 0) + event.costMicros
-          turn.usage = true
-        }
+        countTurnUsage(event)
         addNotes(event, usageNotes.apply(event, compactionUpdates.get(event.turnId)?.state === "writing"))
         break
       }
@@ -1237,11 +1335,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         queue = event.queue.map((entry) => ({ queueId: entry.queueId, preview: entry.preview, ...(entry.delivery ? { delivery: entry.delivery } : {}), ...(entry.kind === "notice" ? { notice: true as const } : {}) }))
         break
       case "continuity.updated":
-        continuity.set(event.record.id, event.record)
-        if (continuity.size > 256) continuity.delete(continuity.keys().next().value!)
+        keepContinuity(event)
         break
       case "server.request":
-        requests.set(event.requestId, { kind: event.kind, title: event.title, detail: event.detail, ...(event.itemId ? { itemId: event.itemId } : {}) })
+        keepRequest(event)
         // The folded runs and densities leave an awaited call out (and the asking call of a question), so they are planned again.
         if (event.itemId) cache.delete(event.itemId)
         if (event.itemId || event.kind === "question") invalidateCounts()
@@ -1255,16 +1352,400 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         break
       }
     }
-    remember(event)
   }
 
-  function prepend(events: readonly SessionEvent[]) {
-    const older = events.filter((event) => event.seq < (firstSeq ?? Infinity))
+  /**
+   * An older page joins the loaded history. `missed`: newer events this transcript never received, which only the older page makes
+   * its own (the rest of a sub-agent's item that starts on that page: the parent learns whose it is from the page and hands it over).
+   */
+  function prepend(events: readonly SessionEvent[], missed: readonly SessionEvent[] = []) {
+    const older = events.filter((event) => event.seq < (firstSeq ?? Infinity)).sort(bySeq)
     if (!older.length) return
     revision++
-    const replay = [...older, ...history.values()].sort((a, b) => a.seq - b.seq)
     const previousCount = blocks.length
+    // The laid-out rows stay: a block the older page does not touch is the same block after it, and laying out every loaded message
+    // again for each page made each page slower than the last. What the page touches (its items, its turns) is laid out anew.
+    const touchedItems = new Set<string>()
+    const touchedTurns = new Set<string>()
+    for (const event of older) {
+      if ("itemId" in event && typeof event.itemId === "string") touchedItems.add(event.itemId)
+      if ("turnId" in event && typeof event.turnId === "string") touchedTurns.add(event.turnId)
+    }
+    if (!joinOlder(older, missed, touchedItems, touchedTurns)) replayWith(older, missed, touchedItems, touchedTurns)
+    olderLoaded += Math.max(0, blocks.length - previousCount)
+    invalidateCounts()
+  }
+
+  /**
+   * The older page joined without replaying what is loaded: the page is folded on its own, the loaded blocks follow its blocks, and
+   * only the loaded events that read what the page holds are applied again: the rest of an item or a turn the page cuts (a turn's
+   * closing line is laid where it closed), the usage notes, the counters of a sub-agent thread the page continues. A page costs its
+   * own events and one pass over the loaded ones, where replaying everything for each page made scrolling to the top of a long
+   * session replay its log once per page.
+   *
+   * False, before anything a replay needs is lost, where only a replay joins the page exactly: an undo, a revision, a usage limit or
+   * a compaction that reaches across the cut, a turn that ends twice or does not end cleanly, a note that would read differently.
+   */
+  function joinOlder(older: readonly SessionEvent[], missed: readonly SessionEvent[], touchedItems: ReadonlySet<string>, touchedTurns: ReadonlySet<string>): boolean {
+    if (firstSeq === undefined) return false
+    // What the page starts: its own items, its sub-agents' items (by the call they belong to) and its turns.
+    const items = new Set<ItemId>()
+    const subParents = new Map<ItemId, ItemId>()
+    const turnsStarted = new Set<TurnId>()
+    const turnsEnded = new Set<TurnId>()
+    const compacted = new Set<TurnId>()
+    for (const event of older) {
+      if (event.type === "turn.reverted" || event.type === "turn.restored" || event.type === "message.revised" || event.type === "session.orchestration" || event.type === "usage.limit") return false
+      if (event.type === "item.started") {
+        if (typeof event.meta?.agentParent === "string") subParents.set(event.itemId, event.meta.agentParent as ItemId)
+        else items.add(event.itemId)
+      } else if (event.type === "turn.started") turnsStarted.add(event.turnId)
+      else if (isTurnEnd(event)) turnsEnded.add(event.turnId)
+      else if (event.type === "compaction.updated") compacted.add(event.turnId)
+    }
+    const parents = new Set(subParents.values())
+    // One pass over the loaded events: which read the page, and where a loaded block was made (for a closing line laid among them).
+    const reapply: SessionEvent[] = []
+    const ends: TurnEndEvent[] = []
+    const notesInput: SessionEvent[] = []
+    const requestEvents: SessionEvent[] = []
+    const continuityEvents: Extract<SessionEvent, { type: "continuity.updated" }>[] = []
+    const threadEvents = new Map<ItemId, ItemEvent[]>()
+    const handBack = new Map<ItemId, SessionEvent[]>()
+    const madeAt = new Map<string, number>()
+    const turnStartedAt = new Map<string, number>()
+    let undoAt = Infinity
+    let lastUndoAt = -Infinity
+    const seen = { turnStart: false, end: false, queue: false, foreground: false, permission: false, goal: false, usage: false, limit: false, packs: false }
+    const keepFor = <T,>(map: Map<ItemId, T[]>, key: ItemId, value: T) => {
+      const list = map.get(key)
+      if (list) list.push(value)
+      else map.set(key, [value])
+    }
+    const madeFirst = (id: string, seq: number) => madeAt.set(id, madeAt.has(id) ? NaN : seq)
+    const visit = (event: SessionEvent, handed: boolean): boolean => {
+      if (handed && !((event.type === "item.delta" || event.type === "item.completed") && items.has(event.itemId))) return false
+      if (compacted.size && "turnId" in event && typeof event.turnId === "string" && compacted.has(event.turnId)) return false
+      switch (event.type) {
+        case "item.started": {
+          if (items.has(event.itemId) || subParents.has(event.itemId)) return false
+          const parent = typeof event.meta?.agentParent === "string" ? (event.meta.agentParent as ItemId) : threadOf.get(event.itemId)
+          if (parent) {
+            if (parents.has(parent)) keepFor(threadEvents, parent, event)
+          } else if (turnsStarted.has(event.turnId)) {
+            reapply.push(event)
+            madeAt.set(event.itemId, event.seq)
+          }
+          break
+        }
+        case "item.delta":
+        case "item.completed": {
+          // Without sub-agents on the page, a thread's item is never the page's own: no need to ask whose it is.
+          const parent = parents.size ? threadOf.get(event.itemId) ?? subParents.get(event.itemId) : undefined
+          if (parent) {
+            if (parents.has(parent)) keepFor(threadEvents, parent, event)
+            if (subParents.has(event.itemId)) keepFor(handBack, parent, event)
+          } else if (items.has(event.itemId)) reapply.push(event)
+          break
+        }
+        case "message.revised":
+          if (items.has(event.itemId)) return false
+          undoAt = Math.min(undoAt, event.seq)
+          lastUndoAt = Math.max(lastUndoAt, event.seq)
+          break
+        case "turn.reverted":
+        case "turn.restored":
+          undoAt = Math.min(undoAt, event.seq)
+          lastUndoAt = Math.max(lastUndoAt, event.seq)
+          break
+        case "turn.started":
+          if (turnsStarted.has(event.turnId)) return false
+          seen.turnStart = true
+          turnStartedAt.set(event.turnId, event.seq)
+          notesInput.push(event)
+          break
+        case "turn.completed":
+        case "turn.cancelled":
+        case "turn.interrupted":
+        case "turn.failed":
+          if (turnsEnded.has(event.turnId)) return false
+          seen.end = true
+          notesInput.push(event)
+          madeFirst(`status:${event.turnId}`, event.seq)
+          if (turnsStarted.has(event.turnId)) {
+            if (event.type !== "turn.completed" || ends.some((end) => end.turnId === event.turnId)) return false
+            ends.push(event)
+            reapply.push(event)
+          }
+          break
+        case "usage.recorded":
+          seen.usage = true
+          notesInput.push(event)
+          if (turnsStarted.has(event.turnId)) reapply.push(event)
+          break
+        case "compaction.updated":
+          if (touchedTurns.has(event.turnId)) return false
+          if (event.state === "packed") seen.packs = true
+          notesInput.push(event)
+          break
+        case "usage.limit":
+          if (event.turnId && touchedTurns.has(event.turnId)) return false
+          seen.limit = true
+          break
+        case "session.orchestration":
+          madeFirst(`orchestration:${event.groupId}`, event.seq)
+          break
+        case "queue.changed":
+          seen.queue = true
+          break
+        case "foreground.state":
+          seen.foreground = true
+          break
+        case "session.permission":
+          seen.permission = true
+          break
+        case "goal.changed":
+          seen.goal = true
+          break
+        case "server.request":
+        case "server.request.resolved":
+          requestEvents.push(event)
+          break
+        case "continuity.updated":
+          continuityEvents.push(event)
+          break
+      }
+      return true
+    }
+    for (const event of history.values()) if (!visit(event, false)) return false
+    for (const event of missed) if (!visit(event, true)) return false
+    ends.sort(bySeq)
+    // A closing line is laid where its turn closed, among blocks laid out before any undo; the turns' clocks need a loaded start.
+    if (ends.length && undoAt < ends.at(-1)!.seq) return false
+    if (seen.end && !seen.turnStart) return false
+
+    // The page on its own, from an empty projection. The maps keyed by item or turn are shared: nothing on the page names a loaded
+    // key (checked above), and the loaded keys are kept.
+    const loaded = { all: all.splice(0), undone: [...undoneTurns], deleted: [...deletedItems], firstSeq, lastSeq, queue, foreground, lastStop, permissionMode, lastUsage, turnClock, activeTurn, settledStart, goal, usageLimit, rebuiltAt }
+    blocks.length = 0
+    undoneTurns.clear()
+    deletedItems.clear()
+    requests.clear()
+    continuity.clear()
+    // The page's deltas of an item are kept apart from its loaded ones (the page's come first); those of an item the page starts are
+    // joined again below, as the replay joins them.
+    const loadedDeltas = new Map<ItemId, number>()
+    for (const id of touchedItems as ReadonlySet<ItemId>) {
+      const seq = deltaSeqs.get(id)
+      if (seq === undefined) continue
+      loadedDeltas.set(id, seq)
+      deltaSeqs.delete(id)
+    }
+    firstSeq = undefined
+    lastSeq = 0
+    queue = []
+    foreground = "idle"
+    lastStop = undefined
+    permissionMode = "ask"
+    lastUsage = undefined
+    usageNotes.reset()
+    turnClock = undefined
+    activeTurn = undefined
+    settledStart = 0
+    goal = undefined
+    usageLimit = undefined
+    rebuiltAt = undefined
+    replayed = new Map()
+    let handed: Map<ThreadState, SessionEvent[]>
+    try {
+      for (const event of older) apply(event)
+    } finally {
+      handed = replayed
+      replayed = undefined
+    }
+    const giveUp = () => {
+      firstSeq = loaded.firstSeq
+      lastSeq = loaded.lastSeq
+      return false
+    }
+    if (seen.limit && usageLimit) return giveUp()
+    // Without a loaded model call, the page's last one is the session's, unless a loaded compaction cleared its context size.
+    if (!seen.usage && lastUsage && (seen.packs || loaded.all.some((block) => block.kind === "compaction"))) return giveUp()
+    for (const event of reapply) if (event.type === "item.completed" && byItem.get(event.itemId)?.kind === "compaction") return giveUp()
+    // The usage notes go on from the page's calls to the loaded ones: a loaded note that now reads differently (the first call after
+    // the cut compared with the page's last one) is laid again where its call was.
+    const renoted: Array<{ event: Extract<SessionEvent, { type: "usage.recorded" | "compaction.updated" }>; notes: UsageNote[] }> = []
+    const sameNotes = (event: SessionEvent, notes: readonly UsageNote[]) => {
+      for (let i = 0; ; i++) {
+        const block = byItem.get(`note:${event.seq}:${i}` as ItemId)
+        if (i >= notes.length) return !block
+        if (block?.note?.kind !== notes[i]!.kind || block.note.text !== notes[i]!.text) return false
+      }
+    }
+    const compacting = new Map<TurnId, string>()
+    const closed = new Set<TurnId>()
+    for (const event of notesInput.sort(bySeq)) {
+      if (event.type === "compaction.updated" || event.type === "usage.recorded") {
+        if (event.type === "compaction.updated") compacting.set(event.turnId, event.state)
+        const notes = event.type === "compaction.updated" ? usageNotes.apply(event) : usageNotes.apply(event, compacting.get(event.turnId) === "writing")
+        if (!sameNotes(event, notes)) renoted.push({ event, notes })
+      } else {
+        usageNotes.apply(event)
+        if (!isTurnEnd(event)) continue
+        if (compacting.get(event.turnId) === "writing") {
+          if (closed.has(event.turnId)) return giveUp()
+          compacting.set(event.turnId, "closed")
+        }
+        closed.add(event.turnId)
+      }
+    }
+    // Where a closing line or a note laid again goes among the loaded blocks: before the first one made after its event.
+    const madeAfter = (block: Block, seq: number): boolean | undefined => {
+      const named = SEQ_NAMED.exec(block.itemId)
+      const at = named ? Number(named[1]) : madeAt.get(block.itemId)
+      if (at !== undefined) return Number.isNaN(at) ? undefined : at > seq
+      const turnAt = turnStartedAt.get(block.turnId)
+      return turnAt !== undefined && turnAt > seq ? true : undefined
+    }
+    const placed = new Map<number, number>()
+    const places = [...ends.map((end) => end.seq), ...renoted.map(({ event }) => event.seq)].sort((a, b) => a - b)
+    const place = () => {
+      for (let walked = 0, p = 0; p < places.length; p++) {
+        for (; walked < loaded.all.length; walked++) {
+          const after = madeAfter(loaded.all[walked]!, places[p]!)
+          if (after === undefined) return false
+          if (after) break
+        }
+        placed.set(places[p]!, walked)
+      }
+      return true
+    }
+    if (!place()) {
+      // A block of a loaded turn that started before the event: when its item started is read from the loaded events.
+      for (const event of history.values()) if (event.type === "item.started" && event.seq < places.at(-1)! && !madeAt.has(event.itemId)) madeAt.set(event.itemId, event.seq)
+      if (!place()) return giveUp()
+    }
+
+    // The page's compactions, requests and continuity records come before the loaded ones.
+    if (compacted.size) {
+      const later = [...compactionUpdates].filter(([turnId]) => !compacted.has(turnId))
+      for (const [turnId, event] of later) {
+        compactionUpdates.delete(turnId)
+        compactionUpdates.set(turnId, event)
+      }
+    }
+    for (const event of requestEvents.sort(bySeq)) {
+      if (event.type === "server.request") keepRequest(event)
+      else if (event.type === "server.request.resolved") requests.delete(event.requestId)
+    }
+    for (const event of continuityEvents.sort(bySeq)) keepContinuity(event)
+    const olderStop = lastStop
+    settledStart = Math.max(settledStart, loaded.settledStart)
+    // The loaded blocks follow the page's; what the loaded events add to the page's items and turns is applied again, in order, a
+    // closing line or a note laid where its event was.
+    const stale = new Set(renoted.map(({ event }) => event.seq))
+    let next = 0
+    const keepUntil = (until: number) => {
+      for (; next < until; next++) {
+        const block = loaded.all[next]!
+        const named = block.note ? SEQ_NAMED.exec(block.itemId) : null
+        if (named && stale.has(Number(named[1]))) {
+          byItem.delete(block.itemId)
+          cache.delete(block.itemId)
+          continue
+        }
+        all.push(block)
+        blocks.push(block)
+      }
+    }
+    // Where the loaded log was at its last undo, redo or revision: `listBlocks` marks undone runs up to there.
+    let marked: number | undefined
+    const markUndo = () => {
+      if (loaded.rebuiltAt === undefined || marked !== undefined) return
+      keepUntil(loaded.rebuiltAt)
+      marked = all.length
+    }
+    const steps: Array<{ seq: number; run: () => void }> = []
+    for (const event of reapply) {
+      if (isTurnEnd(event)) steps.push({ seq: event.seq, run: () => {
+        keepUntil(placed.get(event.seq)!)
+        finishTurn(event, { outcome: "completed" })
+      } })
+      else if (event.type === "item.started") steps.push({ seq: event.seq, run: () => countTurnItem(event) })
+      else if (event.type === "usage.recorded") steps.push({ seq: event.seq, run: () => countTurnUsage(event) })
+      else steps.push({ seq: event.seq, run: () => {
+        history.delete(event.seq)
+        project(event)
+        remember(event)
+      } })
+    }
+    for (const { event, notes } of renoted) steps.push({ seq: event.seq, run: () => {
+      keepUntil(placed.get(event.seq)!)
+      addNotes(event, notes)
+      for (let i = 0; i < notes.length; i++) cache.delete(`note:${event.seq}:${i}` as ItemId)
+    } })
+    for (const step of steps.sort((a, b) => a.seq - b.seq)) {
+      if (step.seq > lastUndoAt) markUndo()
+      // A closing line or a note laid again carries the seq of its event, as when it was applied live.
+      applying = step.seq
+      step.run()
+    }
+    markUndo()
+    keepUntil(loaded.all.length)
+    for (const [id, seq] of loadedDeltas) if (!items.has(id)) deltaSeqs.set(id, seq)
+    // The undos come back once the blocks are in place: everything laid above was laid before them.
+    for (const turnId of loaded.undone) undoneTurns.add(turnId)
+    for (const itemId of loaded.deleted) deletedItems.add(itemId)
+    rebuiltAt = marked
+    listBlocks()
+    firstSeq = older[0]!.seq
+    lastSeq = loaded.lastSeq
+    if (seen.queue) queue = loaded.queue
+    if (seen.foreground) foreground = loaded.foreground
+    if (seen.permission) permissionMode = loaded.permissionMode
+    lastStop = seen.end ? loaded.lastStop : olderStop
+    if (seen.usage) lastUsage = loaded.lastUsage
+    if (seen.goal) goal = loaded.goal
+    if (seen.limit) usageLimit = loaded.usageLimit
+    if (seen.turnStart) {
+      activeTurn = loaded.activeTurn
+      turnClock = loaded.turnClock
+    }
+    // A thread the page continues counts its items again, the page's first, and takes the page and the rest of its items it missed.
+    const olderOf = new Map<ItemId, ItemEvent[]>()
+    for (const event of older) {
+      if (event.type !== "item.started" && event.type !== "item.delta" && event.type !== "item.completed") continue
+      const parent = event.type === "item.started" && typeof event.meta?.agentParent === "string" ? (event.meta.agentParent as ItemId) : threadOf.get(event.itemId)
+      if (parent) keepFor(olderOf, parent, event)
+    }
+    for (const [parent, own] of olderOf) {
+      const thread = threads.get(parent)
+      if (!thread) continue
+      thread.tools = 0
+      thread.last = undefined
+      thread.open.clear()
+      thread.steps = 0
+      thread.stepAt = undefined
+      thread.ended = undefined
+      for (const event of [...own, ...(threadEvents.get(parent) ?? [])].sort(bySeq)) countThread(thread, event)
+      cache.delete(parent)
+      thread.transcript.prepend(handed.get(thread) ?? [], (handBack.get(parent) ?? []).sort(bySeq))
+    }
+    for (const block of blocks) if (touchedItems.has(block.itemId) || touchedTurns.has(block.turnId)) cache.delete(block.itemId)
+    if (loaded.rebuiltAt !== undefined) {
+      const shown = new Set<string>(blocks.map((block) => block.itemId))
+      for (const itemId of cache.keys()) if (!shown.has(itemId)) cache.delete(itemId)
+    }
+    return true
+  }
+
+  /** The older page joined by replaying the whole loaded history after it, for the pages `joinOlder` cannot join exactly. */
+  function replayWith(older: readonly SessionEvent[], missed: readonly SessionEvent[], touchedItems: ReadonlySet<string>, touchedTurns: ReadonlySet<string>) {
+    const replay = [...older, ...history.values(), ...missed].sort(bySeq)
     const previousSeq = lastSeq
+    const previousFirst = firstSeq ?? Infinity
+    const subItems = new Set<string>()
+    for (const event of older) if (event.type === "item.started" && typeof event.meta?.agentParent === "string") subItems.add(event.itemId)
     all.length = 0
     blocks.length = 0
     byItem.clear()
@@ -1275,7 +1756,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     continuity.clear()
     turns.clear()
     compactionUpdates.clear()
-    cache.clear()
+    const laidOut = new Map(cache)
     history.clear()
     deltaSeqs.clear()
     firstSeq = undefined
@@ -1291,13 +1772,17 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     settledStart = 0
     goal = undefined
     usageLimit = undefined
+    rebuiltAt = undefined
     invalidateCounts()
     // The threads stay (an open thread view reads them); their counters are counted again from the replay, and each thread
-    // takes the events it has not seen through its own prepend.
+    // takes the events it has not seen through its own prepend: the older ones, and the rest of an item that starts on the page.
     for (const thread of threads.values()) {
       thread.tools = 0
-      delete thread.last
-      delete thread.ended
+      thread.last = undefined
+      thread.open.clear()
+      thread.steps = 0
+      thread.stepAt = undefined
+      thread.ended = undefined
     }
     replayed = new Map()
     try {
@@ -1305,11 +1790,107 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     } finally {
       const handed = replayed
       replayed = undefined
-      for (const [thread, own] of handed) thread.transcript.prepend(own)
+      for (const [thread, own] of handed) {
+        const before = own.filter((event) => event.seq < previousFirst)
+        if (before.length) thread.transcript.prepend(before, own.filter((event) => event.seq >= previousFirst && subItems.has((event as ItemEvent).itemId)))
+      }
     }
+    // The replay invalidates every block it applies events to, which is all of them: the rows laid out before come back for each block
+    // the older page did not touch.
+    const shown = new Set<string>()
+    for (const block of blocks) {
+      shown.add(block.itemId)
+      if (touchedItems.has(block.itemId) || touchedTurns.has(block.turnId)) cache.delete(block.itemId)
+      else if (!cache.has(block.itemId)) {
+        const before = laidOut.get(block.itemId)
+        if (before) cache.set(block.itemId, before)
+      }
+    }
+    for (const itemId of cache.keys()) if (!shown.has(itemId)) cache.delete(itemId)
     lastSeq = Math.max(lastSeq, previousSeq)
-    olderLoaded += Math.max(0, blocks.length - previousCount)
+  }
+
+  /** The item an event belongs to for `release`: a sub-agent's items belong to the call that started it. */
+  function unitOf(event: SessionEvent): ItemId | undefined {
+    const itemId = "itemId" in event && typeof event.itemId === "string" ? (event.itemId as ItemId) : undefined
+    return itemId === undefined ? undefined : (threadOf.get(itemId) ?? itemId)
+  }
+
+  /**
+   * The latest seq at or before `target` that history can be cut at: no item kept from it on began before it (its deltas are held as
+   * one text, which a page fetched again would add to). Undefined when no such seq drops anything.
+   */
+  function cutSeqAtOrBefore(target: number) {
+    // An older page joins after the loaded events (`joinOlder`): the history is put in seq order here, where order matters.
+    const events = [...history.values()].sort(bySeq)
+    const began = new Map<ItemId, number>()
+    for (const event of events) {
+      const unit = unitOf(event)
+      // An item whose start is not loaded began before everything here: no cut after its first event.
+      if (unit !== undefined && !began.has(unit)) began.set(unit, event.type === "item.started" ? event.seq : -Infinity)
+    }
+    let reach = Infinity
+    for (let at = events.length - 1; at > 0 && reach > -Infinity; at--) {
+      const event = events[at]!
+      const unit = unitOf(event)
+      if (unit !== undefined) reach = Math.min(reach, began.get(unit)!)
+      if (event.seq <= target && reach >= event.seq) return event.seq
+    }
+    return undefined
+  }
+
+  /**
+   * Lets go of the history far above the reader: the blocks, their rows and the events behind them, so a session read to its top
+   * holds no more than one read from its bottom. The newest `keep` blocks stay, and so does every block within `rows` rows of the
+   * bottom and from the newest prompt down (the sticky prompt shows it). Offsets count from the bottom, so the viewport does not move.
+   * What the replay of older pages counts (usage, the goal, the permission) stays as it is until such a page comes back.
+   * Returns the seq to page back from (the daemon's `before` cursor) or undefined when nothing went.
+   */
+  function release({ keep, width, rows }: { keep: number; width: number; rows: number }): number | undefined {
+    if (firstSeq === undefined || blocks.length < keep + 2 * WINDOW_STEP || blocks.length < releasedAt + WINDOW_STEP) return undefined
+    releasedAt = blocks.length
+    const perBlock = counts(width)
+    const first = firstShown()
+    let cut = blocks.length
+    // Blocks above the laid-out window are never on screen: past it, the rows to keep are already kept.
+    for (let kept = 0; cut > 0 && (blocks.length - cut < keep || kept < rows); kept += cut >= first ? (perBlock[cut - first] ?? 0) : rows) cut--
+    const prompt = blocks.findLastIndex((block) => block.kind === "user_message")
+    if (prompt >= 0) cut = Math.min(cut, prompt)
+    const target = blocks.slice(cut).find((block) => block.seq !== undefined)?.seq
+    const cutSeq = target === undefined ? undefined : cutSeqAtOrBefore(target)
+    if (cutSeq === undefined) return undefined
+    let drop = 0
+    while (drop < all.length && (all[drop]!.seq ?? -Infinity) < cutSeq) drop++
+    if (drop < WINDOW_STEP) return undefined
+    const shownBefore = blocks.length
+    const gone = new Set(all.splice(0, drop).map((block) => block.itemId))
+    for (const itemId of gone) {
+      byItem.delete(itemId)
+      cache.delete(itemId)
+      retained.delete(itemId)
+      grown.delete(itemId)
+      threads.delete(itemId)
+    }
+    for (const [itemId, parent] of threadOf) if (gone.has(parent)) threadOf.delete(itemId)
+    for (const [itemId, seq] of deltaSeqs) if (seq < cutSeq) deltaSeqs.delete(itemId)
+    // An older page joins after the loaded events, so the events before the cut are not only its head.
+    for (const seq of [...history.keys()]) if (seq < cutSeq) history.delete(seq)
+    const keptTurns = new Set<TurnId>()
+    for (const event of history.values()) if ("turnId" in event && typeof event.turnId === "string") keptTurns.add(event.turnId as TurnId)
+    if (activeTurn) keptTurns.add(activeTurn)
+    for (const turnId of turns.keys()) if (!keptTurns.has(turnId)) turns.delete(turnId)
+    for (const turnId of compactionUpdates.keys()) if (!keptTurns.has(turnId)) compactionUpdates.delete(turnId)
+    for (const turnId of undoneTurns) if (!keptTurns.has(turnId)) undoneTurns.delete(turnId)
+    firstSeq = cutSeq
+    // The kept blocks keep their rows; the undone runs keep the markers they had (the log lost its first `drop` blocks).
+    if (rebuiltAt !== undefined) rebuiltAt = Math.max(0, rebuiltAt - drop)
+    listBlocks()
     invalidateCounts()
+    // The laid-out window keeps its first block, or starts at the first kept one when that went.
+    const shownFirst = Math.max(0, first - (shownBefore - blocks.length))
+    olderLoaded = Math.max(0, blocks.length - WINDOW_BLOCKS - shownFirst)
+    releasedAt = blocks.length
+    return cutSeq
   }
 
   /** Line counts of all blocks at `width`; recomputed only when blocks were added/finished or width changed. */
@@ -1353,7 +1934,13 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     agentThreads: (): AgentThread[] => blocks.filter((block) => block.kind === "tool_call" && block.meta?.subagent === true).map(agentThread),
     /** The transcript of the sub-agent called by `itemId` (a transcript like this one), when it has reported anything. */
     agentTranscript: (itemId: ItemId): unknown => threads.get(itemId)?.transcript,
+    /**
+     * Whether a sub-agent's thread holds its whole start: the call that started it is loaded, and every event after it is (a session
+     * loads newest first, without gaps). False while the window starts inside the thread, which then begins mid-message.
+     */
+    agentThreadLoaded: (itemId: ItemId): boolean => index.has(itemId),
     prepend,
+    release,
     get lastSeq() {
       return lastSeq
     },

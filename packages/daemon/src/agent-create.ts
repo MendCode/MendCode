@@ -6,7 +6,7 @@ import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import { canonicalDir } from "@mendcode/tools"
 import type { AgentContent } from "./agent-generate"
 
-type Outcome = { generated?: AgentContent; fallback?: string; calledProvider?: boolean }
+type Outcome = { generated?: AgentContent; fallback?: string; calledProvider?: boolean; /** Lines added to the frontmatter after `model` (a bot's `permission` and `bot:` block). */ extraFrontmatter?: string[] }
 
 export async function createAgentFile(dir: string, command: Extract<Command, { type: "agent.create" }>, outcome: Outcome = {}): Promise<AgentCreateReport> {
   const content: AgentContent = outcome.generated ?? { name: command.name ?? agentName(command.description), description: command.description, prompt: command.description }
@@ -17,6 +17,7 @@ export async function createAgentFile(dir: string, command: Extract<Command, { t
   const text = ["---", `description: ${JSON.stringify(content.description)}`, `mode: ${command.mode}`,
     ...(command.model ? [`model: ${JSON.stringify(command.model)}`] : []),
     ...(denied.length ? ["permission:", ...denied.map((permission) => `  ${permission}: deny`)] : []),
+    ...(outcome.extraFrontmatter ?? []),
     "---", content.prompt, ""].join("\n")
   const parsed = parseAgentFile({ text, stem: content.name, file, source: command.scope })
   if ("problem" in parsed) throw new Error(parsed.problem)

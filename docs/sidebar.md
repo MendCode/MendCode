@@ -6,6 +6,88 @@ Its fixed header names the current preset and `/panel`, including in the narrow 
 
 `/sidebar` only controls the left session list.
 
+## The left list: every project, and bots
+
+`sidebarProjects` (`/customize` › Top & side › Sidebar projects) picks whose sessions the left list shows. The default, `auto`, shows every project while experimental bots are on and the sessions of the folder you opened otherwise; `folder` always shows the opened folder and `all` always shows every project. These rows stay in `/customize` even when `sidebar` is `hidden`, because the toggle key still shows the list. Every project means projects, not every folder a session ever ran in. A folder is a project when it is the root of a git work tree (it holds `.git`, a folder or the file of a linked worktree) or it is the folder you opened. The home folder, any folder with a hidden part in its path (`.ssh`, `.config/...`) and anything under a temp folder (`/tmp`, `/var/folders`, the system temp dir) are never projects; their sessions stay in `/sessions`. Each folder is asked once per run (one `stat`, off the draw path), so a folder shows up a moment after the list first draws. A linked worktree is listed under its main repo's name, with its sessions among the repo's. A folder with a session used in the last 24 hours is also a project, git root or not (home, hidden and temp folders still never are), and it shows past the cap as a busy project does, so a new folder you used stays after you switch to a session elsewhere.
+
+Whose projects: `sidebarProjectsFrom` (`/customize` › Top & side › Projects from) is `you` by default. A project then lists only when a session in it has a message you typed in the terminal or the web UI (`lastHumanAt`, [sessions.md](sessions.md)), or has no recorded origin (made before origins were kept, so nothing is hidden the day this lands), or when a session there works or waits now, or it is the open folder. A folder used today only by tools (a bridged Claude Code session, `mendcode session send` from a script, the PR reviewer, loops, workflows) waits behind `+ N more projects` like any other cut project, in the same ranking. `all` lists every project as before. The list follows a `session.list` refresh, so a project you just typed in shows within a minute unless it is open or working.
+
+To hide a project by hand, put the list in focus, pick its group row (the header then reads `↵ fold  x hide  → prompt`) and press `x`. The folder is saved in `sidebarHiddenProjects` (the canonical folder, at most 200, the oldest dropping out) and a notice says `hid <name> · /customize to bring it back`. A hidden project is never listed, not even behind `+ N more projects`, unless it is the open folder (`x` on that one says so and does nothing). `/customize` › Top & side › Hidden projects lists them: `←` `→` pick one, Enter brings it back.
+
+The list is ranked by the latest message activity of each project's sessions (then the number of sessions in the last 14 days), newest first. Opening or selecting a chat, subscribing to it, reading it or typing a draft in it never moves a group: only a session that gets new messages does, and a project already ranked keeps its place until its latest activity moves by a minute or more, so a streaming turn does not shuffle the list. The opened project and the projects with a session that works or waits always show, wherever they rank. By default (`sidebarProjectCount` 0, `/customize` › Top & side › Projects shown, auto) the list fills the sidebar's height, at least six projects; a number from 1 to 30 caps it instead (the opened and busy projects count toward it). The rest sit behind one row, `+ N more projects`; Enter or a click on it reveals the next eight in the same ranking (the cursor moves to the first one that appeared and the row keeps counting the rest), and once every project shows the row reads `show fewer` and folds them away again. Every shown group starts open; Space or a click on its arrow folds or opens it (kept in memory only), and a folded group shows how many of its sessions work or wait. Enter or a click on the project's name starts a new chat in that folder (a blank chat is reused) and the folder becomes this terminal's.
+
+The list follows other terminals live and cheaply. Every `session.activity` push is applied in place to the list of the other folders and to the bots' states, with no request. Only a session no list holds (a possible new chat of a bot) asks for the bot list again, once per second at most for any number of pushes, after a random 0 to 1.5 s so many terminals do not ask together. The full lists (`session.list`, `bot.list`) are asked on the first show, on the first show after pushes came while the list was hidden, after a reconnect, and every 60 s (jittered) only while the list shows; a hidden list does nothing but note that pushes came and has no timer.
+
+An open project shows its latest `sidebarPreviewCount` sessions if it is the opened one, and at most three if it is another (`/customize` › Top & side › Sessions per project, 1 to 50, default 5), in the usual order: pinned first, then the latest activity. The open session and any session that works or waits stay in the list even past that count, without repeating. Only sessions active in the last `sidebarRecentDays` days list at all (`/customize` › Top & side › Recent days, 0 to 365, default 7, 0 lists every age; a profile that never set it gets 7); the open, working, waiting and pinned sessions show at any age. A project with nothing recent still lists as a group: its header and a `+ N older` row, so it stays where its activity ranks it. Under the preview a `+ N more` row counts the hidden sessions (`+ N older` when only old ones are hidden); Enter or a click on it reveals the next eight sessions (the cursor lands on the first new one), and once the whole list shows, the `show less` row that replaces it folds it back. Which projects are opened this way is kept in memory only, so a restart shows the previews again. A chat nobody used (no title, no draft, nothing queued, only its first events) is left out of the list and the count unless it is the open one or one this terminal opened in the last day and that has taken part since; `/sessions` still lists it. The classic one-folder list (flag off, `sidebarProjects: folder`) is unchanged and has no preview.
+
+With `/experimental bots on` the list can also hold the bots. A bot is one row: its icon (a glyph per shape in its theme color, `()` `[]` `<>` `/\` `{}` in ASCII), its name, where it comes from, and its state as a symbol and a word (`● working`, `◌ idle`, `… waiting`, `! problem`). The icon is followed by exactly one space, a picture included (two cells and the space), so the names line up. A bot's chats are not in the project lists or their counts: under each bot that has chats a `▸ chats` row (Space or a click on its arrow folds and opens it, Enter or a click on its name starts a chat with the bot; closed by default, open while the open chat is one of them and when you start a chat with the bot) lists its newest chats from every folder, three and a `+ N more` row (`show less` once opened). `/sessions` still lists everything. Enter or a click on a bot starts a new chat with it, right away, in the folder MendCode is opened in (the open session's folder). `o` on the bot row opens its page, which is drawn like the other list pages (the shared header, a summary line, panels, the wheel, Esc back): identity, model, permission, its chats by folder, newest first, and `n` new chat in a folder, `e` edit, `m` memory, `d` delete. From a chat, `/bot open [name]` opens the page of that bot (no name: the open chat's bot). These keys choose the layout (`/customize` › Top & side), and none of them does anything with the flag off:
+
+| Key | Values |
+|---|---|
+| `sidebarLayout` | `bots-first` (the default; a profile that never chose a layout gets it, a saved choice is kept), `projects-first`, `icons-only` (a narrow column of icons; the picked row's name shows under it) and `scratch` (no section until you add them) |
+| `sidebarSections` | the sections shown and their order, a comma list of `projects`, `bots`, `sessions` (the opened folder's sessions with no bot, shown when `projects` is not); `none` hides all; empty takes the layout's own. Choosing a layout clears it |
+
+### Row marks
+
+A session row starts with a symbol: a spinner while it works, `?` while it waits for you to approve a tool, `◎` while it asks you a question, `◈` when a plan waits for your review, `✗` after a failed turn, `●` for a reply you have not read, `…` when messages are queued. The header counts every kind that waits for you. A daemon that does not say what it waits on shows `?`.
+
+On the right, a working row shows how long its turn has run (`42s`, `2m14s`, `12m`, `1h05m`), counting on the same tick that moves its spinner and only while it works; every other row shows its age. While the session
+compacts its conversation the time reads `compacting`. A session whose sub-agents work shows how many after it, `↳2` in the working
+colour (ASCII `^2`), and spins even while it rests itself; the count covers its child sessions in a turn and an engine's own agent
+calls (Claude Code's `Agent`, background ones until their end is reported), and the selected row's detail line says
+`2 sub-agents working`. With none working, the one-folder list keeps the dim count of its listed child sessions. A bot whose chat
+rests while its sub-agents work stays working. The daemon sends both in `session.activity` and `session.list` (`agents`,
+`compacting`). Every working row of the list spins, whichever project or bot it belongs to, while the open chat rests.
+
+A workflow's own sessions are not chats in the list. The daemon titles them `workflow · <name>` (the run) and
+`workflow · <name> · <task>` (each task). While a run works or waits, its row reads `◇ <name>`, with the footer's workflow mark,
+and its tasks stay under it. A finished run leaves the list: it is on `/workflows`, and in `/sessions`. Enter or a click on a
+run's row opens `/workflows` on that run, with its tasks, instead of the empty chat that holds them. A task's session still
+opens as a chat. A workflow session you renamed is a session like any other. The open session always shows.
+
+A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
+
+The selected row's detail line adds the PR's branch (or, for the open session, the folder's branch) and, in a linked worktree, `worktree <name>`. Other rows never show them.
+
+A session whose PR is merged or closed settles by itself, unless it is the open session, pinned, working, waiting or has queued messages, and unless it had activity after the PR was last checked; a new message brings it back. In the classic one-folder list the Settled row folds these away. Opened, it lists 10, and its `+ N more` row (Enter or a click) adds 25 each time; the count is kept in memory only.
+
+### Keyboard
+
+With the prompt empty, `←` focuses the list (`→` when the list is on the right); the header then reads `→ prompt`. In the list `↑` and `↓` move over every row: group rows, session rows, `+ N more` and `show less` rows, the `+ N more projects` row and bot rows, and the selected row is marked with `›` and a fill. `Enter` opens a session, starts a new chat in a project (its header) or with a bot (its row or its `chats` row), reveals a page on a `more` row, and folds an origin's bots row; `Space` folds or opens any header (a project, a bot's `chats`, a bot, an origin's bots, Settled). On a header, `←` folds it when it is open and `→` opens it when it is folded (swapped when the list is on the right); otherwise `→` or `Esc` returns to the prompt as before. A click on a header's ▸/▾ arrow folds it and a click on its name does what Enter does. The header reads `↵ new  spc fold  x hide` on a project, `↵ chat spc fold → prompt` on a `chats` row and `↵ chat  o page  → prompt` on a bot (`o` opens its page). A bot's chat wears the bot's colour on the prompt's rules and lead glyph, and the footer row leads with the bot's glyph and name. `↑` on the first row wraps to the last row and `↓` on the last wraps to the first. In the sections list (all projects, or bots on) `Tab` jumps to the first row of the next section (Projects, Bots, Sessions), `Shift+Tab` to the first row of the current section and then of the previous ones, both wrapping, and `b` jumps to the first bot; the header then reads `tab section  → prompt`. `Tab` does nothing to the list while the prompt has focus. The mouse works as before. A terminal in application-cursor mode (arrows sent as `ESC O A..D`) is read the same.
+
+`←` and `→` are also the keys between sub-agent chats. When the open session has a sub-agent (its own, or a sibling's) that is still working or waiting, the plain arrows stay sub-agent navigation and `Alt+←` (`Alt+→` for a list on the right) focuses the list instead; otherwise `←` focuses the list. A finished sub-agent does not hold the arrows. On a fresh session the home screen's list does not take `↓` while the sidebar has focus.
+
+### Wheel
+
+The mouse wheel or a trackpad over the list's columns moves the list's window by `wheelLines` rows (`/customize` › Input & keys › Wheel lines), in the projects and bots list and in the classic list, on either side; the chat does not move. The picked row stays where it is and may leave the view; the next arrow key, or opening another session, brings the window back to the picked row. A list that fits needs no scrolling and ignores the wheel. While the search is open the wheel does nothing over the list. Over the chat the wheel scrolls the chat as before.
+
+A sideways swipe or wheel does nothing on the chat page; the list opens and closes with `/sidebar`.
+
+### Search
+
+`/` in the focused list, or `ctrl+x <` from the chat (`sidebar.search` in `keybindings.json`), opens a search field at the top of the list. It finds sessions by title, projects by folder name or path, and bots by name, and draws them in place of the list:
+
+```text
+ / side▌                     4 │
+   ↑↓ move  ↵ open  esc back   │
+                               │
+ › · Fix the sidebar search 2m │
+   ▸ sidebar-lane      project │
+   ⬢ sidekick           ◌ idle │
+   · Notes on side effects  3d │
+
+   app · 2m                    │
+```
+
+- Typing filters at once. A lowercase query ignores case; a query with a capital letter matches case exactly.
+- The order: the start of the name, then the start of a word in it (a camelCase hump counts), then the letters together anywhere, then the letters in order with gaps (`fsb` finds `Fix the sidebar`). A project's path matches below its name. The most recent activity breaks ties. The matched letters are underlined in the accent colour.
+- `↑` `↓` move, `Enter` or a click opens the match: a session opens, a project starts a new chat in its folder, a bot starts a chat with it as Enter on its row does. The last row says where the picked match is.
+- `Esc` (or Backspace on an empty field) closes the search and gives back the list as it was, with the same row picked; opened from the chat, the prompt gets the keyboard back. `ctrl+u` clears the field, `ctrl+w` deletes a word.
+- The search runs over what the terminal already holds, with no request per key. When the typing stops for a moment, one `session.list` with `find` (50 at most) adds the sessions it does not hold, whose title or folder holds the text as typed. The list shows the best 64 matches and counts the rest.
+- Nothing of it loads until the first `/`; closed, it keeps no timer. It needs the list on screen: where the list does not show (a narrow terminal, the home screen, `/sidebar hidden`), `ctrl+x <` says so.
+
+With bots on and a terminal from 70 to 109 columns, the list is the icons column; below 70 it does not show. With the flag off and `sidebarProjects` on `auto` or `folder` the list is the one described above and nothing else loads.
+
 ## Panel commands
 
 - `/panel <preset>` switches to a curated list; `/panel next` cycles the available presets (skips galaxy outside full tier). `/panel off` hides the panel and retains its list. When your saved panel is a preset with your own changes (see [Your version of a preset](#your-version-of-a-preset)), `/panel <preset>` shows yours; `/panel <preset> default` shows the built-in one.
@@ -79,6 +161,7 @@ A refused preset changes nothing and says why in one line:
 ### Choose the effective spec
 
 `sidebarWidgets` is an ordered list in `<dataDir>/tui/profile.json`. `rightSidebar` is the default visibility; a session's own goes in `session-look.json`.
+`panelStart` (`/customize` → Sidebar & panel → Panel at start) decides how a new terminal and a new chat open: `remember` (the default) uses `rightSidebar` as saved, `shown` always opens the panel, `hidden` never does. `/panel` still toggles it in the chat, and a chat keeps its own choice.
 `<project>/.mendcode/tui/profile.json` can override `sidebarWidgets`; even an empty project list overrides the user list.
 The manual editor and `/panel reset` edit the effective spec: the project override when present, otherwise the user profile. An empty project override stays empty; edit or remove that override explicitly to inherit the user spec again. Existing right-panel subcommands under `/sidebar` remain hidden compatibility aliases; completion and help only advertise `/panel`.
 

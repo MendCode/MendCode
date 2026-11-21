@@ -1,6 +1,7 @@
 import type { PrFinding, PrStopReason } from "@mendcode/protocol"
 import { DEFAULT_REVIEWER, failureOf, type GhCall, type PublishReport } from "./publish"
 import type { ReviewState } from "./state"
+import { warnLine } from "../hosting"
 
 /**
  * The commit status a review sets on the pull request's head (docs/pr-review.md, "Commit status"): `pending` when the review of a
@@ -74,7 +75,7 @@ export async function postStatus({ gh, repo, sha, state, description, context, t
   const refused = failureOf(done) !== "uncertain"
   if (refused && !refusedRepos.has(repo)) {
     refusedRepos.add(repo)
-    process.stderr.write(`[PR_REVIEW]: GitHub refused the commit status on ${repo} (${(done.err || done.out).split("\n")[0]?.slice(0, 160) || `exit ${done.code}`}); reviews go on without it (the token needs statuses: write)\n`)
+    warnLine(`[PR_REVIEW]: GitHub refused the commit status on ${repo} (${(done.err || done.out).split("\n")[0]?.slice(0, 160) || `exit ${done.code}`}); reviews go on without it (the token needs statuses: write)`)
   }
   return !refused
 }

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, type WorkflowSummary, type WorkflowTaskState, type WorkflowTaskSummary, type WorkflowVerification } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { createWorkflowsPageState, needsTick, renderWorkflowsPage, workflowLevels, workflowsPageKey, workflowTaskOrder, type WorkflowsPageState } from "../src/view/workflows-page"
+import { createWorkflowsPageState, needsTick, renderWorkflowsPage, selectedWorkflow, workflowLevels, workflowsPageKey, workflowTaskOrder, type WorkflowsPageState } from "../src/view/workflows-page"
 import { textWidth } from "../src/view/wrap"
 
 const ids = createIdFactory()
@@ -31,18 +31,18 @@ function workflow(over: Partial<WorkflowSummary> = {}): WorkflowSummary {
   }
 }
 
+type TaskSpec = { state?: WorkflowTaskState; needs?: string[]; over?: Partial<WorkflowTaskSummary> }
 function tasksOf(specs: Array<[string, TaskSpec]>): WorkflowTaskSummary[] {
   return specs.map(([id, spec]) =>
     task(id, { state: spec.state ?? "pending", needs: spec.needs ?? [], ...(spec.state && spec.state !== "pending" ? { sessionId: ids("session"), startedAt: NOW - 4 * MIN } : {}), ...(spec.over ?? {}) }),
   )
 }
-type TaskSpec = { state?: WorkflowTaskState; needs?: string[]; over?: Partial<WorkflowTaskSummary> }
 
-/** survey (L1) → impl-api, impl-ui (L2) → tests (L3), the mock of the spec. */
+/** survey (step 1) → impl-api, impl-ui (step 2) → tests (step 3). */
 const graph = () =>
   tasksOf([
-    ["survey", { state: "done", over: { mode: "read", endedAt: NOW - 4 * MIN + 34_000 } }],
-    ["impl-api", { state: "running", needs: ["survey"], over: { latest: "edit src/a.ts", startedAt: NOW - 4 * MIN - 10_000 } }],
+    ["survey", { state: "done", over: { mode: "read", endedAt: NOW - 4 * MIN + 34_000, modelId: "gpt-6-luna", engine: "codex" } }],
+    ["impl-api", { state: "running", needs: ["survey"], over: { latest: "edit src/a.ts", startedAt: NOW - 4 * MIN - 10_000, modelId: "claude-sonnet", engine: "claude" } }],
     ["impl-ui", { state: "needs_input", needs: ["survey"] }],
     ["tests", { state: "pending", needs: ["impl-api", "impl-ui"], over: { kind: "check", mode: undefined } }],
   ])
@@ -60,537 +60,328 @@ const sample: WorkflowSummary[] = [
 ]
 
 const text = (line: Line) => line.map((span) => span.text).join("")
-const plain = (lines: Line[]) => lines.map((line) => text(line).replaceAll("│", ""))
+const screen = (lines: Line[]) => lines.map(text).join("\n")
 const render = (runs: WorkflowSummary[], state: WorkflowsPageState, width = 140, height = 40) => renderWorkflowsPage({ runs, state, width, height, now: NOW })
-const titleRow = (lines: Line[]) => lines[1]!
 const start = createWorkflowsPageState()
-const byName = (name: string) => sample.find((run) => run.name === name)!
-const on = (name: string, key: string, extra: Partial<WorkflowsPageState> = {}) => workflowsPageKey({ selected: sample.indexOf(byName(name)), scope: "project", ...extra }, key, sample)
+const byName = (name: string, runs = sample) => runs.find((run) => run.name === name)!
+/** The list with the cursor on a run, or (`run: true`) that run opened. */
+const at = (name: string, extra: Partial<WorkflowsPageState> = {}, runs = sample): WorkflowsPageState => ({ scope: "project", focus: "list", row: `r:${byName(name, runs).workflowId}`, ...extra })
+const inside = (name: string, extra: Partial<WorkflowsPageState> = {}, runs = sample) => at(name, { focus: "run", ...extra }, runs)
+const press = (state: WorkflowsPageState, keys: string[], runs = sample) => keys.reduce((current, key) => workflowsPageKey(current, key, runs).state, state)
 
 describe("levels", () => {
   test("a task is one level above the highest task it needs, 1 without needs", () => {
-    const levels = workflowLevels(graph())
-    expect([...levels]).toEqual([["survey", 1], ["impl-api", 2], ["impl-ui", 2], ["tests", 3]])
+    expect(Object.fromEntries(workflowLevels(graph()))).toEqual({ survey: 1, "impl-api": 2, "impl-ui": 2, tests: 3 })
   })
-  test("a long chain and a diamond", () => {
-    const levels = workflowLevels([
-      { id: "d", needs: ["b", "c"] },
-      { id: "c", needs: ["a"] },
-      { id: "b", needs: ["a"] },
-      { id: "a", needs: [] },
-      { id: "e", needs: ["d"] },
-    ])
-    expect(Object.fromEntries(levels)).toEqual({ a: 1, b: 2, c: 2, d: 3, e: 4 })
-  })
+
   test("unknown needs and cycles do not throw", () => {
-    expect(workflowLevels([{ id: "a", needs: ["ghost"] }]).get("a")).toBe(1)
-    const cyclic = workflowLevels([{ id: "a", needs: ["b"] }, { id: "b", needs: ["a"] }])
-    expect(cyclic.size).toBe(2)
+    const levels = workflowLevels([{ id: "a", needs: ["b"] }, { id: "b", needs: ["a"] }, { id: "c", needs: ["zzz"] }])
+    expect(levels.get("c")).toBe(1)
+    expect(levels.size).toBe(3)
   })
+
   test("display order is by level, plan order within a level", () => {
-    const shuffled = [...graph()].reverse()
-    expect(workflowTaskOrder({ tasks: shuffled }).map((entry) => entry.task.id)).toEqual(["survey", "impl-ui", "impl-api", "tests"])
+    expect(workflowTaskOrder({ tasks: graph().reverse() }).map((entry) => entry.task.id)).toEqual(["survey", "impl-ui", "impl-api", "tests"])
   })
 })
 
-describe("renderWorkflowsPage", () => {
-  test.each([
-    [60, 20],
-    [90, 24],
-    [90, 40],
-    [119, 30],
-    [120, 30],
-    [140, 40],
-    [160, 50],
-    [50, 6],
-    [60, 1],
-  ])("returns exactly height lines within width at %ix%i", (width, height) => {
-    for (let selected = 0; selected < sample.length; selected++) {
-      const lines = render(sample, { selected, scope: "project" }, width, height)
+describe("the page frame", () => {
+  test.each([[60, 20], [90, 24], [109, 30], [110, 30], [140, 40], [169, 40], [170, 50], [220, 60], [50, 6], [60, 1]])("returns exactly height lines within width at %ix%i, on every run, listed and opened", (width, height) => {
+    for (const run of sample) for (const state of [at(run.name), inside(run.name), inside(run.name, { info: true }), at(run.name, { keys: true })]) {
+      const lines = render(sample, state, width, height)
       expect(lines).toHaveLength(height)
       for (const line of lines) expect(textWidth(text(line))).toBeLessThanOrEqual(width)
     }
   })
 
-  test("fills exactly the width in every layout, with the confirm row and the cursor on every slot", () => {
-    const withVerification = workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: verificationRound() })
-    for (const [width, height] of [[60, 20], [90, 24], [140, 40]] as const) {
-      for (const task of [undefined, 0, 2, 4]) {
-        const state: WorkflowsPageState = { selected: 0, scope: "project", ...(task === undefined ? {} : { task }), confirm: { kind: "stop", workflowId: withVerification.workflowId } }
-        const lines = render([withVerification], state, width, height)
-        expect(lines).toHaveLength(height)
-        for (const line of lines) expect(textWidth(text(line))).toBe(width)
-      }
-    }
+  test("the keys sit on the title row, right, and none at the bottom; the tabs name the scopes with the count", () => {
+    const lines = render(sample, start, 140, 30)
+    expect(text(lines[1]!)).toMatch(/Workflows · this project .*enter open.*\? keys · esc back/)
+    expect(text(lines[2]!)).toContain("1 This project 7")
+    expect(text(lines[2]!)).toContain("2 All projects")
+    expect(lines.slice(-3).map(text).join("")).not.toMatch(/esc|enter/)
   })
 
-  test("many tasks and many runs stay within the frame", () => {
-    const wide = Array.from({ length: 32 }, (_, i) => task(`task-${i}`, { needs: i ? [`task-${i - 1}`] : [], state: "pending" }))
-    const runs = Array.from({ length: 40 }, (_, i) => workflow({ name: `run-${i}`, tasks: wide, contract, verification: verificationRound() }))
-    for (const [width, height] of [[60, 20], [100, 30], [140, 40]] as const) {
-      const lines = render(runs, { selected: 25, scope: "project", task: 20 }, width, height)
-      expect(lines).toHaveLength(height)
-      for (const line of lines) expect(textWidth(text(line))).toBeLessThanOrEqual(width)
-    }
+  test("the keys follow what the cursor is on: a run waiting for the user offers approve and reject", () => {
+    const run = workflow({ state: "needs_input", tasks: tasksOf([["gate", { state: "needs_input", over: { kind: "human", mode: undefined } }]]) })
+    expect(text(render([run], inside("api rewrite", {}, [run]))[1]!)).toMatch(/y approve · n reject · .*esc list/)
+    expect(text(render([sample[4]!], inside("flaky"))[1]!)).toMatch(/t retry/)
   })
 
-  test("the title is 'Workflows · scope' with counts computed from the runs shown", () => {
-    const title = text(titleRow(render(sample, start))).trim()
-    expect(title).toStartWith("Workflows · this project")
-    expect(title).toContain("1 blocked · 1 failed · 1 needs input")
-    expect(text(titleRow(render(sample.slice(2, 3), start))).trim()).toContain("1 completed")
-    expect(text(titleRow(render(sample.slice(2, 3), start))).trim()).not.toContain("needs input")
-    expect(text(titleRow(render(sample, { selected: 0, scope: "all" })))).toContain("Workflows · all projects")
+  test("? lists every key as the first rows of the body", () => {
+    const out = screen(render(sample, { ...start, keys: true }))
+    for (const key of ["pause · resume", "approve · reject", "evidence", "fold · checks"]) expect(out).toContain(key)
+    expect(workflowsPageKey(start, "?", sample).state.keys).toBe(true)
+    expect(workflowsPageKey({ ...start, keys: true }, "\x1b", sample)).toEqual({ state: { ...start, keys: false }, action: { type: "none" } })
   })
 
-  test("header status: Confirm, then Blocked, then Needs input, then Live", () => {
-    const status = (runs: WorkflowSummary[], state: WorkflowsPageState = start) => titleRow(render(runs, state))
-    const confirm = status(sample, { selected: 0, scope: "project", confirm: { kind: "delete", workflowId: sample[0]!.workflowId } })
-    expect(confirm.find((span) => span.text === "Confirm")).toMatchObject({ fg: "warning", bold: true })
-    expect(confirm.find((span) => span.text === "Blocked")).toBeUndefined()
-    expect(status(sample).find((span) => span.text === "Blocked")).toMatchObject({ fg: "error", bold: true })
-    const noBlocked = sample.filter((run) => run.state !== "blocked")
-    expect(status(noBlocked).find((span) => span.text === "Needs input")).toMatchObject({ fg: "warning", bold: true })
-    const live = sample.filter((run) => run.state === "running" || run.state === "completed")
-    const calm = text(status(live))
-    expect(calm).not.toContain("Blocked")
-    expect(calm).not.toContain("Needs input")
-    expect(calm).toContain("1 running")
+  test("below 110 columns the list fills the page and enter shows the run alone; from 110 the run sits beside the list; from 170 its facts too", () => {
+    const narrow = screen(render(sample, at("api rewrite"), 100))
+    expect(narrow).toContain("docs sweep")
+    expect(narrow).not.toContain("impl-api")
+    const opened = screen(render(sample, inside("api rewrite"), 100))
+    expect(opened).toContain("impl-api")
+    expect(opened).not.toContain("docs sweep")
+    const wide = screen(render(sample, at("api rewrite"), 140))
+    expect(wide).toContain("docs sweep")
+    expect(wide).toContain("impl-api")
+    expect(wide).not.toContain("Models")
+    expect(screen(render(sample, at("api rewrite"), 200, 50))).toMatch(/Models[\s\S]*claude-sonnet +claude · 1 agent/)
   })
 
-  test("hints live in one header row with every key at wide sizes", () => {
-    const rows = plain(render(sample, start))
-    const keys = rows[0]!
-    expect(keys).toContain("esc back")
-    expect(rows.slice(1).join("\n")).not.toContain("esc back")
-    for (const hint of ["↑↓ run", "←→ task", "enter open", "p pause/resume", "x stop", "t retry", "v verify", "a accept", "d delete", "tab scope"]) expect(keys).toContain(hint)
+  test("a confirmation replaces the keys with the question", () => {
+    const state = workflowsPageKey(at("docs sweep"), "x", sample).state
+    expect(text(render(sample, state)[1]!)).toContain('stop "docs sweep"? x/y confirm')
   })
 
-  test("list rows show state, done/total and elapsed; verifying reads 'in review'", () => {
-    const rows = plain(render(sample, start))
-    const row = (name: string) => rows.find((line) => line.includes(name))!
-    expect(row("api rewrite")).toContain("needs input")
-    expect(row("api rewrite")).toContain("1/4")
-    expect(row("api rewrite")).toContain("12m 0s")
-    expect(row("docs sweep")).toContain("running")
-    expect(row("audit deps")).toContain("completed")
-    expect(row("audit deps")).toContain("2/2")
-    expect(row("audit deps")).toContain("41s")
-    const reviewing = plain(render([workflow({ name: "checking", state: "verifying", contract })], start)).find((line) => line.includes("checking"))!
-    expect(reviewing).toContain("in review")
-    expect(reviewing).toContain("verifying")
+  test("empty: the commands that start a run", () => {
+    const out = screen(render([], start))
+    expect(out).toContain("No workflows in this project")
+    expect(out).toContain("/workflows run <file.js> --yes")
+  })
+})
+
+describe("the list", () => {
+  test("rows say where a run is or how it ended instead of a count; live runs come first", () => {
+    const out = screen(render(sample, start, 100))
+    expect(out).toMatch(/api rewrite +Step 2 2\/3/)
+    expect(out).toMatch(/audit deps +done/)
+    expect(out).toMatch(/later +paused/)
+    expect(out.indexOf("later")).toBeLessThan(out.indexOf("audit deps"))
   })
 
-  test("each run state has its label and color", () => {
-    const spans = render(sample, start).flat()
-    const badge = (label: string) => spans.find((span) => span.text.trim() === label)
-    expect(badge("needs input")).toMatchObject({ fg: "warning" })
-    expect(badge("• running")).toMatchObject({ fg: "text" })
-    expect(badge("completed")).toMatchObject({ fg: "success" })
-    expect(badge("blocked")).toMatchObject({ fg: "error" })
-    expect(badge("failed")).toMatchObject({ fg: "error" })
-    expect(badge("paused")).toMatchObject({ fg: "muted" })
-    expect(badge("stopped")).toMatchObject({ fg: "muted" })
+  test("runs about the same item are one group; the live group is open, a finished one is closed until space", () => {
+    const item = (over: Partial<WorkflowSummary>) => workflow({ subject: "cu-vault-probe", name: "mend", ...over })
+    const runs = [
+      item({ state: "running", startedAt: NOW - MIN, tasks: graph() }),
+      item({ state: "completed", startedAt: NOW - 30 * MIN }),
+      workflow({ subject: "cu-other", name: "mend", state: "completed", startedAt: NOW - 50 * MIN, updatedAt: NOW - 40 * MIN }),
+      workflow({ subject: "cu-other", name: "mend", state: "failed", startedAt: NOW - 60 * MIN, updatedAt: NOW - 50 * MIN }),
+    ]
+    const out = screen(render(runs, start, 100))
+    expect(out).toMatch(/● cu-vault-probe +Step 2 2\/3/)
+    expect(out.match(/  ✓ mend +done/g)?.length).toBe(1)
+    expect(out).toMatch(/✓ cu-other +done .*2 runs/)
+    const groupRow = { ...start, row: `g:/Users/dev/Code/app\0s:cu-other` }
+    expect(screen(render(runs, workflowsPageKey(groupRow, " ", runs).state, 100)).match(/  ✗ mend/g)?.length).toBe(1)
   })
 
-  test("narrow rows drop columns from the right but keep name and state", () => {
-    const row = plain(render(sample, start, 44, 30)).find((line) => line.includes("api rewrite"))!
-    expect(row).toContain("needs input")
-    expect(row).toContain("1/4")
-    expect(row).not.toContain("12m")
-    const narrower = plain(render(sample, start, 34, 30)).find((line) => line.includes("api rewrite"))!
-    expect(narrower).toContain("needs input")
-    expect(narrower).not.toContain("1/4")
+  test("runs of one name started together are a batch, `name ×N`, with how many failed", () => {
+    const review = (model: string, state: WorkflowSummary["state"]) => workflow({ name: "mend-council", subject: "patch", state, startedAt: NOW - 10 * MIN, tasks: [task("r", { label: `review ${model}`, state: state === "failed" ? "failed" : "done", modelId: model })] })
+    const runs = [review("claude-opus", "completed"), review("gpt-6-astra", "failed"), workflow({ name: "mend", subject: "patch", state: "completed", startedAt: NOW - 30 * MIN })]
+    const out = screen(render(runs, { ...start, row: `g:/Users/dev/Code/app\0s:patch`, opened: [`g:/Users/dev/Code/app\0s:patch`] }, 140))
+    expect(out).toMatch(/✗ mend-council ×2 +1 of 2 fail/)
+    const batch = screen(render(runs, { ...start, row: `b:${runs[0]!.workflowId}`, opened: [`g:/Users/dev/Code/app\0s:patch`] }, 140))
+    expect(batch).toMatch(/review claude-opus +claude-opus/)
+    expect(batch).toMatch(/review gpt-6-astra +gpt-6-astra/)
   })
 
-  test("only the selected row has the pointer", () => {
-    const rows = plain(render(sample, { selected: 3, scope: "project" }, 100, 40))
-    const pointers = rows.filter((line) => line.trimStart().startsWith("❯"))
-    expect(pointers).toHaveLength(1)
-    expect(pointers[0]).toContain("broken")
+  test("the all-projects scope heads each folder with its run count", () => {
+    const runs = [workflow({ directory: "/w/one" }), workflow({ directory: "/w/two" }), workflow({ directory: "/w/two" })]
+    const out = screen(render(runs, createWorkflowsPageState("all"), 100))
+    expect(out).toContain("one · 1")
+    expect(out).toContain("two · 2")
   })
 
-  test("selection scrolls the list and stays visible", () => {
-    const many = Array.from({ length: 30 }, (_, i) => workflow({ name: `flow-${i}` }))
-    for (const width of [100, 140]) {
-      const rows = plain(render(many, { selected: 25, scope: "project" }, width, 30))
-      const pointers = rows.filter((line) => line.includes("❯"))
-      expect(pointers).toHaveLength(1)
-      expect(pointers[0]).toContain("flow-25")
-    }
+  test("all projects names no project in the title, and a folder written with a trailing slash is the same folder", () => {
+    const runs = [workflow({ directory: "/w/one" }), workflow({ directory: "/w/one/" }), workflow({ directory: "/w/two" })]
+    const out = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("all"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
+    expect(out).toContain("one · 2")
+    expect(out).not.toContain("one · 1")
+    expect(out).toContain("Workflows · all ")
+    expect(out).not.toContain("Workflows · one")
+    const project = screen(renderWorkflowsPage({ runs, state: createWorkflowsPageState("project"), width: 100, height: 40, now: NOW, directory: "/w/one" }))
+    expect(project).toContain("Workflows · one")
   })
 
-  test("wide layout has Workflows and Detail sections side by side; narrow stacks them", () => {
-    const wide = plain(render(sample, start, 140, 40))
-    const titles = wide.find((line) => line.includes("Detail"))!
-    expect(titles).toContain("Workflows")
-    expect(titles.indexOf("Workflows")).toBeLessThan(titles.indexOf("Detail"))
-    expect(wide.join("\n")).toMatch(/[┌┐└┘]/)
-    const stacked = plain(render(sample, start, 100, 40)).join("\n")
-    expect(stacked).toContain("Detail")
-    expect(stacked).toContain("objective")
-    // The wide breakpoint is 110 columns of terminal width (ui/breakpoints.ts), no longer 120 columns of inner width.
-    expect(plain(render(sample, start, 110, 40)).join("\n")).toContain("Detail")
-    expect(plain(render(sample, start, 109, 40)).find((line) => line.includes("Detail"))).not.toContain("Workflows")
+  test("the cursor moves over rows by key, skips headings and stays when runs arrive", () => {
+    const moved = press(start, ["\x1b[B", "\x1b[B"])
+    expect(selectedWorkflow(moved, sample)?.name).toBe("broken")
+    expect(selectedWorkflow(moved, [workflow({ name: "new one" }), ...sample])?.name).toBe("broken")
+    expect(press(start, ["\x1b[A"]).row).toBeUndefined()
+    // The oldest finished run is the last row.
+    expect(press(at("audit deps"), ["\x1b[B"])).toEqual(at("audit deps"))
   })
 
-  test("detail shows directory, objective, contract, perms and the tasks by level", () => {
-    const out = plain(render(sample, start, 140, 40)).join("\n")
-    expect(out).toContain("/Users/dev/Code/app")
-    expect(out).toContain("objective  Rewrite the API layer")
-    expect(out).toContain("contract   2 checks · independent audit · 4 criteria")
-    expect(out).toContain("perms      edits · concurrency 2 · repairs 0/2")
-    expect(out).toMatch(/L1 +✓ survey +read +34s/)
-    expect(out).toMatch(/L2 +• impl-api +work +4m 10s +▸ edit src\/a\.ts/)
-    expect(out).toMatch(/\? impl-ui +work +4m 0s +needs input/)
-    expect(out).toMatch(/L3 +· tests +check +waits impl-api, impl-ui/)
+  test("many runs scroll so the cursor stays in sight", () => {
+    const runs = Array.from({ length: 60 }, (_, index) => workflow({ name: `run ${index}`, state: "completed", updatedAt: NOW - index * 1000 }))
+    expect(screen(render(runs, at("run 50", {}, runs), 100, 20))).toContain("❯ ✓ run 50")
+  })
+})
+
+describe("one run", () => {
+  test("the header names the run and its state; the phases read as a stepper and a timeline with each step's model", () => {
+    const out = screen(render(sample, inside("api rewrite"), 140))
+    expect(out).toMatch(/\? api rewrite .*needs input · 12m/)
+    expect(out).toContain("✓ Step 1 ── ")
+    expect(out).toContain("phase 2 of 3")
+    expect(out).toMatch(/│ ✓ survey +gpt-6-luna · codex +34s/)
+    expect(out).toMatch(/│ ● impl-api +claude-sonnet · claude +4m 10s/)
+    expect(out).toContain("▸ edit src/a.ts")
   })
 
-  test("a level label shows once per level", () => {
-    const out = plain(render(sample, start, 140, 40)).join("\n")
-    expect(out.match(/L2/g)).toHaveLength(1)
-    expect(out.match(/L1/g)).toHaveLength(1)
+  test("a failed step shows why and the notice names it with the retry key", () => {
+    const out = screen(render(sample, inside("flaky"), 140))
+    expect(out).toContain("Stopped in Step 1: a failed · t retry")
+    expect(out).toMatch(/│ ✗ a[\s\S]*│ +exit 2/)
   })
 
-  test("task glyphs and colors per state", () => {
-    const run = workflow({
-      state: "failed",
-      tasks: tasksOf([
-        ["ok", { state: "done" }],
-        ["run", { state: "running" }],
-        ["ask", { state: "needs_input" }],
-        ["bad", { state: "failed", over: { reason: "exit 1" } }],
-        ["skip", { state: "skipped", needs: ["bad"], over: { reason: "needs bad" } }],
-        ["halt", { state: "stopped" }],
-        ["wait", { state: "pending", needs: ["ok"] }],
-      ]),
-    })
-    const lines = render([run], start, 140, 40)
-    const glyphOf = (id: string) => {
-      const row = lines.slice(4).find((line) => text(line).includes(` ${id} `))!
-      const index = row.findIndex((span) => span.text.trim() === id)
-      return row[index - 2]!
-    }
-    expect(glyphOf("ok")).toMatchObject({ text: "✓", fg: "success" })
-    expect(glyphOf("run")).toMatchObject({ text: "•", fg: "text" })
-    expect(glyphOf("ask")).toMatchObject({ text: "?", fg: "warning" })
-    expect(glyphOf("bad")).toMatchObject({ text: "✗", fg: "error" })
-    expect(glyphOf("skip")).toMatchObject({ text: "–", fg: "muted" })
-    expect(glyphOf("halt")).toMatchObject({ text: "–", fg: "muted" })
-    expect(glyphOf("wait")).toMatchObject({ text: "·", fg: "muted" })
-    const out = plain(lines).join("\n")
-    expect(out).toContain("exit 1")
-    expect(out).toContain("needs bad")
-    expect(out).toContain("queued")
+  test("a step waiting out its retry backoff shows why", () => {
+    const run = workflow({ tasks: tasksOf([["a", { state: "pending", over: { attempt: 1, reason: "retrying after transient failure: the turn failed" } }]]) })
+    expect(screen(render([run], inside("api rewrite", {}, [run])))).toContain("retrying after transient failure")
   })
 
-  test("a retried task shows its attempt", () => {
-    const run = workflow({ tasks: tasksOf([["a", { state: "done", over: { attempt: 3 } }]]) })
-    expect(plain(render([run], start)).join("\n")).toContain("attempt 3")
+  test("a retried step shows its attempt", () => {
+    const run = workflow({ tasks: [task("a", { state: "running", attempt: 2, modelId: "m1", startedAt: NOW - MIN })] })
+    expect(screen(render([run], inside("api rewrite", {}, [run])))).toContain("attempt 2")
   })
 
-  test("the cursor task is highlighted; with no cursor the default target is", () => {
-    const highlightedIds = (state: WorkflowsPageState) =>
-      render([sample[0]!], state)
-        .filter((line) => line.some((span) => span.bg === "element"))
-        .map((line) => text(line).trim())
-    expect(highlightedIds(start).join("|")).toContain("impl-ui")
-    expect(highlightedIds({ selected: 0, scope: "project", task: 0 }).join("|")).toContain("survey")
-    expect(highlightedIds({ selected: 0, scope: "project", task: 3 }).join("|")).toContain("impl-api")
+  test("the cursor step is highlighted; with none chosen it stands on what waits, then what runs", () => {
+    expect(screen(render(sample, inside("docs sweep"), 140))).toMatch(/❯ │ ● a/)
+    expect(screen(render(sample, inside("api rewrite", { step: "t:survey" }), 140))).toMatch(/❯ │ ✓ survey/)
   })
 
-  test("no verification: 'none' without a contract, 'not started' with one", () => {
-    expect(plain(render([sample[1]!], start)).join("\n")).toMatch(/verification +none/)
-    expect(plain(render([sample[0]!], start)).join("\n")).toMatch(/verification +round 0 — not started/)
+  test("i shows the identity and limits in place of the timeline", () => {
+    const out = screen(render(sample, inside("api rewrite", { info: true }), 140))
+    expect(out).toMatch(/Identity[\s\S]*plan hash/)
+    expect(out).toMatch(/Limits[\s\S]*contract +2 checks · independent audit · 4 criteria/)
+    expect(out).not.toContain("▸ edit src/a.ts")
+    expect(workflowsPageKey(inside("api rewrite"), "i", sample).state.info).toBe(true)
+  })
+})
+
+describe("verification", () => {
+  const run = (over: Partial<WorkflowSummary> = {}) => workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: verificationRound(), ...over })
+  const view = (one: WorkflowSummary) => screen(render([one], inside("api rewrite", {}, [one]), 140, 60))
+
+  test("no contract draws no block; a contract not started says round 0", () => {
+    expect(view(workflow())).not.toContain("Verify")
+    expect(view(workflow({ contract }))).toContain("round 0 — not started")
   })
 
-  test("an audit that did not finish says so and names the keys to continue, not 'not started'", () => {
-    const run = workflow({ state: "blocked", reason: "audit stalled: no activity for 10 min (3 attempts)", contract, tasks: graph(), rounds: 0 })
-    const out = plain(render([run], start, 140, 50)).join("\n")
-    expect(out).toMatch(/verification +round 1 — did not finish/)
+  test("an audit that did not finish says so and names the keys to continue", () => {
+    const out = view(workflow({ state: "blocked", contract, rounds: 0, reason: "audit stalled" }))
+    expect(out).toContain("round 1 — did not finish")
     expect(out).toContain("v verify again · b evidence · a accept")
-    expect(out).not.toContain("not started")
   })
 
-  test("the verification block lists checks, the audit and per-criterion rows", () => {
-    const run = workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: verificationRound() })
-    const out = plain(render([run], start, 140, 50)).join("\n")
+  test("the block lists checks, the audit and per-criterion rows", () => {
+    const out = view(run())
     expect(out).toContain("round 1 — rejected")
     expect(out).toContain("✓ bun test")
     expect(out).toMatch(/✗ tsc -b +exit 2/)
     expect(out).toContain("audit fail")
-    expect(out).toMatch(/✓ builds +compiles cleanly/)
     expect(out).toMatch(/✗ docs +README does not mention the flag/)
-    expect(out).toMatch(/\? perf +could not measure/)
     expect(out).toContain("! 1 unverified")
-    expect(out).toContain("rejected")
     expect(out).toContain("docs missing")
   })
 
-  test("criterion evidence wraps to two lines and then ends with an ellipsis", () => {
-    const long = verificationRound({ evidence: "word ".repeat(80) })
-    const run = workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: long })
-    const rows = plain(render([run], start, 100, 60)).map((line) => line.trim())
-    const at = rows.findIndex((line) => line.startsWith("✓ builds word"))
-    expect(at).toBeGreaterThan(0)
-    expect(rows[at + 1]).toContain("word")
-    expect(rows[at + 1]).toContain("…")
-    expect(rows[at + 2]).not.toContain("word")
-  })
-
-  test("a void audit says the workspace changed", () => {
-    const run = workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: verificationRound({ workspaceChanged: true, verdict: "pass" }) })
-    const out = plain(render([run], start, 140, 50)).join("\n")
-    expect(out).toContain("audit void: workspace changed")
-    expect(out).not.toContain("audit pass")
-    const spans = render([run], start, 140, 50).flat()
-    expect(spans.find((span) => span.text === "void: workspace changed")).toMatchObject({ fg: "error" })
-  })
-
-  test("an accepted round reads accepted; a hand acceptance shows 'accepted by you' and the reason", () => {
-    const accepted = workflow({ state: "completed", contract, tasks: graph(), rounds: 1, verification: verificationRound({ accepted: true, verdict: "pass" }) })
-    expect(plain(render([accepted], start, 140, 50)).join("\n")).toContain("round 1 — accepted")
-    const byHand = workflow({ state: "completed", contract, tasks: graph(), override: { reason: "checked by hand", at: NOW } })
-    const out = plain(render([byHand], start, 140, 50))
-    expect(out.some((line) => line.includes("accepted by you  checked by hand"))).toBe(true)
-  })
-
-  test("a verifying run shows the previous round while the next one runs, without 'rejected' feedback", () => {
-    const run = workflow({ state: "verifying", contract, tasks: graph(), rounds: 1, verification: verificationRound() })
-    const out = plain(render([run], start, 140, 50)).join("\n")
-    expect(out).toContain("next round running")
-    expect(out).not.toMatch(/^\s*rejected$/m)
-  })
-
-  test("the reason is shown, red when blocked", () => {
-    const rows = render([byName("broken")], start, 140, 40)
-    const reason = rows.find((line) => text(line).includes("contract still failing"))!
-    expect(reason.find((span) => span.text.includes("contract still failing"))).toMatchObject({ fg: "error" })
-  })
-
-  test("the verification block keeps its rows when there are many tasks", () => {
-    const wide = Array.from({ length: 32 }, (_, i) => task(`task-${i}`, { needs: i ? [`task-${i - 1}`] : [], state: "done" }))
-    const run = workflow({ state: "blocked", contract, tasks: wide, rounds: 1, verification: verificationRound() })
-    const out = plain(render([run], start, 140, 40)).join("\n")
-    expect(out).toContain("round 1 — rejected")
-    expect(out).toContain("audit fail")
-  })
-
-  test("a pending confirmation takes the list's first row", () => {
-    const stop = plain(render(sample, { selected: 0, scope: "project", confirm: { kind: "stop", workflowId: sample[0]!.workflowId } }, 100, 40))
-    expect(stop.some((line) => line.includes('stop "api rewrite"? x or y confirms · any key cancels'))).toBe(true)
-    const wide = plain(render(sample, { selected: 0, scope: "project", confirm: { kind: "stop", workflowId: sample[0]!.workflowId } }, 140, 40))
-    expect(wide.some((line) => line.includes("stop? x/y confirm"))).toBe(true)
-    const del = plain(render(sample, { selected: 0, scope: "project", confirm: { kind: "delete", workflowId: sample[0]!.workflowId } }, 50, 20))
-    expect(del.some((line) => line.includes("delete? d/y confirm"))).toBe(true)
-  })
-
-  test("empty state", () => {
-    const rows = plain(render([], start, 100, 30))
-    expect(rows.some((line) => line.includes("no workflows"))).toBe(true)
-    expect(rows).toHaveLength(30)
-    expect(text(titleRow(render([], start)))).toContain("no workflows")
-  })
-
-  test("elapsed time follows `now`", () => {
-    const later = plain(renderWorkflowsPage({ runs: sample, state: start, width: 140, height: 40, now: NOW + 3 * MIN })).find((line) => line.includes("api rewrite"))!
-    expect(later).toContain("15m 0s")
-  })
-
-  test("compact sizes drop the directory and perms rows", () => {
-    const compact = plain(render(sample, start, 60, 20)).join("\n")
-    expect(compact).not.toContain("perms")
-    expect(compact).not.toContain("/Users/dev")
-    expect(plain(render(sample, start, 90, 40)).join("\n")).toContain("perms")
+  test("a void audit says the workspace changed; an accepted round reads accepted; a hand acceptance shows the reason", () => {
+    expect(view(run({ verification: verificationRound({ workspaceChanged: true, verdict: "pass" }) }))).toContain("void: workspace changed")
+    expect(view(run({ state: "completed", verification: verificationRound({ accepted: true, verdict: "pass" }) }))).toContain("round 1 — accepted")
+    expect(view(run({ state: "completed", override: { reason: "flaky gate", at: NOW } }))).toContain("accepted by you  flaky gate")
   })
 })
 
 describe("needsTick", () => {
   test("only while a run has a live clock", () => {
-    expect(needsTick([])).toBe(false)
-    expect(needsTick(sample.filter((run) => run.state === "completed" || run.state === "paused" || run.state === "blocked"))).toBe(false)
     expect(needsTick([byName("docs sweep")])).toBe(true)
-    expect(needsTick([workflow({ state: "verifying" })])).toBe(true)
+    expect(needsTick([byName("later"), byName("audit deps")])).toBe(false)
   })
 })
 
 describe("workflowsPageKey", () => {
-  const id = (name: string) => byName(name).workflowId
-
-  test("up and down move the run selection with clamping and reset the task cursor", () => {
-    expect(workflowsPageKey(start, "j", sample).state.selected).toBe(1)
-    expect(workflowsPageKey(start, "\x1b[B", sample).state.selected).toBe(1)
-    expect(workflowsPageKey(start, "k", sample).state).toBe(start)
-    expect(workflowsPageKey({ ...start, selected: 6 }, "j", sample).state.selected).toBe(6)
-    const moved = workflowsPageKey({ ...start, task: 2 }, "j", sample).state
-    expect(moved).toEqual({ selected: 1, scope: "project" })
-    expect("task" in moved).toBe(false)
-    expect(workflowsPageKey({ ...start, selected: 1, task: 1 }, "\x10", sample).state).toEqual({ selected: 0, scope: "project" })
+  test("enter opens a run, esc and ← go back to the list, esc on the list and q close", () => {
+    expect(workflowsPageKey(at("docs sweep"), "\r", sample).state.focus).toBe("run")
+    expect(workflowsPageKey(inside("docs sweep"), "\x1b", sample).state.focus).toBe("list")
+    expect(workflowsPageKey(inside("docs sweep"), "\x1b[D", sample).state.focus).toBe("list")
+    expect(workflowsPageKey(at("docs sweep"), "\x1b", sample).action).toEqual({ type: "close" })
+    expect(workflowsPageKey(inside("docs sweep"), "q", sample).action).toEqual({ type: "close" })
+    expect(workflowsPageKey(start, "\r", []).action).toEqual({ type: "none" })
   })
 
-  test("left and right move the task cursor from the default target and clamp", () => {
-    // api rewrite: order survey, impl-api, impl-ui, tests; default target = impl-ui (needs_input, index 2)
-    expect(workflowsPageKey(start, "\x1b[C", sample).state.task).toBe(3)
-    expect(workflowsPageKey(start, "l", sample).state.task).toBe(3)
-    expect(workflowsPageKey(start, "\x1b[D", sample).state.task).toBe(1)
-    expect(workflowsPageKey(start, "h", sample).state.task).toBe(1)
-    expect(workflowsPageKey({ ...start, task: 0 }, "\x1b[D", sample).state).toEqual({ selected: 0, scope: "project", task: 0 })
-    expect(workflowsPageKey({ ...start, task: 3 }, "\x1b[C", sample).state.task).toBe(3)
-  })
-
-  test("with no default target right starts at the first task and left too", () => {
-    const calm = [workflow({ state: "paused", tasks: tasksOf([["a", { state: "pending" }], ["b", { state: "pending", needs: ["a"] }]]) })]
-    expect(workflowsPageKey(start, "l", calm).state.task).toBe(0)
-    expect(workflowsPageKey(start, "h", calm).state.task).toBe(0)
-  })
-
-  test("the verification block is a cursor slot only when an auditor session exists", () => {
-    const audited = [workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification: verificationRound() })]
-    expect(workflowsPageKey({ ...start, task: 3 }, "l", audited).state.task).toBe(4)
-    expect(workflowsPageKey({ ...start, task: 4 }, "l", audited).state.task).toBe(4)
-    const bare = [workflow({ state: "blocked", contract, tasks: graph() })]
-    expect(workflowsPageKey({ ...start, task: 3 }, "l", bare).state.task).toBe(3)
-  })
-
-  test("enter opens the default target: needs_input over running over failed", () => {
-    const sessionOf = (run: WorkflowSummary, taskId: string) => run.tasks.find((t) => t.id === taskId)!.sessionId!
-    const first = sample[0]!
-    expect(workflowsPageKey(start, "\r", sample).action).toEqual({ type: "open", sessionId: sessionOf(first, "impl-ui") })
-    const noInput = workflow({ tasks: [...graph().filter((t) => t.state !== "needs_input")] })
-    expect(workflowsPageKey(start, "\r", [noInput]).action).toEqual({ type: "open", sessionId: sessionOf(noInput, "impl-api") })
-    const flaky = byName("flaky")
-    expect(workflowsPageKey({ ...start, selected: 4 }, "\r", sample).action).toEqual({ type: "open", sessionId: sessionOf(flaky, "a") })
-    // a running task wins over a failed one listed earlier
-    const both = workflow({ tasks: tasksOf([["f", { state: "failed" }], ["r", { state: "running" }]]) })
-    expect(workflowsPageKey(start, "\r", [both]).action).toEqual({ type: "open", sessionId: sessionOf(both, "r") })
-  })
-
-  test("enter with nothing to prioritize opens the latest task session, else the run's root session", () => {
-    const done = byName("audit deps")
-    const latest = { ...done, tasks: done.tasks.map((t, i) => ({ ...t, endedAt: NOW - (10 - i) * MIN })) }
-    expect(workflowsPageKey(start, "\r", [latest]).action).toEqual({ type: "open", sessionId: latest.tasks[1]!.sessionId! })
-    const fresh = workflow({ state: "paused", tasks: tasksOf([["a", { state: "pending" }]]) })
-    expect(workflowsPageKey(start, "\r", [fresh]).action).toEqual({ type: "open", sessionId: fresh.rootSessionId })
-  })
-
-  test("enter opens the cursor's task, and nothing for a task that has no session yet", () => {
-    const first = sample[0]!
-    expect(workflowsPageKey({ ...start, task: 0 }, "\r", sample).action).toEqual({ type: "open", sessionId: first.tasks.find((t) => t.id === "survey")!.sessionId! })
-    expect(workflowsPageKey({ ...start, task: 1 }, "\r", sample).action).toEqual({ type: "open", sessionId: first.tasks.find((t) => t.id === "impl-api")!.sessionId! })
-    // tests is pending: it has no session, so enter does nothing even though other tasks have one
-    expect(workflowsPageKey({ ...start, task: 3 }, "\r", sample).action).toEqual({ type: "none" })
-    const withoutSession = workflow({ tasks: tasksOf([["a", { state: "pending" }]]) })
-    expect(workflowsPageKey({ ...start, task: 0 }, "\r", [withoutSession]).action).toEqual({ type: "none" })
+  test("in a run ↑↓ move over phases and steps; enter opens the step's session, else the latest step's", () => {
+    const run = byName("api rewrite")
+    expect(press(inside("api rewrite"), ["\x1b[A"]).step).toBe("t:impl-api")
+    expect(press(inside("api rewrite", { step: "t:survey" }), ["\x1b[B"]).step).toBe("p:2")
+    expect(workflowsPageKey(inside("api rewrite", { step: "t:survey" }), "\r", sample).action).toEqual({ type: "open", sessionId: run.tasks[0]!.sessionId! })
+    expect(workflowsPageKey(inside("api rewrite"), "\r", sample).action).toEqual({ type: "open", sessionId: run.tasks[2]!.sessionId! })
+    const bare = workflow({ tasks: [task("a")] })
+    expect(workflowsPageKey(inside("api rewrite", {}, [bare]), "\r", [bare]).action).toEqual({ type: "open", sessionId: bare.rootSessionId })
   })
 
   test("enter on the verification block opens the auditor session", () => {
     const verification = verificationRound()
     const run = workflow({ state: "blocked", contract, tasks: graph(), rounds: 1, verification })
-    expect(workflowsPageKey({ ...start, task: 4 }, "\r", [run]).action).toEqual({ type: "open", sessionId: verification.audit!.sessionId })
+    expect(workflowsPageKey(inside("api rewrite", { step: "v" }, [run]), "\r", [run]).action).toEqual({ type: "open", sessionId: verification.audit!.sessionId })
   })
 
-  test("esc and q close; an empty list never throws", () => {
-    expect(workflowsPageKey(start, "\x1b", sample).action).toEqual({ type: "close" })
-    expect(workflowsPageKey(start, "q", []).action).toEqual({ type: "close" })
-    for (const key of ["j", "k", "h", "l", "p", "x", "t", "v", "a", "d", "\r", "y"]) expect(workflowsPageKey(start, key, []).action).toEqual({ type: "none" })
+  test("space on a phase with checks lists them grouped by label", () => {
+    const run = workflow({ script: scriptOf(), tasks: [
+      task("c1", { kind: "check", label: "bun test", phase: "Checks", state: "done", startedAt: NOW - MIN, endedAt: NOW - MIN + 2000 }),
+      task("c2", { kind: "check", label: "bun test", phase: "Checks", state: "done", startedAt: NOW - MIN, endedAt: NOW - MIN + 3000 }),
+      task("a1", { label: "audit", phase: "Audit", state: "running", modelId: "claude-opus", startedAt: NOW - MIN }),
+    ] })
+    const opened = workflowsPageKey(inside("api rewrite", { step: "p:Checks" }, [run]), " ", [run]).state
+    expect(screen(render([run], inside("api rewrite", { step: "p:Checks" }, [run]), 140))).not.toMatch(/2 × bun test/)
+    expect(screen(render([run], opened, 140))).toMatch(/✓  2 × bun test +5s/)
   })
 
   test("p pauses running, waiting and verifying runs and resumes paused and blocked ones", () => {
-    for (const name of ["api rewrite", "docs sweep"]) expect(on(name, "p").action).toEqual({ type: "control", workflowId: id(name), action: "pause" })
-    expect(workflowsPageKey(start, "p", [workflow({ state: "verifying" })]).action).toMatchObject({ action: "pause" })
-    for (const name of ["later", "broken"]) expect(on(name, "p").action).toEqual({ type: "control", workflowId: id(name), action: "resume" })
-    for (const name of ["audit deps", "flaky", "old"]) expect(on(name, "p").action).toEqual({ type: "none" })
+    const control = (name: string) => workflowsPageKey(at(name), "p", sample).action
+    expect(control("docs sweep")).toEqual({ type: "control", workflowId: byName("docs sweep").workflowId, action: "pause" })
+    expect(control("api rewrite")).toMatchObject({ action: "pause" })
+    expect(control("later")).toMatchObject({ action: "resume" })
+    expect(control("broken")).toMatchObject({ action: "resume" })
+    expect(control("audit deps")).toEqual({ type: "none" })
   })
 
-  test("v verifies a blocked run with a contract, or a paused one whose tasks are finished", () => {
-    expect(on("broken", "v").action).toEqual({ type: "control", workflowId: id("broken"), action: "verify" })
-    const pausedDone = workflow({ state: "paused", contract, tasks: tasksOf([["a", { state: "done" }], ["b", { state: "skipped" }]]) })
-    expect(workflowsPageKey(start, "v", [pausedDone]).action).toMatchObject({ action: "verify" })
-    const pausedWorking = workflow({ state: "paused", contract, tasks: tasksOf([["a", { state: "done" }], ["b", { state: "pending" }]]) })
-    expect(workflowsPageKey(start, "v", [pausedWorking]).action).toEqual({ type: "none" })
-    const noContract = workflow({ state: "blocked", tasks: graph() })
-    expect(workflowsPageKey(start, "v", [noContract]).action).toEqual({ type: "none" })
-    for (const name of ["api rewrite", "docs sweep", "audit deps", "flaky", "old"]) expect(on(name, "v").action).toEqual({ type: "none" })
+  test("actions need a run's own row: a group acts only once opened", () => {
+    const runs = [workflow({ subject: "x", state: "running" }), workflow({ subject: "x", state: "completed", startedAt: NOW - 30 * MIN })]
+    expect(workflowsPageKey({ ...start, row: `g:/Users/dev/Code/app\0s:x` }, "p", runs).action).toEqual({ type: "none" })
   })
 
-  test("a asks for a reason unless the run is running, waiting, completed or stopped", () => {
-    for (const name of ["broken", "flaky", "later"]) expect(on(name, "a").action).toEqual({ type: "accept", workflowId: id(name) })
-    expect(workflowsPageKey(start, "a", [workflow({ state: "verifying" })]).action).toMatchObject({ type: "accept" })
-    for (const name of ["api rewrite", "docs sweep", "audit deps", "old"]) expect(on(name, "a").action).toEqual({ type: "none" })
+  test("v verifies a blocked run with a contract; a asks for a reason when acceptance makes sense", () => {
+    expect(workflowsPageKey(at("broken"), "v", sample).action).toMatchObject({ action: "verify" })
+    expect(workflowsPageKey(at("docs sweep"), "v", sample).action).toEqual({ type: "none" })
+    expect(workflowsPageKey(at("broken"), "a", sample).action).toEqual({ type: "accept", workflowId: byName("broken").workflowId })
+    expect(workflowsPageKey(at("docs sweep"), "a", sample).action).toEqual({ type: "none" })
   })
 
-  test("t retries the selected failed task, or the first failed one with no cursor", () => {
-    const run = workflow({ state: "failed", tasks: tasksOf([["a", { state: "done" }], ["b", { state: "failed", needs: ["a"] }], ["c", { state: "failed", needs: ["a"] }], ["d", { state: "skipped", needs: ["b"] }]]) })
-    expect(workflowsPageKey(start, "t", [run]).action).toEqual({ type: "retry", workflowId: run.workflowId, taskId: "b" })
-    expect(workflowsPageKey({ ...start, task: 2 }, "t", [run]).action).toEqual({ type: "retry", workflowId: run.workflowId, taskId: "c" })
-    expect(workflowsPageKey({ ...start, task: 0 }, "t", [run]).action).toEqual({ type: "none" })
-    expect(workflowsPageKey({ ...start, task: 3 }, "t", [run]).action).toEqual({ type: "none" })
-    expect(workflowsPageKey(start, "t", [byName("docs sweep")]).action).toEqual({ type: "none" })
+  test("t retries the cursor's failed step, or the first failed one", () => {
+    expect(workflowsPageKey(at("flaky"), "t", sample).action).toEqual({ type: "retry", workflowId: byName("flaky").workflowId, taskId: "a" })
+    expect(workflowsPageKey(at("docs sweep"), "t", sample).action).toEqual({ type: "none" })
   })
 
-  test("y and n approve or reject the human task that waits, at the cursor or the first one", () => {
-    const run = workflow({ state: "needs_input", tasks: tasksOf([["a", { state: "done" }], ["gate", { state: "needs_input", needs: ["a"], over: { kind: "human", mode: undefined, latest: "Approve the release" } }], ["work", { state: "needs_input", needs: ["a"] }]]) })
-    expect(workflowsPageKey(start, "y", [run]).action).toEqual({ type: "answer", workflowId: run.workflowId, taskId: "gate", decision: "approve" })
-    expect(workflowsPageKey(start, "n", [run]).action).toEqual({ type: "answer", workflowId: run.workflowId, taskId: "gate", decision: "reject" })
-    expect(workflowsPageKey({ ...start, task: 2 }, "y", [run]).action).toEqual({ type: "none" })
-    expect(workflowsPageKey({ ...start, task: 0 }, "n", [run]).action).toEqual({ type: "none" })
-    expect(workflowsPageKey(start, "y", [byName("docs sweep")]).action).toEqual({ type: "none" })
-    const rows = plain(render([run], start)).join("\n")
-    expect(rows).toContain("human")
-    expect(rows).toContain("y approve · n reject · Approve the release")
+  test("y and n answer the human step that waits", () => {
+    const run = workflow({ state: "needs_input", tasks: tasksOf([["a", { state: "done" }], ["gate", { state: "needs_input", needs: ["a"], over: { kind: "human", mode: undefined, latest: "Approve the release" } }]]) })
+    expect(workflowsPageKey(at("api rewrite", {}, [run]), "y", [run]).action).toEqual({ type: "answer", workflowId: run.workflowId, taskId: "gate", decision: "approve" })
+    expect(workflowsPageKey(at("api rewrite", {}, [run]), "n", [run]).action).toEqual({ type: "answer", workflowId: run.workflowId, taskId: "gate", decision: "reject" })
+    const out = screen(render([run], inside("api rewrite", {}, [run]), 140))
+    expect(out).toContain("Waiting for you: gate · y approve · n reject")
+    expect(out).toContain("Approve the release")
   })
 
-  test("a task waiting out its retry backoff shows why", () => {
-    const run = workflow({ state: "running", tasks: tasksOf([["a", { state: "pending", over: { attempt: 1, retryAt: NOW + 5_000, reason: "retrying after transient failure: the turn failed" } }]]) })
-    expect(plain(render([run], start)).join("\n")).toContain("retrying after transient failure")
+  test("x and d ask first; the same key or y confirms, any other key cancels; finished runs cannot stop", () => {
+    const stopping = workflowsPageKey(at("docs sweep"), "x", sample).state
+    expect(stopping.confirm).toEqual({ kind: "stop", workflowId: byName("docs sweep").workflowId })
+    expect(workflowsPageKey(stopping, "y", sample).action).toMatchObject({ action: "stop" })
+    expect(workflowsPageKey(stopping, "z", sample)).toEqual({ state: at("docs sweep"), action: { type: "none" } })
+    const deleting = workflowsPageKey(at("old"), "d", sample).state
+    expect(workflowsPageKey(deleting, "d", sample).action).toMatchObject({ action: "delete" })
+    expect(workflowsPageKey(at("old"), "x", sample).state.confirm).toBeUndefined()
   })
 
-  test("x asks for confirmation, then x or y stops", () => {
-    const asked = on("docs sweep", "x")
-    expect(asked.action).toEqual({ type: "none" })
-    expect(asked.state.confirm).toEqual({ kind: "stop", workflowId: id("docs sweep") })
-    const done = workflowsPageKey(asked.state, "x", sample)
-    expect(done.action).toEqual({ type: "control", workflowId: id("docs sweep"), action: "stop" })
-    expect(done.state.confirm).toBeUndefined()
-    expect(workflowsPageKey(asked.state, "y", sample).action).toMatchObject({ action: "stop" })
-    expect(workflowsPageKey(asked.state, "d", sample).action).toEqual({ type: "none" })
+  test("tab and 1/2 change the scope, reset the cursor and report it", () => {
+    expect(workflowsPageKey(at("docs sweep"), "\t", sample)).toEqual({ state: createWorkflowsPageState("all"), action: { type: "scope", scope: "all" } })
+    expect(workflowsPageKey(start, "1", sample).state).toBe(start)
   })
 
-  test("d asks for confirmation, then d or y deletes", () => {
-    const asked = workflowsPageKey(start, "d", sample)
-    expect(asked.state.confirm).toEqual({ kind: "delete", workflowId: sample[0]!.workflowId })
-    expect(workflowsPageKey(asked.state, "d", sample).action).toEqual({ type: "control", workflowId: sample[0]!.workflowId, action: "delete" })
-    expect(workflowsPageKey(asked.state, "y", sample).action).toMatchObject({ action: "delete" })
-    expect(workflowsPageKey(asked.state, "x", sample).action).toEqual({ type: "none" })
-  })
-
-  test("any other key cancels a confirmation, esc does not close", () => {
-    const asked = workflowsPageKey(start, "x", sample).state
-    for (const key of ["n", "j", "\x1b", "p", "\t", "\r"]) {
-      const result = workflowsPageKey(asked, key, sample)
-      expect(result.action).toEqual({ type: "none" })
-      expect(result.state.confirm).toBeUndefined()
-    }
-  })
-
-  test("a confirmation for a run that is no longer selected does nothing", () => {
-    const asked = workflowsPageKey(start, "x", sample).state
-    expect(workflowsPageKey({ ...asked, selected: 1 }, "x", sample).action).toEqual({ type: "none" })
-  })
-
-  test("stop is ignored for finished runs but delete is not", () => {
-    for (const name of ["audit deps", "flaky", "old"]) {
-      expect(on(name, "x").state.confirm).toBeUndefined()
-      expect(on(name, "d").state.confirm).toEqual({ kind: "delete", workflowId: id(name) })
-    }
-    expect(on("later", "x").state.confirm).toEqual({ kind: "stop", workflowId: id("later") })
-  })
-
-  test("tab toggles the scope, resets the selection and cursor, and reports the new scope", () => {
-    const all = workflowsPageKey({ selected: 3, scope: "project", task: 1 }, "\t", sample)
-    expect(all.action).toEqual({ type: "scope", scope: "all" })
-    expect(all.state).toEqual({ selected: 0, scope: "all" })
-    expect(workflowsPageKey(all.state, "\t", sample).action).toEqual({ type: "scope", scope: "project" })
+  test("a run opened from elsewhere starts on its run view, its group opened", () => {
+    const runs = [workflow({ subject: "x", state: "completed" }), workflow({ subject: "x", state: "completed", startedAt: NOW - 30 * MIN })]
+    const state = createWorkflowsPageState("all", runs[1]!.workflowId)
+    expect(selectedWorkflow(state, runs)).toBe(runs[1])
+    expect(screen(render(runs, state, 140))).toMatch(/❯ +✓ api rewrite/)
   })
 
   test("unknown keys change nothing", () => {
@@ -599,6 +390,14 @@ describe("workflowsPageKey", () => {
     expect(result.action).toEqual({ type: "none" })
   })
 })
+
+function scriptOf(): NonNullable<WorkflowSummary["script"]> {
+  return {
+    hash: "ab".repeat(32), origin: "file", host: "running", calls: 3,
+    phases: [{ title: "Checks", state: "done", completed: 2, total: 2 }, { title: "Audit", state: "running", completed: 0, total: 1 }],
+    budget: { agents: 16 }, usage: { agents: 1, tokens: 0 }, counts: { pending: 0, running: 1, done: 2, failed: 0 }, omitted: 0, logs: [],
+  }
+}
 
 /** One rejected round: a passing and a failing check, a failing audit with three judged criteria, and one criterion nobody verified. */
 function verificationRound(over: { evidence?: string; workspaceChanged?: boolean; verdict?: "pass" | "fail"; accepted?: boolean } = {}): WorkflowVerification {

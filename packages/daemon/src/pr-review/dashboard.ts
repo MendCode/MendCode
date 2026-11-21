@@ -1,4 +1,4 @@
-import { PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
+import { MAX_FRAME_BYTES, PrReviewDashboard, type PrFinding, type PrJobSummary, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { JobState, ReviewJob } from "./contracts"
 import type { ReviewState } from "./state"
 
@@ -154,6 +154,38 @@ export function dashboardMetrics(jobs: readonly ReviewJob[], now: number, concur
     tokens24h: tokensSince(jobs, since),
     concurrency,
   }
+}
+
+/** Bytes a status reply's dashboard may take: the frame limit less room for the reply's text and envelope. */
+export const DASHBOARD_MAX_BYTES = MAX_FRAME_BYTES - 32 * 1024
+
+/**
+ * The dashboard cut to `budget` bytes of JSON, so a long ledger never makes the reply too big to send and leave the page on an old
+ * list. The oldest finished jobs at the end of the list go first (`dropped`). Live jobs are never left out for size while a smaller
+ * form of them fits: their decision logs and phase lists go from the last one up (`thinned`). Only a ledger whose live jobs alone
+ * do not fit even so loses live jobs from the end (`droppedLive`), which the reply then says.
+ */
+export function fitDashboard(dashboard: PrReviewDashboard, budget = DASHBOARD_MAX_BYTES): { dashboard: PrReviewDashboard; dropped: number; thinned: number; droppedLive: number } {
+  const bytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value))
+  let total = bytes(dashboard)
+  if (total <= budget) return { dashboard, dropped: 0, thinned: 0, droppedLive: 0 }
+  const live = (job: PrReviewDashboard["jobs"][number]) => LIVE_STATES.has(job.state as JobState)
+  const jobs = [...dashboard.jobs]
+  let dropped = 0
+  // A job's share of the JSON: itself and the comma that joins it to the list.
+  while (jobs.length && total > budget && !live(jobs.at(-1)!)) { total -= bytes(jobs.pop()) + 1; dropped++ }
+  let thinned = 0
+  for (let at = jobs.length - 1; at >= 0 && total > budget; at--) {
+    const { decisions: _decisions, completedPhases: _phases, ...rest } = jobs[at]!
+    if (!_decisions && !_phases) continue
+    const smaller = rest as PrReviewDashboard["jobs"][number]
+    total -= bytes(jobs[at]) - bytes(smaller)
+    jobs[at] = smaller
+    thinned++
+  }
+  let droppedLive = 0
+  while (jobs.length && total > budget) { total -= bytes(jobs.pop()) + 1; droppedLive++ }
+  return { dashboard: { ...dashboard, jobs }, dropped, thinned, droppedLive }
 }
 
 /** Throws `RangeError` for a concurrency under 1 and the schema's error for a ledger row the protocol refuses. */

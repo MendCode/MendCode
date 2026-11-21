@@ -131,3 +131,10 @@ describe("chats other programs keep for the project", () => {
     expect(out(await port.interrupt({ sessionId: "v1:ses_old_app" }))).toContain("no session")
   })
 })
+
+test("full access opens a session in another project and messages one there without asking; other modes ask", () => {
+  const context = { threads: { projectOf: () => "/other" } } as never
+  const ask = (mode: string) => [threadsTool.approvalFor!({ action: "start", directory: "/other", text: "x" }, { ...(context as object), mode } as never), threadsTool.approvalFor!({ action: "message", sessionId: "ses_x", text: "x" }, { ...(context as object), mode } as never)]
+  expect(ask("full")).toEqual([false, false])
+  expect(ask("edits")).toEqual([true, true])
+})

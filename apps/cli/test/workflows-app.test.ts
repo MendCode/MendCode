@@ -105,6 +105,8 @@ describe("workflows in the chat", () => {
     })
     app.applySettings({})
     await slash("/workflows")
+    // The first enter opens the run, the second the session of its running step.
+    await app.onKey("\r")
     await app.onKey("\r")
     expect(app.sessionId).toBe(taskId)
     await app.onKey("\x1b[A")
@@ -125,6 +127,7 @@ describe("workflows in the chat", () => {
     })
     app.applySettings({})
     await slash("/workflows")
+    await app.onKey("\r")
     await app.onKey("\r")
     expect(app.sessionId).toBe(taskId)
     await app.onKey("\x1b[C")

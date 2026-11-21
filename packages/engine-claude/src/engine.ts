@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
+import { environmentKey, processMcpTurn, realClock, sparesAgents, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import {
   claudeArgs,
   claudePermissionMode,
@@ -37,6 +37,15 @@ export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 /** Records of a turn Claude Code runs on its own that are kept until its notice is shown; a runaway one is cut there. */
 const MAX_UNSOLICITED = 2_000
 const UNDO_NOT_APPLIED = "[CLAUDE]: Claude Code did not apply the earlier undo, so this message was not sent; send it again to continue on the conversation as Claude Code has it"
+
+/**
+ * Whether Claude Code's answer to `rewind_conversation` leaves its conversation as the user sees it after the undo: it cut there, or
+ * it holds no message by that uuid (`target_not_found`), so the undone message never reached it (a turn stopped or failed before its
+ * message was written) and there is nothing to cut.
+ */
+export function rewindApplied(response: { rewound?: unknown; reason?: unknown } | undefined): boolean {
+  return response?.rewound === true || response?.reason === "target_not_found"
+}
 /** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
 const MAX_AGENT_TASKS = 256
 /** Command lines of the last calls that can become background tasks (Bash, Monitor, Agent), kept so a task can be listed by what it runs. */
@@ -83,6 +92,19 @@ type ActiveTurn = {
 
 /** Ended turns per process whose background agents are still followed. */
 const MAX_AGENT_TURNS = 8
+
+/**
+ * The newest `MAX_AGENT_TURNS` mappers, oldest leaving first; a mapper whose agents still run stays while any mapper whose agents ended
+ * can leave instead, so a long-running agent keeps its thread however many short ones come after it.
+ */
+export function retainAgentTurns<T extends { hasBackgroundAgents(): boolean }>(mappers: T[]): T[] {
+  const kept = [...mappers]
+  while (kept.length > MAX_AGENT_TURNS) {
+    const ended = kept.findIndex((mapper) => !mapper.hasBackgroundAgents())
+    kept.splice(ended < 0 ? 0 : ended, 1)
+  }
+  return kept
+}
 /** The id of the `SubagentStart` hook MendCode registers at `initialize` (`subagentContext`). */
 const SUBAGENT_HOOK = "mendcode-subagent-start"
 /** The id of the `PostToolUse` hook MendCode registers at `initialize` (`oneTree`). */
@@ -538,11 +560,13 @@ export function createClaudeEngine(options: {
       return
     }
     if (agentTask(connection, message)) return
+    if (message.type === "assistant" && !message.parent_tool_use_id) showSentMessages(connection, message)
+    adoptOrphanAgent(connection, message)
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
       owner.accept(message)
-      if (!owner.hasBackgroundAgents()) connection.agentTurns = connection.agentTurns.filter((mapper) => mapper !== owner)
+      // The mapper stays after its agents end (`MAX_AGENT_TURNS` of them): a message sent to an ended agent starts it again, and its records still go to it.
       if (message.parent_tool_use_id) return
     }
     // The rest of a turn already ended by esc: nothing of it belongs to the next one.
@@ -610,6 +634,35 @@ export function createClaudeEngine(options: {
    * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
    * command as a message and held the queue until Claude Code next answered.
    */
+  /**
+   * A sub-agent no turn of this process started (launched before a daemon restart, started again by `SendMessage`) is taken by the
+   * running turn: Claude Code's notice that it started opens its thread there instead of its work being dropped.
+   */
+  function adoptOrphanAgent(connection: Connection, message: ClaudeMessage) {
+    const mapper = connection.turn?.mapper
+    if (!mapper || mapper.owns(message) || connection.agentTurns.some((earlier) => earlier.owns(message))) return
+    // Only Claude Code's start notice: a sub-agent record can come before the turn's own Agent call is registered.
+    if (message.type !== "system" || message.subtype !== "task_started" || message.task_type !== "local_agent" || message.owned_by_subagent === true) return
+    const toolUseId = message.tool_use_id
+    if (typeof toolUseId !== "string" || !toolUseId || mapper.knowsToolUse(toolUseId)) return
+    const description = typeof message.description === "string" && message.description.trim() ? message.description.trim() : "resumed sub-agent"
+    mapper.adoptAgent({ toolUseId, description, ...(typeof message.subagent_type === "string" ? { agent: message.subagent_type } : {}) })
+  }
+
+  /** The main agent's `SendMessage` to a sub-agent, from this turn or an earlier one, shows in that sub-agent's thread. */
+  function showSentMessages(connection: Connection, message: ClaudeMessage) {
+    const content = message.message?.content
+    if (!Array.isArray(content)) return
+    for (const part of content) {
+      if (part?.type !== "tool_use" || part.name !== "SendMessage" || typeof part.id !== "string") continue
+      const args = part.input as { to?: unknown; message?: unknown } | undefined
+      if (typeof args?.to !== "string" || typeof args.message !== "string") continue
+      const sent = { toolUseId: part.id, to: args.to, text: args.message }
+      if (connection.turn?.mapper.sentToAgent(sent)) continue
+      connection.agentTurns.some((mapper) => mapper.sentToAgent(sent))
+    }
+  }
+
   function agentTask(connection: Connection, message: ClaudeMessage): boolean {
     if (message.type !== "system" || typeof message.task_id !== "string") return false
     if (message.subtype === "task_started" && message.owned_by_subagent === true) {
@@ -812,7 +865,7 @@ export function createClaudeEngine(options: {
       // is not sent and the user is told. The undo is asked once; sending again continues on the conversation as Claude Code has it.
       pendingRewinds.delete(input.sessionId)
       const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(cut), interrupt_if_running: true }).catch(() => undefined)
-      if (response?.rewound !== true) {
+      if (!rewindApplied(response)) {
         keepIdle(connection)
         throw new Error(UNDO_NOT_APPLIED)
       }
@@ -822,7 +875,28 @@ export function createClaudeEngine(options: {
       await control(connection, { subtype: "set_permission_mode", mode: wanted })
       connection.permission = wanted
     }
+    // A turn cancelled while this process started leaves it idle once it is ready; this turn holds it now.
+    connection.idle?.cancel()
     return connection
+  }
+
+  /**
+   * The process a turn runs in, or undefined when the turn is cancelled while Claude Code still starts: nothing was sent to it, so
+   * the turn ends at once instead of after the start (an undo of its message waits for that end), and the process starts on, idle.
+   */
+  function unlessCancelled(starting: Promise<Connection>, signal: AbortSignal): Promise<Connection | undefined> {
+    return new Promise((resolve, reject) => {
+      const cancelled = () => {
+        resolve(undefined)
+        starting.then((connection) => { if (!connection.turn) keepIdle(connection) }, () => {})
+      }
+      if (signal.aborted) return cancelled()
+      signal.addEventListener("abort", cancelled, { once: true })
+      starting.then(
+        (connection) => { signal.removeEventListener("abort", cancelled); resolve(connection) },
+        (error: unknown) => { signal.removeEventListener("abort", cancelled); reject(error) },
+      )
+    })
   }
 
   async function content(input: TurnInput): Promise<Array<Record<string, unknown>>> {
@@ -851,7 +925,7 @@ export function createClaudeEngine(options: {
       if (input.externalMcp && !plainBusy) {
         if (plain) close(plain, "a turn with its own MCP servers")
         // Background agents of an earlier bridged turn still run in its process: this turn joins them there, so they live on. That
-        // process's bridge was the earlier turn's, so its thread tools answer that the bridge is gone until a new process starts.
+        // process was started with the earlier turn's token: the bridge takes it for this session's live turn (daemon thread-mcp.ts).
         // When that process has to start again (new model, effort or credentials), it starts with this turn's bridge: the earlier
         // turn's config file went with its turn, and Claude Code refuses to start on it.
         const running = kept.get(input.sessionId)
@@ -882,7 +956,9 @@ export function createClaudeEngine(options: {
       }
       let connection: Connection
       try {
-        connection = await connectionFor(input)
+        const started = await unlessCancelled(connectionFor(input), input.signal)
+        if (!started) return { status: "ok" }
+        connection = started
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
@@ -929,7 +1005,7 @@ export function createClaudeEngine(options: {
             if (connection.turn === turn) delete connection.turn
             if (turn.mapper.hasBackgroundAgents() && options.onAgentEvent) {
               sink = (event) => options.onAgentEvent?.(connection.sessionId, input.turnId, event)
-              connection.agentTurns = [...connection.agentTurns, turn.mapper].slice(-MAX_AGENT_TURNS)
+              connection.agentTurns = retainAgentTurns([...connection.agentTurns, turn.mapper])
             }
             // New MCP servers need a restart; it waits while a background task runs, as it would end with the process.
             if (connection.reload && connection.background === 0) close(connection, "MCP servers changed")
@@ -956,10 +1032,15 @@ export function createClaudeEngine(options: {
           "abort",
           () => {
             turn.interrupted = true
-            // Claude Code's interrupt stops every background agent of the session, this turn's and earlier ones', for good.
-            turn.mapper.stopBackground()
-            for (const mapper of connection.agentTurns) mapper.stopBackground()
-            connection.agentTurns = []
+            // A plain interrupt stops every background agent of the session, this turn's and earlier ones', for good. With
+            // `spare_background_tasks` (the user stopped only the turn) they run on: this turn's agents keep reporting after it ends.
+            // A Claude Code that does not read the field stops them anyway; they then end as it reports them.
+            const spare = sparesAgents(input.signal)
+            if (!spare) {
+              turn.mapper.stopBackground()
+              for (const mapper of connection.agentTurns) mapper.stopBackground()
+              connection.agentTurns = []
+            }
             const stopNow = () => {
               if (settled) return
               turn.mapper.finish("interrupted")
@@ -973,7 +1054,7 @@ export function createClaudeEngine(options: {
               clock.setTimer(DRAIN_LIMIT_MS, () => { connection.draining = false })
               stopNow()
             })
-            void control(connection, { subtype: "interrupt" }).catch(() => { grace.cancel(); stopNow() })
+            void control(connection, { subtype: "interrupt", ...(spare ? { spare_background_tasks: true } : {}) }).catch(() => { grace.cancel(); stopNow() })
           },
           { once: true },
         )
@@ -1014,7 +1095,7 @@ export function createClaudeEngine(options: {
         return true
       }
       const response = await control(connection, { subtype: "rewind_conversation", target_message_uuid: messageUuid(turnId), interrupt_if_running: true }).catch(() => undefined)
-      return response?.rewound === true
+      return rewindApplied(response)
     },
     // Claude Code compacts its own context when it fills up (`claude_compact` sets where).
     needsCompaction: () => false,
@@ -1062,10 +1143,13 @@ export function createClaudeEngine(options: {
     },
     /** Ends every process; `reason` is what `onClose` reports (a bridged turn's own process ends with its turn). */
     stop(reason = "engine stopped") {
-      for (const isolated of isolatedEngines) isolated.stop(reason)
+      // Every process ends even when a callback throws for one (a daemon stopping has closed its database): one left running goes on
+      // writing beside the process the next daemon starts for the same session.
+      const each = (end: () => void) => { try { end() } catch { /* the next one still ends */ } }
+      for (const isolated of isolatedEngines) each(() => isolated.stop(reason))
       isolatedEngines.clear()
       kept.clear()
-      for (const connection of [...connections.values()]) close(connection, reason)
+      for (const connection of [...connections.values()]) each(() => close(connection, reason))
     },
   }
   return port

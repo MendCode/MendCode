@@ -1,4 +1,5 @@
 import { estimateTokens } from "@mendcode/protocol/wire"
+import { inProject } from "../../view/project-scope"
 import { compactFallback } from "./compact-fallback"
 import type { SidebarWidget, McpStatusReport, Loop, SessionTreeNode, WorkflowSummary, ChangesReport, ContextReport } from "@mendcode/protocol"
 import type { SlotContext } from "@mendcode/extension-api"
@@ -38,6 +39,9 @@ import { preload } from "../lazy-pages"
 import { labelString, sessionLabel } from "../../view/session-label"
 import { fileInSlot } from "./file-slot"
 import type { createFileOpen } from "./file-open"
+
+/** A pulse at least this frequent carries the panel's animation frames (the spinner's 125 ms against the galaxy's 100 ms). */
+const PULSE_RIDE_MS = 125
 
 /**
  * `look` puts a change on screen for this session of this terminal only (session-look.ts): showing, hiding, presets, an added card and
@@ -134,6 +138,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
   }
   const velocity = { yaw: 0, pitch: 0 }
   let tickMs = 0
+  /** A frame drew the panel's cards since the last tick; a tick that finds none stops. */
+  let panelDrawn = false
   let orbitHeight = 12
   const ascii = () => asciiChrome(state)
   const orbitAllowed = () => featureOn(state.settingsNow, "panel_orbit") && (state.settingsNow.tier !== undefined || state.mode === "full")
@@ -212,9 +218,22 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     tickMs = interval
     if (interval && !state.rightTick) {
       state.rightTick = setInterval(() => {
+        // No frame drew the panel since the last tick (a file has the slot, a side chat, a terminal too narrow): nothing of it is in
+        // sight, so nothing of it moves. The next frame that draws it starts the tick again. The galaxy redrew the whole screen ten
+        // times a second behind an open file.
+        if (!panelDrawn) {
+          clearInterval(state.rightTick)
+          state.rightTick = undefined
+          tickMs = 0
+          return
+        }
+        panelDrawn = false
         ensureData()
         if (state.page !== "chat" || !state.tuiProfile.rightSidebar) return
         if (orbit?.orbitAnimating(true, state.rightFocus, isRunning(), state.reducedMotion, firedAt(), now()) && hasOrbit) orbit.stepOrbit(activeCamera(), velocity, state.reducedMotion)
+        // The spinner's pulse already redraws the screen about as often: the galaxy's step shows on its next frame. Two clocks out of
+        // step drew 18 frames a second while a turn ran with the galaxy in sight; one draws 8.
+        if (state.pulse && state.pulseMs > 0 && state.pulseMs <= PULSE_RIDE_MS) return
         requestFrame()
       }, interval)
       state.rightTick.unref?.()
@@ -273,7 +292,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     query("mcp", { type: "mcp.status", directory }, (result) => { state.sidebarMcp = (result as McpStatusReport | undefined)?.servers })
     query("jobs", { type: "background.list" }, (result) => { if (Array.isArray(result?.tasks)) state.agentShells = result.tasks as typeof state.agentShells })
     query("loops", { type: "loop.list", directory }, (result) => { state.loops = (result?.loops ?? []) as Loop[] })
-    query("workflows", { type: "workflow.list", directory }, (result) => { state.workflows = (result?.workflows ?? []) as WorkflowSummary[] })
+    // This folder's runs only: the Workflows page owns the list while it is open (its "all projects" view must not shrink to this folder).
+    query("workflows", { type: "workflow.list", directory }, (result) => { if (state.page !== "workflows") state.workflows = (result?.workflows ?? []) as WorkflowSummary[] })
     // The backlog card asks only while its feature is on; off, the card says so and the daemon is not asked.
     if (featureOn(state.settingsNow, "backlog")) query("backlog", { type: "backlog.get", directory }, (result) => { state.backlog = Array.isArray(result?.items) ? result.items as BacklogItem[] : [] })
     query("git", { type: "git.status", directory }, (result) => {
@@ -474,7 +494,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       case "changes": return lines(state.changedFiles.length ? [`${state.changedFiles.length} file${state.changedFiles.length === 1 ? "" : "s"} · +${state.diffTotals?.added ?? 0} -${state.diffTotals?.removed ?? 0}`, ...state.changedFiles.map((file) => `${file.status} ${file.path} +${file.additions} -${file.deletions}`)] : [], state.diffTotals ? "No changed files" : "Changes unavailable")
       case "jobs": return lines(state.agentShells.filter((job) => job.sessionId === state.sessionId).map((job) => `${job.status}: ${job.command}`), "No background jobs")
       case "loops": return lines(state.loops.filter((loop) => loop.directory === input.directory).map((loop) => `${loop.name}: ${loop.state}`), "No loops")
-      case "workflows": return lines(state.workflows.filter((run) => run.directory === input.directory).map((run) => `${run.name}: ${run.state}`), "No workflows")
+      case "workflows": return lines(state.workflows.filter((run) => inProject(run.directory, input.directory)).map((run) => `${run.name}: ${run.state}`), "No workflows")
       case "agents": return state.sidebarTree ? agentsTreeCard({ nodes: state.sidebarTree.map((node) => ({ sessionId: node.sessionId, parentId: node.parentId, kind: node.kind ?? "fork", title: node.title, ...(node.model ? { model: modelLabel(node.model, state.modelReport) } : {}), state: node.state, agent: node.agent, headline: node.headline, unmerged: node.unmerged })), rootId: state.sessionId, width, glyphs: ctx.glyphs, ...(widget.options.maxRows ? { maxNodes: Math.max(1, Math.floor(widget.options.maxRows / 3)) } : {}) }) : agentsCard(state.transcript.blocks().filter((block) => block.kind === "tool_call" && block.title?.startsWith("task:")).map((block) => ({ title: block.title!, status: toolStatus(block), ...(durationOf(block) !== undefined ? { durationMs: durationOf(block)! } : {}) })), width, ctx.glyphs)
       case "mcp": return lines((state.sidebarMcp ?? []).map((server) => `${server.name}: ${server.enabled ? server.state : "off"} · ${server.tools} tools`), state.sidebarMcp ? "No MCP servers" : "MCP status unavailable")
       case "git": return git.branch ? [text(git.branch), text(`${git.ahead === undefined ? "ahead unavailable" : `${git.ahead} ahead`} · ${git.behind === undefined ? "behind unavailable" : `${git.behind} behind`}`), text(`${git.dirty ?? state.changedFiles.length} dirty`)] : [text(git.error ?? "No Git repository", "muted")]
@@ -503,6 +523,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
 
   function panelRows(width: number, height: number): Line[] {
     orbitHeight = Math.min(34, Math.max(3, height - 4))
+    panelDrawn = true
     ensureData()
     const chat = sideChat(ctx)
     const flat = input.screen.size.width < 70
@@ -574,7 +595,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     let chatArea: { top: number; height: number } | undefined
     // Opened with no `sidechat` card of its own, the side chat takes the whole bar and the cards come back when it closes: stacked over them it left neither enough room.
     const implicitChat = chat.open && !widgets.some((widget) => widget.type === "sidechat")
-    const chatHeight = implicitChat ? Math.max(3, height - 1) : Math.max(8, widgets.some((widget) => widget.type !== "sidechat") ? Math.floor(height * .6) : height)
+    const chatHeight = implicitChat ? Math.max(3, height) :Math.max(8, widgets.some((widget) => widget.type !== "sidechat") ? Math.floor(height * .6) : height)
     const addChat = (title?: string) => {
       if (chatArea) return
       chatArea = { top: panels.length, height: chatHeight }
@@ -606,7 +627,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const name = implicitChat ? "side chat · /btw" : `${presetOf(widgets)} · /panel${state.rightFocus ? " · focused · esc back" : ""}`
     // A short sheet spends one row on the name and the note together, so the cards keep the rest.
     // `panelHeader` off gives the name row to the cards; a note (hidden cards, how to scroll) still shows when there is one.
-    const header: Line[] = !state.tuiProfile.panelHeader ? (note ? [fit(text(note, "muted"), width)] : []) : note && height < 10 ? [fit(text(`${name} · ${note}`, "muted"), width)] : [fit(text(name, "muted"), width), ...(note ? [fit(text(note, "muted"), width)] : [])]
+    // The side chat alone names itself in its box: a name row above it said the same thing twice.
+    const header: Line[] = !state.tuiProfile.panelHeader || (implicitChat && !note) ?(note ? [fit(text(note, "muted"), width)] : []) : note && height < 10 ? [fit(text(`${name} · ${note}`, "muted"), width)] : [fit(text(name, "muted"), width), ...(note ? [fit(text(note, "muted"), width)] : [])]
     const room = height - header.length
     maxScroll = Math.max(0, panels.length - room)
     if (chat.focused && chatArea) state.rightScroll = Math.min(maxScroll, chatArea.top)

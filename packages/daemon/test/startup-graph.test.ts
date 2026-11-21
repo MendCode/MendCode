@@ -35,7 +35,7 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   expect(inputs.has("packages/daemon/src/daemon.ts")).toBe(true)
   expect(inputs.has("apps/cli/src/ui/app.ts")).toBe(true)
   for (const file of [
-    "computer", "computer-sessions", "computer-native", "computer-accessibility", "computer-program",
+    "computer", "computer-sessions", "computer-native", "computer-accessibility", "computer-program", "computer-tree",
     "browser", "browser-cdp", "browser-scripts", "setup-import", "debug-db", "diagnostics",
     "git-commit", "git-init", "git-push", "git-publish", "git-pr",
     "pr-review/already-reviewed", "pr-review/commit-status", "pr-review/pr-states",
@@ -44,7 +44,25 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "restart-drain", "reply-language",
     // Memory review loads at the first turn with generation on, a waiting job or the Extraction tab.
     "memory-extraction",
+    // Experimental bots (off by default): the service loads with the first bot command, the memory reader with the first turn that runs with the flag on.
+    // bot-learn (its notes, skills and schedules) loads with the same first turn; bot-tools stays plain schemas.
+    "bot-service", "bot-memory", "bot-recall", "bot-learn",
+    // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
+    "bot-hermes",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
+  // Bot faces (text, generated picture, avatar check and frame clock) load when a bot is drawn, never at start.
+  for (const file of ["apps/cli/src/ui/app/bots.ts", "apps/cli/src/view/bot.ts", "apps/cli/src/view/bot-face.ts", "apps/cli/src/view/bot-face-image.ts", "apps/cli/src/view/bot-face-anim.ts", "apps/cli/src/view/bot-avatar.ts"]) expect(inputs.has(file), file).toBe(false)
+  // The bots sidebar (all projects, bots section, icons column, a bot's page) loads with the first frame that needs it.
+  for (const file of ["apps/cli/src/ui/app/sidebar-bots.ts", "apps/cli/src/view/sidebar-multi.ts", "apps/cli/src/view/bot-icon.ts", "apps/cli/src/view/bot-look.ts", "apps/cli/src/view/bot-card-page.ts"]) expect(inputs.has(file), file).toBe(false)
+  // A plain terminal launch never evaluates the headless run, the herdr/tuios reporters (only inside such a pane), the completion script or the session export.
+  for (const file of ["run", "herdr", "support-output", "export", "automation"]) expect(inputs.has(`apps/cli/src/${file}.ts`), file).toBe(false)
+  // The prompt's vim layer loads with the first frame or key that has the vimMode setting on.
+  expect(inputs.has("apps/cli/src/view/vim.ts")).toBe(false)
+  expect(inputs.has("apps/cli/src/ui/app/vim-lazy.ts") || inputs.has("apps/cli/src/view/vim-lazy.ts")).toBe(true)
+  // The left list's search (index, matcher, drawing and keys) loads with the first `/` or `sidebar.search`.
+  for (const file of ["apps/cli/src/ui/app/sidebar-search.ts", "apps/cli/src/view/sidebar-search.ts"]) expect(inputs.has(file), file).toBe(false)
+  // The bots listed on the home screen load with the first home frame that has the flag on.
+  for (const file of ["apps/cli/src/ui/app/home-bots.ts", "apps/cli/src/view/home-bots.ts"]) expect(inputs.has(file), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
   // /profiles and what it names of an override (labels, groups, summaries) load with the page.

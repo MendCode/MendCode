@@ -19,6 +19,19 @@ export function backgroundName(command: string, max: number): string {
 }
 
 /**
+ * Whether an engine's background task and a sub-agent's call name the same agent. The task's text and the call's title are cut at
+ * different lengths and may differ in spacing, so a long name matches by what the shorter keeps.
+ */
+export function sameAgentName(task: string, call: string): boolean {
+  const a = oneLine(task ?? "")
+  const b = oneLine(call ?? "")
+  if (!a || !b) return false
+  if (a === b) return true
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a]
+  return short.length >= 150 && long.startsWith(short)
+}
+
+/**
  * What runs in the background of this session, right over the prompt, so nobody has to ask. Compact (minimal and balanced, as Codex
  * and Claude Code show it): one muted row, the single item named or the counts by kind, and where to see them. Full (as opencode and
  * grok-cli list them): one row per item with its run time, up to `BACKGROUND_FULL_ROWS`, then `+N more`. Nothing when nothing runs.

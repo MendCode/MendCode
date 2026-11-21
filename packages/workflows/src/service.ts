@@ -29,7 +29,7 @@ import {
   type AuditOutcome,
   type TaskEnd,
 } from "./run"
-import { effectiveScriptBudget, startedQueueIds, WORKFLOW_PERMISSION_RANK } from "@mendcode/protocol"
+import { effectiveScriptBudget, sameFolder, startedQueueIds, WORKFLOW_PERMISSION_RANK, WORKFLOW_SESSION_PREFIX } from "@mendcode/protocol"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type TimerHandle = { cancel(): void }
@@ -254,9 +254,17 @@ export function createWorkflowService(options: {
     return false
   }
 
+  /** The worktrees other live runs have a work task going in (a script's `cwd`). */
+  function busyLanes(run: WorkflowRun): Set<string> {
+    const lanes = new Set<string>()
+    for (const other of runs.values())
+      if (other.workflowId !== run.workflowId) for (const task of other.tasks) if (task.mode === "work" && task.lane && (task.state === "running" || task.state === "needs_input")) lanes.add(task.lane)
+    return lanes
+  }
+
   /** The ready tasks minus script checks still waiting for their stdin (the replay brings it). */
   function startable(run: WorkflowRun, now?: number): string[] {
-    const ready = readyTasks(run, directoryBusy(run), now)
+    const ready = readyTasks(run, directoryBusy(run), now, busyLanes(run))
     return run.script ? ready.filter((taskId) => !scripts.waitingForStdin(run, taskId)) : ready
   }
 
@@ -334,7 +342,7 @@ export function createWorkflowService(options: {
       task.sessionId ??
       options.createSession({
         directory: execution.directory,
-        title: `workflow · ${run.name} · ${task.title}`,
+        title: `${WORKFLOW_SESSION_PREFIX}${run.name} · ${task.title}`,
         parentId: run.rootSessionId,
         readOnly: execution.readOnly,
         permission: execution.permission,
@@ -565,7 +573,7 @@ export function createWorkflowService(options: {
     }
     const outcome = await verifier.run({
       directory: run.plan.workspace?.mode.includes("worktree") ? run.tasks.find((task) => task.execution)?.execution?.directory ?? run.directory : run.directory,
-      title: `workflow · ${run.name} · audit ${round}`,
+      title: `${WORKFLOW_SESSION_PREFIX}${run.name} · audit ${round}`,
       checks: contract.checks.map((check) => check.command),
       checkTimeouts: contract.checks.map((check) => check.timeoutSeconds),
       signal: controller.signal,
@@ -673,7 +681,7 @@ export function createWorkflowService(options: {
         put(controlRun(previous, "stop", clock.now()))
       }
       const workflowId = ids("workflow")
-      const rootSessionId = options.createSession({ directory: input.directory, title: `workflow · ${input.name ?? input.plan.name}`, ...(input.originSessionId ? { parentId: input.originSessionId } : {}) })
+      const rootSessionId = options.createSession({ directory: input.directory, title: `${WORKFLOW_SESSION_PREFIX}${input.name ?? input.plan.name}`, ...(input.originSessionId ? { parentId: input.originSessionId } : {}) })
       const run = createRun({ workflowId, plan: input.plan, planHash: input.planHash, directory: input.directory, permission: input.permission, rootSessionId, ...(input.originSessionId ? { originSessionId: input.originSessionId } : {}), at: clock.now() })
       if (input.packageRoot) run.packageRoot = input.packageRoot
       if (input.definitionId) Object.assign(run, { definitionId: input.definitionId, revisionId: input.revisionId, revision: input.revision })
@@ -691,7 +699,7 @@ export function createWorkflowService(options: {
       return runs.get(workflowId)!
     },
     list(directory?: string) {
-      return [...runs.values()].filter((run) => !directory || run.directory === directory).sort((a, b) => b.updatedAt - a.updatedAt)
+      return [...runs.values()].filter((run) => !directory || sameFolder(run.directory, directory)).sort((a, b) => b.updatedAt - a.updatedAt)
     },
     get: (workflowId: WorkflowId) => runs.get(workflowId),
     recordUsage,

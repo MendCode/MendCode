@@ -146,6 +146,11 @@ export const WorkflowAgentTaskSpec = lazySchema(() => z.strictObject({
   allowedTools: WorkflowPermissionPolicy.shape.allowedTools,
   inputs: z.array(WorkflowArtifactSelector).max(8).optional(),
   output: WorkflowOutputContract.optional(),
+  /**
+   * An existing git worktree of the run's repository (not its main checkout) the agent works in: its session, permissions and sandbox
+   * belong to that directory, and as it never edits the run's directory it does not hold that directory's single-writer slot.
+   */
+  cwd: z.string().min(1).max(1024).optional(),
 }))
 export type WorkflowAgentTaskSpec = z.infer<typeof WorkflowAgentTaskSpec>
 
@@ -419,6 +424,8 @@ export const WorkflowTask = lazySchema(() => z.strictObject({
   modelId: z.string().max(100).optional(),
   /** Runs in its own worktree: it does not hold the directory's single-writer slot. */
   isolated: z.boolean().optional(),
+  /** A work task in a worktree the script named (`cwd`): that path is its writer lane, so two tasks on one path never run together. */
+  lane: z.string().min(1).max(1024).optional(),
 }))
 export type WorkflowTask = z.infer<typeof WorkflowTask>
 
@@ -533,7 +540,12 @@ export const WorkflowScriptSummary = lazySchema(() => z.strictObject({
   host: WorkflowScriptState.shape.host,
   calls: z.number().int().nonnegative(),
   phase: z.string().max(80).optional(),
-  phases: z.array(z.strictObject({ title: z.string().max(80), detail: z.string().max(300).optional(), state: z.enum(["pending", "running", "done", "blocked"]), completed: z.number().int().nonnegative(), total: z.number().int().nonnegative() })).max(24),
+  /** Each phase with its progress; `startedAt`/`endedAt` span its tasks, `agents`/`checks`/`checksFailed` split them (every task, listed or not). */
+  phases: z.array(z.strictObject({
+    title: z.string().max(80), detail: z.string().max(300).optional(), state: z.enum(["pending", "running", "done", "blocked"]), completed: z.number().int().nonnegative(), total: z.number().int().nonnegative(),
+    startedAt: z.number().int().nonnegative().optional(), endedAt: z.number().int().nonnegative().optional(),
+    agents: z.number().int().nonnegative().optional(), checks: z.number().int().nonnegative().optional(), checksFailed: z.number().int().nonnegative().optional(),
+  })).max(24),
   budget: WorkflowScriptBudget,
   usage: z.strictObject({
     agents: z.number().int().nonnegative(),
@@ -547,6 +559,8 @@ export const WorkflowScriptSummary = lazySchema(() => z.strictObject({
   logs: z.array(z.string().max(200)).max(10),
   result: z.string().max(500).optional(),
   error: z.string().max(500).optional(),
+  /** How the script says it ended, when its result is an object with a `state` (`merge-ready`, `draft`, `blocked`) and maybe a `reason`. */
+  outcome: z.strictObject({ state: z.string().max(40), reason: z.string().max(200).optional() }).optional(),
 }))
 export type WorkflowScriptSummary = z.infer<typeof WorkflowScriptSummary>
 
@@ -573,6 +587,8 @@ export const WorkflowSummary = lazySchema(() => z.strictObject({
   reason: WorkflowRun.shape.reason,
   rootSessionId: SessionId,
   originSessionId: SessionId.optional(),
+  /** The work item a script run is about (its `item`, `subject` or `target` argument, as a short name): runs on the same item group together. */
+  subject: z.string().max(120).optional(),
   tasks: z.array(WorkflowTaskSummary).max(256),
   /** Rounds run so far; only the last one travels. */
   rounds: z.number().int().min(0).max(6),
@@ -614,6 +630,7 @@ export function summarizeWorkflow(run: WorkflowRun): WorkflowSummary {
     ...(run.reason ? { reason: run.reason } : {}),
     rootSessionId: run.rootSessionId,
     ...(run.originSessionId ? { originSessionId: run.originSessionId } : {}),
+    ...(subjectOf(run.plan.script?.args) ? { subject: subjectOf(run.plan.script?.args)! } : {}),
     tasks: (script ? script.listed : run.tasks).map(({ result: _result, reason, feedback: _feedback, output, mapItem: _mapItem, ...task }) => ({
       ...task,
       ...(reason !== undefined ? { reason: clipped(reason, SUMMARY_TEXT_CHARS) } : {}),
@@ -641,15 +658,43 @@ export function summarizeWorkflow(run: WorkflowRun): WorkflowSummary {
 }
 
 const SCRIPT_LISTED_FINISHED = 48
+/** Finished agent, human and map steps a script summary keeps beyond the newest checks: a run's agents are few, its checks many. */
+const SCRIPT_LISTED_STEPS = 120
+const SUBJECT_KEYS = ["item", "subject", "target"] as const
 
-/** The script block of a summary and the tasks it lists: every live task, the newest finished ones, and a count of the rest. */
+/** The work item a script run's arguments name, as a short name: `.mend/items/cu-vault-screen-button.json` → `cu-vault-screen-button`. */
+export function subjectOf(args: Record<string, unknown> | undefined): string | undefined {
+  for (const key of SUBJECT_KEYS) {
+    const value = args?.[key]
+    if (typeof value !== "string" || !value.trim()) continue
+    const base = value.trim().split(/[\\/]/).filter(Boolean).at(-1) ?? value.trim()
+    return clipped(base.replace(/\.[a-z0-9]{1,8}$/i, ""), 120)
+  }
+  return undefined
+}
+
+/** A script result that is an object with a `state` (and maybe a `reason`): how the run says it ended. */
+function outcomeOf(result: string | undefined): { state: string; reason?: string } | undefined {
+  if (!result || !result.trimStart().startsWith("{")) return undefined
+  try {
+    const value = JSON.parse(result) as { state?: unknown; reason?: unknown }
+    if (typeof value.state !== "string" || !value.state.trim()) return undefined
+    return { state: clipped(value.state.trim(), 40), ...(typeof value.reason === "string" && value.reason.trim() ? { reason: clipped(value.reason.replace(/\s+/g, " ").trim(), 200) } : {}) }
+  } catch {
+    return undefined
+  }
+}
+
+const FINISHED_TASK = new Set(["done", "skipped", "stopped"])
+
+/** The script block of a summary and the tasks it lists: every live task, its finished agent steps, the newest finished checks, and a count of the rest. */
 function summarizeScript(run: WorkflowRun): { summary: WorkflowScriptSummary; listed: WorkflowTask[] } | undefined {
   const script = run.plan.script
   const host = run.script
   if (!script || !host) return undefined
-  const live = run.tasks.filter((task) => !["done", "skipped", "stopped"].includes(task.state))
-  const finished = run.tasks.filter((task) => ["done", "skipped", "stopped"].includes(task.state)).slice(-SCRIPT_LISTED_FINISHED)
-  const listed = run.tasks.filter((task) => live.includes(task) || finished.includes(task))
+  const finished = run.tasks.filter((task) => FINISHED_TASK.has(task.state))
+  const kept = new Set([...finished.filter((task) => task.kind !== "check").slice(-SCRIPT_LISTED_STEPS), ...finished.filter((task) => task.kind === "check").slice(-SCRIPT_LISTED_FINISHED)])
+  const listed = run.tasks.filter((task) => !FINISHED_TASK.has(task.state) || kept.has(task))
   const titles = [...script.meta.phases.map((phase) => phase.title), ...run.tasks.flatMap((task) => (task.phase ? [task.phase] : []))]
   const phases = [...new Set(titles)].slice(0, 24).map((title) => {
     const tasks = run.tasks.filter((task) => task.phase === title)
@@ -657,8 +702,16 @@ function summarizeScript(run: WorkflowRun): { summary: WorkflowScriptSummary; li
     const terminal = tasks.length > 0 && tasks.every((task) => ["done", "failed", "skipped", "stopped"].includes(task.state))
     const progress = tasks.length === 0 ? (host.phase === title ? "running" as const : "pending" as const) : completed === tasks.length ? "done" as const : terminal ? "blocked" as const : "running" as const
     const detail = script.meta.phases.find((phase) => phase.title === title)?.detail
-    return { title, ...(detail ? { detail } : {}), state: progress, completed, total: tasks.length }
+    const starts = tasks.flatMap((task) => (task.startedAt !== undefined ? [task.startedAt] : []))
+    const ends = tasks.flatMap((task) => (task.endedAt !== undefined ? [task.endedAt] : []))
+    const checks = tasks.filter((task) => task.kind === "check")
+    return {
+      title, ...(detail ? { detail } : {}), state: progress, completed, total: tasks.length,
+      ...(starts.length ? { startedAt: Math.min(...starts) } : {}), ...(terminal && ends.length ? { endedAt: Math.max(...ends) } : {}),
+      agents: tasks.length - checks.length, checks: checks.length, checksFailed: checks.filter((task) => task.state === "failed").length,
+    }
   })
+  const outcome = outcomeOf(host.result)
   const usage = run.tasks.reduce((sum, task) => ({ tokens: sum.tokens + (task.usage?.input ?? 0) + (task.usage?.output ?? 0), costMicros: sum.costMicros + (task.usage?.costMicros ?? 0) }), { tokens: 0, costMicros: 0 })
   const count = (...states: string[]) => run.tasks.filter((task) => states.includes(task.state)).length
   const engines: Record<string, { agents: number; tokens: number }> = {}
@@ -683,6 +736,7 @@ function summarizeScript(run: WorkflowRun): { summary: WorkflowScriptSummary; li
       logs: host.logs,
       ...(host.result ? { result: host.result.slice(0, 500) } : {}),
       ...(host.error ? { error: host.error } : {}),
+      ...(outcome ? { outcome } : {}),
     },
   }
 }

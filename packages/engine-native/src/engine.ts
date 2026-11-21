@@ -94,6 +94,10 @@ function lastPrompt(messages: readonly ModelMessage[]) {
 }
 
 const CONTEXT_PREVIEW_CHARS = 60
+/** Longest wait for one command that moved to the background before the turn answers: above the longest `shell` timeout, which stops it first. */
+const YIELD_WAIT_MS = 31 * 60_000
+/** Output of such a command given to the model when it ends (head and tail kept). */
+const YIELD_REPORT_CHARS = 30_000
 const CONTEXT_LARGEST = 5
 
 function messageChars(message: ModelMessage) {
@@ -177,6 +181,8 @@ const WARM_SPECS_PER_STEP = 8
 const SHELL_TOOL = "shell"
 /** Inline shell of a custom command: each command's deadline and the size of what may enter the prompt. */
 const INLINE_SHELL_TIMEOUT_MS = 30_000
+/** Call ids of a custom command's `!`...`` expansions: the host runs them before the model starts, so they never move to the background. */
+const INLINE_SHELL_CALL_PREFIX = "command-shell-"
 /** Provider failures in a row, in steps that used a hosted tool, before the step goes on without that tool. */
 const HOSTED_FAILURE_LIMIT = 2
 /** ChatGPT's image tool takes the request's reasoning effort as its own complexity and refuses every value; it works with none. */
@@ -203,6 +209,22 @@ type ProjectTool = Tool & { jsonSchema?: Record<string, unknown>; override?: boo
 export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeTools?: readonly string[]; offline?: boolean; addDirs?: readonly string[]; activeTools?: readonly string[]; noContextFiles?: boolean; noAgentPrompt?: boolean; /** A bare sub-agent: no extension handler rewrites its system prompt or messages (`prompt.system`, `context`). */ noHooks?: boolean }
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
+
+/** The names a run's `--tools` and `--exclude-tools` may give a provider-side tool: its own, and that of MendCode's tool that does the same. */
+const HOSTED_NAMES: Record<HostedTool, readonly string[]> = { web_search: ["web_search", "websearch"], image_generation: ["image_generation", "image_gen"] }
+
+/**
+ * Whether a scripted run's limits leave a provider-side tool on. It runs at the provider with no card, so the limits that remove MendCode's
+ * own tools remove it too: `--offline` (both reach the network), an allow-list that names neither of its names, an exclusion that names one.
+ */
+export function hostedWithinLimits(tool: HostedTool, limits: RunLimits | undefined, turnExcluded: readonly string[] = []): boolean {
+  const names = HOSTED_NAMES[tool]
+  const named = (patterns: readonly string[] | undefined) => !!patterns?.some((pattern) => names.some((name) => permissionMatch(name, pattern)))
+  if (limits?.offline) return false
+  if (limits?.activeTools && !named(limits.activeTools)) return false
+  if (limits?.tools && !named(limits.tools)) return false
+  return !named(limits?.excludeTools) && !named(turnExcluded)
+}
 
 type Toolset = { tools: Map<string, Tool>; specs: ToolSpec[]; main: boolean; allowTask: boolean; agent?: AgentProfile; subagents?: Map<string, AgentProfile>; extras?: ProjectTool[]; codeCatalog?: Toolset; codeActive?: Set<string>; /** Set by `withDiscovery`: what is listed and what waits behind `tool_search`. */ catalog?: ToolCatalog }
 
@@ -472,6 +494,8 @@ export function createNativeEngine(options: {
   continuity?: import("@mendcode/kernel").ContinuityForSession
   /** A session's background shell tasks; without it `shell` cannot run in the background. */
   background?(sessionId: SessionId): BackgroundPort
+  /** How long a foreground `shell` command runs before it moves to the background (the tool's own default when absent; 0 never). */
+  shellYieldMs?(): number | undefined
   /** A session's interactive processes (`shell_session`); without it that tool reports it is unavailable. */
   interactive?(sessionId: SessionId): InteractivePort
   /** Workflows started from this session (the workflow tools); without it they report they are unavailable. */
@@ -490,6 +514,8 @@ export function createNativeEngine(options: {
   review?(sessionId: SessionId): ReviewPort
   aiConfig?(sessionId: SessionId): import("@mendcode/tools").AIConfigPort
   loops?(sessionId: SessionId): LoopPort
+  /** A bot's learning tools (`bot_note`, `bot_skill`, `bot_schedule`): the port of the session's bot, undefined for any other session. */
+  bot?(sessionId: SessionId): import("@mendcode/tools").BotPort | undefined
   /** The session's git worktree (the `worktree` tool, offered to the main agent while `experimental.worktree_tool` is on); without it the tool reports it is unavailable. */
   worktrees?(sessionId: SessionId): WorktreePort
   /** The session's pull request watches (the `pr_watch` tool, offered to the main agent while `experimental.pr_watch` is on); without it the tool does not exist. */
@@ -721,15 +747,20 @@ export function createNativeEngine(options: {
   }
 
   const policy = () => options.permissionPolicy?.() ?? {}
+  /** The bot port a `bot_*` tool call gets (a bot's turn only); nothing for any other tool. */
+  const botFor = (sessionId: SessionId, tool: string): { bot?: import("@mendcode/tools").BotPort } => {
+    const bot = tool.startsWith("bot_") ? options.bot?.(sessionId) : undefined
+    return bot ? { bot } : {}
+  }
   const memoryConsentTurns = new Set<string>()
   const rulesFor = (toolset: Toolset, sessionId?: SessionId) => policyRules(policy(), toolset.agent?.permissionRules, sessionId ? options.sessionRules?.(sessionId) : undefined, sessionId ? projectRulesOf(policy(), options.cwdFor(sessionId)) : undefined)
   function withPolicy(base: Toolset): Toolset {
     const rules = rulesFor(base)
     const primaryOnly = policy().experimental?.primary_tools ?? []
-    const allowed = (name: string) => (name !== ADVISOR_TOOL.name || featureOn(policy(), "advisor")) && (name !== "session_meta" || !!options.sessionMeta && featureOn(policy(), "session_meta")) && (name !== SNIP_TOOL.name || policy().experimental?.snip === true) && (name !== "worktree" || policy().experimental?.worktree_tool === true) && (name !== "pr_watch" || !!options.prWatch && policy().experimental?.pr_watch === true) && (name !== "threads" || !!options.threads && policy().experimental?.thread_tools === true) && (!SESSION_RECALL_TOOL_NAMES.has(name) || !!options.recall && policy().experimental?.session_recall === true) && (!name.startsWith("tool_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_tools === true) && (!name.startsWith("question_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_questions === true) && !toolDisabled(name, rules) && (base.main || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
+    const allowed = (name: string) => (name !== ADVISOR_TOOL.name || featureOn(policy(), "advisor")) && (name !== "session_meta" || !!options.sessionMeta && featureOn(policy(), "session_meta")) && (name !== SNIP_TOOL.name || policy().experimental?.snip === true) && (name !== "worktree" || policy().experimental?.worktree_tool === true) && (name !== "pr_watch" || !!options.prWatch && policy().experimental?.pr_watch === true) && (name !== "threads" || !!options.threads && (policy().experimental?.thread_tools === true || base.agent?.botTurn === true)) && (!name.startsWith("bot_") || !!options.bot && base.agent?.botTurn === true) && (!SESSION_RECALL_TOOL_NAMES.has(name) || !!options.recall && policy().experimental?.session_recall === true) && (!name.startsWith("tool_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_tools === true) && (!name.startsWith("question_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_questions === true) && !toolDisabled(name, rules) && (base.main || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
     // A tool that declares a tier (`Tool.tier`, docs/tiers.md) is offered only when the user's tier includes it.
     const tier = policy().tier
-    const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
+    const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : (name === "threads" || name.startsWith("bot_")) && base.agent?.botTurn === true || tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
     const offered = (name: string) => allowed(name) && inTier(name) && (name !== "profiles" || !!options.packages && featureOn(policy(), "profile_tools"))
     return { ...base, tools: new Map([...base.tools].filter(([name]) => offered(name))), specs: base.specs.filter((spec) => offered(spec.name)), allowTask: base.allowTask && offered(TASK_TOOL.name) }
   }
@@ -863,6 +894,9 @@ export function createNativeEngine(options: {
   }
   /** Early cards of whole calls waiting for their run, by session and call id (`EarlyCard`). */
   const earlyCards = new Map<string, EarlyCard>()
+  /** Foreground commands of a running turn that moved to the background (`shell` yield), by `sessionId:turnId`: the turn waits for them before it ends. */
+  const yieldedTasks = new Map<string, Set<string>>()
+  const turnKey = (input: TurnInput) => `${input.sessionId}:${input.turnId}`
   const earlyKey = (sessionId: SessionId, callId: string) => `${sessionId}\n${callId}`
   function takeEarlyCard(sessionId: SessionId, callId: string) {
     const card = earlyCards.get(earlyKey(sessionId, callId))
@@ -1154,9 +1188,10 @@ export function createNativeEngine(options: {
         const hostedRules = policyRules(policy(), agent?.permissionRules, options.sessionRules?.(input.sessionId), projectRulesOf(policy(), options.cwdFor(input.sessionId)))
         const primaryOnly = policy().experimental?.primary_tools ?? []
         /** A provider-side tool runs with no approval card, so this call's own rules decide whether it is offered at all. */
+        const hostedLimits = options.runLimits?.(input.sessionId)
         const hostedAllowed = (name: HostedTool) => {
           const rule = matchingRule(permissionName(name), "*", hostedRules)
-          return !hostedOff.has(name) && rule?.action !== "deny" && rule?.action !== "ask" && (!agent || agentAllows(agent, name)) && !workflowToolDenied(input.workflow?.execution, name, "execute") && !workflowToolAsks(input.workflow?.execution, name, "execute") && (role !== "subagent" || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
+          return !hostedOff.has(name) && hostedWithinLimits(name, hostedLimits, input.turnOptions?.excludeTools) && rule?.action !== "deny" && rule?.action !== "ask" && (!agent || agentAllows(agent, name)) && !workflowToolDenied(input.workflow?.execution, name, "execute") && !workflowToolAsks(input.workflow?.execution, name, "execute") && (role !== "subagent" || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
         }
         // A fork keeps its parent's hosted tools for the shared prefix, less those its own rules refuse (the prefix then differs there).
         const hostedTools = share ? share.last.hostedTools : fork ? callTools.length ? fork.hostedTools.filter(hostedAllowed) : [] : !compound && textKind === "agent_message" && !final ? (options.hostedTools?.() ?? []).filter(hostedAllowed) : []
@@ -1364,7 +1399,7 @@ export function createNativeEngine(options: {
    */
   async function permit(input: TurnInput, tool: Tool, call: ToolCall, itemId: ItemId, toolset: Toolset, frozen: ReturnType<typeof freezeAction>, explicitApproval = false): Promise<PermitResult> {
     const parsedPermission = tool.args.safeParse(call.args)
-    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId) }
+    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId), ...botFor(input.sessionId, tool.name) }
     if (parsedPermission.success && tool.permissionFor) tool = { ...tool, permission: tool.permissionFor(parsedPermission.data, permissionContext) }
     tool = sessionRecallPermission(tool, call.args)
     const mode = modeOf(input, toolset)
@@ -1393,9 +1428,9 @@ export function createNativeEngine(options: {
     if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId) ? READ_ONLY_RUN_REFUSAL : "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
-    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}) }).catch(() => undefined)
+    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...botFor(input.sessionId, tool.name) }).catch(() => undefined)
     // `approval: "always"`: the user sees exactly what will run, in every mode and whatever the allow rules or grants say (a tool that runs code the model wrote).
-    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data, permissionContext) === true
+    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data, { ...permissionContext, mode }) === true
     // Reading another session asks once per call, except in full access (the user chose to run unattended) or when the user's own
     // message names that session's id: either is consent to read it.
     const named = parsedPermission.success && typeof (parsedPermission.data as { sessionId?: unknown }).sessionId === "string" && userText.includes((parsedPermission.data as { sessionId: string }).sessionId)
@@ -1835,7 +1870,7 @@ export function createNativeEngine(options: {
     }
     let result: ToolResult
     try {
-      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...instructionContext(input.sessionId),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
+      result = await tool.execute(runArgs, { ...storedFiles, cwd, sessionId: input.sessionId, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...instructionContext(input.sessionId),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId), shellYieldMs: options.shellYieldMs?.(), ...(call.callId.startsWith(INLINE_SHELL_CALL_PREFIX) ? {} : { onYield:(taskId: string) => { const key = turnKey(input); yieldedTasks.set(key, (yieldedTasks.get(key) ?? new Set()).add(taskId)) } }) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...botFor(input.sessionId, call.name), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
     } catch (error) {
       if (!parentItemId) throw error
       return finish({ output: input.signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error), title: call.name, isError: true, truncated: false }, input.signal.aborted)
@@ -1876,7 +1911,7 @@ export function createNativeEngine(options: {
     await hooks?.prepare?.({ sessionId: input.sessionId, cwd: options.cwdFor(input.sessionId) })
     let text = input.text
     for (const [index, entry] of held.entries()) {
-      const call: ToolCall = { callId: `command-shell-${input.turnId}-${index}`, name: SHELL_TOOL, args: { command: entry.command, timeoutMs: INLINE_SHELL_TIMEOUT_MS } }
+      const call: ToolCall = { callId: `${INLINE_SHELL_CALL_PREFIX}${input.turnId}-${index}`, name: SHELL_TOOL, args: { command: entry.command, timeoutMs: INLINE_SHELL_TIMEOUT_MS } }
       const { result } = await runCall(input, call, toolset, false, undefined, false, false, undefined, messages)
       if (input.signal.aborted) return { ok: false, message: "[ENGINE]: cancelled" }
       if (result.isError) return { ok: false, message: `[ENGINE]: inline shell failed: ${result.output.slice(0, 1000)}` }
@@ -1937,6 +1972,53 @@ export function createNativeEngine(options: {
    * Model ↔ tools until the model stops. Shared by turns and sub-agent tasks; `persist` saves the
    * history after every step (turns) and is absent for tasks, whose history lives only in the call.
    */
+  /**
+   * Waits for this turn's commands that moved to the background and are still running (`shell` yield), then says how they ended:
+   * the turn's answer is never given while one runs. Undefined when none was still running. Each still stops at its own timeout.
+   */
+  async function awaitYielded(input: TurnInput, closing = false): Promise<string | undefined> {
+    const ids = yieldedTasks.get(turnKey(input))
+    const port = options.background?.(input.sessionId)
+    if (!ids?.size || !port) return undefined
+    // The command was resolved from secret markers before it ran, and its output may print one: both leave here masked, as in `runCall`.
+    const clean = (text: string) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text
+    const parts: string[] = []
+    for (const id of [...ids]) {
+      ids.delete(id)
+      const running = port.peek(id, 0)
+      if (running?.task.status !== "running") continue
+      // A card shows what the turn waits for while it waits.
+      const itemId = input.newItemId()
+      input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: `waiting for ${clean(running.task.command).split("\n")[0]!.slice(0, 160)}` } })
+      const read = await port.read(id, { waitMs: YIELD_WAIT_MS, signal: input.signal, until: "exit" })
+      if (!read || input.signal.aborted) {
+        input.emit({ type: "item.completed", itemId, status: "cancelled", text: "" })
+        return undefined
+      }
+      const printed = clean(read.output)
+      const output = printed.length > YIELD_REPORT_CHARS ? `${printed.slice(0, YIELD_REPORT_CHARS / 5)}\n… output omitted …\n${printed.slice(-(YIELD_REPORT_CHARS * 4) / 5)}` : printed
+      const status = read.task.status === "running" ? "still running" : read.task.status === "killed" ? `killed (${read.task.killedBy ?? "stopped"})` : `exit ${read.task.exitCode ?? -1}`
+      input.emit({ type: "item.completed", itemId, status: read.task.status === "exited" && read.task.exitCode === 0 ? "ok" : "error", text: `${output.slice(-4_000)}${output ? "\n" : ""}[${status}]` })
+      parts.push(`[${id} \`${clean(read.task.command).slice(0, 200)}\`: ${status}]${output ? `\n${output}` : ""}`)
+    }
+    if (!parts.length) return undefined
+    return closing
+      ? `The commands you moved to the background in this turn ended when the turn did:\n\n${parts.join("\n\n")}`
+      : `The commands you moved to the background in this turn ended before your answer:\n\n${parts.join("\n\n")}\n\nUse their results and finish.`
+  }
+
+  /**
+   * A turn that ends where the model cannot be called again (its last step, a structured answer, the step limit) still waits for the
+   * commands it moved to the background; how they ended joins the history for whoever continues, and no model call is spent on it.
+   */
+  async function settleYielded(input: TurnInput, messages: ModelMessage[], persist: (() => Promise<void>) | undefined) {
+    const ended = input.signal.aborted ? undefined : await awaitYielded(input, true)
+    yieldedTasks.delete(turnKey(input))
+    if (!ended) return
+    messages.push({ role: "user", content: ended })
+    await persist?.()
+  }
+
   async function runLoop(input: TurnInput, messages: ModelMessage[], toolset: Toolset, loop: { maxSteps: number; cap?: number; persist?: () => Promise<void>; trackContext: boolean; structured?: { retries: number }; fork?: ForkPrefix | undefined }) {
     let answer = ""
     /** With a required answer format: model steps that ended without a valid `StructuredOutput` call. */
@@ -2071,6 +2153,16 @@ export function createNativeEngine(options: {
       }
       if (input.signal.aborted || reply.toolCalls.length === 0) {
         for (const call of reply.toolCalls) closeEarly(call, "cancelled", "")
+        // A command that moved to the background in this turn is still the turn's: the answer waits for it and sees how it ended.
+        const ended = !input.signal.aborted && !final ? await awaitYielded(input) : undefined
+        if (ended) {
+          messages.push({ role: "user", content: ended })
+          await loop.persist?.()
+          continue
+        }
+        // The last step has no model call left for a report: it settles them without one.
+        if (final) await settleYielded(input, messages, loop.persist)
+        yieldedTasks.delete(turnKey(input))
         // Before a turn that edited files ends, the advisor signs off once; revise/stop buys exactly one more step.
         const last = messages[messages.length - 1]
         const review = !input.signal.aborted && !final && !loop.structured && step + 1 < maxSteps && last?.role === "assistant"
@@ -2158,13 +2250,17 @@ export function createNativeEngine(options: {
       if (input.signal.aborted) return { outcome: { status: "ok" } as TurnOutcome, answer }
       if (loop.structured) {
         // A valid `StructuredOutput` call is the answer and ends the turn; an invalid one (or other calls only) costs a retry.
-        if (structuredCall === "ok") return { outcome: { status: "ok" } as TurnOutcome, answer }
+        if (structuredCall === "ok") {
+          await settleYielded(input, messages, loop.persist)
+          return { outcome: { status: "ok" } as TurnOutcome, answer }
+        }
         if (structuredCall === "failed" && ++structuredFailures > loop.structured.retries) return structuredExhausted()
       }
       // Only the foreground loop consumes prompts, after the whole tool iteration is safely in history.
       const { error } = await joinQueued(step)
       if (error !== undefined) return { outcome: { status: "error", code: "inline_shell", message: error } as TurnOutcome, answer }
     }
+    await settleYielded(input, messages, loop.persist)
     if (toolset.agent?.steps !== undefined) return { outcome: { status: "ok" } as TurnOutcome, answer }
     return { outcome: { status: "error", code: "max_steps", message: `[ENGINE]: stopped after ${maxSteps} model steps` } as TurnOutcome, answer }
   }

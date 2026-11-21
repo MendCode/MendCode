@@ -65,7 +65,7 @@ async function boot(script?: (turn: TurnInput) => Promise<void>) {
     if (ack.ok) await until(() => store.turns.list(sessionId).filter((turn) => turn.status !== "running").length > before)
     return ack
   }
-  return { client, seen, open, say, project, store: () => store }
+  return { client, seen, open, say, project, agentsDir: path.join(dir, "agents"), store: () => store }
 }
 
 async function until(check: () => boolean, ms = 8_000) {
@@ -194,4 +194,18 @@ test("applying a plan in the middle of an external turn lifts the plan agent's c
   expect(live).toEqual(["plan", "full"])
   await h.say(session, "now build")
   expect(h.seen.at(-1)).toMatchObject({ text: "now build", mode: "full" })
+})
+
+test("a session whose agent names a Claude Code model sends its turns to Claude Code; an agent on a native model leaves the turn's selection alone", async () => {
+  const h = await boot()
+  const session = await h.open("gpt-6-luna")
+  writeFileSync(path.join(h.agentsDir, "sonnet-bot.md"), "---\ndescription: Answers on Claude\nmode: primary\nmodel: claude-sonnet\n---\nAnswer briefly.")
+  writeFileSync(path.join(h.agentsDir, "luna-bot.md"), "---\ndescription: Answers on Luna\nmode: primary\nmodel: gpt-6-luna\n---\nAnswer briefly.")
+  expect(await h.client.send({ type: "session.agent.set", sessionId: session, agent: "sonnet-bot" })).toMatchObject({ ok: true })
+  await h.say(session, "which model")
+  expect(h.seen[0]!.selection?.model).toMatchObject({ model: "claude-sonnet" })
+  expect(h.store().sessionModel(session)).toEqual({ model: "gpt-6-luna" })
+  expect(await h.client.send({ type: "session.agent.set", sessionId: session, agent: "luna-bot" })).toMatchObject({ ok: true })
+  await h.say(session, "and now")
+  expect(h.seen[1]!.selection?.model).toBeUndefined()
 })

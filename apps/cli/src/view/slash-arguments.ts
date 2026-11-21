@@ -26,6 +26,14 @@ export function noteCustomPanels(presets: readonly string[]) {
 }
 
 const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
+  bot: () => [
+    { word: "list", summary: "Show the bots, their state and the folders they work in" },
+    { word: "new", summary: "Make a bot in a form: a name, or -d and a description for the model to draft", more: true },
+    { word: "edit", summary: "Change a bot in its form", more: true },
+    { word: "delete", summary: "Remove a bot after you confirm; its sessions stay", more: true },
+    { word: "duplicate", summary: "Copy a bot under a new name", more: true },
+    { word: "memory", summary: "Show, add to or clear what a bot remembers", more: true },
+  ],
   pr: () => [
     { word: "setup", summary: "Set up review and GitHub publishing with one confirmation" },
     { word: "on", summary: "Turn on PR watching and the PR reviewer" },

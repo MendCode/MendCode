@@ -55,7 +55,7 @@ Each bridge process serves one session's turn, then stops; engine bindings resum
 
 Claude Code's background agents (and Claude Code's own answer when one ends) live inside its process. When a bridged turn ends with background agents still running, its process is kept instead:
 - The session's next turns run in that same process, so the agents live on.
-- That process's bridge belonged to the earlier turn. Until it stops, the thread tools answer that the bridge is gone.
+- That process was started with the earlier turn's bearer. The bridge accepts it for the same session's live turn, until one hour after it was issued; it never answers for another session. The listener opens again on the port it had, so the process's config still reaches it.
 - It stops once no background agent is left, and the next turn starts a new bridged process.
 
 A process without the bridge that still runs background agents also keeps the session's turns.

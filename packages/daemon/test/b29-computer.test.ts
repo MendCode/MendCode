@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { ComputerCaptureMetadata, Command, createIdFactory } from "@mendcode/protocol"
 import { isReadOnlyCommand } from "@mendcode/protocol/wire"
 import { createComputerTools, runTool, BUILTIN_TOOLS } from "@mendcode/tools"
 import { captureData, computerFixture, png, signal } from "./b29-fixtures"
+import { KEEP } from "../src/computer"
 
 const fixtures: ReturnType<typeof computerFixture>[] = []
 afterEach(() => { for (const f of fixtures.splice(0)) { f.control.stop(); f.store.close(); rmSync(f.dir, { recursive: true, force: true }) } })
@@ -97,7 +98,8 @@ test("stale captures and foreground changes fail without a key; a failed key als
 test("previews are bounded and never register authority for unreadable, oversized or failed native captures", async () => {
   const f = fixture()
   f.os.mac.image = png(3200, 2000)
-  expect(captureData(await f.port.capture({}, signal()))).toMatchObject({ width: 1600, height: 1000, resized: true })
+  expect(captureData(await f.port.capture({}, signal()))).toMatchObject({ width: 1280, height: 800, resized: true })
+  expect(f.os.calls.find((call) => call[0] === "/usr/bin/sips")).toContain("1280")
   f.os.mac.image = png(100, 100, 5 * 1024 * 1024)
   expect((await f.port.capture({}, signal())).output).toContain("bounded PNG")
   f.os.mac.image = Buffer.from("not a PNG")
@@ -127,14 +129,38 @@ test("opt-in, platform, cancellation, unknown sessions and shutdown are checked 
   expect(f.os.calls).toEqual([])
 })
 
-test("the artifact cap persists across service instances and refuses a 65th native capture", async () => {
+test("a chat full of cached captures keeps capturing: the oldest files are deleted, the newest kept", async () => {
   const f = fixture()
   const directory = path.join(f.dir, "computer", f.sessionId)
   mkdirSync(directory, { recursive: true })
-  for (let index = 0; index < 64; index++) writeFileSync(path.join(directory, `${index}.png`), "fixture")
-  expect((await f.port.capture({}, signal())).output).toContain("64 screenshot artifact limit")
-  expect(f.os.calls).toEqual([])
-  expect(existsSync(directory)).toBe(true)
+  // Left by an earlier run of the service (64 was the old hard cap); file times give their order.
+  for (let index = 0; index < 64; index++) {
+    const file = path.join(directory, `old-${String(index).padStart(2, "0")}.png`)
+    writeFileSync(file, "fixture")
+    utimesSync(file, 1_700_000_000 + index, 1_700_000_000 + index)
+  }
+  const shot = await f.port.capture({}, signal())
+  expect(shot.isError).toBe(false)
+  const kept = readdirSync(directory).filter((name) => name.endsWith(".png"))
+  expect(kept).toHaveLength(KEEP)
+  expect(kept).toContain(path.basename(captureData(shot).filePath))
+  expect(kept).toContain("old-63.png")
+  expect(kept).not.toContain("old-00.png")
+  // Many more captures never stop the task and never hold more than the ring.
+  for (let index = 0; index < KEEP + 3; index++) expect((await f.port.capture({}, signal())).isError).toBe(false)
+  expect(readdirSync(directory).filter((name) => name.endsWith(".png"))).toHaveLength(KEEP)
+})
+
+test("an evicted capture no longer authorizes a key", async () => {
+  const f = fixture()
+  const first = captureData(await f.port.capture({}, signal()))
+  const directory = path.join(f.dir, "computer", f.sessionId)
+  utimesSync(first.filePath, 1_700_000_000, 1_700_000_000)
+  for (let index = 0; index < KEEP - 1; index++) writeFileSync(path.join(directory, `later-${index}.png`), "fixture")
+  expect((await f.port.capture({}, signal())).isError).toBe(false)
+  expect(existsSync(first.filePath)).toBe(false)
+  expect((await f.port.key({ captureID: first.captureID, key: "tab" }, signal())).output).toContain("missing")
+  expect(f.os.keys).toEqual([])
 })
 
 test("tool factories use the supplied session port, remain execute-gated and validate before dispatch", async () => {

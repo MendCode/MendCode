@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { AGENT_SHELL_ENV } from "@mendcode/protocol/wire"
-import { guardClient, originCapabilities, shownCommand, startedBySession } from "../src/agent-origin"
+import { callerCapabilities, guardClient, originCapabilities, shownCommand, startedBySession } from "../src/agent-origin"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -92,4 +92,14 @@ describe("this program, started from a session's own shell", () => {
     expect(cli(["uninstall", "--force", "--dir", other], marked).err).toContain("removes this installation")
     expect(cli(["--dir", other, "update", "--inspect", "--json"], marked).code).toBe(0)
   }, 60_000)
+})
+
+describe("the caller hint", () => {
+  test("inside another agent's shell the client says so, so its messages are not counted as a person's; elsewhere it says nothing", () => {
+    expect(callerCapabilities({ CLAUDECODE: "1" })).toEqual(["caller:agent"])
+    expect(callerCapabilities({ CODEX_THREAD_ID: "abc" })).toEqual(["caller:agent"])
+    expect(callerCapabilities({ AI_AGENT: "x" })).toEqual(["caller:agent"])
+    expect(callerCapabilities({})).toEqual([])
+    expect(callerCapabilities({ CLAUDECODE: "" })).toEqual([])
+  })
 })

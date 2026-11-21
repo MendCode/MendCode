@@ -142,6 +142,9 @@ The frontmatter is YAML: multi-line `description: |`, quoted values and lists. `
 | Markdown and JSON within a layer | markdown |
 | Extension-registered command and another command | extension-registered command |
 | Enabled skill `/skill-name` and a built-in or custom command | built-in or custom command; `/doctor` reports the clash |
+| Two or more profiles (packages) | none: each runs as `/<package>:<name>`, all listed in the menu, and the bare `/<name>` lists them and runs none; a project or user command of that name still wins the bare name |
+
+A `description` longer than the menu's 120 characters is cut there and noted in `/doctor`; the command still loads.
 
 Templates and expanded prompts are limited to 32,000 characters. The 200-command cap applies after precedence, dropping the lowest-priority layers first.
 

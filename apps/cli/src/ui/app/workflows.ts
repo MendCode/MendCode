@@ -1,5 +1,6 @@
-import { createWorkflowsPageState, parseWorkflowCommand } from "../lazy-pages"
-import type { WorkflowId, WorkflowSummary } from "@mendcode/protocol"
+import { createWorkflowsPageState, parseWorkflowCommand, preload } from "../lazy-pages"
+import { inProject } from "../../view/project-scope"
+import type { SessionId, WorkflowId, WorkflowSummary } from "@mendcode/protocol"
 import type { WorkflowControlAction } from "../../view/workflows-page"
 import type { AppContext } from "./context"
 
@@ -14,7 +15,6 @@ export function createWorkflows(ctx: AppContext) {
       if (omitted > 0) say(`${omitted} older workflow${omitted === 1 ? " is" : "s are"} not listed; the newest are shown`, "info")
       state.workflowsLoaded = true
       state.workflowsError = ""
-      state.workflowsState = { ...state.workflowsState, selected: Math.max(0, Math.min(state.workflowsState.selected, state.workflows.length - 1)) }
     } else state.workflowsError = reply.error.message
     requestFrame()
   }
@@ -26,6 +26,26 @@ export function createWorkflows(ctx: AppContext) {
     state.workflowsError = ""
     requestFrame()
     await loadWorkflows()
+  }
+
+  /**
+   * A workflow's run picked in the sessions list: /workflows on that run, its tasks and their state, as a workflow reads in
+   * Claude Code, instead of the empty chat that only holds its tasks. False when the session is no run's root (a task opens as a chat).
+   */
+  async function openWorkflowOf(sessionId: SessionId): Promise<boolean> {
+    const reply = await input.send({ type: "workflow.list" })
+    if (!reply.ok) return false
+    const runs = (reply.result?.workflows ?? []) as WorkflowSummary[]
+    const at = runs.findIndex((run) => run.rootSessionId === sessionId)
+    if (at < 0) return false
+    await preload("workflows")
+    state.workflows = runs
+    state.workflowsState = createWorkflowsPageState("all", runs[at]!.workflowId)
+    state.workflowsLoaded = true
+    state.workflowsError = ""
+    state.page = "workflows"
+    requestFrame()
+    return true
   }
 
   async function controlWorkflow(workflowId: string, action: WorkflowControlAction | "retry" | "approve" | "reject", taskId?: string) {
@@ -149,11 +169,11 @@ export function createWorkflows(ctx: AppContext) {
   }
 
   function noteWorkflow(run: WorkflowSummary, deleted: boolean) {
-    if (input.directory && run.directory !== input.directory) return
+    if (!inProject(run.directory, input.directory)) return
     state.workflows = [...state.workflows.filter((existing) => existing.workflowId !== run.workflowId), ...(deleted ? [] : [run])]
     if (!deleted && !["completed", "failed", "stopped"].includes(run.state)) state.liveWorkflows.set(run.workflowId, run.state === "needs_input" || run.state === "blocked")
     else state.liveWorkflows.delete(run.workflowId)
   }
 
-  return { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow }
+  return { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow }
 }

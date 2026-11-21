@@ -1,7 +1,8 @@
+import type { CommandReply } from "@mendcode/client"
 import type { Settings } from "@mendcode/protocol"
 import { appHarness, conversation, ids, NOW } from "./session-ui-harness"
 
-export function b51Harness(width = 100, height = 30, mode: NonNullable<Settings["queue"]>["mode"] = "after-response", held = false) {
+export function b51Harness(width = 100, height = 30, mode: NonNullable<Settings["queue"]>["mode"] = "after-response", held = false, promoteReply?: CommandReply) {
   let settings: Settings = { onboarded: true, reducedMotion: true, queue: { mode } }
   const h = appHarness({ width, height, directory: "/work/queue", reply: (command) => {
     if (command.type === "settings.set") {
@@ -9,6 +10,7 @@ export function b51Harness(width = 100, height = 30, mode: NonNullable<Settings[
       return { ok: true, result: { settings } }
     }
     if (command.type === "settings.get") return { ok: true, result: { settings } }
+    if (command.type === "queue.promote") return promoteReply
   } })
   h.app.applySettings(settings)
   const chat = conversation(h.sessionId, h.app.onEvent)

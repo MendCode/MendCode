@@ -1,16 +1,17 @@
 import { afterEach, expect, test } from "bun:test"
-import { appHarness, cleanTemps, conversation, tempDir } from "./session-ui-harness"
+import type { SessionEvent } from "@mendcode/protocol"
+import { appHarness, cleanTemps, conversation, ids, tempDir } from "./session-ui-harness"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 
 afterEach(cleanTemps)
 
 /** A session whose engine reports two sub-agents of its own (the shape packages/engine-claude emits for Claude Code's Agent tool). */
-async function chat(shells: Array<Record<string, unknown>> = []) {
+async function chat(shells: Array<Record<string, unknown>> = [], width = 110) {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
   const h = appHarness({
-    dataDir, width: 110, height: 34,
+    dataDir, width, height: 34,
     reply: (command) => {
       if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
       if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
@@ -84,7 +85,22 @@ test("an open background sub-agent moves after its parent's turn ended: its mode
   const text = screen(h)
   expect(text).toMatch(/general-purpose · claude-sonnet-5-5 · await/)
   expect(text).toContain("Checking the size next.")
-  expect(text).toMatch(/read \/work\/a\.txt…/)
+  // Its own working row says what it does now, by kind, and its step; the call's title is on its card.
+  expect(text).toMatch(/Reading… .*\(step 2 · /)
+})
+
+test("with the left list shown, left in an open sub-agent's thread changes sibling instead of entering the list", async () => {
+  const { h } = await chat([], 150)
+  expect(screen(h)).toContain("Sessions")
+  await h.type("\x18\x1b[B")
+  await h.type("\x1b[C")
+  h.app.render()
+  expect(screen(h)).toContain("Second brief: report b.txt.")
+  await h.type("\x1b[D")
+  h.app.render()
+  const text = screen(h)
+  expect(text).toContain("Locate the file named a.txt and report it.")
+  expect(text).toContain("← focus")
 })
 
 test("a sub-agent that ended says what it took under its call and is no longer listed as at work", async () => {
@@ -99,6 +115,39 @@ test("a sub-agent that ended says what it took under its call and is no longer l
   expect(screen(h)).toMatch(/Agents\s+1 running/)
   expect(screen(h)).toMatch(/└ Read b\.txt\s+await/)
   expect(screen(h)).not.toMatch(/[├└] Read a\.txt\s+await\s+read/)
+})
+
+test("a background sub-agent sent a message after it ended works again in its open thread; an end that repeats its last text leaves no empty bullet", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const h = appHarness({
+    dataDir, width: 110, height: 34,
+    reply: (command) => {
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+      if (command.type === "session.children" || command.type === "task.list") return { ok: true, result: { sessions: [], tasks: [] } } as never
+      if (command.type === "background.list") return { ok: true, result: { tasks: [] } } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  const talk = conversation(h.sessionId, h.app.onEvent)
+  const child = (itemId: string, kind: "tool_call" | "agent_message", meta: Record<string, string> = {}) => talk.emit({ type: "item.started", turnId: "turn_1", itemId, kind, meta: { ...meta, agentParent: "item_bg" } })
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg", kind: "tool_call", meta: { tool: "agent Finish the report", subagent: true, agent: "general-purpose", background: true } })
+  talk.emit({ type: "item.completed", itemId: "item_bg", status: "ok", text: "running in the background" })
+  child("item_bg_text", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_bg_text", status: "ok", text: "Report regenerated." })
+  await h.type("\x18\x1b[B")
+  child("item_bg_end", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_bg_end", status: "ok", text: "", meta: { agentParent: "item_bg", agentEnd: true, toolCalls: 3, tokens: 1_000, durationMs: 100 } })
+  h.app.render()
+  expect(screen(h)).toMatch(/Finish the report.*\n.*· done/)
+  expect(screen(h)).not.toMatch(/^\s*[│ ]*\s*•\s*[│ ]*$/m)
+  // The coordinator's message starts it again: the thread is at work, not done.
+  child("item_bg_again", "tool_call", { tool: "read /work/report.py" })
+  h.app.render()
+  expect(screen(h)).not.toMatch(/Finish the report.*\n.*· done/)
+  expect(screen(h)).toMatch(/Finish the report.*\n.*· read \/work\/report\.py/)
 })
 
 test("a click on a sub-agent's row of the strip opens it", async () => {
@@ -227,14 +276,14 @@ test("a background sub-agent stays in the strip after its turn, while the daemon
   await Bun.sleep(5)
   h.app.render()
   let text = screen(h)
-  expect(text).toMatch(/Survey the map\s+bg\s+\$ ls \/maps · 1 tool/)
+  expect(text).toMatch(/Survey the map\s+async\s+\$ ls \/maps · 1 tool/)
   expect(text).not.toMatch(/◇ Survey the map\s+agent/)
   running = false
   talk.emit({ type: "turn.completed", turnId: "turn_2" })
   await Bun.sleep(5)
   h.app.render()
   text = screen(h)
-  expect(text).not.toMatch(/Survey the map\s+bg\s+\$ ls/)
+  expect(text).not.toMatch(/Survey the map\s+async\s+\$ ls/)
 })
 
 test("a background sub-agent named only once its call ended still matches the daemon's background work and stays in the strip", async () => {
@@ -261,7 +310,7 @@ test("a background sub-agent named only once its call ended still matches the da
   await Bun.sleep(5)
   h.app.render()
   const text = screen(h)
-  expect(text).toMatch(/Survey the map\s+bg/)
+  expect(text).toMatch(/Survey the map\s+async/)
   expect(text).not.toMatch(/◇ Survey the map\s+agent/)
 })
 
@@ -300,6 +349,59 @@ test("with background commands listed under the sub-agents, a click on the first
   expect(screen(h)).toMatch(/background/i)
 })
 
+test("an engine's agent started above the history shown opens as a sub-agent thread, by click and by ctrl+x ↓, never as the command card", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const sessionId = ids("session")
+  const log: SessionEvent[] = []
+  const talk = conversation(sessionId, (event) => void log.push(event))
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg", kind: "tool_call", meta: { tool: "agent Modo edificio con ascensor", subagent: true, agent: "general-purpose", background: false } })
+  talk.emit({ type: "item.completed", turnId: "turn_1", itemId: "item_bg", status: "ok", text: "running in the background", meta: { tool: "agent Modo edificio con ascensor", subagent: true, agent: "general-purpose", background: true } })
+  talk.emit({ type: "turn.completed", turnId: "turn_1" })
+  const older = log.length
+  // A long session afterwards: the chat opens on these, without the call; the agent keeps working meanwhile.
+  for (let n = 1; n <= 40; n++) talk.exchange(`question ${n}`, `answer ${n}`)
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_child", kind: "tool_call", meta: { tool: "read src/building.ts", agentParent: "item_bg" } })
+  talk.emit({ type: "item.completed", turnId: "turn_1", itemId: "item_child", status: "ok", text: "ok", meta: { tool: "read src/building.ts" } })
+  const page = (events: SessionEvent[], more: boolean) => ({ ok: true as const, window: { events, firstSeq: events[0]!.seq, lastSeq: events.at(-1)!.seq, sessionLastSeq: log.at(-1)!.seq, more } })
+  const opened = async () => {
+    const h = appHarness({
+      dataDir, sessionId, width: 110, height: 34,
+      events: { loadWindow: async () => page(log.slice(older), true), loadBefore: async () => page(log.slice(0, older), false) },
+      reply: (command) => {
+        if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+        if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
+        if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
+        if (command.type === "background.list") return { ok: true, result: { tasks: [{ id: "engine:a6f3", sessionId, command: "Modo edificio con ascensor", status: "running", kind: "agent", startedAt: Date.now() }] } } as never
+        return undefined
+      },
+    })
+    h.app.applySettings({ onboarded: true })
+    await h.app.start()
+    h.app.onGlobal({ type: "session.background.changed", gseq: 2, at: Date.now(), sessionId } as never)
+    await Bun.sleep(5)
+    h.app.render()
+    return h
+  }
+  const byClick = await opened()
+  const rows = byClick.text()
+  const row = rows.findIndex((text) => /Modo edificio con ascensor\s+async/.test(text))
+  expect(row).toBeGreaterThanOrEqual(0)
+  const col = rows[row]!.search(/Modo edificio/) + 4
+  await byClick.type(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
+  await Bun.sleep(5)
+  byClick.app.render()
+  expect(screen(byClick)).toContain("╭─ sub-agent ")
+  expect(screen(byClick)).toMatch(/◆ Modo edificio con ascensor/)
+  expect(screen(byClick)).not.toMatch(/Background|\/ps/)
+  const byKey = await opened()
+  await byKey.type("\x18\x1b[B")
+  await Bun.sleep(5)
+  byKey.app.render()
+  expect(screen(byKey)).toMatch(/◆ Modo edificio con ascensor/)
+})
+
 test("after the daemon restarts, a background sub-agent that ended with the old one leaves the strip: the list is asked again on reconnect", async () => {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
@@ -318,17 +420,17 @@ test("after the daemon restarts, a background sub-agent that ended with the old 
   h.app.applySettings({ onboarded: true })
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).toMatch(/Survey the map\s+async/)
   // The daemon restarts: its new process runs nothing of the old one's, and sends no event about it.
   running = false
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).toMatch(/Survey the map\s+async/)
   h.app.onConnection("reconnecting")
   h.app.onConnection("connected")
   await Bun.sleep(5)
   h.app.render()
-  expect(screen(h)).not.toMatch(/Survey the map\s+bg/)
+  expect(screen(h)).not.toMatch(/Survey the map\s+async/)
 })
 
 test("a background sub-agent esc stopped stays in the strip as stopped by you until /relaunch asks the model to start it again", async () => {
@@ -358,7 +460,7 @@ test("a background sub-agent esc stopped stays in the strip as stopped by you un
   h.app.render()
   // An hour old by the harness clock, far past the moment an ended sub-agent's row normally stays.
   expect(screen(h)).toMatch(/Agents {2}1 stopped by you/)
-  expect(screen(h)).toMatch(/└ Re-verify compar\S*\s+bg\s+stopped by you · \/relaunch\s+5s/)
+  expect(screen(h)).toMatch(/└ Re-verify compar\S*\s+async\s+stopped by you · \/relaunch\s+5s/)
   await h.type("/relaunch\r")
   await Bun.sleep(5)
   const [submit] = h.sentOf("user.submit") as Array<{ text: string }>
@@ -463,4 +565,57 @@ test("an open sub-agent that has ended stays in the strip", async () => {
   talk.emit({ type: "item.completed", itemId: "item_a", status: "ok", text: "done" })
   h.app.render()
   expect(screen(h)).toMatch(/▸Read a\.txt\s+await\s+done/)
+})
+
+test("an open sub-agent's thread whose start is loaded pages the session back no further and draws no 'earlier' label over its brief", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const sessionId = ids("session")
+  const log: SessionEvent[] = []
+  const talk = conversation(sessionId, (event) => void log.push(event))
+  for (let n = 1; n <= 10; n++) talk.exchange(`old question ${n}`, `old answer ${n}`)
+  const oldest = log.length
+  talk.emit({ type: "turn.started", turnId: "turn_9", queueId: "queue_9" })
+  talk.emit({ type: "item.started", turnId: "turn_9", itemId: "item_audit", kind: "tool_call", meta: { tool: "agent Audit the goal", subagent: true, agent: "general-purpose", background: false } })
+  talk.emit({ type: "item.started", turnId: "turn_9", itemId: "item_brief", kind: "user_message", meta: { agentParent: "item_audit" } })
+  talk.emit({ type: "item.completed", itemId: "item_brief", status: "ok", text: `You are a senior advisor auditing the goal. ${"Read the run log fully and say what is wrong. ".repeat(6)}` })
+  for (let n = 1; n <= 30; n++) {
+    talk.emit({ type: "item.started", turnId: "turn_9", itemId: `item_step_${n}`, kind: "tool_call", meta: { tool: `read src/file-${n}.ts`, agentParent: "item_audit" } })
+    talk.emit({ type: "item.completed", turnId: "turn_9", itemId: `item_step_${n}`, status: "ok", text: "ok", meta: { tool: `read src/file-${n}.ts` } })
+  }
+  const windowFrom = log.length - 20
+  const page = (events: SessionEvent[], more: boolean) => ({ ok: true as const, window: { events, firstSeq: events[0]!.seq, lastSeq: events.at(-1)!.seq, sessionLastSeq: log.at(-1)!.seq, more } })
+  const before: number[] = []
+  const h = appHarness({
+    dataDir, sessionId, width: 110, height: 30,
+    events: {
+      loadWindow: async () => page(log.slice(windowFrom), true),
+      // The thread's call and brief are one page back; the session's oldest exchanges another, and the log says more is older still.
+      loadBefore: async (_id, seq) => {
+        before.push(seq)
+        if (seq > log[oldest]!.seq) return page(log.slice(oldest, windowFrom), true)
+        if (seq > log[0]!.seq) return page(log.slice(0, oldest), true)
+        return { ok: true as const, window: { events: [], firstSeq: seq, lastSeq: seq, sessionLastSeq: log.at(-1)!.seq, more: false } }
+      },
+    },
+    reply: (command) => {
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+      if (command.type === "session.children" || command.type === "task.list") return { ok: true, result: { sessions: [], tasks: [] } } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  await h.app.start()
+  await Bun.sleep(5)
+  await h.type("\x18\x1b[B")
+  await Bun.sleep(5)
+  h.app.render()
+  expect(screen(h)).toContain("╭─ sub-agent ")
+  const pagesToOpen = before.length
+  // Up to the thread's top and on past it: the brief shows whole, and the session's oldest page is never asked for.
+  for (let n = 0; n < 20; n++) { await h.type("\x1b[5~"); await Bun.sleep(1); h.app.render() }
+  h.app.render()
+  expect(before.length).toBe(pagesToOpen)
+  expect(screen(h)).toContain("You are a senior advisor auditing the goal.")
+  expect(screen(h)).not.toMatch(/earlier · scroll up|loading earlier/)
 })

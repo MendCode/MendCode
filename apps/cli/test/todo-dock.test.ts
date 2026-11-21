@@ -79,7 +79,8 @@ describe("todo dock contract", () => {
     test(`${theme}, ${density}, ${tier}: running turn has no task row and Jobs is opt-in`, async () => {
       const h = fixture(100, 30, theme, density, tier)
       expect(h.text().join("\n")).not.toContain("· 1/4")
-      expect(h.text().join("\n")).toContain("Generating")
+      // The turn has finished steps: between them the model is thinking.
+      expect(h.text().join("\n")).toContain("Thinking…")
       await h.type("\x14")
       const text = h.text().join("\n")
       expect(text).not.toMatch(/Jobs\s+1 running/)

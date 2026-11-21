@@ -50,6 +50,10 @@ const GLYPHS: Readonly<Record<string, readonly [string, string]>> = {
   image_generation: ["◧", "i"],
   image_gen: ["◧", "i"],
   tool_define: ["◧", "i"],
+  // A bot learning: a note kept, a skill saved, work scheduled.
+  bot_note: ["✦", "*"],
+  bot_skill: ["✧", "+"],
+  bot_schedule: ["◴", "@"],
 }
 
 export function glyphOf({ name, ascii }: { name: string; ascii: boolean }): string {

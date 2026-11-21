@@ -216,14 +216,12 @@ test("daemon bridge creates project children and delegates across configured eng
     }
     return { status: "ok" }
   })
-  const completed = h.say(parent)
-  await until(() => h.daemon.store.pendingRequestsOf(parent).length === 1)
-  const request = h.daemon.store.pendingRequestsOf(parent)[0]!
-  expect(request).toMatchObject({ kind: "approval", title: "thread_read", detail: expect.stringContaining(other) })
-  expect((await h.client.send({ type: "request.resolve", sessionId: parent, requestId: request.requestId, decision: { kind: "approve", scope: "once" } })).ok).toBe(true)
-  await completed
+  // Full access no longer asks before a thread call; a session of another project is still not read by its bare id.
+  await h.say(parent)
+  expect(h.daemon.store.pendingRequestsOf(parent)).toHaveLength(0)
   expect(results[0].result.content[0].text).toContain("state=idle")
   expect(results[1].result.isError).toBe(true)
+  expect(results[1].result.content[0].text).toContain("no session")
   for (const result of results.slice(2)) expect(result.result.content[0].text).toContain("state: completed")
   const tasks = h.daemon.store.tasks.list().filter((task) => task.parentId === parent)
   expect(tasks).toHaveLength(5)

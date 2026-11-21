@@ -1,4 +1,5 @@
 import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { AGENT_CALLER_CAPABILITY } from "@mendcode/protocol"
 import { claudeAlias, claudeCompactEnv } from "./claude-models"
 import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
@@ -102,6 +103,7 @@ import { createCommandExecution } from "./command-execution"
 import { createInlineShellTable, type InlineShell } from "./inline-shell"
 import { expandMcpMentions, expandMcpPrompt, type McpContentPort } from "./mcp-content"
 import { createRunLimitsStore, reviewIneligible, type RunLimitsStore } from "./run-limits"
+import { configureRunLimits } from "./run-limit-guard"
 import { createSessionPermissionRules } from "./session-permission-rules"
 import { createGrantStore, type AgentPort, type EngineHooks, type GoalPort, type GrantStore, type SecretsPort } from "@mendcode/engine-native"
 import { createGoalPrompts } from "./goal-prompts"
@@ -235,6 +237,7 @@ import type { CreateLoopInput } from "@mendcode/loops"
 import { createLazyLoops } from "./lazy-loops"
 import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
+import { describeTrigger } from "../../loops/src/schedule"
 import { LOOP_INTERPRET_SYSTEM, LOOP_INTERPRET_TIMEOUT_MS, loopInterpretRequest, readInterpretation } from "./loop-interpret"
 import { createWorktreePort } from "./worktree-port"
 import type { GhRun } from "./pr-watch"
@@ -256,7 +259,7 @@ import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
-import { createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
+import { connectionOrigin, createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
 import { createSessionStarter } from "./session-start"
 import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
@@ -304,6 +307,8 @@ const DEFAULT_DELTA_IDLE_DAYS = 3
 /** How long a settled session waits, with the daemon idle, before its superseded foreground and queue snapshots are deleted. */
 const SETTLED_PRUNE_DELAY_MS = 10_000
 const BUSY = new Set(["generating", "tool", "waiting_approval", "compacting", "cancelling"])
+/** Sub-agents counted per session for the left list; more than this many at once still shows as this many. */
+const MAX_LIVE_AGENTS = 99
 /** `session.tree`: nodes returned in all, how many forks get their unmerged count, and how deep sub-agents of sub-agents go. */
 const TREE_NODES = 400
 const TREE_MERGE_COUNTS = 50
@@ -322,6 +327,8 @@ type Connection = {
   peer?: { name: string; hash: string; readOnly: boolean }
   /** The client was started by a session's own shell: it reads, and works only inside that session's authority (agent-origin.ts). */
   agent?: AgentOrigin | undefined
+  /** What `hello` said of the client: its name and whether it runs inside another agent's shell (`caller:agent`). Only ever lowers the origin from `cli` to `agent`; see `connectionOrigin`. */
+  client?: { name: string; callerAgent: boolean }
   rejected?: boolean
   /** Loopback TCP local transport: the per-start secret was presented. */
   localAuthed?: boolean
@@ -385,6 +392,8 @@ export type DaemonOptions = RemoteListenerOptions & {
    * Clients that come from a session's shell are recognised either way.
    */
   agentOrigin?: { descendants?: boolean }
+  /** Experimental bots: apps whose bots `bot.list` shows in `external` (bot-service.ts). None ships yet. */
+  botConnectors?: readonly import("./bot-service").BotConnector[]
   /**
    * Where other programs keep this user's chats, for `threads` (thread-foreign.ts): Codex and Claude Code homes and the previous
    * MendCode's database. Absent: `threads` knows only this daemon's sessions, which is what a private data directory gets.
@@ -417,7 +426,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; bot(sessionId: SessionId): import("@mendcode/tools").BotPort | undefined; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -503,6 +512,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   openUrl?(url: string): Promise<void>
   /** Opens an image file in the system's viewer, or shows it in its folder (`image.open`); the system handler by default. */
   openImage?(input: { path: string; reveal?: boolean }): Promise<void>
+  /** Opens a desktop app by name (`app.open`, a bot card's "Open in <app>"); `open -a` on macOS by default. */
+  openApp?(app: string): Promise<void>
   /** The subscription account for `/usage` (name, email, plan); without it the report has no profile. */
   usageProfile?(): Promise<UsageProfile>
   /** A model's public API price (USD per million tokens), for the waste report's dollars: models.dev's, by provider (a subscription by its vendor's API). */
@@ -981,6 +992,21 @@ export async function startDaemon(options: DaemonOptions) {
     ...(options.complete ? { complete: ({ sessionId, ...request }: { system: string; prompt: string; signal: AbortSignal; sessionId?: string }) => completeBudgeted!({ ...request, auxiliary: { role: "hook", ...(sessionId && store.hasSession(sessionId as SessionId) ? { sessionId: sessionId as SessionId } : {}) } }) } : {}),
   })
   const pluginMetadata = createPluginMetadata(options.dir)
+  /** Experimental bots: loaded by the first turn that runs with `experimental.bots` on (see `runTurn`). */
+  let botMemoryModule: typeof import("./bot-memory") | undefined
+  /** The recent-activity digest of a bot's turn, loaded with the memory reader (never at start). */
+  let botRecallModule: typeof import("./bot-recall") | undefined
+  /** What a bot learns with (notes, skills, schedules), loaded with the same first turn. */
+  let botLearnModule: typeof import("./bot-learn") | undefined
+  /** The bot a session runs as: a trusted bot of the user's own folder while the flag is on; undefined for every other session. */
+  function botNameOf(sessionId: SessionId): string | undefined {
+    const name = botMemoryModule && botsOn() ? store.sessionAgent(sessionId) : undefined
+    const directory = name ? store.sessionDirectory(sessionId) : undefined
+    const bot = name && directory ? agents.auxiliary(directory, name) : undefined
+    return bot?.bot && bot.source === "user" && bot.trusted ? name : undefined
+  }
+  let botSummaryAsker: ((sessionId: string) => void) | undefined
+  let botDigestCache: { key: string; at: number; text: string } | undefined
   /** Custom agents (`agents/*.md` of every layer); project ones follow the directory's trust, like custom tools. */
   const agents = createAgentRegistry({
     layers: resourceLayersFor,
@@ -990,13 +1016,48 @@ export async function startDaemon(options: DaemonOptions) {
     },
     // A child in its own worktree reads agents (and their trust) from its parent's project, as a workflow agent does from its source.
     directoryOf: (sessionId) => workflowContext(sessionId)?.workflow.sourceDirectory ?? store.sessionDirectory((store.meta.get(`session.fanout.owner:${sessionId}`) || (store.tasks.list().find((task) => task.taskId === sessionId && task.worktree)?.parentId ?? sessionId)) as SessionId),
-    selected: (sessionId) => livePermission(sessionId) === "plan" ? "plan" : store.sessionAgent(sessionId),
+    // A report-only loop session is in plan mode; a bot's own schedule keeps the bot as its agent (the session's mode still caps it to reading).
+    selected: (sessionId) => livePermission(sessionId) === "plan" && !loops.forSession(sessionId)?.agent ? "plan" : store.sessionAgent(sessionId),
     planExitAgent: () => store.settings.get().plan_exit_agent ?? store.settings.get().planExitAgent,
     settings: () => store.settings.get(),
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
     select: (sessionId, name) => store.setSessionAgent(sessionId, name === "build" ? undefined : name),
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
+    botsOn: () => botsOn(),
+    botRecall: (name, sessionId) => {
+      const recall = botRecallModule
+      if (!recall || !botsOn()) return ""
+      const now = clock.now()
+      // `primary` is asked several times in a turn: one digest serves them all.
+      if (botDigestCache?.key === `${name}:${sessionId}` && now - botDigestCache.at < 2_000) return botDigestCache.text
+      botSummaryAsker ??= recall.summaryAsker({ now: () => clock.now(), ask: (id) => void metadata.summary(id as SessionId).catch(() => {}) })
+      const sessions = sessionAutomation.list({ agent: name, roots: true, since: now - recall.DIGEST_WINDOW_MS, hideEmpty: true, limit: 30 }).map((session) => ({
+        sessionId: session.sessionId, title: session.title, directory: session.directory, updatedAt: session.updatedAt, status: session.status, summary: session.summary,
+        stale: store.meta.get(`session.summary.seq:${session.sessionId}`) !== String(store.lastSeq(session.sessionId) ?? 0),
+      }))
+      const text = recall.botDigest({ sessions, excludeSessionId: sessionId, now, wantSummary: botSummaryAsker })
+      botDigestCache = { key: `${name}:${sessionId}`, at: now, text }
+      return text
+    },
+    botSkills: (name) => botLearnModule && botsOn() ? botLearnModule.botSkillsPrompt({ dir: options.dir, name }) : "",
+    // Every folder's active sessions: a bot sees all sessions (docs/permissions.md).
+    botOverview: (_name, sessionId) => botRecallModule && botsOn()
+      ? botRecallModule.workspaceOverview({ sessions: sessionAutomation.list({ active: true, roots: true, limit: 12 }).map((session) => ({ sessionId: session.sessionId, title: session.title, directory: session.directory, status: session.status })), excludeSessionId: sessionId })
+      : "",
+    botHint: () => botRecallModule && botsOn() ? `${botRecallModule.BOT_RECALL_HINT} ${botRecallModule.BOT_TOOLS_HINT}` : "",
+    botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
   })
+  /**
+   * The model a session's agent names (a bot's `model:`) when the catalog lists it. At turn time the agent's model wins over the session's
+   * (the engine's `choiceFor`), so the daemon routes, checks and reports that one, not the session's. Undefined for a session on no agent.
+   */
+  function agentModelOf(sessionId: SessionId, models: { list(): ModelInfo[] }, override?: string): ModelChoice | undefined {
+    if (!override && !store.sessionAgent(sessionId)) return undefined
+    // Only the model is read: the prompt a bot's turn builds (memory, digest, overview) is not, so asking never costs a chat opening that.
+    const profile = agents.port().primary(sessionId, override, { prompt: false })
+    if (!profile?.model || !models.list().some((model) => model.id === profile.model)) return undefined
+    return { model: profile.model, ...(profile.effort ? { effort: profile.effort } : {}), ...(profile.variant ? { variant: profile.variant } : {}) }
+  }
   /** Pre-change copies of the files a turn's write/edit/apply_patch calls touch, so `session.undo` can put them back. */
   const snapshots = createTurnSnapshots({ store })
   const mflowHooks = createMflowHooks({
@@ -1297,7 +1358,8 @@ export async function startDaemon(options: DaemonOptions) {
       else engineTasks.delete(sessionId)
       if (tasks.length && stop) engineTaskStops.set(sessionId, stop)
       else engineTaskStops.delete(sessionId)
-      globalSink.append({ type: "session.background.changed", sessionId })
+      // A stopping daemon's engines end their processes after the database closed: nobody is left to tell.
+      try { globalSink.append({ type: "session.background.changed", sessionId }) } catch (error) { if (!(error instanceof RangeError)) throw error }
     },
     continuity: continuity.forSession,
     compound: (sessionId) => compoundCalls.get(sessionId),
@@ -1343,6 +1405,12 @@ export async function startDaemon(options: DaemonOptions) {
     },
     review: (sessionId) => reviews.port(sessionId),
     // Built below with the loop service; tools only call this during turns.
+    // A bot's learning tools (notes, skills, its own schedules): only for a bot's session with the flag on.
+    bot: (sessionId) => {
+      const name = botLearnModule ? botNameOf(sessionId) : undefined
+      const directory = name ? store.sessionDirectory(sessionId) : undefined
+      return name && directory ? botLearnModule!.createBotPort({ dir: options.dir, name, directory: canonicalDir(directory), sessionId, redact: (text) => secrets.mask(sessionId, text), loops: { list: () => loops.list(), stop: (loopId) => loops.stop(loopId), create: createLoop } }) : undefined
+    },
     loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
     // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
     loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => {
@@ -1445,7 +1513,13 @@ export async function startDaemon(options: DaemonOptions) {
   const engine: typeof rawEngine = {
     ...rawEngine,
     async runTurn(turn) {
-      const unread = !turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
+      // Experimental bots: the memory reader loads at the first turn with the flag on, never otherwise.
+      if (botsOn()) {
+        botMemoryModule ??= await import("./bot-memory")
+        botRecallModule ??= await import("./bot-recall")
+        botLearnModule ??= await import("./bot-learn")
+      }
+      const unread =!turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
         loopNotes.delete(turn.sessionId)
         const { foldRunNotices } = await import("@mendcode/loops")
@@ -1461,8 +1535,12 @@ export async function startDaemon(options: DaemonOptions) {
         store.meta.set(restrictionKey, String(excluded.includes("threads") && excluded.includes("pr_watch")))
       }
       keepSessionEngine(turn.sessionId, true)
-      const model = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const agentModel = agentModelOf(turn.sessionId, catalog, turn.selection?.agent)
+      const model = agentModel ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(model)) return retiredEngineError
+      // The engine router reads the turn's selection, else the session's model: a bot whose model runs on another engine (Claude Code,
+      // Codex, pi, an ACP agent) names it in the selection, so the turn goes to that engine and not to the session's.
+      if (agentModel && (modelEngine(agentModel, catalog) || agentModel.model.startsWith("acp:")) && turn.selection?.model?.model !== agentModel.model) turn = { ...turn, selection: { ...turn.selection, model: agentModel } }
       // A recorded notice (`actor.record`, the PR reviewer's news): already in the transcript, answered by no model on any engine. Only
       // the native engine keeps it in its own history; another program's engine is not started for it.
       if (turn.turnOptions?.noReply && turn.authority?.synthetic) {
@@ -1562,7 +1640,7 @@ export async function startDaemon(options: DaemonOptions) {
       } finally { lease?.release() }
     },
     async compact(turn) {
-      const selected = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const selected = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(selected)) return retiredEngineError
       if (options.info?.engine !== "native") {
         const model = resolveModel({ role: "compaction", roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
@@ -1595,6 +1673,20 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.backlog > MAX_CLIENT_BACKLOG_BYTES) connection.socket.end()
   }
 
+  /**
+   * Experimental bots: what memory review found in a bot's session is also kept as the bot's own notes (everywhere for the user
+   * scope, this project for the project scope), deduped and redacted, so the bot's next chat in any folder starts knowing it.
+   * The bot memory module is loaded by the bot's own turns, so a session of a bot always finds it; with the flag off nothing is written.
+   */
+  function keepBotNotes(job: { sessionId: string; directory: string }, memories: ReadonlyArray<{ scope: string; text: string }>) {
+    const module = botMemoryModule
+    const name = module && botsOn() ? store.sessionAgent(job.sessionId as SessionId) : undefined
+    const bot = name ? agents.auxiliary(job.directory, name) : undefined
+    if (!module || !name || !bot?.bot || bot.source !== "user" || !bot.trusted) return
+    const notes = (scope: string) => memories.filter((memory) => memory.scope === scope).slice(0, 6).map((memory) => redactSecrets(memory.text).text)
+    module.appendBotNotes({ dir: options.dir, name }, notes("user"))
+    module.appendBotNotes({ dir: options.dir, name, directory: canonicalDir(job.directory) }, notes("project"))
+  }
   /** Loops and workflows observe every session event (a map lookup per event each). */
   let extractedNotices: MemoryEntry[] = []
   const extractionOptions: Parameters<typeof createMemoryExtraction>[0] = {
@@ -1618,6 +1710,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (written) notices.push(written)
         }
       }
+      keepBotNotes(job, memories)
       maintainMemory(job.directory)
       return proposed
     },
@@ -1789,28 +1882,66 @@ export async function startDaemon(options: DaemonOptions) {
   })
 
   /** What a running turn is doing right now, for the agent view: when it started, tools in flight, requests waiting. */
-  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string> }>()
-  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; paused?: boolean } {
+  const live = new Map<SessionId, { since: number; tools: Map<string, string>; pending: Map<string, string>; kinds: Map<string, "approval" | "question" | "plan">; compactions: Set<string> }>()
+  /**
+   * The sub-agents working for each session right now, for the left list: its child sessions with a turn running (`child:<id>`) and
+   * the engine's own sub-agent calls (`item:<id>`, a Claude Code `Agent` call), which outlive the turn while they run in the background.
+   */
+  const liveAgents = new Map<SessionId, Set<string>>()
+  function noteAgent(sessionId: SessionId, key: string, running: boolean) {
+    const set = liveAgents.get(sessionId)
+    if (running) {
+      if (set?.has(key) || (set?.size ?? 0) >= MAX_LIVE_AGENTS) return false
+      liveAgents.set(sessionId, (set ?? new Set()).add(key))
+      return true
+    }
+    if (!set?.delete(key)) return false
+    if (!set.size) liveAgents.delete(sessionId)
+    return true
+  }
+  function liveInfo(sessionId: SessionId): { since?: number; tool?: string; pending?: string; pendingKind?: "approval" | "question" | "plan"; paused?: boolean; agents?: number; compacting?: boolean } {
     const paused = actors.get(sessionId)?.snapshot().paused ? { paused: true } : {}
+    const agents = liveAgents.get(sessionId)?.size ? { agents: liveAgents.get(sessionId)!.size } : {}
     const entry = live.get(sessionId)
-    if (!entry) return paused
+    if (!entry) return { ...paused, ...agents }
     const tool = [...entry.tools.values()].at(-1)
     const pending = [...entry.pending.values()].at(-1)
-    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending } : {}), ...paused }
+    const pendingKind = [...entry.kinds.values()].at(-1)
+    return { since: entry.since, ...(tool ? { tool } : {}), ...(pending ? { pending, ...(pendingKind ? { pendingKind } : {}) } : {}), ...paused, ...agents, ...(entry.compactions.size ? { compacting: true } : {}) }
+  }
+  /** A sub-agent's turn starting or ending moves its parent's count; a Claude Code agent call is counted until its end is reported. */
+  function trackAgents(event: SessionEvent) {
+    const id = event.sessionId
+    const ended = event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed"
+    if (event.type === "turn.started" || ended) {
+      const parentId = store.sessionInfo(id)?.parentId as SessionId | undefined
+      if (parentId && noteAgent(parentId, `child:${id}`, event.type === "turn.started")) publishActivity(parentId, actors.get(parentId)?.snapshot().foreground ?? "idle")
+      return false
+    }
+    if (event.type === "item.started" && event.kind === "tool_call" && event.meta?.subagent === true) return noteAgent(id, `item:${event.itemId}`, true)
+    if (event.type !== "item.completed") return false
+    // A background agent's call completes as soon as it is launched; its end comes later as an `agentEnd` under that call.
+    if (event.meta?.agentEnd === true && typeof event.meta.agentParent === "string") return noteAgent(id, `item:${event.meta.agentParent}`, false)
+    return event.meta?.background === true && event.status === "ok" ? false : noteAgent(id, `item:${event.itemId}`, false)
   }
   function trackLive(event: SessionEvent) {
     const id = event.sessionId
-    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map() })
+    const agentsMoved = trackAgents(event)
+    if (event.type === "turn.started") return void live.set(id, { since: event.at, tools: new Map(), pending: new Map(), kinds: new Map(), compactions: new Set() })
     if (event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed") return void live.delete(id)
     // The queue length lands right after the event; publish once the actor has settled.
     if (event.type === "queue.added" || event.type === "queue.changed") return void queueMicrotask(() => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle"))
     const entry = live.get(id)
-    if (!entry) return
-    let changed = false
+    if (!entry) {
+      if (agentsMoved) publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle")
+      return
+    }
+    let changed = agentsMoved
     if (event.type === "item.started" && event.kind === "tool_call") (entry.tools.set(event.itemId, String(event.meta?.tool ?? "tool").slice(0, 200)), (changed = true))
-    else if (event.type === "item.completed") changed = entry.tools.delete(event.itemId)
-    else if (event.type === "server.request") (entry.pending.set(event.requestId, event.title.slice(0, 200)), (changed = true))
-    else if (event.type === "server.request.resolved") changed = entry.pending.delete(event.requestId)
+    else if (event.type === "item.started" && event.kind === "compaction") (entry.compactions.add(event.itemId), (changed = true))
+    else if (event.type === "item.completed") changed = entry.tools.delete(event.itemId) || entry.compactions.delete(event.itemId) || changed
+    else if (event.type === "server.request") (entry.pending.set(event.requestId, event.title.slice(0, 200)), entry.kinds.set(event.requestId, event.planReview ? "plan" : event.kind), (changed = true))
+    else if (event.type === "server.request.resolved") (entry.kinds.delete(event.requestId), (changed = entry.pending.delete(event.requestId)))
     if (changed) publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle")
   }
 
@@ -2575,10 +2706,12 @@ export async function startDaemon(options: DaemonOptions) {
       store: store.loops,
       clock,
       ids,
-      createSession: ({ directory, title, readOnly, permission }) => {
+      createSession: ({ directory, title, readOnly, permission, agent }) => {
         const id = ids("session")
         store.createSession({ id, directory, title })
         store.meta.set(`session.title.manual:${id}`, "true")
+        // A bot's schedule runs as that bot (its memory, skills and digest apply).
+        if (agent) store.setSessionAgent(id, agent)
         announceSession(id, directory)
         const actor = actorFor(id)
         // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
@@ -2953,6 +3086,11 @@ export async function startDaemon(options: DaemonOptions) {
     store,
     ...(options.foreignThreads ? { foreign: createForeignThreads(options.foreignThreads) } : {}),
     startPlan: (from, directory) => sessionStarter.plan(from, directory),
+    // Experimental bots: a bot reads its own chats and notes through the tool (bot-recall.ts, docs/agents.md); nothing here runs with the flag off.
+    botOf: botNameOf,
+    // The tier counts like the flag: a bot on balanced or full writes to sessions as the main agent does.
+    threadToolsOn: () => featureOn(store.settings.get(), "threads"),
+    botNotes: (bot, query) => botMemoryModule!.searchBotNotes({ dir: options.dir, name: bot, ...(query ? { query } : {}) }),
     peers: (sessionId) => peers.port(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     busy: (sessionId) => {
@@ -3283,6 +3421,14 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** The Git page's push, create pull request and PR tab run git and gh on the network: off unless `experimental.git_actions` is on (docs/git.md). */
   const gitActionsOn = () => effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.git_actions === true
+  /** Experimental bots (docs/agents.md): off unless `experimental.bots` is on. */
+  function botsOn() { return !options.safeMode && store.settings.get().experimental?.bots === true }  /** The model's draft of an agent from a description (`agent.create` and `bot.create` with `generate`); any failure is a `fallback` for the plain template. */
+  async function generateAgentOutcome(command: { directory: string; model?: string | undefined; name?: string | undefined; description: string }, signal: AbortSignal | undefined) {
+    const listed = agents.report({ directory: canonicalDir(command.directory) }).agents
+    const model = command.model ? { model: command.model } : options.models?.selectable ? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), command.directory), catalog: options.models }) : undefined
+    const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted && ((request) => completeBudgeted({ ...request, auxiliary: { role: "agentGenerate", directory: canonicalDir(command.directory) } })), description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal })
+    return { ...("content" in result && result.content ? { generated: result.content } : {}), ...(result.fallback ? { fallback: result.fallback } : {}), calledProvider: result.calledProvider }
+  }
   /** A line in the session's transcript that says what the Git page did: an event of the log, never a model turn. */
   const gitNote = (sessionId: SessionId | undefined, groupId: string, text: string) => {
     if (sessionId && store.hasSession(sessionId)) sessionSink.append({ type: "session.orchestration", sessionId, groupId: `git:${groupId}`.slice(0, 64), text: redactSecrets(text).text.slice(0, 1000) })
@@ -3535,6 +3681,10 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.rejected) return
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
     if ((connection.remoteAddress || connection.peer) && command.type.startsWith("memory.")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: memory is local only" })
+    if (command.type.startsWith("bot.")) {
+      if ((connection.remoteAddress || connection.peer) && command.type !== "bot.list") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: making, editing and teaching bots is local only" })
+      if (!botsOn()) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: bots are off: turn them on with /experimental bots on" })
+    }
     if (connection.peer?.readOnly && !isReadOnlyCommand(command.type)) {
       return send(connection, { v: PROTOCOL_VERSION, kind: "error", id: command.id, error: { code: "forbidden", message: "read-only token" } })
     }
@@ -3728,6 +3878,7 @@ export async function startDaemon(options: DaemonOptions) {
         return connection.socket.end()
       }
       connection.clientId = command.clientId
+      connection.client = { name: command.client.name, callerAgent: command.capabilities.includes(AGENT_CALLER_CAPABILITY) }
       // What the client says of itself can add the agent-origin restriction, never lift the one the socket's peer earned.
       connection.agent ??= peerOrigin.declared(command.capabilities)
       connection.dialogs = !connection.remoteAddress && !connection.peer && command.capabilities.includes(DIALOGS_CAPABILITY)
@@ -3856,7 +4007,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (spare) return reply(connection, command.id, { ok: true, result: { sessionId: spare, reused: true } })
         }
         const id = ids("session")
-        store.createSession({ id, directory: command.directory, title: command.title ?? "", ...(command.parentId ? { parentId: command.parentId } : {}) })
+        store.createSession({ id, directory: command.directory, title: command.title ?? "", origin: connectionOrigin(connection), ...(command.parentId ? { parentId: command.parentId } : {}) })
         // Made on purpose by an API client: never reused, hidden or removed as an empty chat.
         if (!command.reuseEmpty && !command.title) store.emptySessions.markExplicit(id)
         if (command.reuseEmpty && !command.title && !command.choice && !command.agent && !command.parentId) quietEmpties.add(id)
@@ -3890,7 +4041,7 @@ export async function startDaemon(options: DaemonOptions) {
           const first = store.engineMessages.first(command.sessionId, "native") as import("@mendcode/engine-native").ModelMessage | undefined
           const seed = focusedHandoff(first ? [first] : [], safeGoal.text, context, store.limitCheckpoints.get(command.sessionId)?.summary)
           const id = ids("session")
-          store.createSession({ id, directory: source.directory, title: `handoff: ${safeGoal.text}`.slice(0, 200) })
+          store.createSession({ id, directory: source.directory, title: `handoff: ${safeGoal.text}`.slice(0, 200), origin: connectionOrigin(connection) })
           store.handoff.queueContext({ sessionId: id, fromSessionId: command.sessionId, title: "Focused handoff", text: seed })
           store.sessionTree.recordFork({ sessionId: id, parentId: command.sessionId })
           store.setSessionModel(id, store.sessionModel(command.sessionId))
@@ -3909,7 +4060,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (point && !point.ok) return reply(connection, command.id, point)
         const id = ids("session")
         const title = command.title ?? (command.readOnly ? `side: ${source.title || "untitled"}` : `fork: ${source.title || "untitled"}`)
-        store.createSession({ id, directory: source.directory, title: title.slice(0, 200) })
+        store.createSession({ id, directory: source.directory, title: title.slice(0, 200), origin: connectionOrigin(connection) })
         store.meta.set(`session.title.manual:${id}`, "true")
         let branch: ReturnType<typeof store.forkConversation> | undefined
         try {
@@ -4254,13 +4405,13 @@ export async function startDaemon(options: DaemonOptions) {
             if (agents.report({ directory }).agents.some((agent) => agent.name === selected && agent.trusted && agent.disable)) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: agent ${selected} is disabled` })
             if (command.attachments?.some((attachment) => attachment.mime.startsWith("image/")) && options.models?.selectable) {
               const catalog = options.models
-              const refusal = imageRefusal(command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog }), catalog)
+              const refusal = imageRefusal(agentModelOf(command.sessionId, catalog, command.selection?.agent) ?? command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog }), catalog)
               if (refusal) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${refusal}` })
             }
             if (command.turnOptions && Object.keys(command.turnOptions).length) {
               // No model call, tool removal and a required answer shape are only honoured by the native engine: Claude Code, ACP and Codex turns would silently ignore them.
               const catalog = options.models ?? { selectable: false, list: () => [], defaults: { model: "engine default" } }
-              const model = command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
+              const model = agentModelOf(command.sessionId, catalog, command.selection?.agent) ?? command.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
               if (options.info?.engine !== "native" || modelEngine(model, catalog) || model.model.startsWith("acp:")) return reply(connection, command.id, { ok: false, code: "unsupported", message: "[DAEMON]: per-prompt noReply, tool exclusions and output format need the native engine; this session's model runs on another engine" })
               if (command.turnOptions.format && !structuredValidator(command.turnOptions.format.schema).ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: output format is not a supported JSON Schema" })
             }
@@ -4301,9 +4452,10 @@ export async function startDaemon(options: DaemonOptions) {
           }
         }
         if (peer && safe.type === "user.submit") {
-          const model = safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
+          const model = agentModelOf(safe.sessionId, catalog, safe.selection?.agent) ?? safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
           const key = modelEngine(model, catalog) ?? options.info?.engine
-          if (key === "opencode" || key === "cursor" || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
+          // The agent's own model counts, not only the submitted one: an agent set to pi or an ACP agent must not start them for a peer.
+          if (key === "pi" || key === "opencode" || key === "cursor" || model.model.startsWith("acp:") || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
           safe = { ...safe, turnOptions: remoteTurnOptions(safe.turnOptions) }
         }
         // Only the submitted text grants resource reads; attached thread/PR/agent context does not.
@@ -4364,12 +4516,12 @@ export async function startDaemon(options: DaemonOptions) {
           // An extension may add text of its own (a file, an environment value): secrets in that are markers too.
           const rewritten = captured(safe.sessionId, routed.text)
           if ("ok" in rewritten) return reply(connection, command.id, rewritten)
-          const result = await actor.handle(rewritten.text === safe.text ? safe : { ...safe, text: rewritten.text }, safe.displayText ?? safe.text)
+          const result = await actor.handle(rewritten.text === safe.text ? safe : { ...safe, text: rewritten.text }, safe.displayText ?? safe.text, connectionOrigin(connection))
           const answer = result.ok && routed.notice ? { ok: true as const, result: { ...result.result, notice: routed.notice } } : result
           if (requestKey && answer.ok) rememberRequest(requestKey, answer)
           return reply(connection, command.id, answer)
         }
-        const result = await actor.handle(safe, safe.type === "user.submit" ? safe.displayText : undefined)
+        const result = await actor.handle(safe, safe.type === "user.submit" ? safe.displayText : undefined, connectionOrigin(connection))
         if (requestKey && result.ok) rememberRequest(requestKey, result)
         if (result.ok && remembered) {
           const settings = store.settings.set(approvalRulePatch({ settings: store.settings.get(), level: remembered.level, directory: canonicalDir(store.sessionDirectory(command.sessionId) ?? process.cwd()), rules: remembered.offer.rules }))
@@ -4714,7 +4866,8 @@ export async function startDaemon(options: DaemonOptions) {
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
         if (command.addDirs && connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: extra directories are set on the machine that runs the commands" })
         const { id: _id, clientId: _client, type: _type, sessionId: _session, ...patch } = command
-        return reply(connection, command.id, { ok: true, result: { limits: runLimits.configure(command.sessionId, patch) } })
+        // Tool limits a client set are marked, so an engine that would ignore them never runs the session (run-limit-guard.ts).
+        return reply(connection, command.id, { ok: true, result: { limits: configureRunLimits(runLimits, command.sessionId, patch) } })
       }
       case "permissions.list":
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
@@ -5377,6 +5530,8 @@ export async function startDaemon(options: DaemonOptions) {
             }
           }
           if (!definition) throw new Error(`unknown command /${command.name}`)
+          const ambiguous = (await import("./custom-commands")).ambiguousCommand(definition)
+          if (ambiguous) throw new Error(ambiguous)
           const sessionModel = resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
           let invocation = { command: definition, args: command.args }
           const skillText = await skillInvocation(directory, definition, command.args)
@@ -5484,6 +5639,8 @@ export async function startDaemon(options: DaemonOptions) {
           }
           return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: unknown command /${command.name}` })
         }
+        const ambiguous = (await import("./custom-commands")).ambiguousCommand(found)
+        if (ambiguous) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${ambiguous}` })
         let skillText: string | undefined
         try { skillText = await skillInvocation(command.directory, found, command.args) } catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${(error as Error).message}` }) }
         return reply(connection, command.id, { ok: true, result: { prompt: skillText ?? (await import("./custom-commands")).expandCommand(found.body, command.args), ...(found.agent ? { agent: found.agent } : {}), ...(found.model ? { model: found.model } : {}), ...(found.subtask !== undefined ? { subtask: found.subtask } : {}) } })
@@ -5636,6 +5793,13 @@ export async function startDaemon(options: DaemonOptions) {
           await (options.openImage ?? (await import("./open-url")).openImage)({ path: command.path, ...(command.reveal ? { reveal: true } : {}) })
           return reply(connection, command.id, { ok: true, result: { opened: true } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : "Could not open the image" }) }
+      }
+      case "app.open": {
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Opening apps is local only" })
+        try {
+          await (options.openApp ?? (await import("./open-url")).openApp)(command.app)
+          return reply(connection, command.id, { ok: true, result: { opened: true } })
+        } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : "Could not open the app" }) }
       }
       case "session.changes":
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Session file snapshots are local only" })
@@ -6037,13 +6201,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "agent.create": {
         if (connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Agent creation is local only" })
         try {
-          const listed = agents.report({ directory: canonicalDir(command.directory) }).agents
-          let outcome: Parameters<typeof createAgentFile>[2]
-          if (command.generate) {
-            const model = command.model ? { model: command.model } : options.models?.selectable ? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), command.directory), catalog: options.models }) : undefined
-            const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted && ((request) => completeBudgeted({ ...request, auxiliary: { role: "agentGenerate", directory: canonicalDir(command.directory) } })), description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal: connection.signal })
-            outcome = { ...(result.content ? { generated: result.content } : {}), ...(result.fallback ? { fallback: result.fallback } : {}), calledProvider: result.calledProvider }
-          }
+          const outcome = command.generate ? await generateAgentOutcome(command, connection.signal) : undefined
           const created = await createAgentFile(options.dir, command, outcome)
           const loaded = agents.report({ directory: canonicalDir(command.directory) }).agents.find((agent) => agent.file === created.file)
           return reply(connection, command.id, { ok: true, result: { ...created, ...(loaded ? { agent: loaded } : {}) } })
@@ -6077,6 +6235,45 @@ export async function startDaemon(options: DaemonOptions) {
           } } })
           return reply(connection, command.id, { ok: true, result: { agent, ...result, sessionId, tool: command.tool, input: command.params ?? {}, callsProviders: command.tool === "task" } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: String(error).slice(0, 4000) }) }
+      }
+      case "bot.list":
+      case "bot.create":
+      case "bot.duplicate":
+      case "bot.file":
+      case "bot.save":
+      case "bot.draft":
+      case "bot.delete":
+      case "bot.memory": {
+        const service = await import("./bot-service")
+        const context: import("./bot-service").BotContext = {
+          dir: options.dir,
+          agents: () => agents.report({ directory: options.dir }),
+          sessions: (name) => sessionAutomation.list({ agent: name, roots: true, limit: 100 }),
+          sessionsOfModel: (model) => sessionAutomation.list({ model, roots: true, limit: 100 }),
+          connectors: () => options.botConnectors ?? [],
+          // Schedules are loops the bot owns; read only when loops already exist (nothing is loaded for this).
+          schedules: (name) => loops.list().filter((loop) => loop.agent === name && loop.state !== "stopped" && loop.state !== "completed").map((loop) => ({ loopId: loop.loopId, name: loop.name, trigger: describeTrigger(loop.trigger), directory: loop.directory, state: loop.state, runs: loop.runs, ...(loop.nextWakeAt !== undefined ? { nextWakeAt: loop.nextWakeAt } : {}) })),
+        }
+        try {
+          switch (command.type) {
+            case "bot.list": return reply(connection, command.id, { ok: true, result: await service.listBots(context) })
+            case "bot.create": {
+              const outcome = command.generate ? await generateAgentOutcome(command, connection.signal) : undefined
+              const created = await service.createBot({ dir: options.dir, command, ...(outcome ? { outcome } : {}), exists: (name) => context.agents().agents.some((agent) => agent.name === name), write: createAgentFile })
+              const loaded = agents.report({ directory: options.dir }).agents.find((agent) => agent.file === created.file)
+              return reply(connection, command.id, { ok: true, result: { ...created, ...(loaded ? { agent: loaded } : {}) } })
+            }
+            case "bot.duplicate": return reply(connection, command.id, { ok: true, result: await service.duplicateBot(context, command) })
+            case "bot.file": return reply(connection, command.id, { ok: true, result: await service.botFile(context, command) })
+            case "bot.save": return reply(connection, command.id, { ok: true, result: await service.saveBot(context, command) })
+            case "bot.delete": return reply(connection, command.id, { ok: true, result: await service.deleteBot(context, command) })
+            case "bot.draft": {
+              const outcome = await generateAgentOutcome(command, connection.signal)
+              return reply(connection, command.id, { ok: true, result: service.draftBot({ command, outcome, exists: (name) => context.agents().agents.some((agent) => agent.name === name) }) })
+            }
+            case "bot.memory": return reply(connection, command.id, { ok: true, result: service.botMemory(context, command) })
+          }
+        } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       }
       case "agents.list":
       case "session.agent.set": {
@@ -6148,6 +6345,8 @@ export async function startDaemon(options: DaemonOptions) {
         const idle = command.type === "session.model.set" && !store.turns.list(command.sessionId).some((turn) => turn.status === "running")
         const rebuilt = switchedTo === "native" && idle ? importForeign(command.sessionId!, resolveModel({ role: "main", session, roles, catalog })) : undefined
         const handoff = rebuilt ? { from: rebuilt.from, to: resolveModel({ role: "main", session, roles, catalog }).model, turns: rebuilt.turns, omitted: rebuilt.omitted, tokens: rebuilt.tokens, rebuilt: true as const } : switchedTo ? portable.preview({ sessionId: command.sessionId!, key: switchedTo }) : undefined
+        // A session on an agent that names a model runs on that one (the engine gives the agent's model priority), so that is the model the report shows as in force.
+        const bound = sessionId && catalog.selectable ? agentModelOf(sessionId, catalog) : undefined
         const listed = modelsReport({ engine: options.info?.engine ?? "unknown", catalog, roles, session, sessionKnown: sessionId !== undefined, resolve: modelResolutions.apply })
         // Where the native engine packs a session on each model under the settings in force; a model another engine runs has none.
         const compactProviders = catalog.selectable ? options.providers?.list(true) ?? [] : []
@@ -6155,7 +6354,7 @@ export async function startDaemon(options: DaemonOptions) {
         // A model's `modelContext` (a window or compaction point made permanent for it) is listed beside the catalog's window.
         const withSetting = (model: ModelInfo) => { const contextSetting = modelContextOf(compactSettings, model); return contextSetting ? { ...model, contextSetting } : model }
         const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = model.engine === "claude" ? Number(claudeCompactEnv({ model: model.id, settings: compactSettings, on: featureOn(compactSettings, "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
-        return reply(connection, command.id, { ok: true, result: { ...listed, models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
+        return reply(connection, command.id, { ok: true, result: { ...listed, ...(bound ? { effective: bound } : {}), models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
       }
       case "reasoning.status": {
         const directory = canonicalDir(command.directory)

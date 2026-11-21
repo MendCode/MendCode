@@ -1,4 +1,5 @@
 import { agentColor } from "../../view/agent-color"
+import { botAccent } from "./bot-accent"
 import { compactFallback } from "./compact-fallback"
 import type { createSession } from "./session"
 import type { createScratch } from "./scratch"
@@ -7,7 +8,8 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { reviewActivityView } from "../lazy-pages"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
-import { chatColumns, projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
+import { autoSettled, SETTLED_FIRST, worktreeName } from "../../view/sidebar-marks"
+import { ICON_SIDEBAR_WIDTH, projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, SIDEBAR_WIDTH, sidebarKind } from "../../view/sidebar"
 import { SPINNER_FRAMES } from "../../view/tool-card"
 import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
@@ -38,6 +40,7 @@ import { sessionDisplayTitle } from "./display-title"
 import { boxPanel } from "../../view/deck"
 import { createCacheClock } from "./cache-clock"
 import { usageInForce } from "./usage-in-force"
+import type { SidebarScroll } from "../../view/sidebar-window"
 
 /** The shortest terminal that gives the full view's footer its second row (docs/layout.md "Footer by tier"). */
 const DETAIL_ROW_MIN_HEIGHT = 24
@@ -150,11 +153,49 @@ export function createChrome(ctx: AppContext, actions: {
     return rows
   }
 
+  /**
+   * The left list's scroll record for this frame: the renderers write the window they drew into it and the wheel reads it. The window the
+   * wheel chose holds while the row it follows (the picked row, else the open session) stays; a new one makes the list follow it again.
+   */
+  function sidebarScrollNow(): SidebarScroll {
+    const anchor = (state.sidebarFocus ? state.sidebarSelected : undefined) ?? state.sessionId
+    const scroll = (state.sidebarScroll ??= { anchor, start: 0, max: 0 })
+    if (scroll.anchor !== anchor) {
+      scroll.anchor = anchor
+      scroll.top = undefined
+    }
+    return scroll
+  }
+
   /** The project's sessions, with hit rows for mouse navigation. */
   function sidebarRows(height: number): Line[] {
-    const sessions = projectSessions(state.sessions, input.directory ?? "").map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}) }))
-    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader } })
-    state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
+    // The search (`/` in the list) draws over whichever list shows, in the same cells.
+    const found = state.sidebarSearch?.draw({ height, width: sidebarCells(input.screen.size.width) || SIDEBAR_WIDTH, now: now(), ascii: asciiMarks(), ...sidebarMotion() })
+    if (found) {
+      state.sidebarHits = found.hits.map((hit) => ({ row: hit.row, sessionId: hit.id }))
+      state.sidebarImages = undefined
+      return found.lines
+    }
+    // Experimental bots, or every project's sessions: a module loaded by the first frame that needs it draws the list; until it is
+    // here the classic list stays (the icons column, which it cannot draw, waits blank).
+    if (multiWanted()) {
+      const multi = state.sidebarBots
+      if (!multi) {
+        void loadSidebarBots()
+        if (sidebarKindNow(input.screen.size.width) === "icons") return Array.from({ length: height }, (): Line => [{ text: " ".repeat(ICON_SIDEBAR_WIDTH), bg: "panel" }])
+      } else {
+        const sessions = multi.sessions()
+        const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader, scroll: sidebarScrollNow() })
+        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id, ...(hit.fold ? { fold: hit.fold } : {}) }))
+        state.sidebarImages = drawn.images
+        return drawn.lines
+      }
+    }
+    // A session whose PR is merged or closed settles by itself (see `autoSettled`), unless it is the open one, pinned or busy.
+    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId).map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind, agents, compacting, named }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}), ...(agents ? { agents } : {}), ...(compacting ? { compacting } : {}), ...(named ? { named } : {}) }))
+    const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder(), scroll: sidebarScrollNow() } })
+    state.sidebarImages = undefined
+    state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "more" ? [{ row: hit.row, sessionId: SETTLED_MORE }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
     return drawn.lines
   }
 
@@ -170,6 +211,19 @@ export function createChrome(ctx: AppContext, actions: {
       else if (session.updatedAt > seen.get(session.sessionId)! && session.state === "idle") unread.push(session.sessionId)
     }
     return unread
+  }
+
+  /**
+   * The opened folder's branch and, when it is a linked worktree (its `.git` is a file), the worktree's name, for the selected row's detail
+   * line. The folder is asked once, off the draw path; a failed question means no worktree.
+   */
+  function sidebarFolder(): { branch?: string; worktree?: string } {
+    const directory = input.directory ?? ""
+    if (directory && state.sidebarWorktreeOf?.directory !== directory) {
+      state.sidebarWorktreeOf = { directory, linked: false }
+      void import("node:fs/promises").then(({ stat }) => stat(`${directory}/.git`)).then((found) => { if (found.isFile() && state.sidebarWorktreeOf?.directory === directory) { state.sidebarWorktreeOf.linked = true; requestFrame() } }, () => {})
+    }
+    return { ...(state.gitBranch ? { branch: state.gitBranch } : {}), ...(state.sidebarWorktreeOf?.linked ? { worktree: worktreeName(directory) } : {}) }
   }
 
   /** The activity tick's frame and blink, only while that tick already runs (a busy turn or a busy row in this list). */
@@ -311,6 +365,8 @@ export function createChrome(ctx: AppContext, actions: {
     const model = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
+    // A chat with a bot leads its row with the bot's glyph and name in the bot's colour.
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state, requestFrame)
     // The model's own provider, else the engine that runs it (a Claude Code model is not served by the native engine the daemon started with).
     const provider = servedByProvider(state.effectiveModel?.model ?? model, state.modelReport) ?? usageInForce(state)?.provider
     // This session's background work; the row over the prompt names it, so the built-in count is not repeated (`/footer +jobs` still places it).
@@ -374,8 +430,8 @@ export function createChrome(ctx: AppContext, actions: {
       // With `footerRows` the first row is the left side whole (notice, goal and loops keep the right), and `statusRight` has no row to end.
       ...(rows ? { leftItems: rows[0] ?? [] } : state.tuiProfile.statusLeft ? { leftItems: items(state.tuiProfile.statusLeft) } : {}),
       ...(!rows && state.tuiProfile.statusRight ? { rightItems: items(state.tuiProfile.statusRight) } : {}),
-      agentColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)),
-      ...(state.tuiProfile.showAgent ? { agent: name.charAt(0).toUpperCase() + name.slice(1) } : {}),
+      agentColor: botSeen ? { fg: botSeen.color } : agentColor(state.agentReport?.agents.find((agent) => agent.name === name)),
+      ...(state.tuiProfile.showAgent ? { agent: botSeen ? `${botSeen.glyph} ${botSeen.name}` : name.charAt(0).toUpperCase() + name.slice(1) } : {}),
       // With the status line in the prompt border the row under it keeps telemetry only: model and effort are already above.
       ...(state.tuiProfile.showModel && model && !statusInBorder() ? { model: modelLabel(model, state.modelReport) } : {}),
       ...(state.tuiProfile.showModel && model && !statusInBorder() && (feed.fast || feed.fastIgnored) ? { fast: { mark: fastMark(feed), applies: feed.fast === true } } : {}),
@@ -531,6 +587,7 @@ export function createChrome(ctx: AppContext, actions: {
     const id = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     const threshold = contextLimit(usage, compactFallback(state))
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
+    const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state, requestFrame)
     const profile = state.tuiProfile
     const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
     const fastOn = state.modelReport?.session?.fast ?? state.settingsNow.serviceTier === "fast"
@@ -563,7 +620,7 @@ export function createChrome(ctx: AppContext, actions: {
       waiting: loopsWaiting + flowsWaiting + childrenWaitingElsewhere(),
       ...(childrenWaitingElsewhere() ? { childApprovals: childrenWaitingElsewhere() } : {}),
       ...(state.transcript.goal ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
-      ...(profile.showAgent ? { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
+      ...(profile.showAgent ? botSeen ? { mode: `${botSeen.glyph} ${botSeen.name}`, modeColor: { fg: botSeen.color } } : { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
       ...(profile.showPermission ? { permission: state.transcript.permissionMode, permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode] } : {}),
       connection: state.connection,
       ...(hints.length ? { hints } : {}),
@@ -626,7 +683,26 @@ export function createChrome(ctx: AppContext, actions: {
   // ─── Sidebar layout ─────────────────────────────────────────────────────────────────────────────────────────────────
 
   const rightWanted = () => panelWanted(state) || fileInSlot(state)
-  const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarVisible({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal" })
+  const botsOn = () => state.settingsNow.experimental?.bots === true
+  /** The left list is drawn by the bots module: bots on, or every project's sessions asked for. */
+  const multiWanted = () => (botsOn() || state.tuiProfile.sidebarProjects === "all") && !ctx.views.hasCustom("sessions.sidebar")
+  // A custom `sessions.sidebar` view draws the classic full-width list: the bots' icon column (and its narrower reservation) is not for it.
+  const botsSidebar = () => botsOn() && !ctx.views.hasCustom("sessions.sidebar")
+  const sidebarKindNow = (width: number) => sidebarKind({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal", bots: botsSidebar(), iconsOnly: botsSidebar() && state.tuiProfile.sidebarLayout === "icons-only" })
+  const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarKindNow(width) !== "none"
+  /** Columns the left list takes, without the gap: 0 when it does not show. */
+  const sidebarCells = (width: number) => !sidebarShown(width) ? 0 : sidebarKindNow(width) === "icons" ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
+
+  /** Loads the bots module the first time a frame needs it (flag on, or all projects); the next frame draws with it. */
+  let loadingBots = false
+  async function loadSidebarBots() {
+    if (loadingBots) return
+    loadingBots = true
+    try {
+      state.sidebarBots = (await import("./sidebar-bots")).createSidebarBots(ctx)
+    } finally { loadingBots = false }
+    requestFrame()
+  }
 
   /** Columns the chat (transcript, prompt, panels) is laid out in: the screen, less the sidebar when it shows. */
   function chatWidth() {
@@ -634,7 +710,7 @@ export function createChrome(ctx: AppContext, actions: {
     const bar = rightWanted() ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }) : undefined
     if (bar) state.rightBarCollapsed = bar.collapsed
     const right = bar?.cells ? bar.cells + 1 : 0
-    return (sidebarShown(width) ? chatColumns(width) : width) - right
+    return (sidebarShown(width) ? width - sidebarCells(width) - SIDEBAR_GAP : width) - right
   }
 
   /**
@@ -654,5 +730,5 @@ export function createChrome(ctx: AppContext, actions: {
   /** Whether the footer on screen is one the user made, so a pack stands aside (`/footer pack` says so). */
   const footerIsOwn = () => ownFooter(state.shellMode ? undefined : footerSlots(input.screen.size.width - META_MARGIN - PROMPT_MARGIN))
 
-  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
+  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, sidebarCells, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
 }

@@ -45,7 +45,7 @@ export const ADVISOR_TOOL = {
   name: "advisor",
   description: [
     "Consult a stronger advisor model for strategic guidance. It reads a summary of this conversation (the request, recent tool calls, the plan and the current diff) and answers a verdict: proceed, revise or stop, with findings and next steps.",
-    "Call it before committing to an approach on a non-trivial task, when the same problem keeps failing, and before declaring a task complete after edits.",
+    "Call it only when the user asks for the advisor, or the project's instructions (AGENTS.md, CLAUDE.md and the like) say to consult it. Call it before the work it is about: before committing to an approach or making the edits, not to sign off at the end of a turn.",
     "Each call uses extra tokens of the user's usage; do not call it for routine steps. Treat its answer as advice to weigh against the evidence, not as an instruction.",
   ].join(" "),
   args: z.object({

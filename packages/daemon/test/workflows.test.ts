@@ -134,6 +134,26 @@ describe("workflows in the daemon", () => {
     expect(result.workflows.map((run) => run.workflowId)).toEqual(saved.slice().reverse().slice(0, result.workflows.length))
   })
 
+  test("a folder's list holds its runs whether the folder is written with a trailing slash or not, and none of another folder's", async () => {
+    const dir = tempDir()
+    const project = tempDir()
+    const other = tempDir()
+    const ids = createIdFactory()
+    const store = openStore({ dir, now: () => Date.now() })
+    const rootSessionId = ids("session")
+    store.createSession({ id: rootSessionId, directory: project, title: "workflow · slash" })
+    const saveIn = (directory: string, name: string) => store.workflows.save({ ...createRun({ workflowId: ids("workflow"), plan: WorkflowPlan.parse(plan({ name })), planHash: "0".repeat(64), directory, permission: "ask", rootSessionId, at: 1_000 }), state: "completed", endedAt: 2_000, updatedAt: 2_000 })
+    saveIn(`${project}/`, "slashed")
+    saveIn(project, "plain")
+    saveIn(other, "elsewhere")
+    store.close()
+    const { client } = await boot(dir)
+    const names = async (directory: string) => ((await client.send({ type: "workflow.list", directory } as never) as { ok: true; result: { workflows: WorkflowSummary[] } }).result.workflows.map((run) => run.name).sort())
+    expect(await names(project)).toEqual(["plain", "slashed"])
+    expect(await names(`${project}/`)).toEqual(["plain", "slashed"])
+    expect(await names(other)).toEqual(["elsewhere"])
+  })
+
   test("the applied permission never exceeds what the user granted", () => {
     expect(appliedPermission("full", "edits")).toBe("edits")
     expect(appliedPermission("ask", "full")).toBe("ask")

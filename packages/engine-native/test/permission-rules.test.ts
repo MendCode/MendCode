@@ -6,6 +6,7 @@ import { z } from "zod"
 import type { Settings } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { createGrantStore, createNativeEngine, memoryHistory, questionTool, type ModelEvent } from "../src"
+import { hostedWithinLimits, type RunLimits } from "../src/engine"
 import { configRules, declaredRoots, externalPatterns, matchingRule, permissionMatch, policyRules, splitDeclared, toolDisabled } from "../src/permission-rules"
 import { callTool, scriptedProvider, stop, turn } from "./harness"
 
@@ -217,6 +218,40 @@ describe("external directory and doom loop", () => {
   })
 })
 
+
+test("a tool's per-call approval sees the session's permission mode, so a call may ask in every mode but full", async () => {
+  const seen: Array<string | undefined> = []
+  const saved = defineTool({ name: "saved_run", description: "start a saved run", permission: "execute", args: z.object({ name: z.string() }), approvalFor: (_args, context) => (seen.push(context?.mode), context?.mode !== "full"), execute: async () => ({ output: "started", title: "saved_run", isError: false, truncated: false }) })
+  const run = (mode: "full" | "ask") => {
+    const s = scenario([callTool("saved_run", { name: "mend" }), stop("ok")], {}, { tools: [saved] })
+    const t = turn({ text: "go", mode: () => mode, answers: [{ kind: "approve", scope: "once" }] })
+    return s.engine.runTurn(t.input).then(() => t)
+  }
+  expect((await run("full")).asked).toEqual([])
+  expect((await run("ask")).asked).toHaveLength(1)
+  expect(seen).toEqual(["full", "ask"])
+})
+
+test("a scripted run's --offline, --tools and --exclude-tools remove the provider's own web search and image generation too", async () => {
+  const hosted = (limits: RunLimits | undefined) => scenario([stop("ok")], {}, { hostedTools: () => ["web_search", "image_generation"], runLimits: () => limits })
+  const sent = async (limits: RunLimits | undefined) => {
+    const run = hosted(limits)
+    await run.engine.runTurn(turn({ text: "look it up" }).input)
+    return run.requests[0]?.hostedTools
+  }
+  expect(await sent(undefined)).toEqual(["web_search", "image_generation"])
+  expect(await sent({ offline: true })).toBeUndefined()
+  // An allow-list of the caller's own tools names neither.
+  expect(await sent({ tools: ["mcp__kst-studio__kst_read_project", "mcp__kst-studio__kst_catalog"] })).toBeUndefined()
+  // MendCode's names and the provider's both count, in an allow-list and in an exclusion.
+  expect(await sent({ tools: ["read", "websearch"] })).toEqual(["web_search"])
+  expect(await sent({ excludeTools: ["web_search"] })).toEqual(["image_generation"])
+  expect(await sent({ excludeTools: ["websearch", "image_gen"] })).toBeUndefined()
+  const turned = hosted(undefined)
+  await turned.engine.runTurn({ ...turn({ text: "look it up" }).input, turnOptions: { excludeTools: ["websearch"] } })
+  expect(turned.requests[0]?.hostedTools).toEqual(["image_generation"])
+  expect(hostedWithinLimits("web_search", { excludeTools: ["web*"] })).toBe(false)
+})
 
 test("hosted tools obey global denies and primary-only settings without contacting a provider service", async () => {
   const denied = scenario([stop("ok")], { tools: { websearch: false } }, { hostedTools: () => ["web_search", "image_generation"] })

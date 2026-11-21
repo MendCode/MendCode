@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import type { CommandReply } from "@mendcode/client"
 import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { createEditor } from "../src/view/editor"
@@ -244,6 +245,20 @@ describe("edit a queued prompt", () => {
     expect(failing.text().join("\n")).toContain("already started")
   })
 
+  test("a steering message the engine already took says it is with the model until the running tool ends, and how to correct it", async () => {
+    const failing = appHarness({ width: 200, reply: (command) => command.type === "queue.remove" ? { ok: false, error: { code: "target_mismatch", message: "[ACTOR]: queued message not found" } } : undefined })
+    failing.app.applySettings({ onboarded: true })
+    const chat = conversation(failing.sessionId, failing.app.onEvent)
+    const id = ids("queue")
+    chat.emit({ type: "queue.added", queueId: id, text: "no, use the other branch", attachments: [] })
+    chat.emit({ type: "queue.changed", queue: [{ queueId: id, preview: "no, use the other branch", attachments: 0, delivery: "steer" }] })
+    await failing.type(ALT_UP)
+    expect(failing.app.editor.text).toBe("")
+    const shown = failing.text().join("\n")
+    expect(shown).toContain("already handed to the model: it reads it when the running tool ends")
+    expect(shown).not.toContain("that message already started")
+  })
+
   test("a shell line is refused while the prompt holds text, and notices cannot be pulled back", async () => {
     const h = queued()
     const shell = ids("queue")
@@ -307,6 +322,20 @@ describe("Esc Esc backtrack", () => {
     expect(h.sentOf("session.undo").at(-1)).toMatchObject({ atItemId: h.turns[0]!.items[0]!.itemId })
     expect(h.app.page).toBe("chat")
     expect(h.app.editor.text).toBe(h.turns[0]!.items[0]!.text)
+  })
+
+  test("Enter puts the prompt back before the daemon answers the undo, and a refused undo restores the prompt as it was", async () => {
+    const answers: Array<(reply: CommandReply) => void> = []
+    const h = b56Harness({ reply: (command) => (command.type === "session.undo" ? new Promise<CommandReply>((resolve) => answers.push(resolve)) : undefined) })
+    await h.type("\x1b")
+    await h.type("\x1b")
+    void h.app.onInput("\r")
+    await Bun.sleep(5)
+    expect(h.sentOf("session.undo")).toHaveLength(1)
+    expect(h.app.editor.text).toBe(h.turns[1]!.items[0]!.text)
+    answers[0]!({ ok: false, error: { code: "internal", message: "[DAEMON]: undo failed" } } as CommandReply)
+    await Bun.sleep(5)
+    expect(h.app.editor.text).toBe("")
   })
 
   test("f forks from the selected prompt and Esc leaves the picker", async () => {

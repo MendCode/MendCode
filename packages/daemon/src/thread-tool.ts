@@ -1,7 +1,9 @@
 import { defineTool, fail, type ToolPermission, type ToolResult } from "@mendcode/tools"
 import { z } from "zod"
 
-const ACTIONS = ["list", "stats", "read", "search", "message", "wait", "interrupt", "merge_back", "start"] as const
+const ACTIONS = ["list", "stats", "read", "search", "message", "wait", "interrupt", "merge_back", "start", "notes"] as const
+/** What a bot gets from this tool while `experimental.thread_tools` is off (its own recall, docs/agents.md). */
+const RECALL_ACTIONS = ["list", "stats", "read", "search", "notes"]
 
 /**
  * One tool for the project's other local sessions (`threads`, experimental.thread_tools; tier balanced).
@@ -20,12 +22,14 @@ export const threadsTool = defineTool({
     "list also names this project's chats in other programs (codex:…, claude:…, v1:…): read and search only, each asks the user.",
     "start opens a session in another project's folder (absolute directory) with text as its first message; message and wait take another project's id from list scope=all. Those always ask the user, arrive marked as an agent's, and never reach a session above this one's permission.",
     "Read, search, stats, interrupt, merge_back: this project only; use the id as printed. Reading another session needs approval unless the user attached it with @thread. Reasoning is never shown; secrets stay markers.",
+    "A bot (an agent with a bot: block) sees every session of this daemon: list scope=all shows them, list mine=true only your own chats, newest first; read, search and wait work on any session, in any folder, without asking; notes finds your saved notes (query optional). message, interrupt and start keep their rules.",
   ].join(" "),
   permission: "write",
   args: z.object({
     action: z.enum(ACTIONS),
     sessionId: z.string().min(4).max(64).optional().describe("Id from list (not needed for list; stats without it is this session)"),
-    text: z.string().min(1).max(8_000).optional().describe("message, start: text to send; search: text to find"),
+    text: z.string().min(1).max(8_000).optional().describe("message, start: text to send; search, notes: text to find"),
+    mine: z.boolean().optional().describe("list: a bot's own chats in every folder"),
     scope: z.enum(["project", "all"]).optional().describe("list: project (default) or all"),
     directory: z.string().min(1).max(1_024).optional().describe("start: the other project's absolute folder; list: only that folder"),
     title: z.string().min(1).max(120).optional().describe("start: its title"),
@@ -37,7 +41,7 @@ export const threadsTool = defineTool({
     timeoutSeconds: z.number().int().min(1).max(120).optional().describe("wait: seconds to wait, default 60"),
   }),
   permissionFor(args, context): ToolPermission {
-    if (args.action === "list" || args.action === "stats") return "read"
+    if (args.action === "list" || args.action === "stats" || args.action === "notes") return "read"
     if (args.action === "read" || args.action === "search" || args.action === "wait") return "read"
     return "write"
   },
@@ -45,8 +49,10 @@ export const threadsTool = defineTool({
     if (["read", "search", "wait"].includes(args.action) && args.sessionId && context?.threads?.ownTask?.(args.sessionId)) return false
     return ["read", "search", "wait", "merge_back"].includes(args.action) && !(args.sessionId && context?.threads?.granted(args.sessionId))
   },
-  // A message to another project's session, and a session opened there, ask in every mode, full access included: they reach folders and rules this session was not started in.
+  // A message to another project's session, and a session opened there, ask in every mode but full access: they reach folders and rules
+  // this session was not started in, and only full access is the user's word that threads run unattended.
   approvalFor(args, context) {
+    if (context?.mode === "full") return false
     if (args.action === "start") return true
     return args.action === "message" && args.sessionId !== undefined && context?.threads?.projectOf?.(args.sessionId) !== undefined
   },
@@ -69,6 +75,12 @@ export const threadsTool = defineTool({
     const port = context.threads
     if (!port) return fail({ title: "threads", message: "threads are not available here" })
     const title = `threads ${args.action}${args.sessionId ? ` ${args.sessionId}` : ""}`
+    if (port.recallOnly && !RECALL_ACTIONS.includes(args.action)) return fail({ title, message: `${args.action} is not available to a bot unless experimental.thread_tools is on; list mine=true, read, search and notes are` })
+    if (args.action === "notes") {
+      const notes = port.notes?.({ query: args.text })
+      if (!notes?.ok) return fail({ title, message: notes?.message ?? "notes are for a bot's own sessions" })
+      return { output: notes.output, truncated: false, title, isError: false, meta: { action: "notes" } }
+    }
     const need = (field: "sessionId" | "text" | "directory") => fail({ title, message: `${args.action} needs ${field}` })
     if (args.action !== "list" && args.action !== "stats" && args.action !== "start" && !args.sessionId) return need("sessionId")
     if ((args.action === "message" || args.action === "search" || args.action === "start") && !args.text) return need("text")
@@ -77,7 +89,7 @@ export const threadsTool = defineTool({
     const text = args.text ?? ""
     // Only a session of another project is addressed as such, which is exactly what `approvalFor` asked the user about.
     const elsewhere = sessionId && port.projectOf?.(sessionId) !== undefined ? { elsewhere: true } : {}
-    const result = args.action === "list" ? port.list(args.limit, { scope: args.scope, directory: args.directory, query: args.query, state: args.state, project: args.project })
+    const result = args.action === "list" ? port.list(args.limit, { mine: args.mine, scope: args.scope, directory: args.directory, query: args.query, state: args.state, project: args.project })
       : args.action === "start" ? await (port.start?.({ directory: args.directory!, text, title: args.title }) ?? Promise.resolve({ ok: false as const, message: "starting sessions is not available here" }))
       : args.action === "stats" ? port.stats({ sessionId: args.sessionId })
       : args.action === "read" ? await port.read({ sessionId, limit: args.limit, before: args.before })

@@ -4,13 +4,15 @@ import type { createPrompt } from "./prompt"
 import type { createMemory } from "./memory"
 import { createKeyTokenizer, type KeyToken } from "../keys"
 import { connectPaste } from "../lazy-pages"
+import { runningSubagents, stopSubagents as stopSessionSubagents } from "./subagent-stop"
 import { composeSubmission, liveAttachments, pastedPaths } from "../../view/attachments"
+import { livePastes } from "../../view/paste-placeholders"
 import { parseSlash, slashRefusal } from "../../view/commands"
 import { removedAliasHint } from "../../view/slash-aliases"
 import { hoistCommand } from "../../view/mentions"
 import type { AppContext } from "./context"
 import type { ItemId, TurnId } from "@mendcode/protocol"
-import { DOUBLE_ESC_MS, RETRACT_NARRATION_CHARS } from "./constants"
+import { DOUBLE_ESC_MS, RETRACT_MAX_STEPS, RETRACT_NARRATION_CHARS } from "./constants"
 import { MAX_DRAFT_CHARS } from "@mendcode/protocol/wire"
 import { moveLongPastes } from "./paste-upload"
 
@@ -29,6 +31,7 @@ export function createInput(ctx: AppContext, actions: {
   attachPasted: ReturnType<typeof createPrompt>["attachPasted"]
   insertPasted: ReturnType<typeof createPrompt>["insertPasted"]
   expandedPrompt: ReturnType<typeof createPrompt>["expandedPrompt"]
+  rememberComposed: ReturnType<typeof createPrompt>["rememberComposed"]
   pasteClipboardImage: ReturnType<typeof createPrompt>["pasteClipboardImage"]
   syncMentions: ReturnType<typeof createPrompt>["syncMentions"]
   syncDraft: ReturnType<typeof createPrompt>["syncDraft"]
@@ -114,6 +117,8 @@ export function createInput(ctx: AppContext, actions: {
       else if (actions.planReviewPaste(token.text)) continue
       else if (actions.gitPaste(token.text)) continue
       else if (state.page === "chat") {
+        // The left list's search takes a paste as it takes keys (keys.ts): into its query, never the prompt behind it.
+        if (state.sidebarSearch?.paste(token.text)) continue
         if (state.promptSearch && actions.composer.searchPaste(token.text)) continue
         if (state.find && !state.palette && actions.findPaste(token.text)) continue
         if (state.palette) {
@@ -147,6 +152,10 @@ export function createInput(ctx: AppContext, actions: {
         await actions.compactionPaste(token.text)
       } else if (state.page === "memory-assistant" || state.page === "export" || state.page === "skills" || state.page === "model-picker" || state.page === "history" && state.historyState.editing || state.page === "usage" && state.usageState.weatherInput !== undefined) {
         await onKey(token.text.replace(/\s+/g, " "))
+      } else if (state.page === "bot-form") {
+        // The form's text rows take a paste as typed text, one line (the personality's line breaks become spaces).
+        const line = token.text.replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "")
+        if (line.trim()) await state.botForm?.paste(line)
       } else if (state.page === "console" && state.console?.form) {
         await onKey(token.text.replace(/[\x00-\x1f\x7f]/g, ""))
       } else if (state.page === "connect") {
@@ -186,12 +195,14 @@ export function createInput(ctx: AppContext, actions: {
       state.pastes = long.pastes
       state.attachments = [...state.attachments, ...long.attachments]
     }
+    const pasted = state.pastes.length > 0
     if (state.pastes.length) {
       editor.replaceAll(actions.expandedPrompt())
       state.pastes = []
     }
-    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md).
-    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
+    // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md). That is for a line
+    // of one's own: a pasted block or a multi-line message that mentions `/name` is a message, never that command's arguments.
+    const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || pasted || editor.text.trim().includes("\n") ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
     if (hoisted) editor.replaceAll(hoisted)
     // `/plan <text>` enters plan mode and sends <text> as the message; a bare `/plan` only toggles the mode (slash.ts).
     const planned = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || state.planDraft ? undefined : /^\/plan\s+(\S[\s\S]*)$/i.exec(editor.text.trim())
@@ -300,14 +311,29 @@ export function createInput(ctx: AppContext, actions: {
       report(denied)
       return requestFrame()
     }
+    // A blank chat opened from a bot takes the bot as its agent now, with its first message: only then does it become a listed chat.
+    const botChat = state.pendingBot?.sessionId === state.sessionId ? state.pendingBot : undefined
+    if (botChat) {
+      const set = await input.send({ type: "session.agent.set", sessionId: botChat.sessionId, agent: botChat.name })
+      if (!set.ok) {
+        fail(set.error.message)
+        if (state.sessionId === submissionSession && editor.isEmpty()) { state.attachments = live; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
+        return requestFrame()
+      }
+      if (state.pendingBot === botChat) state.pendingBot = undefined
+    }
     const sending = live
-    state.attachments = []
+    // The bot assignment above is awaited: another chat may be open by now, and the message stays bound to the one it was written in.
+    const stillHere = state.sessionId === submissionSession
+    if (stillHere) state.attachments = []
     const executable = expanded !== undefined && typeof expanded !== "string" ? expanded : undefined
     const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, sending, executable ? "" : ide.text)
     const contextText = composed.text
     composed.text = ide.text + composed.text
-    state.clearPending = state.tuiProfile.submitScroll === "clear"
-    const reply = await input.send(executable ? { type: "commands.execute", sessionId: state.sessionId, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: state.sessionId, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
+    // What the message was made of (its pastes, its images and files) is kept for this run, so it comes back into the prompt as it was composed.
+    if (!executable) actions.rememberComposed({ texts: [text, composed.text], pastes: livePastes(typed.pastes, typed.text), attachments: sending })
+    state.clearPending = stillHere && state.tuiProfile.submitScroll === "clear"
+    const reply = await input.send(executable ? { type: "commands.execute", sessionId: submissionSession, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: submissionSession, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
     // A message that could not go comes back to the prompt it left, unless something newer is there now (another session,
     // text typed while it was sent): that stays, and the message is one ↑ away in the prompt history.
     const restorable = state.sessionId === submissionSession && editor.isEmpty() && state.attachments.length === 0
@@ -337,7 +363,9 @@ export function createInput(ctx: AppContext, actions: {
     if (!message || message.notice || message.shell) return undefined
     // A line of narration ("Checking the routes first.") is not an answer yet: GPT models write one before every first tool call.
     const said = blocks.reduce((total, block) => total + (block.kind === "agent_message" ? block.text.trim().length : 0), 0)
-    return { itemId: message.itemId, answered: said > RETRACT_NARRATION_CHARS }
+    // A turn that already did real work (more than a few tool calls, thoughts or answers) is not a typo to take back: Esc Esc only stops it.
+    const steps = blocks.filter((block) => block.kind === "tool_call" || block.kind === "reasoning" || block.kind === "agent_message").length
+    return { itemId: message.itemId, answered: said > RETRACT_NARRATION_CHARS || steps > RETRACT_MAX_STEPS }
   }
 
   /**
@@ -376,6 +404,9 @@ export function createInput(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  const subagentsRunning = async () => (await runningSubagents({ send: input.send, sessionId: state.sessionId })) > 0
+  const stopSubagents = () => stopSessionSubagents({ send: input.send, sessionId: state.sessionId })
+
   async function onEscape() {
     if (state.editingScratch) return endScratchEdit()
     if (state.editingGoal) return endGoalEdit()
@@ -400,6 +431,21 @@ export function createInput(ctx: AppContext, actions: {
       report(reply)
       return requestFrame()
     }
+    // The Esc after an interrupt that spared the sub-agents stops them too.
+    if (state.agentStopArmedAt > 0 && now() - state.agentStopArmedAt <= DOUBLE_ESC_MS) {
+      state.agentStopArmedAt = 0
+      state.escArmedAt = 0
+      const stopping = state.sessionId
+      const { stopped, failed } = await stopSubagents()
+      // A switch while the stop was on its way: its result belongs to the session left behind, not this one.
+      if (state.sessionId !== stopping) return
+      // An agent that would not stop leaves the arm up, so the next Esc tries it again.
+      if (failed) state.agentStopArmedAt = now()
+      const summary = stopped ? `stopped ${stopped} sub-agent${stopped === 1 ? "" : "s"}` : "no sub-agents running"
+      state.notice = failed ? `${stopped ? `${summary} · ` : ""}${failed} could not be stopped · esc to try again` : summary
+      return requestFrame()
+    }
+    state.agentStopArmedAt = 0
     const turnId = state.transcript.activeTurn
     if (!turnId) {
       // Idle with an empty prompt: Esc twice goes back to an earlier prompt to edit and resend.
@@ -413,13 +459,28 @@ export function createInput(ctx: AppContext, actions: {
     }
     state.escArmedAt = 0
     // Nothing answered yet (a typo caught in time): the message is taken back, as if never sent, and waits in the prompt to fix.
+    // Not while sub-agents run: the undo cancels them with the turn, and the interrupt below spares them until a third Esc.
     const unanswered = retractable(turnId)
-    if (unanswered && !unanswered.answered) {
+    const interrupting = state.sessionId
+    const agentsRunning = unanswered && !unanswered.answered ? await subagentsRunning() : undefined
+    // A switch or a new turn while the sub-agents were looked up: this Esc no longer has a turn to act on.
+    if (state.sessionId !== interrupting || state.transcript.activeTurn !== turnId) return requestFrame()
+    if (unanswered && !unanswered.answered && !agentsRunning) {
       const taking = retract(unanswered.itemId).finally(() => { if (retracting === taking) retracting = undefined })
       retracting = taking
       return taking
     }
-    const reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId })
+    // Only the turn stops; its sub-agents run on until a third Esc. A daemon older than this terminal refuses the field: it stops both.
+    state.agentStopArmedAt = now()
+    let reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId, spareAgents: true })
+    let spared = reply.ok
+    if (!reply.ok && reply.error.code === "invalid_command") {
+      state.agentStopArmedAt = 0
+      reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId })
+      spared = false
+    }
+    if (spared && await subagentsRunning()) state.notice = "interrupted · sub-agents keep running · esc stops them"
+    else state.agentStopArmedAt = 0
     if (reply.ok && unanswered?.answered) state.notice = "already answered · esc esc to edit"
     if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
     // The interrupt holds the queue; the terminal sends it on, so what was queued runs once the cancelled turn has stopped.

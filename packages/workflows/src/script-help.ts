@@ -18,6 +18,8 @@ Then the body. It runs in an isolated process: no process, Bun, require, import,
       opts: label, phase, schema (JSON Schema subset; the answer is validated, with one automatic repair turn),
             mode "read" (default, cannot change anything) | "work" (edits; one work agent at a time unless worktree),
             worktree true (isolated checkout: work agents may then run in parallel), model "provider:model", effort,
+            cwd "/abs/path" (an existing linked git worktree of this repository the agent works in, e.g. one the script
+            made with git worktree add; it never edits the run's directory, so it runs in parallel too; not with worktree),
             engine "native" | "claude" | "codex" | "pi" (the engine the model runs on; non-native needs the full tier, an exact model,
             and no allowedTools or budget; checked before the agent starts), agent (profile name), allowedTools,
             retry (number | {maxAttempts, retryOn}), timeoutMinutes, budget {tokens, usd},

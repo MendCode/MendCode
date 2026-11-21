@@ -30,7 +30,9 @@ export function formatElapsed(ms: number) {
 const TOOL_PHASES: ReadonlyArray<[RegExp, string]> = [
   [/^advisor\b|__advisor\b/, "Consulting advisor..."],
   [/question/, "Waiting for answer..."],
-  [/^task$|subagent/, "Waiting for subagents..."],
+  [/^task$|subagent|delegate_task/, "Waiting for subagents..."],
+  // Another session (`threads`, `mendcode_threads · thread_read`): its name holds "read", which is not a file read.
+  [/thread/, "Checking sessions..."],
   [/web|fetch|browser|screenshot/, "Browsing..."],
   [/test|typecheck|lint|build/, "Testing..."],
   [/patch|diff/, "Patching..."],
@@ -41,8 +43,40 @@ const TOOL_PHASES: ReadonlyArray<[RegExp, string]> = [
   [/shell|bash|exec|command/, "Running command..."],
 ]
 
-/** Characters of a running command the phase word keeps. */
-const COMMAND_CHARS = 48
+/** A step that has gone on this long shows its own time after the verb. */
+export const STEP_CLOCK_MS = 5_000
+
+/** Characters of a program name the phase word keeps. */
+const PROGRAM_CHARS = 24
+
+/** What a shell command does, by family, most telling first: the card in the chat already shows the command itself. */
+const COMMAND_PHASES: ReadonlyArray<[RegExp, string]> = [
+  [/(^|\s)(test|vitest|jest|pytest|mocha|playwright)\b|\s--test\b|\btest:|\bcargo test\b|\bgo test\b/, "Running tests..."],
+  [/\b(build(\.\w+)?|compile|make|webpack|vite build|esbuild|cargo build|go build)\b/, "Building..."],
+  [/\b(tsc|typecheck|lint|eslint|biome|clippy|ruff|mypy)\b/, "Checking..."],
+  [/\bgit commit\b/, "Committing..."],
+  [/\bgit push\b|\bgh pr\b/, "Pushing..."],
+  [/\b(npm|bun|pnpm|yarn|pip|brew|cargo) (install|add|i)\b/, "Installing..."],
+  [/^(grep|rg|find|fd|ls|tree|graft|git grep)\b/, "Searching..."],
+  [/^(cat|head|tail|sed -n|less|wc|jq)\b/, "Reading..."],
+  [/^git\b/, "Checking git..."],
+  [/^(curl|wget)\b/, "Fetching..."],
+]
+
+/** The command's steps without the `cd` and the variables set before them. */
+const commandSteps = (command: string) =>
+  command.split(/&&|\|\||;|\n/).map((step) => step.trim().replace(/^(\w+=\S*\s+)+/, "").replace(/^(sudo|env|time|exec)\s+/, "")).filter((step) => step && !/^cd\b/.test(step))
+
+/**
+ * The phase word for a running shell command: what it does (`Running tests...`, `Building...`, `Committing...`), else the program it
+ * runs (`Running node...`). Never the command line itself, which its card in the chat already shows.
+ */
+export function commandPhase(command: string): string {
+  const steps = commandSteps(command)
+  for (const [pattern, phase] of COMMAND_PHASES) if (steps.some((step) => pattern.test(step))) return phase
+  const program = steps[0]?.split(/\s+/)[0]?.split("/").at(-1)
+  return program ? `Running ${program.length > PROGRAM_CHARS ? `${program.slice(0, PROGRAM_CHARS - 1)}…` : program}...` : "Running command..."
+}
 
 /** The phase word for a running tool: v1 matches the tool name against a few families. */
 export function toolPhase(tool: string) {
@@ -103,23 +137,27 @@ export function tokensText(tokens: { input: number; cached?: number; output: num
   return `${pieces.join(" ")} tokens`
 }
 
-/** The phase word from the foreground state, the running item and whether a question or an approval waits. */
-export function phaseOf(input: { state: ForegroundState; current?: RunningItem; waiting?: "question" | "approval" }): string {
-  if (input.state === "waiting_approval") return input.waiting === "question" ? "Waiting for answer..." : "Waiting for approval..."
-  if (input.state === "compacting") return "Compacting..."
-  if (input.state === "cancelling") return "Cancelling..."
-  const { current } = input
-  if (!current && input.state === "tool") return "Running command..."
+/** What the model does now: the running item, else between steps (`steps` finished so far) it is thinking, before the first it is starting. */
+export function stepPhase(current: RunningItem | undefined, steps: number): string {
   if (current?.kind === "reasoning") return "Thinking..."
+  if (current?.kind === "agent_message") return "Writing..."
   if (current?.kind === "compaction") return "Compacting..."
   if (current?.kind === "tool_call" && current.writing) return "Writing..."
   if (current?.kind === "tool_call") {
-    const phase = current.tool ? toolPhase(current.tool) : "Running command..."
-    // A shell call says which command runs from the moment it starts.
-    const command = current.tool && /^(shell|bash)$/i.test(current.tool) ? current.detail?.split("\n")[0]?.trim() : undefined
-    return command ? `Running ${command.length > COMMAND_CHARS ? `${command.slice(0, COMMAND_CHARS - 1)}…` : command}...` : phase
+    if (current.tool && /^(shell|bash)$/i.test(current.tool) && current.detail) return commandPhase(current.detail)
+    return current.tool ? toolPhase(current.tool) : "Running command..."
   }
-  return "Generating..."
+  // Between steps the model is reading what the last one gave and choosing the next.
+  return steps > 0 ? "Thinking..." : "Generating..."
+}
+
+/** The phase word from the foreground state, the running item and whether a question or an approval waits. */
+export function phaseOf(input: { state: ForegroundState; current?: RunningItem; waiting?: "question" | "approval"; steps?: number }): string {
+  if (input.state === "waiting_approval") return input.waiting === "question" ? "Waiting for answer..." : "Waiting for approval..."
+  if (input.state === "compacting") return "Compacting..."
+  if (input.state === "cancelling") return "Cancelling..."
+  if (!input.current && input.state === "tool") return "Running command..."
+  return stepPhase(input.current, input.steps ?? 0)
 }
 
 /**
@@ -133,6 +171,8 @@ export function renderWorkingRow(input: {
   margin: number
   spinner: string
   phase: string
+  /** The turn's step in progress (tool calls, thoughts and messages so far, plus this one) and how long this step has taken: the progress the chat does not sum up. */
+  step?: { number: number; ms: number }
   elapsedMs?: number
   /** This turn's tokens: `input` sent and `output` received, the provider's counts; `estimated` when `output` also holds words streamed since the last count. */
   tokens?: { input: number; cached?: number; output: number; estimated?: boolean }
@@ -179,8 +219,11 @@ export function renderWorkingRow(input: {
   const tokenOptions = { style: input.style ?? "classic", ...(input.tokenFigures ? { show: input.tokenFigures } : {}) } as const
   /** One part, when it has something to say: the turn's own text is `head`, the rest follows a retry too. */
   const piece = (part: ActivityPart, head: boolean): { text: string; fg: ColorName } | undefined => {
-    if (head && part === "verb") return { text: inline ? input.phase.replace(/\.{3}$/, "…") : input.phase, fg: "text" }
-    if (head && part === "elapsed" && input.elapsedMs !== undefined) return { text: formatElapsed(input.elapsedMs), fg: "text" }
+    if (head && part === "verb") {
+      const verb = inline ? input.phase.replace(/\.{3}$/, "…") : input.phase
+      // A step that goes on says for how long, so a long test run or a long thought reads apart from the turn's total (the first step's time is the total).
+      return { text: input.step && input.step.number > 1 && input.step.ms >= STEP_CLOCK_MS ? `${verb} ${formatElapsed(input.step.ms)}` : verb, fg: "text" }
+    }    if (head && part === "elapsed" && input.elapsedMs !== undefined) return { text: formatElapsed(input.elapsedMs), fg: "text" }
     if (head && part === "stalled" && input.stalledMs !== undefined) return { text: `no response for ${formatElapsed(input.stalledMs)}`, fg: "warning" }
     if (part === "model" && input.model) return { text: input.model, fg: "muted" }
     if (part === "tokens" && input.tokens) return { text: tokensText(input.tokens, tokenOptions), fg: "muted" }
@@ -208,6 +251,12 @@ export function renderWorkingRow(input: {
   }
   const draw = (part: ActivityPart, head: boolean) => {
     if (head && part === "spinner") return addSpinner(input.stalledMs === undefined ? "text" : "warning")
+    // The step number goes with the turn's time, before it.
+    if (head && part === "elapsed" && input.step && input.step.number > 1) {
+      const step = { text: `step ${input.step.number}`, fg: "muted" as const }
+      if (inline) grouped.push(step)
+      else add(step.text, step.fg)
+    }
     const found = piece(part, head)
     if (!found) return
     if (inline && !GROUPED.has(part)) return void grouped.push(found)

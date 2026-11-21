@@ -6,6 +6,7 @@ import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SETUP_ROWS } from "../src/view/setup-page"
 import { textWidth } from "../src/view/wrap"
+import { PULSE_OTHERS_MS } from "../src/ui/app/ticks"
 import { appHarness, cleanTemps, conversation, ids, mendRowIn, NOW, tempDir, type Harness } from "./session-ui-harness"
 
 afterEach(cleanTemps)
@@ -61,7 +62,8 @@ test("Agent View lists only this folder's sessions (a folder inside it is anothe
   expect(text(h)).toMatch(/0 wait · 0 loop · 1 work/)
   const row = () => text(h).split("\n").find((line) => line.includes("This folder work"))
   const before = row()
-  await Bun.sleep(300)
+  // Only other sessions work: the spinner turns on the slow tick (PULSE_OTHERS_MS).
+  await Bun.sleep(PULSE_OTHERS_MS + 150)
   expect(row()).not.toBe(before)
   h.app.stop?.()
 })

@@ -13,7 +13,7 @@ const UP = new Set(["\x1b[A", "\x1bOA", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "j"])
 const CLOSE = new Set(["\x1b", "q"])
 
-/** The card's rows: each item with its kind and run time, the selected one marked. */
+/** The card's rows: each item with its kind and run time; the marker sits in its own two-cell column, so every row starts at the same cell. */
 export function psCard(input: { state: PsCardState; items: readonly PsItem[]; now: number }): InfoCard {
   const { items } = input
   if (!items.length) return { title: "Background", body: [{ text: "Nothing runs in the background of this session.", fg: "muted" }], hint: "esc close" }
@@ -21,7 +21,7 @@ export function psCard(input: { state: PsCardState; items: readonly PsItem[]; no
   return {
     title: `Background · ${items.length} running`,
     body: items.map((item, index) => ({
-      label: index === selected ? "›" : "",
+      marker: index === selected ? "›" : "",
       text: `${backgroundName(item.command, 60)} · ${item.kind ?? "command"} · ${formatDuration(Math.max(0, input.now - item.startedAt))}`,
       fg: index === selected ? "accent" as const : "text" as const,
     })),

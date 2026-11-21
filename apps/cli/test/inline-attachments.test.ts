@@ -97,12 +97,13 @@ describe("what lands in the prompt", () => {
     expect(b.prompt()).toContain("[Image #1]")
   })
 
-  test("a refusal is one line and inserts nothing: no token, no path", async () => {
+  test("a pasted path that is no file stays the text it was, with no error left above the prompt", async () => {
     const b = bench()
     await b.type("antes ")
     await b.type(paste("/shots/missing.png"))
-    expect(b.prompt()).not.toContain("[")
-    expect(b.h.text().filter((row) => row.includes("not a file or directory")).length).toBeGreaterThan(0)
+    expect(b.prompt()).not.toContain("[Image")
+    expect(b.prompt()).toContain("/shots/missing.png")
+    expect(b.h.text().some((row) => row.includes("not a file or directory"))).toBe(false)
   })
 
   test("a limit refusal (too big) inserts nothing and keeps the text", async () => {

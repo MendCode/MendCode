@@ -12,16 +12,16 @@ import { PackageAuthorManifest } from "./package-authoring"
 import { z } from "zod"
 import { CompoundPricing } from "./compound"
 import { QuotaSnapshot, SessionEvent } from "./events"
-import { ADVISOR_CHECKPOINTS, AGENT_MODES, EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
+import { ADVISOR_CHECKPOINTS, AGENT_MODES, BOT_COLORS, BOT_SHAPES,EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
 import { FEATURE_IDS, TIERS } from "./tier-data"
 import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data"
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
-import { BlobRef, ItemId, MemoryId, SessionId, TurnId } from "./ids"
-import { ForegroundState } from "./states"
+import { BlobRef, ClientId, CommandId, ItemId, MemoryId, SessionId, TurnId } from "./ids"
+import { ForegroundState, SessionOrigin } from "./states"
 import { DEFAULT_AREA, AREA_NAME } from "./areas"
 import { ImageGenerationSettings } from "./image-generation"
 import { VoiceSettings } from "./voice"
-import { lazySchema } from "./lazy"
+import { lazySchema, lazyValue } from "./lazy"
 import { SessionDraft, SessionLifecycle } from "./session-lifecycle"
 
 /**
@@ -42,6 +42,10 @@ export const SessionSummary = lazySchema(() => z.strictObject({
   updatedAt: z.number().int().nonnegative(),
   lastSeq: z.number().int().nonnegative(),
   detached: z.boolean().optional(),
+  /** Who created the session (docs/sessions.md); absent on sessions made before it was recorded. */
+  origin: SessionOrigin.optional(),
+  /** When the latest message typed by a person (origin `tui`) arrived; absent when none was recorded. */
+  lastHumanAt: z.number().int().nonnegative().optional(),
   /** Foreground state if the session has a live actor, otherwise "idle". */
   state: ForegroundState,
   queued: z.number().int().nonnegative(),
@@ -49,8 +53,14 @@ export const SessionSummary = lazySchema(() => z.strictObject({
   since: z.number().int().nonnegative().optional(),
   tool: z.string().max(200).optional(),
   pending: z.string().max(200).optional(),
+  /** What that request is: a tool approval, a question for the user, or a plan to review. Present with `pending`. */
+  pendingKind: z.enum(["approval", "question", "plan"]).optional(),
   /** True while the session is paused (`session.control`): it finishes the running turn and starts nothing until resumed. */
   paused: z.boolean().optional(),
+  /** How many of its sub-agents work right now (as `session.activity` carries it); omitted at none. */
+  agents: z.number().int().nonnegative().max(99).optional(),
+  /** True while the running turn compacts the conversation; omitted otherwise. */
+  compacting: z.boolean().optional(),
   parentId: SessionId.optional(),
   agent: z.string().max(100).optional(),
   model: z.lazy(() => ModelChoice).optional(),
@@ -717,6 +727,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
     /** Opt-in network: the Git page's push, create pull request and PR tab run git and gh on this machine, each after a confirmation card. */
     git_actions: z.boolean().optional(),
     openTelemetry: z.boolean().optional(),
+    /** Opt-in: agents with a `bot:` block are bots (`/bot`, `bot.list`), each with its own memory (docs/agents.md). */
+    bots: z.boolean().optional(),
   }).optional(),
   permissionReviewerRole: z.enum(MODEL_ROLES).optional(),
   /** Caps and checkpoints of the advisor; the advisor runs only when the `advisor` model role is set (docs/advisor.md). */
@@ -1365,6 +1377,8 @@ export const AgentInfo = lazySchema(() => z.strictObject({
   permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
   permissionRules: z.array(PermissionRule).max(500).optional(),
   trusted: z.boolean(),
+  /** Set when the agent file has a `bot:` block (experimental bots). */
+  bot: BotIdentity.optional(),
   hidden: z.boolean().optional(),
   disable: z.boolean().optional(),
   color: AgentConfig.shape.color,
@@ -1479,3 +1493,178 @@ export type DiagnosticsReport = {
 }
 
 export { InteractionReport, MemorySideChatResponse } from "./interaction-http"
+
+/*
+ * Experimental bots (`experimental.bots`, docs/agents.md): an agent file with a `bot:` block. Every `bot.*` command answers
+ * `forbidden` while the flag is off. The shape and color lists are held equal to the ones the agent file parser reads by a
+ * test. Everything is built on first use, and it lives here (not in a module of its own) so start-up loads no extra module.
+ */
+const botName = lazyValue(() => z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/))
+
+const botParts = lazyValue(() => {
+  const state = z.enum(["working", "waiting", "idle", "problem"])
+  const identity = z.strictObject({
+    shape: z.enum(BOT_SHAPES).optional(),
+    color: z.enum(BOT_COLORS).optional(),
+    avatar: z.string().min(1).max(4096).optional(),
+    /** `mendcode` for a bot made here, else the id of the connector that owns it. */
+    origin: z.string().min(1).max(64),
+  })
+  const session = z.strictObject({
+    sessionId: SessionId,
+    title: z.string().max(200),
+    /** The session's own status (`running`, `waiting_for_input`, `failed`, `idle`, …), as `session.get` reports it. */
+    status: z.string(),
+    updatedAt: z.number().int().nonnegative(),
+  })
+  /** One bot's sessions in one project directory. Several folders at once are several groups. */
+  const project = z.strictObject({ directory: z.string().max(4096), state, sessions: z.array(session) })
+  /** A schedule the bot owns: a loop that wakes it on a trigger, in a folder. */
+  const schedule = z.strictObject({
+    loopId: z.string().min(1).max(64),
+    name: z.string().max(120),
+    /** The trigger in its text form (`daily 09:00`, `weekly mon 09:00`, `every 30m`). */
+    trigger: z.string().max(100),
+    directory: z.string().max(4096),
+    /** `active`, `running`, `paused`, `blocked`… (the loop's own state). */
+    state: z.string().max(40),
+    nextWakeAt: z.number().int().nonnegative().optional(),
+    runs: z.number().int().nonnegative(),
+  })
+  const info = z.strictObject({
+    name: botName(),
+    description: z.string(),
+    identity,
+    model: z.string().optional(),
+    permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
+    /** The file limits tools with rules instead of one of the modes above (a `permission:` mapping, `tools`, `deny`). */
+    permissionRules: z.boolean().optional(),
+    file: z.string(),
+    /** From its sessions: `waiting` (an approval or a question is open) over `working` over `problem` (a session failed) over `idle`. */
+    state,
+    projects: z.array(project),
+    /** The schedules the bot made for itself (not cancelled, not finished); the daemon always sends it. */
+    schedules: z.array(schedule).optional(),
+  })
+  /** A bot that lives in another app and reaches MendCode through a connector (`hermes` is the first; the list is empty without one). */
+  const external = z.strictObject({
+    /** The connector's id. */
+    origin: z.string().min(1).max(64),
+    id: z.string().min(1).max(200),
+    name: z.string().min(1).max(100),
+    description: z.string().max(300).optional(),
+    identity: identity.optional(),
+    state,
+    /** The model the bot runs on, as its app reports it. */
+    model: z.string().max(100).optional(),
+    /** The model id that starts a chat with it (`acp:hermes-<profile>`); absent when the connector cannot chat. */
+    chat: z.string().min(1).max(100).optional(),
+    /** The app the bot lives in, as `open -a` names it, for "Open in <app>". */
+    app: z.string().min(1).max(100).optional(),
+    /** The MendCode sessions on its chat model, by folder, as a MendCode bot's chats are (the daemon fills it; the app's own server-side history is not read). */
+    projects: z.array(project).optional(),
+    /** The state the app itself reported, before its MendCode chats are counted: it stands whenever those chats are all idle. */
+    appState: state.optional(),
+  })
+  const report = z.strictObject({
+    bots: z.array(info),
+    external: z.array(external),
+    problems: z.array(z.strictObject({ file: z.string(), message: z.string() })),
+  })
+  return { state, identity, session, project, schedule, info, external, report }
+})
+type BotParts = ReturnType<typeof botParts>
+
+export const BotIdentity = lazySchema(() => botParts().identity)
+export type BotIdentity = z.infer<BotParts["identity"]>
+export type BotState = z.infer<BotParts["state"]>
+export type BotSession = z.infer<BotParts["session"]>
+export type BotProject = z.infer<BotParts["project"]>
+export type BotSchedule = z.infer<BotParts["schedule"]>
+export type BotInfo = z.infer<BotParts["info"]>
+export type ExternalBotInfo = z.infer<BotParts["external"]>
+export const BotListReport = lazySchema(() => botParts().report)
+export type BotListReport = z.infer<BotParts["report"]>
+
+const botBase = { id: CommandId, clientId: ClientId }
+
+/** Read-only. Ack: `BotListReport`. */
+export const BotList = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.list") }))
+
+/**
+ * Writes `~/.mendcode/agents/<name>.md` with a `bot:` block and `permission: smart`. With `generate` the configured model writes
+ * the name (when absent), when-to-use text and prompt from `description`; any failure falls back to the plain template.
+ * Ack: `AgentCreateReport`.
+ */
+export const BotCreate = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.create"),
+  directory: z.string().min(1).max(4096),
+  name: botName().optional(),
+  description: z.string().trim().min(1).max(300),
+  generate: z.boolean().optional(),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+  shape: z.enum(BOT_SHAPES).optional(),
+  color: z.enum(BOT_COLORS).optional(),
+}))
+
+/** Copies a bot's file under a new name. Ack: `AgentCreateReport`. */
+export const BotDuplicate = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.duplicate"), name: botName(), newName: botName() }))
+
+/**
+ * The bot form's save (`/bot new`, the bot page's Edit). `create` makes `~/.mendcode/agents/<name>.md` (a taken name is refused);
+ * otherwise it rewrites that bot in place, keeping every frontmatter key the form has no field for. The form is a whole snapshot:
+ * a `shape`, `color`, `avatar` or `model` left out is removed, and `description` left out is kept (the plain one on create).
+ * The result must still parse as this bot or nothing is written. Ack: `AgentCreateReport`.
+ */
+export const BotSave = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.save"),
+  name: botName(),
+  create: z.boolean(),
+  description: z.string().trim().min(1).max(300).optional(),
+  /** The personality: the markdown body of the agent file. */
+  prompt: z.string().max(16_000),
+  shape: z.enum(BOT_SHAPES).optional(),
+  color: z.enum(BOT_COLORS).optional(),
+  avatar: z.string().min(1).max(4096).optional(),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+  /** Absent: the file's own permission stays (a per-tool mapping the form cannot show), or `smart` for a new bot. */
+  permission: z.enum(["plan", "ask", "smart", "edits", "full"]).optional(),
+}))
+
+/**
+ * What the model would write for a description, without writing it: the form shows it to confirm. Ack: `{ name, description, prompt,
+ * shape?, color?, generation, fallback? }`; a failed generation answers the plain template with `fallback` saying why.
+ */
+export const BotDraft = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.draft"),
+  directory: z.string().min(1).max(4096),
+  name: botName().optional(),
+  description: z.string().trim().min(1).max(300),
+  model: z.string().min(1).max(100).regex(/^\S+$/).optional(),
+}))
+
+/**
+ * Removes a bot: its agent file and, with `memory`, its memory folder `<data dir>/bots/<name>/`. Its sessions are never touched.
+ * Only a bot in the user's own `agents/` folder. Ack: `{ file, memoryRemoved, sessions }` (the sessions it leaves as plain sessions).
+ */
+export const BotDelete = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.delete"), name: botName(), memory: z.boolean() }))
+
+/** Without `text`, the bot's file as written. With `text`, the file is checked as an agent and replaced. Ack: `{ file, text, saved }`. */
+export const BotFile = lazySchema(() => z.strictObject({ ...botBase, type: z.literal("bot.file"), name: botName(), text: z.string().max(40_000).optional() }))
+
+/**
+ * A bot's own memory: one global file and one per project directory (`project` needs `directory`). `list` answers both texts,
+ * `add` appends a line, `clear` empties one. Ack: `{ global, project? }`.
+ */
+export const BotMemory = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.memory"),
+  name: botName(),
+  op: z.enum(["list", "add", "clear"]),
+  scope: z.enum(["global", "project"]).optional(),
+  directory: z.string().min(1).max(4096).optional(),
+  text: z.string().trim().min(1).max(2_000).optional(),
+}))

@@ -1,13 +1,17 @@
 import { randomUUID } from "node:crypto"
 import { z } from "zod"
-import { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, ComputerNode, ComputerActionInput, type ComputerTarget, type ComputerObservation, type ComputerSessionReport, type SessionId } from "@mendcode/protocol"
+import { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, ComputerNode, ComputerActionInput, type ComputerTarget, type ComputerObservation, type ComputerObserveReport, type ComputerSessionReport, type SessionId } from "@mendcode/protocol"
 import { fail, type ComputerActivation, type ToolResult } from "@mendcode/tools"
 import { NotDelivered, type BatchOutcome, type ComputerAccessibility, type SemanticAction } from "./computer-accessibility"
 import { runComputerProgram } from "./computer-program"
 import { POOR_TREE_HINT, poorObservation } from "./computer-hints"
+import { renderTree, shownMap, treeChanges, type Shown } from "./computer-tree"
 
 type Audit = { action: string; revision: number; nodeID: string; result: "dispatched" | "failed" | "unknown"; at: number }
-type State = { id: string; sessionId: SessionId; sourceId: string; target: ComputerTarget; mode: "observe" | "control"; createdAt: number; expiresAt: number; lastActiveAt: number; revision: number; stopped: boolean; busy: boolean; program: boolean; abort: AbortController; observation?: ComputerObservation | undefined; audit: Audit[] }
+type State = { id: string; sessionId: SessionId; sourceId: string; target: ComputerTarget; mode: "observe" | "control"; createdAt: number; expiresAt: number; lastActiveAt: number; revision: number; stopped: boolean; busy: boolean; program: boolean; abort: AbortController; observation?: ComputerObservation | undefined; audit: Audit[]; shown?: Shown | undefined }
+/** No window of the app has focus: what the model can do from the application scope. */
+export const APP_SCOPE_HINT = "No window of this app has focus (a menu-bar app, or its windows are closed or minimized): this is the app with its windows, menu bar and status items. In computer_code: tools.selectWindow({nodeID}) restores and selects a listed window; tools.reopen({}) asks the app to show its window, as a click on its Dock icon does; press a menu item (File > New Window) or a status item (it opens its menu; observe again); key goes to the app itself."
+const NO_EFFECT = "No change was seen in the app after the action: it may not have happened, or it changed something outside this window (a menu, another window). Observe (or tools.windows) and check before repeating it."
 const same = (a: ComputerTarget, b: ComputerTarget) => a.pid === b.pid && a.bundleID === b.bundleID
 const MUTATIONS = ["press", "setValue", "click", "typeText", "key", "scroll", "drag"] as const
 const mutations = new Set<string>(MUTATIONS)
@@ -172,7 +176,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
       }
       state.revision++
       state.lastActiveAt = now()
-      state.observation = { revision: state.revision, target: state.target, nodes, truncated, observedAt: now() }
+      state.observation = { revision: state.revision, target: state.target, nodes, truncated, observedAt: now(), ...(result.scope === "app" ? { scope: "app" as const } : {}) }
       return structuredClone(state.observation)
     } catch (error) { state.observation = undefined; throw error }
     finally { state.busy = false }
@@ -295,25 +299,59 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
       return { ok: stopped < 0, revision: state.revision, steps: results, ...(stopped >= 0 ? { stopped: { index: stopped, reason: "step_failed" } } : {}), verified: false, next: "Observe again and check the intended postconditions; dispatch is not proof of success." }
     } catch (error) { throw disposed(error, delivered(error, dispatched)) }
   }
+  /**
+   * A window of the app becomes the session's: a handle from `windows`, or a window node of the current observation (the application
+   * scope lists them). A minimized window is restored. It works while the app is in the background; the window is raised only while
+   * the app is in front. The report says whether the window took the app's focus.
+   */
   async function selectWindow(id: string, sessionId: SessionId, raw: unknown, signal: AbortSignal) {
-    const input = z.strictObject({ windowID: z.string().min(1).max(128) }).parse(raw)
+    const input = z.union([z.strictObject({ windowID: z.string().min(1).max(128) }), z.strictObject({ nodeID: ComputerNode.shape.id })]).parse(raw)
     const state = active(id, sessionId, signal)
     signal = AbortSignal.any([signal, state.abort.signal])
     if (state.mode !== "control") throw new Error("Window selection requires control mode")
     if (!os.selectWindow || state.busy) throw new Error("Window selection is unavailable or busy")
+    if ("nodeID" in input && state.observation?.nodes.find((node) => node.id === input.nodeID)?.role !== "AXWindow") throw new Error("selectWindow: nodeID must be a window (role AXWindow) of the current observation; observe again, or use windowID from tools.windows({})")
     state.busy = true; state.observation = undefined; state.revision++
+    let report: { focused: boolean; restored: boolean; minimized: boolean } | undefined
     try {
       await inputLease(signal, async () => {
-        await target(state, signal, "selectWindow")
+        await target(state, signal)
         await os.indicator(signal, async () => {
-          const selected = await os.selectWindow!(state.target, input.windowID, signal)
+          const { report: native, ...selected } = await os.selectWindow!(state.target, "windowID" in input ? input.windowID : { nodeID: input.nodeID }, signal)
           if (!same(selected, state.target)) { clear(state); throw new Error("Window selection changed the application") }
           active(id, sessionId, signal)
           state.target = selected
+          report = native
         })
       })
       state.lastActiveAt = now()
-      return { target: state.target, revision: state.revision, next: "Observe the selected window before acting." }
+      const verified = report ? report.focused && !report.minimized : true
+      return { target: state.target, revision: state.revision, verified, ...(report ? { focused: report.focused, restored: report.restored } : {}), next: verified ? "Observe the selected window before acting." : "The window did not take the app's focus: observe; if it reads as another window, bring the app forward or select again." }
+    } finally { state.busy = false }
+  }
+  /** Asks the app to show its window, as a click on its Dock icon does, without activating it; the session follows the window that opens. */
+  async function reopen(id: string, sessionId: SessionId, raw: unknown, signal: AbortSignal) {
+    z.strictObject({}).parse(raw ?? {})
+    const state = active(id, sessionId, signal)
+    signal = AbortSignal.any([signal, state.abort.signal])
+    if (state.mode !== "control") throw new Error(OBSERVE_ONLY)
+    if (!os.reopen || state.busy) throw new Error("Reopening is unavailable or busy")
+    state.busy = true; state.observation = undefined; state.revision++
+    let opened = false
+    try {
+      await inputLease(signal, async () => {
+        await target(state, signal)
+        await os.indicator(signal, async () => {
+          const result = await os.reopen!(state.target, signal)
+          if (!same(result.target, state.target)) { clear(state); throw new Error("Reopening changed the application") }
+          active(id, sessionId, signal)
+          const { windowID: _old, windowName: _name, ...app } = state.target
+          state.target = { ...app, ...result.target }
+          opened = result.opened
+        })
+      })
+      state.lastActiveAt = now()
+      return { target: state.target, revision: state.revision, opened, verified: opened, next: opened ? "Observe the window that opened before acting." : "No new window was seen: observe; the app may show it later, or open one from its menu bar (File > New Window)." }
     } finally { state.busy = false }
   }
   const result = (title: string, data: unknown, meta: ToolResult["meta"] = {}): ToolResult => ({ title, output: JSON.stringify(data), truncated: false, isError: false, meta })
@@ -327,6 +365,12 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
     endCapture() { capturing = Math.max(0, capturing - 1) },
     register(id: string, sessionId: SessionId, target: ComputerTarget, at: number) { trim(captures); captures.set(id, { sessionId, target, at }) },
     consume(id: string) { captures.delete(id) },
+    /** The window the last observation of a session showed, for a screenshot of just that window, and whether its tree was poor. */
+    observedWindow(id: string, sessionId: SessionId) {
+      const state = sessions.get(id), root = state?.sessionId === sessionId ? state.observation?.nodes[0] : undefined
+      if (!state?.observation || !root) return
+      return { bounds: root.role === "AXWindow" ? root.bounds : undefined, poor: state.observation.scope !== "app" && poorObservation(state.observation.nodes) }
+    },
     port(sessionId: SessionId) {
       return {
         session(raw: ComputerSessionInput, abort: AbortSignal, activation?: ComputerActivation) {
@@ -398,7 +442,19 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
           return guarded("Computer semantic observation", async () => {
             const input = ComputerObserveInput.parse(raw)
             const observation = await observeReady(input.computerSessionID, sessionId, signal)
-            return result("Computer semantic observation", { ...observation, ...(poorObservation(observation.nodes) ? { hint: POOR_TREE_HINT } : {}), ...(input.screenshot ? { screenshotFallback: "Call computer_capture for visual evidence: no arguments for the main display, or region set to the first node's bounds for this window (windowID there is a macOS number, not this session's handle); preview pixels are not control coordinates." } : {}) }, { computerSessionID: input.computerSessionID, revision: observation.revision, nodeCount: observation.nodes.length, truncated: observation.truncated })
+            const state = sessions.get(input.computerSessionID)!
+            // Text first, and only what changed since the model's last look: an unchanged window costs a line, not its whole tree.
+            const current = shownMap(observation.nodes)
+            const delta = !input.full && state.shown ? treeChanges(state.shown, current) : undefined
+            state.shown = current
+            const hint = observation.scope === "app" ? APP_SCOPE_HINT : poorObservation(observation.nodes) ? POOR_TREE_HINT : undefined
+            const report: ComputerObserveReport = {
+              revision: observation.revision, target: observation.target, ...(observation.scope ? { scope: observation.scope } : {}), truncated: observation.truncated, observedAt: observation.observedAt, nodeCount: observation.nodes.length,
+              ...(delta ?? { tree: renderTree(observation.nodes) }),
+              ...(hint ? { hint } : {}),
+              ...(input.screenshot ? { screenshotFallback: "Call computer_capture for visual evidence: no arguments for the main display, or region set to the window's bounds (the @x,y wxh of the first line); windowID there is a macOS number, not this session's handle; preview pixels are not control coordinates." } : {}),
+            }
+            return result("Computer semantic observation", report, { computerSessionID: input.computerSessionID, revision: observation.revision, nodeCount: observation.nodes.length, truncated: observation.truncated })
           })
         },
         code(raw: ComputerCodeInput, abort: AbortSignal) {
@@ -459,7 +515,10 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
               const had = new Map<string, number>()
               for (const node of before.nodes) had.set(key(node), (had.get(key(node)) ?? 0) + 1)
               const changed = latest.nodes.filter((node) => { const count = had.get(key(node)) ?? 0; if (count > 0) { had.set(key(node), count - 1); return false } return true })
-              return { ...result, after: { revision: latest.revision, changed: changed.slice(0, 20).map(({ id, role, name, value }) => ({ id, role, name, ...(value !== undefined ? { value } : {}) })), ...(changed.length > 20 ? { more: changed.length - 20 } : {}) } }
+              const removed = [...had.values()].reduce((sum, count) => sum + count, 0)
+              // The target re-read after the action: a change there is evidence the action took effect; none is reported, never assumed.
+              const seen = changed.length > 0 || removed > 0
+              return { ...result, verified: seen, ...(seen ? {} : { next: NO_EFFECT }), after: { revision: latest.revision, effect: seen ? "changed" : "none_seen", changed: changed.slice(0, 20).map(({ id, role, name, value }) => ({ id, role, name, ...(value !== undefined ? { value } : {}) })), ...(changed.length > 20 ? { more: changed.length - 20 } : {}), ...(removed ? { removed } : {}) } }
             }
             try {
               const execute = () => runComputerProgram(input.code, bounded, (name, raw) => operation(name, withinRange(raw)).catch((error) => { throw readableIssue(name, error) }))
@@ -480,6 +539,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
                   return settled(state, before.observation, await batch(state.id, sessionId, { ...request, revision: before.revision, steps: before.steps }, bounded))
                 }
                 if (name === "selectWindow") return selectWindow(state.id, sessionId, args, bounded)
+                if (name === "reopen") return reopen(state.id, sessionId, args, bounded)
                 if (name === "status") { return { target: structuredClone(state.target), mode: state.mode, expiresAt: state.expiresAt, revision: state.revision, audit: structuredClone(state.audit) } }
                 if (name === "windows") {
                   if (!os.windows) throw new Error("Window discovery is unavailable")

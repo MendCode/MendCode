@@ -39,13 +39,15 @@ export type SideChatState = {
   /** The exchange's width when `kept` was made: its rows and columns point at other text once the box is drawn at another width. */
   keptWidth?: number | undefined
   /** What the last frame drew, so a press in the box turns into text: every line of the exchange and the first one on screen. */
-  drawn?: { map: SelectionMap; start: number; shown: number }
+  drawn?: { map: SelectionMap; start: number; shown: number; top: number }
   /** The last press in the exchange, to count double and triple clicks. */
   press?: { at: number; row: number; col: number; count: number } | undefined
 }
 
-/** Rows of the box above the exchange: the top border, the name row and the row of what the chat sees. */
+/** Rows of the box above the exchange: the top border, the name row and the row of what the chat sees; a tall box adds a blank row. */
 const EXCHANGE_TOP = 3
+/** From this height the box spends a blank row between its header and the exchange; a short sheet keeps it for the answer. */
+const SPACED_HEIGHT = 14
 /** Cells of the box left of the exchange: the border and its space. */
 const EXCHANGE_LEFT = 2
 const DOUBLE_CLICK_MS = 450
@@ -111,12 +113,13 @@ function threadLines(thread: Pick<AsideThread, "messages">, inner: number, style
       lines.push(sideToolRow(message, inner))
       continue
     }
-    if (lines.length && thread.messages[index - 1]?.role === "tool") lines.push([])
     const user = message.role === "user"
+    // A blank row before each answer that follows its tools, and before each later question, so the exchanges read apart.
+    if (lines.length && (user || thread.messages[index - 1]?.role === "tool")) lines.push([])
     // The user's Markdown look, so code blocks, tables and lists carry the same `copy` buttons as in the transcript.
     const text = renderMarkdown(message.text, Math.max(1, inner - 2), "body", style ? { style } : {})
     // The lead is chrome: a selection copies the text without `›`/`•`, and the buttons move with it.
-    text.forEach((line, index) => lines.push(carryMeta(line, [{ text: index > 0 ? "  " : user ? "› " : "• ", fg: user ? "primary" : "muted" }, ...(user ? line.map((span) => ({ ...span, fg: "muted" as const })) : line)], 2)))
+    text.forEach((line, index) => lines.push(carryMeta(line, [{ text: index > 0 ? "  " : user ? "› " : "• ", fg: user ? "primary" : "muted" }, ...(user ? line.map((span) => ({ ...span, fg: "text" as const, bold: true })) : line)], 2)))
     lines.push(user ? [] : answerCopyRow(message.text, inner))
   }
   return lines
@@ -135,7 +138,7 @@ export function sideContextText(thread: AsideThread, room = Infinity): string {
 
 /** The earlier side chats, one row each: when, the model, and the first question. */
 function historyLines(chat: SideChatState, inner: number, now: number): Line[] {
-  if (!chat.history.length) return renderMarkdown("No earlier side chats. `/btw clear` keeps the current one here.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const })))
+  if (!chat.history.length) return renderMarkdown("No earlier side chats. `/new` keeps the current one here.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const })))
   return chat.history.map((entry, index) => {
     const question = entry.messages.find((message) => message.role === "user")?.text.replace(/\s+/g, " ") ?? ""
     const picked = index === chat.pick
@@ -151,16 +154,17 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   if (chat.view === "chat") {
     if (chat.thread.busy) lines.push([{ text: `• ${chat.thread.status ?? "thinking…"}`, fg: chat.thread.status?.startsWith("Retrying") ? "warning" : "muted" }])
     if (chat.thread.error) lines.push(...renderMarkdown(chat.thread.error, inner).map((line) => line.map((span) => ({ ...span, fg: "error" as const }))))
-    if (!lines.length) lines.push(...renderMarkdown("Ask something about this session without interrupting it.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const }))))
+    if (!lines.length) lines.push(...renderMarkdown("Ask something about this session without interrupting it. `/new` starts a new chat, `/history` opens the earlier ones.", inner).map((line) => line.map((span) => ({ ...span, fg: "muted" as const }))))
   }
   // A short sheet shows the end of the last answer, not the blank row after it.
   while (lines.length > 1 && lines[lines.length - 1]!.length === 0) lines.pop()
-  const room = Math.max(1, height - 6)
+  const spaced = height >= SPACED_HEIGHT
+  const room = Math.max(1, height - 6 - (spaced ? 1 : 0))
   chat.scroll = Math.min(chat.scroll, Math.max(0, lines.length - room))
   const end = Math.max(room, lines.length - chat.scroll)
   const start = Math.max(0, end - room)
   const map: SelectionMap = { width: inner, bodyTop: 0, bodyBase: 0, body: lines.map(bodyLineOf), promptTop: 0, promptRows: 0, promptFirst: 0, promptInset: 0, promptLines: [] }
-  chat.drawn = { map, start, shown: Math.min(room, lines.length - start) }
+  chat.drawn = { map, start, shown: Math.min(room, lines.length - start), top: EXCHANGE_TOP + (spaced ? 1 : 0) }
   if (chat.kept && chat.keptWidth !== inner) chat.kept = undefined
   const shownSelection = chat.selection ?? chat.kept
   const marks = shownSelection ? bodyHighlight(map, shownSelection) : undefined
@@ -173,7 +177,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   const shown = earlier ?? chat.thread
   const model = shown.model ? ` · ${shown.model}` : ""
   const heading = chat.view === "chat" ? title : `${title} · ${chat.view === "list" ? "history" : `earlier ${timeAgo(now, earlier?.at ?? now)}`}`
-  const hints = (chat.view !== "chat" ? [chat.view === "list" ? "↑↓ pick · enter open · esc back" : "pgup/pgdn · esc back", "esc back"] : chat.focused ? ["esc chat · ctrl+] close · /btw clear", "esc chat · ctrl+] close", "ctrl+] close"] : ["ctrl+] type · alt+] close", "ctrl+] type"]).map(keyText)
+  const hints = (chat.view !== "chat" ? [chat.view === "list" ? "↑↓ pick · enter open · esc back" : "pgup/pgdn · esc back", "esc back"] : chat.focused ? ["/new · /history · esc chat · ctrl+] close", "/new · /history · ctrl+] close", "/new · /history", "ctrl+] close"] : ["ctrl+] type · alt+] close", "ctrl+] type"]).map(keyText)
   // The name keeps the model beside it: the keys shrink first, and the model moves to the next row only when even the shortest keys leave no room.
   const keys = hints.find((hint) => textWidth(heading) + textWidth(model) + 2 + textWidth(hint) <= inner) ?? hints.find((hint) => textWidth(heading) + 2 + textWidth(hint) <= inner) ?? ""
   const named = textWidth(heading) + textWidth(model) + 2 + textWidth(keys) <= inner ? model : ""
@@ -182,7 +186,7 @@ export function sideChatRows(chat: SideChatState, width: number, height: number,
   // (the model's own " · " lead is part of \`model\`, so its width already counts the separator)
   const body: Line[] = [
     [{ text: heading, fg: "primary", bold: true }, ...(named ? [{ text: named, fg: "muted" as const }] : []), { text: " ".repeat(Math.max(1, inner - textWidth(heading) - textWidth(named) - textWidth(keys))) }, { text: keys, fg: "muted" }],
-    fit([{ text: [!named && model ? model.slice(3) : "", rest].filter(Boolean).join(" · "), fg: "muted" }], inner), ...shownLines,
+    fit([{ text: [!named && model ? model.slice(3) : "", rest].filter(Boolean).join(" · "), fg: "muted" }], inner), ...(spaced ? [[]] : []), ...shownLines,
   ]
   while (body.length < height - 4) body.push([])
   body.push([{ text: "─".repeat(inner), fg: "border" }], chat.view !== "chat"
@@ -201,7 +205,7 @@ export function sideChatMouse(chat: SideChatState, event: { kind: "press" | "dra
   if (!drawn || !chat.open) return false
   const { map } = drawn
   const inner = map.width
-  const row = event.point.row - EXCHANGE_TOP
+  const row = event.point.row - drawn.top
   const col = Math.max(0, Math.min(inner - 1, event.point.col - EXCHANGE_LEFT))
   const index = drawn.start + Math.max(0, Math.min(drawn.shown - 1, row))
   if (event.kind === "press") {
@@ -258,6 +262,9 @@ export function sideChatKeptKey(chat: SideChatState, key: string, copy: (text: s
   return true
 }
 
+/** Commands typed in the side chat's own input, by what `/btw` does for them. */
+const SIDE_COMMANDS: Record<string, "clear" | "history"> = { "/new": "clear", "/clear": "clear", "/history": "history" }
+
 export function createAside(ctx: AppContext) {
   const { input, state, requestFrame, now } = ctx
 
@@ -284,7 +291,7 @@ export function createAside(ctx: AppContext) {
       return requestFrame()
     }
     chat.open = true
-    if (question === "clear") {
+    if (question === "clear" || question === "new") {
       chat.serial++
       const reply = await input.send({ type: "session.aside.clear", sessionId: state.sessionId })
       chat.thread = reply.ok ? { messages: [], busy: false } : { ...chat.thread, error: reply.error.message }
@@ -357,7 +364,12 @@ export function createAside(ctx: AppContext) {
     else if (key === "\x1b") chat.focused = false
     else if (key === "\r") {
       const draft = chat.draft.trim()
-      if (draft && !chat.thread.busy) {
+      // Typed in the side chat itself: `/new` (or `/clear`) starts a new chat, `/history` lists the earlier ones.
+      const command = SIDE_COMMANDS[draft.toLowerCase()]
+      if (command) {
+        chat.draft = ""
+        void askAside(command)
+      } else if (draft && !chat.thread.busy) {
         chat.draft = ""
         void askAside(draft)
       }

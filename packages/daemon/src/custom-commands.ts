@@ -55,7 +55,9 @@ async function scan(dir: string, source: CustomCommand["source"], pkg: string | 
       const hint = frontmatterHint(data["argument-hint"])
       const agent = frontmatterText(data.agent)
       const model = frontmatterText(data.model)
-      const flatDescription = description === undefined ? undefined : oneLine(description, foreign ? 120 : Number.MAX_SAFE_INTEGER)
+      // The menu shows 120 characters: a longer description is cut there (with a note), never the reason the command is left out.
+      const flatDescription = description === undefined ? undefined : oneLine(description, 120)
+      if (!foreign && description !== undefined && oneLine(description, Number.MAX_SAFE_INTEGER).length > 120) noteFor(origin, name, "description is longer than 120 characters; the menu shows it cut")
       const keepModel = model !== undefined && model.length <= 200
       const keepAgent = agent !== undefined && agent.length <= 100
       const definition = CommandDefinition.parse({
@@ -166,6 +168,31 @@ export type SkillCommandSource = { name: string; description: string; source: "u
  * `skills` become `/name` when nothing else owns the name: built-in, custom and extension commands win, and the clash is reported.
  * Findings (overrides, drops, ignored fields, notes, files that failed) go to `report`; a failing file never stops the rest.
  */
+/**
+ * Two packages or more with a command of the same name: each runs as `/<package>:<name>` (listed with the others), and the bare name,
+ * when a package holds it, lists those choices and runs none of them. A user's or project's own command of that name stays theirs.
+ */
+function qualifyPackageClashes(candidates: ReadonlyArray<Candidate<CustomCommand>>, byName: Map<string, CustomCommand>) {
+  const byPackage = new Map<string, Map<string, CustomCommand>>()
+  for (const candidate of candidates) {
+    const pkg = candidate.value.pkg?.toLowerCase()
+    if (!pkg || !SLASH_NAME.test(`${pkg}:${candidate.name}`)) continue
+    byPackage.set(candidate.name, (byPackage.get(candidate.name) ?? new Map()).set(pkg, candidate.value))
+  }
+  for (const [name, packages] of byPackage) {
+    if (packages.size < 2) continue
+    const choices = [...packages.keys()].map((pkg) => `${pkg}:${name}`)
+    for (const [pkg, command] of packages) byName.set(`${pkg}:${name}`, { ...command, name: `${pkg}:${name}` })
+    const bare = byName.get(name)
+    if (bare?.pkg) byName.set(name, { ...bare, body: "", choices, description: `in ${packages.size} packages: ${choices.map((choice) => `/${choice}`).join(", ")}`.slice(0, 120) })
+  }
+}
+
+/** The answer for a bare name several packages define: which ones to run instead. Undefined for any other command. */
+export function ambiguousCommand(command: Pick<CustomCommand, "name" | "choices">): string | undefined {
+  return command.choices?.length ? `/${command.name} is in ${command.choices.length} packages; run one of ${command.choices.map((choice) => `/${choice}`).join(", ")}` : undefined
+}
+
 export async function loadCustomCommands(options: { directory: string; userDir: string; layers?: ExtensionLayer[]; extra?: CustomCommand[]; prompts?: CustomCommand[]; skills?: readonly SkillCommandSource[]; report?: ResourceDiagnostics }) {
   const report = options.report ?? emptyDiagnostics()
   const layers = options.layers ?? defaultLayers({ userDir: options.userDir, directory: options.directory })
@@ -202,6 +229,7 @@ export async function loadCustomCommands(options: { directory: string; userDir: 
     byName.set(entry.name, entry.value)
     layerOf.set(entry.name, entry.layer)
   }
+  qualifyPackageClashes(ordered, byName)
   for (const command of options.extra ?? []) {
     const previous = layerOf.get(command.name)
     if (previous) report.overridden.push({ kind: "command", name: command.name, layer: previous, by: "extension" })

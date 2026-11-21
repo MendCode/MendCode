@@ -551,6 +551,87 @@ describe("sessions list and migrations", () => {
   })
 })
 
+describe("a session's age", () => {
+  test("bookkeeping events leave its age and rank where the last conversation put them; a message and a turn move them", () => {
+    let clock = 1_000
+    const store = openStore({ dir: tempDir(), now: () => clock })
+    const [quiet, busy] = [ids("session"), ids("session")]
+    store.createSession({ id: quiet, directory: "/repo", title: "" })
+    clock = 2_000
+    store.createSession({ id: busy, directory: "/repo", title: "" })
+    clock = 3_000
+    store.sessionSink.append({ type: "queue.added", sessionId: quiet, queueId: ids("queue"), text: "hello", attachments: [] })
+    clock = 9_000
+    store.sessionSink.append({ type: "limit.checkpoint", sessionId: busy })
+    store.sessionSink.append({ type: "foreground.state", sessionId: busy, state: "idle" })
+    store.sessionSink.append({ type: "session.permission", sessionId: busy, mode: "ask" })
+    store.sessionSink.append({ type: "limit.checkpoint", sessionId: quiet })
+    const after = store.listSessions()
+    expect(after.map((s) => [s.sessionId, s.updatedAt])).toEqual([[quiet, 3_000], [busy, 2_000]])
+    expect(store.sessionInfo(busy)?.updatedAt).toBe(2_000)
+    clock = 10_000
+    const turnId = ids("turn")
+    store.sessionSink.append({ type: "turn.started", sessionId: busy, turnId, queueId: ids("queue") })
+    expect(store.listSessions().map((s) => [s.sessionId, s.updatedAt])).toEqual([[busy, 10_000], [quiet, 3_000]])
+    store.close()
+  })
+
+  test("a database bumped by bookkeeping gets each age back from its latest conversation event, once", async () => {
+    const dir = tempDir()
+    const [talked, silent] = [ids("session"), ids("session")]
+    let clock = 1_000
+    const first = openStore({ dir, now: () => clock })
+    first.createSession({ id: talked, directory: "/repo", title: "" })
+    first.createSession({ id: silent, directory: "/repo", title: "" })
+    clock = 3_000
+    first.sessionSink.append({ type: "queue.added", sessionId: talked, queueId: ids("queue"), text: "hello", attachments: [] })
+    first.close()
+    const { Database } = await import("bun:sqlite")
+    const raw = new Database(path.join(dir, "mendd.db"))
+    raw.run("UPDATE sessions SET updated_at = 9000")
+    raw.run("DELETE FROM meta WHERE key = 'session-age-restored'")
+    raw.close()
+    const second = openStore({ dir, now: () => clock })
+    expect(Object.fromEntries(second.listSessions().map((s) => [s.sessionId, s.updatedAt]))).toEqual({ [talked]: 3_000, [silent]: 1_000 })
+    second.close()
+  })
+
+  test("a bumped session whose events were compacted away gets its age back from its last turn, once", async () => {
+    const dir = tempDir()
+    const [turned, silent] = [ids("session"), ids("session")]
+    let clock = 1_000
+    const first = openStore({ dir, now: () => clock })
+    first.createSession({ id: turned, directory: "/repo", title: "" })
+    first.createSession({ id: silent, directory: "/repo", title: "" })
+    clock = 4_000
+    first.sessionSink.append({ type: "turn.started", sessionId: turned, turnId: ids("turn"), queueId: ids("queue") })
+    first.close()
+    const { Database } = await import("bun:sqlite")
+    const raw = new Database(path.join(dir, "mendd.db"))
+    expect(raw.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM turns").get()!.n).toBeGreaterThan(0)
+    raw.run("DELETE FROM events")
+    raw.run("UPDATE sessions SET updated_at = 9000")
+    raw.run("DELETE FROM meta WHERE key IN ('session-age-restored', 'session-age-restored-turns')")
+    raw.close()
+    const second = openStore({ dir, now: () => clock })
+    expect(Object.fromEntries(second.listSessions().map((s) => [s.sessionId, s.updatedAt]))).toEqual({ [turned]: 4_000, [silent]: 9_000 })
+    second.close()
+  })
+
+  test("a lifecycle write, an archive and a title change do not move it", () => {
+    let clock = 1_000
+    const store = openStore({ dir: tempDir(), now: () => clock })
+    const id = ids("session")
+    store.createSession({ id, directory: "/repo", title: "first" })
+    clock = 50_000
+    store.renameSession(id, "renamed")
+    store.sessionData.set(id, "lifecycle", "{}")
+    store.setSessionArchived(id, true)
+    expect(store.sessionInfo(id)?.updatedAt).toBe(1_000)
+    store.close()
+  })
+})
+
 describe("single writer (A11)", () => {
   test("a second store on the same directory fails fast; after close it can open", () => {
     const dir = tempDir()
@@ -567,5 +648,65 @@ describe("single writer (A11)", () => {
     const store = openStore({ dir })
     store.close()
     expect(readdirSync(dir).includes("mendd.lock")).toBe(false)
+  })
+})
+
+describe("where a session and its messages come from", () => {
+  const added = (store: ReturnType<typeof openStore>, sessionId: SessionId, text: string, extra: Record<string, unknown> = {}) =>
+    store.sessionSink.append({ type: "queue.added", sessionId, queueId: ids("queue"), text, attachments: [], ...extra } as never)
+
+  test("the creator is kept and listed; a caller that names none is auto and an import records none", () => {
+    const store = openStore({ dir: tempDir() })
+    const typed = ids("session")
+    const unnamed = ids("session")
+    const imported = ids("session")
+    store.createSession({ id: typed, directory: "/repo", title: "a", origin: "tui" })
+    store.createSession({ id: unnamed, directory: "/repo", title: "b" })
+    store.createSession({ id: imported, directory: "/repo", title: "c", origin: null })
+    const byId = new Map(store.listSessions({}).map((session) => [session.sessionId, session]))
+    expect(byId.get(typed)?.origin).toBe("tui")
+    expect(byId.get(unnamed)?.origin).toBe("auto")
+    expect(byId.get(imported)).not.toHaveProperty("origin")
+    expect(store.sessionSummary(typed)?.origin).toBe("tui")
+    expect(store.readAfter(typed, 0)[0]).toMatchObject({ type: "session.created", origin: "tui" })
+    store.close()
+  })
+
+  test("only a message a person typed sets lastHumanAt, to its time; scripts, agents, notices and shell lines from them do not", () => {
+    let now = 1_000
+    const store = openStore({ dir: tempDir(), now: () => now })
+    const sessionId = ids("session")
+    store.createSession({ id: sessionId, directory: "/repo", title: "t", origin: "cli" })
+    added(store, sessionId, "from a script", { origin: "cli" })
+    added(store, sessionId, "from a peer", { origin: "agent" })
+    added(store, sessionId, "from the daemon", { origin: "auto" })
+    added(store, sessionId, "a notice", { origin: "tui", notice: true })
+    added(store, sessionId, "an old row")
+    expect(store.sessionSummary(sessionId)).not.toHaveProperty("lastHumanAt")
+    now = 5_000
+    added(store, sessionId, "typed", { origin: "tui" })
+    now = 6_000
+    added(store, sessionId, "from a script again", { origin: "cli" })
+    expect(store.sessionSummary(sessionId)?.lastHumanAt).toBe(5_000)
+    expect(store.listSessions({})[0]?.lastHumanAt).toBe(5_000)
+    store.close()
+  })
+
+  test("a database from before origins gains the columns and its sessions read as unknown", () => {
+    const dir = tempDir()
+    const sessionId = ids("session")
+    const first = openStore({ dir })
+    first.createSession({ id: sessionId, directory: "/repo", title: "old", origin: null })
+    first.close()
+    const raw = new Database(path.join(dir, "mendd.db"))
+    raw.run("ALTER TABLE sessions DROP COLUMN origin")
+    raw.run("ALTER TABLE sessions DROP COLUMN last_human_at")
+    raw.close()
+    const store = openStore({ dir })
+    const summary = store.sessionSummary(sessionId)
+    expect(summary).toBeDefined()
+    expect(summary).not.toHaveProperty("origin")
+    expect(summary).not.toHaveProperty("lastHumanAt")
+    store.close()
   })
 })

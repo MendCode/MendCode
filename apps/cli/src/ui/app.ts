@@ -1,3 +1,4 @@
+import { sameAgentName } from "../view/background-row"
 import { createConsole } from "./app/console"
 import { applyGlyphMode, asciiChrome, asciiScreen } from "./app/glyph-mode"
 import { subagentRunOf } from "./app/subagent-run"
@@ -94,13 +95,13 @@ import { buildBindings, readKeybindings, type KeybindingFile } from "../extensio
 import type { TranscriptHooks } from "../extensions/hooks"
 import { createEditor } from "../view/editor"
 import { attachmentLabels } from "../view/attachments"
-import { createVim } from "../view/vim"
+import { createLazyVim } from "../view/vim-lazy"
 import { createDraftSync } from "./drafts"
 import { createComments } from "./app/comments"
 import { osc52Copy } from "./osc52"
 import { createPromptStash } from "./prompt-stash"
 import { placeholderFor, shellPlaceholderFor } from "../view/prompt-chrome"
-import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile } from "../view/tui-profile"
+import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, panelStarted, readTuiProfile } from "../view/tui-profile"
 import { recoverProfile, profileFile } from "@mendcode/program/profile-history"
 import { ACCESSIBLE_LOOK } from "../view/accessible"
 import { homeTip } from "../view/home-tips"
@@ -259,6 +260,7 @@ export function createApp(input: AppInput) {
     turnState: undefined!,
     openedAt: undefined!,
     escArmedAt: 0,
+    agentStopArmedAt: 0,
     editingScratch: undefined,
     scratchFor: undefined,
     goalPrompt: undefined,
@@ -280,7 +282,7 @@ export function createApp(input: AppInput) {
     attachments: [],
     pastes: [],
     suggestion: 0,
-    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, shown: "", shell: false },
+    recall: { prompts: undefined as import("../view/prompt-search").RecallEntry[] | undefined, index: -1, draft: "", draftCursor: 0, draftPastes: [], draftAttachments: [], shown: "", shell: false },
     submits: 0,
     unsent: [],
     mentionPending: undefined,
@@ -332,6 +334,7 @@ export function createApp(input: AppInput) {
     onboarding: undefined,
     setupAdvanced: false,
     agentReport: undefined,
+    pendingBot: undefined,
     agentError: "",
     agentPicker: { selected: 0 },
     themePicker: { query: "", selected: 0 },
@@ -378,6 +381,7 @@ export function createApp(input: AppInput) {
     frameScheduled: undefined!,
     scrollbarAt: undefined!,
     pulse: undefined!,
+    pulseMs: 0,
     pulseOn: undefined!,
     approvalChoice: undefined!,
     approvalChoiceFor: undefined!,
@@ -441,7 +445,7 @@ export function createApp(input: AppInput) {
     return { shells, agents }
   }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && sameAgentName(shell.command, description)), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}
@@ -465,6 +469,8 @@ export function createApp(input: AppInput) {
     appState.reducedMotion = true
     appState.tuiProfile = normalizeTuiProfile({ ...appState.tuiProfile, ...(appState.tuiProfile.accessible ? {} : ACCESSIBLE_LOOK) })
   }
+  // `panelStart` decides whether a new terminal opens the right panel (a session's own /panel choice, below, still wins).
+  appState.tuiProfile = panelStarted(appState.tuiProfile)
   appState.profileBase = { ...appState.tuiProfile }
   // What slash commands showed or hid in each session is that session's (session-look.ts): the one this terminal opens on gets its own back.
   appState.sessionLook = input.profile ? new Map() : readSessionLook(input.dataDir)
@@ -607,7 +613,7 @@ export function createApp(input: AppInput) {
     state: appState,
     now,
     editor,
-    vim: createVim(editor),
+    vim: createLazyVim(editor),
     scratchEditor,
     keybindingFile,
     stateLabels: STATE_LABEL,
@@ -651,9 +657,10 @@ export function createApp(input: AppInput) {
   const { loadContext, contextWindowCommand, filesCommand } = createContext(ctx)
   const { loadSecretTails, noteSecretMarkers, loadSecrets, dropRevealedSecret, revealSecret, forgetSecret, secretTail } = createSecrets(ctx)
   const environmentPanel = createEnvironmentPanel(ctx)
-  const { openTranscript, loadEarlier } = createPaging(ctx, {
+  const { openTranscript, resumeTranscript, loadEarlier, loadThreadStart, releaseFar } = createPaging(ctx, {
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,
+    loadSecretTails,
     replay: (event) => onEvent(event),
     recoverMissingSession: () => recoverMissingSession(),
   })
@@ -703,11 +710,11 @@ export function createApp(input: AppInput) {
   const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
-  const { attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
+  const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
-  const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name), loadWorkflows: () => loadWorkflows() })
+  const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name), loadWorkflows: () => loadWorkflows(), loadEarlier })
   const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
     resetAudio: audio.reset,
     newTranscript,
@@ -721,10 +728,15 @@ export function createApp(input: AppInput) {
     endGoalEdit,
     loadEffectiveModel,
     restoreDraft,
+    expandedWith,
+    chipped,
+    loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
+    resumeTranscript,
+    syncAppearance: () => syncAppearance(),
     loadEarlier,
-    checkResume: () => returnFlow.checkResume(),
+    checkResume: (options) => returnFlow.checkResume(options),
     sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec() },
     openTree: (options) => sessionTree.open(options),
   })
@@ -740,11 +752,11 @@ export function createApp(input: AppInput) {
   const today = { command: async (args: string) => (await loadToday()).command(args), key: async (key: string) => (await loadToday()).key(key), rows: (width: number, height: number) => todayLoaded?.render(width, height) ?? [] }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
-  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
+  const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { chipped, loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
-  const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
+  const composer = createComposerRecovery(ctx, { chipped, composedAttachments, attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
   const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
-  const { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
+  const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
   const { diagramLayout, openDiagram } = createDiagram(ctx)
@@ -1032,6 +1044,7 @@ export function createApp(input: AppInput) {
   const find = createFind(ctx, { chatWidth: () => transcriptWidth() })
   const inline = createInline(ctx)
   const { onKey, runKeyAction } = createKeys(ctx, {
+    changeProfile: (patch) => changeProfile(patch),
     openPathInView: () => filePick.run(),
     changesClick,
     gitClick: git.gitClick,
@@ -1055,6 +1068,7 @@ export function createApp(input: AppInput) {
     restoreUnsent,
     scratchKey,
     switchSession,
+    openWorkflowOf,
     homeSessions: (...args) => homeSessions(...args),
     navigateMessage,
     endScratchEdit,
@@ -1067,6 +1081,7 @@ export function createApp(input: AppInput) {
     suggestionPool,
     runSlash: (...args) => runSlash(...args),
     chatWidth: (...args) => chatWidth(...args),
+    sidebarShown: (...args) => sidebarShown(...args),
     transcriptWidth: () => transcriptWidth(),
     pickApproval: (...args) => pickApproval(...args),
     pickQuestion: (...args) => pickQuestion(...args),
@@ -1125,6 +1140,7 @@ export function createApp(input: AppInput) {
     attachPasted,
     insertPasted,
     expandedPrompt,
+    rememberComposed,
     pasteClipboardImage,
     syncMentions,
     syncDraft,
@@ -1189,6 +1205,7 @@ export function createApp(input: AppInput) {
     sessionTitle: (...args) => sessionTitle(...args),
     paletteItems: (...args) => paletteItems(...args),
     sidebarShown: (...args) => sidebarShown(...args),
+    sidebarCells: (...args) => sidebarCells(...args),
     rightLayout: (width) => { rightBar.ensureData(); return rightBar.layout(width) },
     fileOpen,
     rightRows: rightBar.rightRows,
@@ -1222,6 +1239,8 @@ export function createApp(input: AppInput) {
     findBar: find.bar,
     searchBar: composer.searchRow,
     loadEarlier,
+    loadThreadStart,
+    releaseFar,
     compactionLive,
     statusRow: (...args) => statusRow(...args),
     statusRows: (...args) => statusRows(...args),
@@ -1237,7 +1256,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, sidebarCells, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,
@@ -1252,7 +1271,7 @@ export function createApp(input: AppInput) {
     render,
   })
   const { queueCommand, queueKey, noteQueue } = createQueue(ctx, (...args) => applySettings(...args))
-  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes } = createSettings(ctx, {
+  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes, syncAppearance } = createSettings(ctx, {
     syncSlashDefault: slashMenu.syncDefault,
     syncAudio: audio.sync,
     syncImages: images.syncImages,
@@ -1284,6 +1303,7 @@ export function createApp(input: AppInput) {
     },
     reloadExtensions,
     noteTurnEnded,
+    releaseFar,
     openSession: (sessionId) => switchSession(sessionId),
     loadMcps,
     chatWidth: () => transcriptWidth(),
@@ -1433,6 +1453,9 @@ export function createApp(input: AppInput) {
       // A watch belongs to the connection, so a reconnect asks again.
       if (back && appState.statusLoaded) watchStatus()
       if (back) void tuiControl.register()
+      // Pushes may have been missed while the connection was down: the bots and other-folder lists are asked for whole.
+      if (back) appState.sidebarBots?.resync()
+      if (back) appState.homeBots?.resync()
       if (back) void reconcileDaemon()
       if (back) void verifySession().catch(() => undefined)
       // A new daemon has none of the old one's background work (an engine's agents ended with its process): the list is asked again.

@@ -29,7 +29,7 @@ func clipped(_ value: String) -> String {
     return String(decoding: units, as: UTF16.self).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\t", with: " ")
 }
 // AppKit text views (TextEdit's document) do not report AXEnabled at all; without AXTextArea here they offered no action.
-let enabledWithoutAttribute: Set<String> = ["AXWindow", "AXScrollArea", "AXGroup", "AXWebArea", "AXImage", "AXTextArea"]
+let enabledWithoutAttribute: Set<String> = ["AXWindow", "AXScrollArea", "AXGroup", "AXWebArea", "AXImage", "AXTextArea", "AXApplication"]
 func enabled(_ element: AXUIElement) -> Bool {
     if let value = attribute(element, kAXEnabledAttribute) as? Bool { return value }
     return enabledWithoutAttribute.contains(text(element, kAXRoleAttribute))
@@ -106,7 +106,19 @@ func retain(_ element: AXUIElement, window: AXUIElement, pid: pid_t) -> Referenc
 var references: [String: Reference] = [:]
 var windowHandles: [String: AXUIElement] = [:]
 var windowPIDs: [String: pid_t] = [:]
-var nodeCounter: UInt64 = UInt64.random(in: 100_000_000_000...900_000_000_000)
+/** An AX element as a dictionary key: equal when CFEqual says it is the same accessibility object. */
+struct ElementKey: Hashable {
+    let element: AXUIElement
+    func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
+    static func == (a: ElementKey, b: ElementKey) -> Bool { CFEqual(a.element, b.element) }
+}
+/**
+ * Node IDs stay the same for an element seen in consecutive observations, so an unchanged window reads back with the same IDs and
+ * the daemon can answer "unchanged" or a short diff. An ID is never given to another element: the counter only grows. Only the
+ * elements of the last walk are kept. IDs are names, not authority: `references` (rebuilt by every walk) is.
+ */
+var stableIDs: [pid_t: [ElementKey: String]] = [:]
+var nodeCounter: UInt64 = UInt64.random(in: 100...899) * 1000
 var badge: NSPanel?
 var cursorLocation: CGPoint?
 var cursorProgram = false
@@ -189,18 +201,41 @@ func targetObject(_ running: NSRunningApplication) -> Object {
     }
     return result
 }
+let windowChanged = "Selected window changed: another window of the app has focus. In computer_code call tools.windows({}) then tools.selectWindow({windowID}) and observe, or start a new session"
+/**
+ * What a session observes and acts in: the app's focused window, or the application itself when it has none (a menu-bar app, every
+ * window closed or minimized). The application scope lists the app's windows and its menu bar and status items; actions there reach
+ * the app's process. When the session's own window closed, the session follows the app to the window that has focus now; another
+ * open window taking the focus still stops it, so a new dialog is never missed.
+ */
 func selected(_ target: Object, foreground: Bool = true) throws -> (NSRunningApplication, AXUIElement, AXUIElement) {
     try trusted()
     let running = try running(target, foreground: foreground)
     let ax = AXUIElementCreateApplication(running.processIdentifier)
     AXUIElementSetMessagingTimeout(ax, 1)
-    guard let focused = elementAttribute(ax, kAXFocusedWindowAttribute) else { try fail("No focused accessible window") }
-    if let id = target["windowID"] as? String {
-        guard let window = windowHandles[id], windowPIDs[id] == running.processIdentifier, CFEqual(window, focused) else { try fail("Selected window changed: the session's window closed or another window of the app has focus. In computer_code call tools.windows({}) then tools.selectWindow({windowID}) and observe, or start a new session") }
+    let focused = elementAttribute(ax, kAXFocusedWindowAttribute)
+    let id = target["windowID"] as? String
+    let window = id.flatMap { key in windowPIDs[key] == running.processIdentifier ? windowHandles[key] : nil }
+    let scope = sessionScope(focused: focused != nil, selected: id != nil, selectedKnown: window != nil, selectedFocused: window.map { w in focused.map { CFEqual(w, $0) } ?? false } ?? false,
+                             selectedOpen: { window.map { w in (attribute(ax, kAXWindowsAttribute) as? [AXUIElement] ?? []).contains(where: { CFEqual($0, w) }) } ?? false })
+    if scope == "changed" { try fail(windowChanged) }
+    if badge != nil {
+        if let window = focused { anchor(window) } else if anchorWindow != 0 { anchorWindow = 0; keepAbove(force: true) }
     }
-    if badge != nil { anchor(focused) }
-    return (running, ax, focused)
+    return (running, ax, focused ?? ax)
 }
+/**
+ * Where a session works, decision only: "window" (the focused window), "app" (no window has focus: the application scope), or
+ * "changed" (another open window took the focus from the session's own). `selectedOpen` is asked only when it decides.
+ */
+func sessionScope(focused: Bool, selected: Bool, selectedKnown: Bool, selectedFocused: Bool, selectedOpen: () -> Bool) -> String {
+    guard focused else { return "app" }
+    guard selected else { return "window" }
+    guard selectedKnown else { return "changed" }
+    return selectedFocused || !selectedOpen() ? "window" : "changed"
+}
+/** Whether `root` is the application itself (no window has focus). */
+func applicationScope(_ root: AXUIElement) -> Bool { text(root, kAXRoleAttribute) == "AXApplication" }
 // MendCode's agent cursor: a violet dot in a white ring, a dark tag naming the action, a tap ring, corner marks around the element
 // acted on and a dashed drag line. Everything is a layer of one transparent canvas window kept directly above the controlled app's
 // window, so a window that covers the app covers its cursor too, and moving the cursor never moves a window.
@@ -372,7 +407,7 @@ func keepAbove(force: Bool = false) {
     let now = uptime()
     if !force && now - anchoredAt < 0.2 { return }
     anchoredAt = now
-    guard anchorWindow != 0 else { if !panel.isVisible { panel.orderFrontRegardless() }; return }
+    guard anchorWindow != 0 else { panel.contentView?.layer?.isHidden = false; if !panel.isVisible { panel.orderFrontRegardless() }; return }
     let info = CGWindowListCopyWindowInfo(.optionIncludingWindow, anchorWindow) as? [[String: Any]]
     let onScreen = info?.first?[kCGWindowIsOnscreen as String] as? Bool ?? false
     panel.contentView?.layer?.isHidden = !onScreen
@@ -557,7 +592,13 @@ func pressable(_ element: AXUIElement) -> Bool {
     return (supported as? [String] ?? []).contains(kAXPressAction)
 }
 func observe(_ target: Object) throws -> Object {
-    let (running, _, window) = try selected(target, foreground: false)
+    let (running, _, root) = try selected(target, foreground: false)
+    if applicationScope(root) {
+        let snapshot = walkWindow(root, pid: running.processIdentifier, application: running)
+        _ = try selected(target, foreground: false)
+        return ["nodes": snapshot.nodes, "truncated": snapshot.truncated, "scope": "app"]
+    }
+    let window = root
     var snapshot = walkWindow(window, pid: running.processIdentifier)
     if let probe = snapshot.webProbe, !pressable(probe), enableWebAccessibility(running.processIdentifier) {
         // The first look at a page waits for its actions, so a click in the same program can already use them.
@@ -578,24 +619,69 @@ func observe(_ target: Object) throws -> Object {
     _ = try selected(target, foreground: false)
     return ["nodes": snapshot.nodes, "truncated": snapshot.truncated]
 }
-/** The window's bounded tree; `webProbe` is a link or button of a web page in it, which offers AXPress once the page's actions are on. */
-func walkWindow(_ window: AXUIElement, pid: pid_t) -> (nodes: [Object], truncated: Bool, webProbe: AXUIElement?) {
+/** A walk ends here even when the app answers slowly: the tree so far comes back marked truncated (the next look is usually fast). */
+let walkBudget: TimeInterval = 2
+func openMenu(_ element: AXUIElement) -> Bool { (attribute(element, kAXSelectedAttribute) as? Bool) == true }
+/**
+ * What the application scope shows under a node, decision only: "all" its children, "none", or "rest" (all but the first: the Apple
+ * menu is the system's, not the app's). Windows are listed, not walked; the menu bar's menus show one level of items; a submenu or a
+ * status item's menu only while it is open. `open` is asked only when it decides.
+ */
+func appScopeChildren(role: String, mainMenuBar: Bool, open: () -> Bool) -> String {
+    switch role {
+    case "AXWindow": return "none"
+    case "AXMenuBar": return mainMenuBar ? "rest" : "all"
+    case "AXMenuBarItem": return mainMenuBar || open() ? "all" : "none"
+    case "AXMenuItem": return open() ? "all" : "none"
+    default: return "all"
+    }
+}
+/**
+ * The bounded tree under `window`; `webProbe` is a link or button of a web page in it, which offers AXPress once the page's actions
+ * are on. With `application` the root is the app itself: its windows (listed, not walked), its menu bar and its status items.
+ */
+func walkWindow(_ window: AXUIElement, pid: pid_t, application: NSRunningApplication? = nil) -> (nodes: [Object], truncated: Bool, webProbe: AXUIElement?) {
     references.removeAll()
-    var nodes: [Object] = [], bytes = 0, truncated = false, visited: [AXUIElement] = [], webProbe: AXUIElement?
-    func walk(_ element: AXUIElement, depth: Int, inheritedSecure: Bool, inWeb: Bool) {
-        if nodes.count >= 500 || depth > observeDepth || bytes >= 58_000 { truncated = true; return }
-        if visited.contains(where: { CFEqual($0, element) }) { return }
-        visited.append(element)
+    var nodes: [Object] = [], bytes = 0, truncated = false, visited = Set<ElementKey>(), webProbe: AXUIElement?, seen: [ElementKey: String] = [:]
+    let deadline = uptime() + walkBudget
+    let mainMenuBar = application != nil ? elementAttribute(window, kAXMenuBarAttribute) : nil
+    /** The children the application scope shows; nil outside it. */
+    func scoped(_ element: AXUIElement, role: String, depth: Int, children: [AXUIElement], menuBar: Bool) -> [AXUIElement]? {
+        guard application != nil else { return nil }
+        switch role {
+        case "AXApplication":
+            var shown = attribute(element, kAXWindowsAttribute) as? [AXUIElement] ?? []
+            if let bar = elementAttribute(element, kAXMenuBarAttribute) { shown.append(bar) }
+            if let extras = elementAttribute(element, "AXExtrasMenuBar") { shown.append(extras) }
+            return shown
+        default:
+            if children.isEmpty { return [] }
+            switch appScopeChildren(role: role, mainMenuBar: menuBar, open: { openMenu(element) }) {
+            case "none": return []
+            case "rest": return Array(children.dropFirst())
+            default: return children
+            }
+        }
+    }
+    func walk(_ element: AXUIElement, depth: Int, inheritedSecure: Bool, inWeb: Bool, menuBar: Bool = false) {
+        if nodes.count >= 500 || depth > observeDepth || bytes >= 58_000 || uptime() > deadline { truncated = true; return }
+        let key = ElementKey(element: element)
+        if visited.contains(key) { return }
+        visited.insert(key)
         AXUIElementSetMessagingTimeout(element, 0.3)
         let info = readNode(element, children: true), role = info.role
         // The walk starts at the window and carries a secure ancestor down, so the node's own role completes the check.
-        let isSecure = inheritedSecure || role == "AXSecureTextField" || info.subrole == "AXSecureTextField", isEnabled = info.enabled
+        let isSecure = inheritedSecure || role == "AXSecureTextField" || info.subrole == "AXSecureTextField", isEnabled = info.enabled || role == "AXApplication"
         let inPage = inWeb || role == "AXWebArea"
         if inPage && webProbe == nil && ["AXLink", "AXButton"].contains(role) { webProbe = element }
-        let name = info.title.isEmpty ? info.description : info.title
-        nodeCounter += 1; let id = "0.\(nodeCounter)"
+        let name = role == "AXApplication" ? (application?.localizedName ?? info.title) : info.title.isEmpty ? info.description : info.title
+        let id: String
+        if let known = stableIDs[pid]?[key] { id = known } else { nodeCounter += 1; id = "0.\(nodeCounter)" }
+        seen[key] = id
         var actions: [String] = []
-        if isEnabled && !isSecure {
+        // Keys reach the app's process even when nothing in it has focus.
+        if role == "AXApplication" { actions.append("key") }
+        else if isEnabled && !isSecure {
             var supported: CFArray?
             AXUIElementCopyActionNames(element, &supported)
             if (supported as? [String] ?? []).contains(kAXPressAction) { actions.append("press") }
@@ -607,8 +693,11 @@ func walkWindow(_ window: AXUIElement, pid: pid_t) -> (nodes: [Object], truncate
                 if textual { actions.append("typeText") }
             }
         }
-        var node: Object = ["id": id, "role": clipped(role), "name": isSecure ? "" : clipped(name), "states": (isEnabled ? ["enabled"] : []) + (info.focused ? ["focused"] : []), "actions": actions]
-        let value = isSecure ? "" : text(element, kAXValueAttribute)
+        var states = (isEnabled ? ["enabled"] : []) + (info.focused ? ["focused"] : [])
+        if application != nil && role == "AXWindow" && (attribute(element, kAXMinimizedAttribute) as? Bool) == true { states.append("minimized") }
+        if application != nil && role == "AXMenuBarItem" && openMenu(element) { states.append("open") }
+        var node: Object = ["id": id, "role": clipped(role), "name": isSecure ? "" : clipped(name), "states": states, "actions": actions, "depth": depth]
+        let value = isSecure || role == "AXApplication" ? "" : text(element, kAXValueAttribute)
         if isSecure { node["secure"] = true; node["states"] = ["secure"] }
         else if !value.isEmpty { node["value"] = clipped(value) }
         if let rect = info.bounds { node["bounds"] = rectObject(rect) }
@@ -617,9 +706,12 @@ func walkWindow(_ window: AXUIElement, pid: pid_t) -> (nodes: [Object], truncate
         bytes += length; nodes.append(node)
         if isSecure { return }
         references[id] = Reference(element: element, signature: signature(info, value: value), stable: signature(info, value: nil), window: window, pid: pid)
-        for child in info.children { if nodes.count >= 500 || bytes >= 58_000 { truncated = true; break }; walk(child, depth: depth + 1, inheritedSecure: isSecure, inWeb: inPage) }
+        let inMenuBar = menuBar || (role == "AXMenuBar" && mainMenuBar.map { CFEqual($0, element) } == true)
+        let children = scoped(element, role: role, depth: depth, children: info.children, menuBar: inMenuBar) ?? info.children
+        for child in children { if nodes.count >= 500 || bytes >= 58_000 { truncated = true; break }; walk(child, depth: depth + 1, inheritedSecure: isSecure, inWeb: inPage, menuBar: inMenuBar) }
     }
     walk(window, depth: 0, inheritedSecure: false, inWeb: false)
+    stableIDs[pid] = seen
     return (nodes, truncated, webProbe)
 }
 /** Strict re-resolution right before an effect: the retained object, its window and ancestry, and its signature (`stable` leaves the value out). */
@@ -958,7 +1050,21 @@ func dispatch(_ request: Object) throws -> Any {
         return targetObject(running)
     case "apps":
         CFRunLoopRunInMode(.defaultMode, 0, false)
-        return NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular && $0.bundleIdentifier != nil }.prefix(128).map { ["pid": Int($0.processIdentifier), "bundleID": $0.bundleIdentifier!, "appName": clipped($0.localizedName ?? "")] as Object }
+        // On-screen windows per process from one window-server call (owner and layer need no Screen Recording permission).
+        var windowCount: [pid_t: Int] = [:]
+        for info in CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [] where (info[kCGWindowLayer as String] as? Int) == 0 {
+            if let owner = info[kCGWindowOwnerPID as String] as? Int { windowCount[pid_t(owner), default: 0] += 1 }
+        }
+        let front = frontmost()?.processIdentifier
+        // Menu-bar apps (no Dock icon) are listed after the others; the system's own agents and this helper are not.
+        let menuBarApp = { (app: NSRunningApplication) in app.activationPolicy == .accessory && !(app.bundleIdentifier ?? "").hasPrefix("com.apple.") && app.bundleIdentifier != Bundle.main.bundleIdentifier }
+        let listed = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier != nil && !$0.isTerminated && $0.activationPolicy == .regular } + NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier != nil && !$0.isTerminated && menuBarApp($0) }
+        return listed.prefix(128).map { app -> Object in
+            var entry: Object = ["pid": Int(app.processIdentifier), "bundleID": app.bundleIdentifier!, "appName": clipped(app.localizedName ?? ""), "windows": windowCount[app.processIdentifier] ?? 0]
+            if app.activationPolicy == .accessory { entry["menuBar"] = true }
+            if app.processIdentifier == front { entry["active"] = true }
+            return entry
+        }
     case "resolve":
         guard let bundle = request["bundleID"] as? String else { try fail("Missing bundle ID") }
         CFRunLoopRunInMode(.defaultMode, 0, false)
@@ -996,25 +1102,63 @@ func dispatch(_ request: Object) throws -> Any {
         let running = try running(target, foreground: false); try trusted()
         let ax = AXUIElementCreateApplication(running.processIdentifier)
         let windows = attribute(ax, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        let focused = elementAttribute(ax, kAXFocusedWindowAttribute)
         return windows.prefix(64).map { window -> Object in
             var result: Object = ["id": handle(window, pid: running.processIdentifier), "name": clipped(text(window, kAXTitleAttribute))]
-            if let rect = bounds(window) { result["bounds"] = rectObject(rect) }; return result
+            if let rect = bounds(window) { result["bounds"] = rectObject(rect) }
+            if (attribute(window, kAXMinimizedAttribute) as? Bool) == true { result["minimized"] = true }
+            if let focused = focused, CFEqual(focused, window) { result["focused"] = true }
+            return result
         }
     case "selectWindow":
+        // A window from tools.windows (its handle) or from an observation (its node). A minimized window is restored; the window becomes
+        // the app's main window, and is raised only while the app is in front, so the user's own window stays where it is.
         try trusted()
         guard badge?.isVisible == true, lease >= 0 else { try fail("Window selection requires an input lease and visible indicator") }
-        let running = try running(target)
-        guard let id = request["windowID"] as? String, let window = windowHandles[id], windowPIDs[id] == running.processIdentifier else { try fail("Unknown window handle") }
-        let ax = AXUIElementCreateApplication(running.processIdentifier)
+        let running = try running(target, foreground: false)
+        let pid = running.processIdentifier
+        var chosen: AXUIElement?
+        if let id = request["windowID"] as? String, let window = windowHandles[id], windowPIDs[id] == pid { chosen = window }
+        else if let node = request["nodeID"] as? String, let ref = references[node], ref.pid == pid, text(ref.element, kAXRoleAttribute) == "AXWindow" { chosen = ref.element }
+        guard let window = chosen else { try fail("Unknown window: give a windowID from tools.windows({}) or the nodeID of a window in the current observation") }
+        let id = handle(window, pid: pid)
+        let ax = AXUIElementCreateApplication(pid)
         guard (attribute(ax, kAXWindowsAttribute) as? [AXUIElement] ?? []).contains(where: { CFEqual($0, window) }) else { try fail("Window closed") }
         references.removeAll()
         if let rect = bounds(window) { try animateCursor(to: CGPoint(x: rect.midX, y: rect.midY), label: "Window") }
-        if cancelled || running.isTerminated || frontmost()?.processIdentifier != running.processIdentifier { try fail("Application changed during window selection; no window was raised") }
+        if cancelled || running.isTerminated { try fail("Application changed during window selection; no window was raised") }
         effect()
-        guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { try fail("Cannot raise window") }
+        let restored = (attribute(window, kAXMinimizedAttribute) as? Bool) == true && AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse) == .success
         _ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
-        let result = targetObject(running)
-        guard result["windowID"] as? String == id else { try fail("Window focus was not confirmed") }; return result
+        if frontmost()?.processIdentifier == pid { _ = AXUIElementPerformAction(window, kAXRaiseAction as CFString) }
+        let deadline = Date(timeIntervalSinceNow: 1)
+        while elementAttribute(ax, kAXFocusedWindowAttribute).map({ !CFEqual($0, window) }) ?? true, Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
+        var result = targetObject(running)
+        let confirmed = result["windowID"] as? String == id
+        if !confirmed { result["windowID"] = id; result["windowName"] = clipped(text(window, kAXTitleAttribute)) }
+        return ["target": result, "focused": confirmed, "restored": restored, "minimized": (attribute(window, kAXMinimizedAttribute) as? Bool) == true]
+    case "reopen":
+        // What clicking the app's Dock icon does: the app is asked to reopen (it shows or creates its window), without being activated.
+        try trusted()
+        guard badge?.isVisible == true, lease >= 0 else { try fail("Reopening requires an input lease and visible indicator") }
+        let running = try running(target, foreground: false)
+        guard let url = running.bundleURL else { try fail("The app's bundle is unknown; nothing was sent") }
+        let ax = AXUIElementCreateApplication(running.processIdentifier)
+        let count = { (attribute(ax, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter { (attribute($0, kAXMinimizedAttribute) as? Bool) != true }.count }
+        let before = count()
+        let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = false
+        var finished = false, launchError: Error?
+        references.removeAll()
+        if let point = cursorLocation { presentCursor(point, label: "Reopen") }
+        effect()
+        NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, error in launchError = error; finished = true }
+        var deadline = Date(timeIntervalSinceNow: 8)
+        while !finished && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
+        if launchError != nil || !finished { try fail("The app did not take the request to reopen; inspect before retrying") }
+        if running.isTerminated { try fail("Computer target changed or exited; start a new session") }
+        deadline = Date(timeIntervalSinceNow: 3)
+        while count() <= before && elementAttribute(ax, kAXFocusedWindowAttribute) == nil && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
+        return ["target": targetObject(running), "opened": count() > before || (before == 0 && elementAttribute(ax, kAXFocusedWindowAttribute) != nil)]
     case "identify":
         // Null, not an error, when the approved process ended or its bundle ID differs: the caller ends the session.
         try trusted()
@@ -1047,6 +1191,7 @@ func dispatch(_ request: Object) throws -> Any {
         references.removeAll()
         let pid = pid_t(target["pid"] as? Int ?? 0)
         for id in Array(windowHandles.keys) where windowPIDs[id] == pid { windowHandles.removeValue(forKey: id); windowPIDs.removeValue(forKey: id) }
+        stableIDs.removeValue(forKey: pid)
         restoreWebAccessibility(pid)
         if !cursorProgram { try? showBadge(false) }
         return ["released": true]
@@ -1152,6 +1297,16 @@ if CommandLine.arguments.contains("--web-plan") {
         let poor = poorTree(count: input["count"] as? Int ?? 0, hasProbe: input["probe"] as? Bool ?? false)
         let route = keyRoute(nodeFocusable: input["focusable"] as? Bool ?? false, focusedSecure: input["secure"] as? Bool ?? false, focusedOutside: input["outside"] as? Bool ?? false)
         print("{\"poor\":\(poor),\"route\":\"\(route)\"}")
+    }
+    exit(0)
+}
+// Decision-only: one window/menu case per stdin line, where the session works and what the application scope shows. No AX object.
+if CommandLine.arguments.contains("--scope-plan") {
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object else { print("{}"); continue }
+        let scope = sessionScope(focused: input["focused"] as? Bool ?? false, selected: input["selected"] as? Bool ?? false, selectedKnown: input["known"] as? Bool ?? true, selectedFocused: input["selectedFocused"] as? Bool ?? false, selectedOpen: { input["selectedOpen"] as? Bool ?? false })
+        let children = appScopeChildren(role: input["role"] as? String ?? "", mainMenuBar: input["mainMenuBar"] as? Bool ?? false, open: { input["open"] as? Bool ?? false })
+        print("{\"scope\":\"\(scope)\",\"children\":\"\(children)\"}")
     }
     exit(0)
 }

@@ -135,6 +135,54 @@ test("authentication, origin/host, payload, expiry, live feature switch and revo
   expect((await max.request("tools/list")).status).not.toBe(200)
 })
 
+test("a process kept for its background agents keeps its earlier turn's token: it answers for the same session's next turn only, within the hour", async () => {
+  const clock = createVirtualClock()
+  const service = createThreadMcp({ clock, listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }) } as unknown as ThreadPort
+  const open = (sessionId: string) => service.open({ engine: "claude", turn: { ...turn(), sessionId } as TurnInput, allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const list = (authorization: string) => service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }))
+  const session = ids("session")
+  const first = open(session)
+  const earlier = first.servers[0]!.headers[0]!.value
+  first.release()
+  // Between turns no lease is live: the old token opens nothing.
+  expect((await list(earlier)).status).not.toBe(200)
+  const next = open(session)
+  const other = open(ids("session"))
+  expect((await list(earlier)).status).toBe(200)
+  // Another session's turn never answers to it.
+  next.release()
+  expect((await list(earlier)).status).toBe(401)
+  other.release()
+  const later = open(session)
+  // In use every few minutes, it lasts to the hour from when it was issued, and no longer.
+  for (let minutes = 5; minutes < 60; minutes += 5) {
+    clock.advance(5 * 60_000)
+    expect((await list(earlier)).status).toBe(200)
+  }
+  clock.advance(5 * 60_000)
+  expect((await list(earlier)).status).not.toBe(200)
+  later.release()
+  // A turn that starts after the hour does not take the old token either.
+  const fresh = open(session)
+  expect((await list(earlier)).status).toBe(401)
+  fresh.release()
+})
+
+test("the server opens again on the port it had, so a kept process's config still reaches it", () => {
+  const service = createThreadMcp({ clock: createVirtualClock() })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false } as unknown as ThreadPort
+  const open = () => service.open({ engine: "claude", turn: turn(), allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const first = open()
+  const url = first.servers[0]!.url
+  first.release()
+  const second = open()
+  expect(second.servers[0]!.url).toBe(url)
+  second.release()
+})
+
 test("Claude config is private and disposable; Codex injection is process flags; the bearer never reaches results", async () => {
   const h = fixture("claude")
   const file = h.lease.args[1]!
@@ -186,8 +234,18 @@ test("approval policy honors denies, explicit asks, read grants, plan ceilings a
   expect(await approve("delegate_task", { prompt: "change" }, false)).toBe(false)
 })
 
-test("bridge history reads need an individual approval in full/edits, even with allow rules or session-scoped answers", async () => {
-  for (const mode of ["full", "edits", "plan"] as const) {
+test("bridge history reads run without asking in full access", async () => {
+  const input = turn()
+  input.permissionMode = () => "full"
+  let asked = 0
+  input.ask = async () => { asked++; return { kind: "approve", scope: "once" } }
+  const authorize = bridgeAuthorizer({ turn: input, directory: "/project", settings: () => ({ tier: "full" }), profile: () => undefined, sessionRules: () => [], allowed: () => true, mask: (text) => text })
+  for (const name of ["thread_read", "thread_search", "thread_wait", "thread_message", "thread_create", "delegate_task"]) expect(await authorize(name, { sessionId: "target" }, false)).toBe(true)
+  expect(asked).toBe(0)
+})
+
+test("bridge history reads need an individual approval in edits and plan, even with allow rules or session-scoped answers", async () => {
+  for (const mode of ["edits", "plan"] as const) {
     const input = turn()
     input.permissionMode = () => mode
     let asked = 0
@@ -258,4 +316,42 @@ test("split token deltas are redacted before the process wrapper emits persisted
   input.emit({ type: "item.delta", itemId: interrupted, text: "last partial answer" })
   input.flushProcessMcp()
   expect(events.flatMap((event) => event.type === "item.delta" && event.itemId === interrupted ? [event.text] : []).join("")).toBe("last partial answer")
+})
+
+test("a cancelled turn's token is revoked for the next turn, while a turn that ended on its own leaves it for the session", async () => {
+  const service = createThreadMcp({ clock: createVirtualClock(), listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }) } as unknown as ThreadPort
+  const open = (sessionId: string, signal: AbortSignal) => service.open({ engine: "claude", turn: { ...turn(), sessionId, signal } as TurnInput, allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const list = (authorization: string) => service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }))
+  const session = ids("session")
+  const cancelled = new AbortController()
+  const first = open(session, cancelled.signal)
+  const revoked = first.servers[0]!.headers[0]!.value
+  cancelled.abort()
+  const ended = open(session, new AbortController().signal)
+  const endedToken = ended.servers[0]!.headers[0]!.value
+  ended.release()
+  const next = open(session, new AbortController().signal)
+  expect((await list(revoked)).status).toBe(401)
+  expect((await list(endedToken)).status).toBe(200)
+  next.release()
+})
+
+test("a kept process's earlier token is scrubbed from what the next turn's lease returns", async () => {
+  const service = createThreadMcp({ clock: createVirtualClock(), listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }), read: () => ({ ok: true, output: "echo" }) } as unknown as ThreadPort
+  let echoed = ""
+  const open = (sessionId: string) => service.open({ engine: "claude", turn: { ...turn(), sessionId } as TurnInput, allowed: () => true, threads: { ...threads, list: () => ({ ok: true, output: `seen ${echoed}` }) } as unknown as ThreadPort, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const session = ids("session")
+  const first = open(session)
+  const earlier = first.servers[0]!.headers[0]!.value
+  echoed = earlier.replace("Bearer ", "")
+  first.release()
+  const next = open(session)
+  expect(next.scrub(`leak ${echoed}`)).toBe("leak [redacted]")
+  const reply = await (await service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization: earlier }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "thread_list", arguments: {} } }) }))).json() as any
+  expect(reply.result.content[0].text).toBe("seen [redacted]")
+  next.release()
 })

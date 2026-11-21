@@ -19,11 +19,11 @@ There is no competing service per repository; persisted loop triggers remain aut
 |---|---|
 | `manual` | never by itself (`loop.control run`) |
 | `interval` `{ everyMs }` | every `everyMs` (1 min to 30 days) after the last run ended |
-| `daily` `{ at, timezone? }` | every day at wall-clock `HH:MM` in `timezone` (an IANA name like `Europe/Madrid`; local time when absent). A missed window is not caught up |
+| `daily` `{ at, timezone?, days? }` | every day at wall-clock `HH:MM` in `timezone` (an IANA name like `Europe/Madrid`; local time when absent), or only on `days` (weekdays, 0 Sunday to 6 Saturday: the weekly form). A missed window is not caught up |
 | `adaptive` `{ everyMs, minMs?, maxMs? }` | like `interval`, but the pace follows the runs (below) |
 | `external` | never by itself; fired from outside with `loop.fire` (cron, CI, a script) |
 
-Text form (`parseTrigger`): `every 30m`, `daily 09:00`, `daily 09:00 Europe/Madrid`, `adaptive 30m`, `adaptive 30m 5m..4h`, `external`, `manual`.
+Text form (`parseTrigger`): `every 30m`, `daily 09:00`, `daily 09:00 Europe/Madrid`, `weekly mon 09:00`, `weekly mon,thu 09:00 Europe/Madrid`, `adaptive 30m`, `adaptive 30m 5m..4h`, `external`, `manual`.
 
 ### Daily and time zones
 

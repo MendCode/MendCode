@@ -61,7 +61,7 @@ export function toCreateInput(directory: string, input: LoopCreateInput): { ok: 
 }
 
 /** The approval text for a loop about to be created. */
-function previewText(input: CreateLoopInput): string {
+export function previewText(input: CreateLoopInput): string {
   const resolved = resolveCreateInput(input)
   return [
     `Loop "${input.name}" in ${input.directory}`,

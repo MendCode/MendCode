@@ -44,6 +44,10 @@ export type ToolContext = {
   /** The session's background commands (`shell` with background, `shell_output`, `shell_kill`); absent where none can run. */
   taskStatus?(input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }): Promise<string>
   background?: BackgroundPort
+  /** How long a foreground `shell` command runs before it moves to the background and the model gets control back; 0 never moves it. */
+  shellYieldMs?: number | undefined
+  /** A foreground command moved to the background (`shell` yield): the turn does not end while it runs. */
+  onYield?(taskId: string): void
   /** The session's interactive processes on a pseudo-terminal (`shell_session`); absent where none can run. Never reachable from remote clients. */
   interactive?: InteractivePort
   /** Workflows of this session's daemon (`workflow_start`, `workflow_status`); absent where the host has none. */
@@ -56,6 +60,8 @@ export type ToolContext = {
   sessionMeta?(input: import("@mendcode/protocol").SessionMetaInput): Promise<unknown>
   /** This project's loops (`loop`); absent where the host has none. */
   loops?: LoopPort
+  /** A bot's learning (`bot_note`, `bot_skill`, `bot_schedule`); present only on a bot's turn with `experimental.bots` on. */
+  bot?: BotPort
   /** This session's git worktree (`worktree`); absent where the host has none. */
   worktrees?: WorktreePort
   /** This session's pull request watches (`pr_watch`); absent where the host has none. */
@@ -132,6 +138,34 @@ export type LoopPort = {
   pause(loopId: string): { ok: true; text: string } | { ok: false; message: string }
 }
 
+/** What the per-call permission hooks of a tool may look at. */
+export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined }
+
+export type BotResult = { ok: true; text: string; /** Short facts for the transcript card. */ meta?: Record<string, string | number | boolean> } | { ok: false; message: string }
+export type BotSkillInput = { name: string; description?: string | undefined; body?: string | undefined }
+export type BotScheduleInput = { name: string; objective: string; trigger: string; directory?: string | undefined; reportOnly?: boolean | undefined; maxRuns?: number | undefined }
+
+/**
+ * What a bot's turn may do to learn (experimental bots, docs/agents.md): keep a note, save a skill of its own, schedule its own work.
+ * Everything lands under the bot (its memory, its skills folder, loops owned by it); nothing here reaches another bot or a plain session.
+ */
+export type BotPort = {
+  /** The bot's name. */
+  name: string
+  note(input: { text: string; scope: "everywhere" | "project" }): BotResult
+  /** The skills the bot saved: one line each. */
+  skillList(): BotResult
+  skillRead(name: string): BotResult
+  /** Whether saving this skill asks the user: the first time per skill (create, or an update of one the user has not approved yet). */
+  skillNeedsApproval(name: string): boolean
+  skillPreview(input: BotSkillInput): string
+  skillSave(input: BotSkillInput & { mode: "create" | "update" }): BotResult
+  schedulePreview(input: BotScheduleInput): Promise<{ problems: string[]; detail?: string }>
+  scheduleCreate(input: BotScheduleInput): Promise<BotResult>
+  scheduleList(): BotResult
+  scheduleCancel(loopId: string): BotResult
+}
+
 /** What a worktree move did: where the session works now and what to tell the model. */
 export type WorktreeMove = { ok: true; text: string; directory: string } | { ok: false; message: string }
 
@@ -181,7 +215,7 @@ export type PrWatchPort = {
 export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number; /** Set when the list spans projects (`scope: "all"` or a `directory`). */ directory?: string; /** The shortest end of the id (at least 8 characters) that no other session shares: what lists print and every tool accepts as the id. */ shortId?: string }
 
 /** What a list covers: this session's project (default), every project of this daemon, or one other project's folder. */
-export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined }
+export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined; /** A bot's own chats in every folder (the `threads` tool's `mine`; ignored for a session that is not a bot's). */ mine?: boolean | undefined }
 
 /** A session started in another project's folder with a first message; the message and its answer follow the `tell` rules. */
 export type PeerStart = { directory: string; text: string; title?: string | undefined }
@@ -245,6 +279,10 @@ export type ThreadPort = {
   mergeBack(input: { sessionId: string }): ThreadResult
   /** Figures of a session (this one without an id): time per turn, day and hour, usage per model, tools, sub-agents, approvals. No message text. */
   stats(input: { sessionId?: string | undefined }): ThreadResult
+  /** Set for a bot's turn while `experimental.thread_tools` is off: only list, stats, read, search and notes work, so the tool offers a bot its own recall and nothing else. */
+  recallOnly?: boolean
+  /** A bot's own saved notes (everywhere and every project) that mention `query`, or its newest notes; absent for a session that is not a bot's. */
+  notes?(input: { query?: string | undefined }): ThreadResult
 }
 
 /** Workflow actions stay scoped to this session's project and use normal tool approval. */
@@ -310,14 +348,14 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   description: string
   permission: ToolPermission
   /** After argument validation, a mixed read/write tool may narrow its permission for this call. */
-  permissionFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): ToolPermission
+  permissionFor?(args: z.infer<Args>, context?: ToolPermissionContext): ToolPermission
   /** Requires the user's approval for this exact call, regardless of mode, allow rules or saved grants. */
-  individualApprovalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
+  individualApprovalFor?(args: z.infer<Args>, context?: ToolPermissionContext): boolean
   /** `always`, or `approvalFor` per call: the call asks, showing `preview`, in every permission mode and whatever the allow rules or saved grants say. */
   approval?: "always"
-  approvalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
+  approvalFor?(args: z.infer<Args>, context?: ToolPermissionContext & { /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
   /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
-  refusalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): string | undefined
+  refusalFor?(args: z.infer<Args>, context?: ToolPermissionContext): string | undefined
   /** The lowest tier that offers this tool to the model (docs/tiers.md); absent means every tier. Ignored while no `tier` is set. */
   tier?: import("@mendcode/protocol/wire").Tier
   args: Args

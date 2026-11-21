@@ -1,22 +1,38 @@
 import type { WorkflowId, WorkflowRunState, WorkflowSummary, WorkflowTaskState, WorkflowTaskSummary } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
-import { clip, fit, panelGrid, spread } from "./deck"
-import { page, type Hint, type PageStatus } from "./page"
+import { clip, fit } from "./deck"
+import { kvList, page, pageChrome, section, type PageStatus, type PageTab } from "./page"
 import { shortenMiddle, truncateEnd } from "./session-list"
-import { formatElapsed } from "./time"
+import { formatElapsed, todayTimeOrDateTime } from "./time"
 import { textWidth, wrap } from "./wrap"
+
+/**
+ * `/workflows`: the runs grouped by the work item they are about, and one run as a graph of its phases with the steps under them
+ * (the live one with its model and what it does now). The page standard (`page()`): title, scope tabs, rule; the keys on the
+ * title row, as `/usage`, `/model`, `/reviews` and `/release` draw them. See docs/workflows.md, "The page".
+ */
 
 export type WorkflowsScope = "project" | "all"
 export type WorkflowControlAction = "pause" | "resume" | "stop" | "verify" | "delete"
 
 /**
- * `selected` indexes the runs shown. `task` is the task cursor over that run's tasks in display order
- * (level, then plan order); one past the last task is the verification block. Unset = the default target.
+ * The cursor is held by key, so a run that arrives or leaves never moves it: `row` is a list row (`g:` group, `r:` run, `b:` batch,
+ * `f:` fold), `step` a row of the run's timeline (`p:` phase, `t:` task, `v` verification). `opened` and `closed` are the groups,
+ * batches and folds the user opened or closed by hand (a group with a live run is open until closed); `checks` the phases whose
+ * checks are listed (`<workflowId>\0<phase key>`).
  */
 export type WorkflowsPageState = {
-  selected: number
   scope: WorkflowsScope
-  task?: number
+  focus: "list" | "run"
+  row?: string
+  opened?: readonly string[]
+  closed?: readonly string[]
+  step?: string
+  checks?: readonly string[]
+  info?: boolean
+  /** Rows of the info view scrolled past (↑↓ while it is shown). */
+  infoOffset?: number
+  keys?: boolean
   confirm?: { kind: "stop" | "delete"; workflowId: WorkflowId }
 }
 
@@ -37,31 +53,32 @@ const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
 const LEFT = new Set(["\x1b[D", "\x1bOD", "h"])
 const RIGHT = new Set(["\x1b[C", "\x1bOC", "l"])
-const COMPACT_WIDTH = 70
-const COMPACT_HEIGHT = 24
-/** Rows the stacked layout wants for the detail before it shrinks the list. */
-const DETAIL_ROWS = 14
-const LABEL_WIDTH = 11
-const NAME_MAX = 16
-const SCRIPT_NAME_MAX = 28
-const HINTS: Hint[] = [
-  { key: "↑↓", label: "run" },
-  { key: "←→", label: "task" },
-  { key: "enter", label: "open" },
-  { key: "p", label: "pause/resume" },
-  { key: "x", label: "stop" },
-  { key: "t", label: "retry" },
-  { key: "v", label: "verify" },
-  { key: "a", label: "accept" },
-  { key: "d", label: "delete" },
-  { key: "tab", label: "scope" },
-]
-const BACK: Hint = { key: "esc", label: "back" }
 
-const STATE: Record<WorkflowRunState, { label: string; fg: ColorName; dot?: boolean }> = {
-  running: { label: "running", fg: "text", dot: true },
+/** Below this the page shows one pane (the list, or the run after enter); from it the list and the run side by side. */
+const WIDE = 110
+/** From this width a third column holds the run's facts (start, folder, limits, models, log). */
+const FACTS_AT = 170
+const RAIL_MIN = 38
+const RAIL_MAX = 46
+const RAIL_SHARE = 0.38
+const FACTS_WIDTH = 40
+const RUN_MAX = 112
+/** Runs of the same name started this close together are one batch (a council's reviewers, one per model). */
+const BATCH_WINDOW_MS = 2_000
+const STEP_LABEL_MAX = 24
+const CHECK_ROWS_MAX = 8
+const FAILURE_ROWS = 3
+const TIME_CELLS = 7
+const LABEL_WIDTH = 11
+/** Below these widths of the run pane a step drops its tokens, then its effort, then its engine. */
+const TOKENS_AT = 90
+const EFFORT_AT = 70
+const ENGINE_AT = 58
+
+const STATE: Record<WorkflowRunState, { label: string; fg: ColorName }> = {
+  running: { label: "running", fg: "text" },
   needs_input: { label: "needs input", fg: "warning" },
-  verifying: { label: "verifying", fg: "warning", dot: true },
+  verifying: { label: "verifying", fg: "warning" },
   paused: { label: "paused", fg: "muted" },
   completed: { label: "completed", fg: "success" },
   failed: { label: "failed", fg: "error" },
@@ -69,13 +86,18 @@ const STATE: Record<WorkflowRunState, { label: string; fg: ColorName; dot?: bool
   stopped: { label: "stopped", fg: "muted" },
   queued: { label: "queued", fg: "muted" },
 }
-const SUMMARY_ORDER: WorkflowRunState[] = ["blocked", "failed", "needs_input", "verifying", "running", "paused", "completed", "stopped", "queued"]
 const TERMINAL = new Set<WorkflowRunState>(["completed", "failed", "stopped"])
+/** A run that is not over: its group sorts first and is open. */
+const LIVE = new Set<WorkflowRunState>(["running", "needs_input", "verifying", "queued", "paused", "blocked"])
+const TICKING = new Set<WorkflowRunState>(["running", "needs_input", "verifying"])
 const PRIORITY: WorkflowTaskState[] = ["needs_input", "running", "failed"]
+/** How a script's own outcome word reads: the first match wins, anything else is a success. */
+const OUTCOME_TONE: ReadonlyArray<[RegExp, "error" | "warning"]> = [[/^(blocked|failed|error|rejected)/i, "error"], [/^(draft|partial|needs)/i, "warning"]]
+/** Marks from worst to best: a batch shows its worst run's. */
+const MARK_RANK = ["fail", "ask", "dot", "done", "ok", "sep"] as const
+type MarkKind = (typeof MARK_RANK)[number]
 
-// ---------------------------------------------------------------------------------------------- tasks
-
-type Entry = { task: WorkflowTaskSummary; level: number }
+// ---------------------------------------------------------------------------------------------- levels (static plans)
 
 /** Topological level of every task: 1 + the highest level it needs, 1 without needs. Unknown needs and cycles count as nothing. */
 export function workflowLevels(tasks: Array<Pick<WorkflowTaskSummary, "id" | "needs">>): Map<string, number> {
@@ -98,7 +120,7 @@ export function workflowLevels(tasks: Array<Pick<WorkflowTaskSummary, "id" | "ne
 }
 
 /** Tasks in display order: by level, plan order within a level. */
-export function workflowTaskOrder(run: Pick<WorkflowSummary, "tasks">): Entry[] {
+export function workflowTaskOrder(run: Pick<WorkflowSummary, "tasks">): Array<{ task: WorkflowTaskSummary; level: number }> {
   const levels = workflowLevels(run.tasks)
   return run.tasks
     .map((task, index) => ({ task, level: levels.get(task.id) ?? 1, index }))
@@ -106,53 +128,291 @@ export function workflowTaskOrder(run: Pick<WorkflowSummary, "tasks">): Entry[] 
     .map(({ task, level }) => ({ task, level }))
 }
 
-const hasAudit = (run: WorkflowSummary) => run.verification?.audit !== undefined
-const slotCount = (run: WorkflowSummary) => run.tasks.length + (hasAudit(run) ? 1 : 0)
-const clamp = (value: number, length: number) => Math.max(0, Math.min(value, length - 1))
+// ---------------------------------------------------------------------------------------------- one run, as phases and steps
 
-/** The task `enter` opens with no cursor: needs_input, then running, then failed (v1's priority). */
-function defaultSlot(order: Entry[]): number | undefined {
-  for (const state of PRIORITY) {
-    const index = order.findIndex((entry) => entry.task.state === state)
-    if (index >= 0) return index
+type PhaseState = "pending" | "running" | "done" | "blocked"
+type Phase = {
+  key: string
+  title: string
+  detail?: string
+  state: PhaseState
+  /** Pending with nothing in it while a later phase already ran: the script skipped it. */
+  notRun: boolean
+  waiting: boolean
+  startedAt?: number
+  endedAt?: number
+  agents: number
+  checks: number
+  checksFailed: number
+  /** Agent, human and map tasks, and failed checks: the rows under the phase. */
+  steps: WorkflowTaskSummary[]
+  checkTasks: WorkflowTaskSummary[]
+}
+type Outcome = { word: string; reason?: string; tone: "error" | "warning" | "success" }
+type RunView = {
+  phases: Phase[]
+  /** Phases worth a stepper: named ones, more than one. */
+  stepper: boolean
+  /** The phase in progress (1-based) and how many there are; undefined without phases. */
+  position?: { index: number; total: number; title: string }
+  outcome?: Outcome
+  waiting?: WorkflowTaskSummary
+  running?: WorkflowTaskSummary
+  failed?: WorkflowTaskSummary
+  labelWidth: number
+  checksPassed: number
+  checksFailed: number
+  agentsFailed: number
+}
+
+const views = new WeakMap<WorkflowSummary, RunView>()
+
+const isCheck = (task: WorkflowTaskSummary) => task.kind === "check"
+const finishedTask = (task: WorkflowTaskSummary) => task.state === "done" || task.state === "failed" || task.state === "skipped" || task.state === "stopped"
+
+/** A step's label without the work item it is about (`audit cu-vault-screen-button` → `audit`): the run's header already names it. */
+function stepLabel(task: WorkflowTaskSummary, subject: string | undefined): string {
+  const label = task.label ?? task.id
+  if (!subject) return label
+  const stripped = label.split(subject).join("").replace(/\s{2,}/g, " ").trim()
+  return stripped || label
+}
+
+function phaseOfTasks(tasks: WorkflowTaskSummary[]): PhaseState {
+  if (!tasks.length) return "pending"
+  if (tasks.every((task) => task.state === "done" || task.state === "skipped")) return "done"
+  if (tasks.every(finishedTask)) return "blocked"
+  return tasks.some((task) => task.state !== "pending") ? "running" : "pending"
+}
+
+function span(tasks: WorkflowTaskSummary[]): { startedAt?: number; endedAt?: number } {
+  const starts = tasks.flatMap((task) => (task.startedAt !== undefined ? [task.startedAt] : []))
+  const ends = tasks.flatMap((task) => (task.endedAt !== undefined ? [task.endedAt] : []))
+  return { ...(starts.length ? { startedAt: Math.min(...starts) } : {}), ...(ends.length && tasks.every(finishedTask) ? { endedAt: Math.max(...ends) } : {}) }
+}
+
+function makePhase(input: { key: string; title: string; detail?: string; state?: PhaseState; tasks: WorkflowTaskSummary[]; counts?: { agents?: number; checks?: number; checksFailed?: number; startedAt?: number; endedAt?: number } }): Phase {
+  const { tasks, counts } = input
+  const checkTasks = tasks.filter(isCheck)
+  const times = span(tasks)
+  const startedAt = counts?.startedAt ?? times.startedAt
+  const endedAt = counts?.endedAt ?? times.endedAt
+  return {
+    key: input.key,
+    title: input.title,
+    ...(input.detail ? { detail: input.detail } : {}),
+    state: input.state ?? phaseOfTasks(tasks),
+    notRun: false,
+    waiting: tasks.some((task) => task.state === "needs_input"),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(endedAt !== undefined ? { endedAt } : {}),
+    agents: counts?.agents ?? tasks.length - checkTasks.length,
+    checks: counts?.checks ?? checkTasks.length,
+    checksFailed: counts?.checksFailed ?? checkTasks.filter((task) => task.state === "failed").length,
+    steps: tasks.filter((task) => !isCheck(task) || task.state === "failed"),
+    checkTasks,
   }
-  return undefined
 }
 
-/** The slot the cursor is on: the explicit one, else the default target. */
-function effectiveSlot(run: WorkflowSummary, state: WorkflowsPageState, order: Entry[]): number | undefined {
-  return state.task !== undefined ? clamp(state.task, slotCount(run)) : defaultSlot(order)
+function outcomeOf(run: WorkflowSummary): Outcome | undefined {
+  const outcome = run.script?.outcome
+  if (!outcome || !TERMINAL.has(run.state)) return undefined
+  const tone = OUTCOME_TONE.find(([pattern]) => pattern.test(outcome.state))?.[1] ?? "success"
+  return { word: outcome.state, ...(outcome.reason ? { reason: outcome.reason } : {}), tone }
 }
 
-/** The session `enter` opens: the cursor's task or the auditor; with no cursor the default task, else the latest one, else the run's root. */
-function openTarget(run: WorkflowSummary, state: WorkflowsPageState, order: Entry[]): string | undefined {
-  if (state.task !== undefined) {
-    const slot = clamp(state.task, slotCount(run))
-    return slot === order.length ? run.verification?.audit?.sessionId : order[slot]?.task.sessionId
+/** The run as phases and steps, built once per update of the run (the daemon sends a new object for each change). */
+function runView(run: WorkflowSummary): RunView {
+  const known = views.get(run)
+  if (known) return known
+  let phases: Phase[]
+  if (run.script?.phases.length) {
+    const titled = new Set(run.script.phases.map((phase) => phase.title))
+    const loose = run.tasks.filter((task) => !task.phase || !titled.has(task.phase))
+    phases = [
+      ...(loose.length ? [makePhase({ key: "p:", title: "", tasks: loose })] : []),
+      ...run.script.phases.map((phase) => makePhase({
+        key: `p:${phase.title}`, title: phase.title, ...(phase.detail ? { detail: phase.detail } : {}), state: phase.state,
+        tasks: run.tasks.filter((task) => task.phase === phase.title),
+        counts: {
+          ...(phase.agents !== undefined ? { agents: phase.agents } : {}), ...(phase.checks !== undefined ? { checks: phase.checks } : {}), ...(phase.checksFailed !== undefined ? { checksFailed: phase.checksFailed } : {}),
+          ...(phase.startedAt !== undefined ? { startedAt: phase.startedAt } : {}), ...(phase.endedAt !== undefined ? { endedAt: phase.endedAt } : {}),
+        },
+      })),
+    ]
+  } else if (run.phases?.length) {
+    phases = run.phases.map((phase) => makePhase({ key: `p:${phase.id}`, title: phase.title, state: phase.state, tasks: run.tasks.filter((task) => phase.tasks.includes(task.id)) }))
+  } else {
+    const order = workflowTaskOrder(run)
+    const levels = [...new Set(order.map((entry) => entry.level))]
+    phases = levels.length > 1
+      ? levels.map((level) => makePhase({ key: `p:${level}`, title: `Step ${level}`, tasks: order.filter((entry) => entry.level === level).map((entry) => entry.task) }))
+      : [makePhase({ key: "p:", title: "", tasks: run.tasks })]
   }
-  const preferred = defaultSlot(order)
-  const fromDefault = preferred === undefined ? undefined : order[preferred]?.task.sessionId
-  if (fromDefault) return fromDefault
-  const latest = [...run.tasks].filter((task) => task.sessionId).sort((a, b) => (b.endedAt ?? b.startedAt ?? 0) - (a.endedAt ?? a.startedAt ?? 0))[0]
-  return latest?.sessionId ?? run.rootSessionId
+  // A run that ended has no phase in progress: the one its script was in when it ended is done (or where it stopped).
+  if (TERMINAL.has(run.state)) for (const phase of phases) if (phase.state === "running" && ![...phase.steps, ...phase.checkTasks].some((task) => !finishedTask(task))) phase.state = run.state === "completed" ? "done" : "blocked"
+  // A phase whose tasks were all skipped or stopped after an earlier failure did not run; it did not fail.
+  for (const phase of phases) if (phase.state === "blocked" && !phase.waiting && ![...phase.steps, ...phase.checkTasks].some((task) => task.state === "failed")) Object.assign(phase, { state: "pending", notRun: true })
+  // A pending phase with nothing in it, once a later one has started, was skipped by the script.
+  phases.forEach((phase, index) => {
+    if (phase.state === "pending" && phase.agents + phase.checks === 0 && phases.slice(index + 1).some((later) => later.state !== "pending" || later.agents + later.checks > 0)) phase.notRun = true
+  })
+  const named = phases.filter((phase) => phase.title)
+  const at = named.findIndex((phase) => phase.state === "running" || phase.state === "blocked" || phase.waiting)
+  // Nothing in play: the last phase that got anywhere, else (a run not started) the first.
+  const last = named.reduce((found, phase, index) => (phase.state !== "pending" ? index : found), -1)
+  const current = at >= 0 ? at : Math.max(0, last)
+  const find = (state: WorkflowTaskState) => run.tasks.find((task) => task.state === state && !isCheck(task)) ?? run.tasks.find((task) => task.state === state)
+  const outcome = outcomeOf(run)
+  const steps = phases.flatMap((phase) => phase.steps)
+  const view: RunView = {
+    phases,
+    stepper: named.length > 1,
+    ...(named.length && current >= 0 ? { position: { index: current + 1, total: named.length, title: named[current]!.title } } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(find("needs_input") ? { waiting: find("needs_input")! } : {}),
+    ...(find("running") ? { running: find("running")! } : {}),
+    ...(find("failed") ? { failed: find("failed")! } : {}),
+    labelWidth: Math.min(STEP_LABEL_MAX, Math.max(4, ...steps.map((task) => textWidth(stepLabel(task, run.subject))))),
+    checksPassed: phases.reduce((sum, phase) => sum + phase.checks - phase.checksFailed, 0),
+    checksFailed: phases.reduce((sum, phase) => sum + phase.checksFailed, 0),
+    agentsFailed: run.tasks.filter((task) => !isCheck(task) && task.state === "failed").length,
+  }
+  views.set(run, view)
+  return view
 }
 
-/** The task `t` retries: the cursor's, or with no cursor the first failed one. Only failed tasks can be retried. */
-function retryTarget(run: WorkflowSummary, state: WorkflowsPageState, order: Entry[]): WorkflowTaskSummary | undefined {
-  const task = state.task !== undefined ? order[clamp(state.task, slotCount(run))]?.task : order.find((entry) => entry.task.state === "failed")?.task
-  return task?.state === "failed" ? task : undefined
+// ---------------------------------------------------------------------------------------------- the list: groups, batches, folds
+
+type Entry = { kind: "run"; key: string; run: WorkflowSummary } | { kind: "batch" | "fold"; key: string; runs: WorkflowSummary[] }
+type Group = { key: string; title: string; directory: string; entries: Entry[]; runs: WorkflowSummary[]; live: boolean; newest: number }
+type Row =
+  | { kind: "heading"; key: string; text: string; count: number }
+  | { kind: "group"; key: string; group: Group; open: boolean }
+  | { kind: "pack"; key: string; entry: Extract<Entry, { kind: "batch" | "fold" }>; depth: number; open: boolean; parent?: string }
+  | { kind: "run"; key: string; run: WorkflowSummary; depth: number; parent?: string }
+
+const entryRuns = (entry: Entry) => (entry.kind === "run" ? [entry.run] : entry.runs)
+const outcomeText = (run: WorkflowSummary) => `${run.script?.outcome?.state ?? run.state}\0${run.script?.outcome?.reason ?? run.reason ?? ""}`
+const foldable = (run: WorkflowSummary) => TERMINAL.has(run.state) && run.script !== undefined && run.script.calls === 0
+
+function groupKeyOf(run: WorkflowSummary) {
+  return `g:${run.directory}\0${run.subject ? `s:${run.subject}` : run.originSessionId ? `o:${run.originSessionId}` : `r:${run.workflowId}`}`
 }
 
-/** The human task `y` / `n` answer: the cursor's, or with no cursor the first one waiting. */
-function humanTarget(run: WorkflowSummary, state: WorkflowsPageState, order: Entry[]): WorkflowTaskSummary | undefined {
-  const task = state.task !== undefined ? order[clamp(state.task, slotCount(run))]?.task : order.find((entry) => entry.task.kind === "human" && entry.task.state === "needs_input")?.task
-  return task?.kind === "human" && task.state === "needs_input" ? task : undefined
+/** A group's runs, newest first, as entries: runs of one batch together, instant repeats with the same outcome folded. */
+function entriesOf(runs: WorkflowSummary[]): Entry[] {
+  const entries: Entry[] = []
+  for (const run of runs) {
+    const last = entries.at(-1)
+    const first = last ? entryRuns(last)[0]! : undefined
+    if (last && first && last.kind !== "fold" && first.name === run.name && Math.abs(first.startedAt - run.startedAt) <= BATCH_WINDOW_MS) {
+      entries[entries.length - 1] = { kind: "batch", key: `b:${first.workflowId}`, runs: [...entryRuns(last), run] }
+      continue
+    }
+    if (last && first && last.kind !== "batch" && foldable(first) && foldable(run) && first.name === run.name && outcomeText(first) === outcomeText(run)) {
+      entries[entries.length - 1] = { kind: "fold", key: `f:${first.workflowId}`, runs: [...entryRuns(last), run] }
+      continue
+    }
+    entries.push({ kind: "run", key: `r:${run.workflowId}`, run })
+  }
+  return entries
+}
+
+function groupsOf(runs: WorkflowSummary[]): Group[] {
+  const sorted = [...runs].sort((a, b) => b.startedAt - a.startedAt)
+  const byKey = new Map<string, WorkflowSummary[]>()
+  for (const run of sorted) {
+    const key = groupKeyOf(run)
+    byKey.set(key, [...(byKey.get(key) ?? []), run])
+  }
+  return [...byKey].map(([key, members]): Group => ({
+    key,
+    title: members[0]!.subject ?? members[0]!.name,
+    directory: members[0]!.directory,
+    entries: entriesOf(members),
+    runs: members,
+    live: members.some((run) => LIVE.has(run.state)),
+    newest: Math.max(...members.map((run) => run.updatedAt)),
+  })).sort((a, b) => Number(b.live) - Number(a.live) || b.newest - a.newest)
+}
+
+const basename = (directory: string) => directory.split(/[\\/]/).filter(Boolean).at(-1) ?? directory
+
+let memo: { runs: WorkflowSummary[]; scope: WorkflowsScope; opened?: readonly string[]; closed?: readonly string[]; reveal?: string; groups: Group[]; rows: Row[] } | undefined
+
+/** The rows of the list. Memoized on the runs array, the scope and what is open, so a frame does no sort and no grouping. */
+function listRows(runs: WorkflowSummary[], state: WorkflowsPageState): { groups: Group[]; rows: Row[] } {
+  const reveal = state.row?.startsWith("r:") ? state.row.slice(2) : undefined
+  if (memo && memo.runs === runs && memo.scope === state.scope && memo.opened === state.opened && memo.closed === state.closed && memo.reveal === reveal) return memo
+  const groups = memo?.runs === runs ? memo.groups : groupsOf(runs)
+  const opened = new Set(state.opened ?? [])
+  const closed = new Set(state.closed ?? [])
+  const holds = (members: WorkflowSummary[]) => reveal !== undefined && members.some((run) => run.workflowId === reveal)
+  const rows: Row[] = []
+  const entryRows = (entry: Entry, depth: number, parent?: string) => {
+    if (entry.kind === "run") return void rows.push({ kind: "run", key: entry.key, run: entry.run, depth, ...(parent ? { parent } : {}) })
+    const open = opened.has(entry.key) || holds(entry.runs)
+    rows.push({ kind: "pack", key: entry.key, entry, depth, open, ...(parent ? { parent } : {}) })
+    if (open) for (const run of entry.runs) rows.push({ kind: "run", key: `r:${run.workflowId}`, run, depth: depth + 1, parent: entry.key })
+  }
+  const groupRows = (group: Group) => {
+    if (group.entries.length === 1) return entryRows(group.entries[0]!, 0)
+    const open = (group.live && !closed.has(group.key)) || opened.has(group.key) || holds(group.runs)
+    rows.push({ kind: "group", key: group.key, group, open })
+    if (open) for (const entry of group.entries) entryRows(entry, 1, group.key)
+  }
+  if (state.scope === "all") {
+    const folders = new Map<string, Group[]>()
+    for (const group of groups) {
+      const folder = group.directory.length > 1 ? group.directory.replace(/\/+$/, "") : group.directory
+      folders.set(folder, [...(folders.get(folder) ?? []), group])
+    }
+    for (const [directory, members] of folders) {
+      rows.push({ kind: "heading", key: `h:${directory}`, text: basename(directory), count: members.reduce((sum, group) => sum + group.runs.length, 0) })
+      members.forEach(groupRows)
+    }
+  } else groups.forEach(groupRows)
+  memo = { runs, scope: state.scope, ...(state.opened ? { opened: state.opened } : {}), ...(state.closed ? { closed: state.closed } : {}), ...(reveal ? { reveal } : {}), groups, rows }
+  return memo
+}
+
+const selectable = (row: Row | undefined) => row !== undefined && row.kind !== "heading"
+
+/** The cursor's row: the one held, else (its run hidden in a closed group) the row that holds it, else the first selectable row. */
+function cursorAt(rows: Row[], state: WorkflowsPageState): number {
+  const exact = rows.findIndex((row) => row.key === state.row)
+  if (exact >= 0) return exact
+  if (state.row?.startsWith("r:")) {
+    const id = state.row.slice(2)
+    const holder = rows.findIndex((row) => (row.kind === "group" && row.group.runs.some((run) => run.workflowId === id)) || (row.kind === "pack" && row.entry.runs.some((run) => run.workflowId === id)))
+    if (holder >= 0) return holder
+  }
+  return Math.max(0, rows.findIndex(selectable))
+}
+
+/** The run a row stands for: itself, a group's live (else newest) run, a batch's or fold's newest. */
+function runOfRow(row: Row | undefined): WorkflowSummary | undefined {
+  if (!row || row.kind === "heading") return undefined
+  if (row.kind === "run") return row.run
+  if (row.kind === "pack") return row.entry.runs[0]
+  return row.group.runs.find((run) => LIVE.has(run.state)) ?? row.group.runs[0]
+}
+
+/** The run the cursor is on, or that the row under it stands for (the `b` evidence key and the app use it). */
+export function selectedWorkflow(state: WorkflowsPageState, runs: WorkflowSummary[]): WorkflowSummary | undefined {
+  if (state.row?.startsWith("r:")) {
+    const found = runs.find((run) => run.workflowId === state.row!.slice(2))
+    if (found) return found
+  }
+  const { rows } = listRows(runs, state)
+  return runOfRow(rows[cursorAt(rows, state)])
 }
 
 // ---------------------------------------------------------------------------------------------- state and keys
 
-export function createWorkflowsPageState(scope: WorkflowsScope = "project"): WorkflowsPageState {
-  return { selected: 0, scope }
+export function createWorkflowsPageState(scope: WorkflowsScope = "project", workflowId?: WorkflowId): WorkflowsPageState {
+  return workflowId ? { scope, focus: "run", row: `r:${workflowId}` } : { scope, focus: "list" }
 }
 
 const canPause = (run: WorkflowSummary) => run.state === "running" || run.state === "needs_input" || run.state === "verifying"
@@ -162,70 +422,160 @@ const canAccept = (run: WorkflowSummary) => !run.queuedBehind && (run.state === 
 /** Verifying again makes sense once the tasks are finished and the contract is what is left. */
 const canVerify = (run: WorkflowSummary) =>
   run.contract !== undefined && (run.state === "blocked" || (run.state === "paused" && run.tasks.every((task) => task.state === "done" || task.state === "skipped")))
+const hasVerify = (run: WorkflowSummary) => run.contract !== undefined || run.verification !== undefined
+const checksKey = (run: WorkflowSummary, phase: string) => `${run.workflowId}\0${phase}`
+const toggled = (list: readonly string[] | undefined, key: string) => (list?.includes(key) ? list.filter((each) => each !== key) : [...(list ?? []), key])
 
-const withTask = (state: WorkflowsPageState, task: number | undefined): WorkflowsPageState => {
-  const { task: _task, ...rest } = state
-  return task === undefined ? rest : { ...rest, task }
+/** The keys of the run's timeline rows the cursor can stand on, in order. */
+function timelineKeys(run: WorkflowSummary, state: WorkflowsPageState): string[] {
+  const view = runView(run)
+  const keys: string[] = []
+  for (const phase of view.phases) {
+    if (phase.title) keys.push(phase.key)
+    for (const task of phase.steps) keys.push(`t:${task.id}`)
+  }
+  if (hasVerify(run)) keys.push("v")
+  void state
+  return keys
+}
+
+/** Where the cursor stands in the run with none chosen: what waits for the user, else what runs, else what failed. */
+function defaultStep(run: WorkflowSummary): string | undefined {
+  const view = runView(run)
+  for (const state of PRIORITY) {
+    const task = state === "needs_input" ? view.waiting : state === "running" ? view.running : view.failed
+    if (task && !isCheck(task)) return `t:${task.id}`
+  }
+  return undefined
+}
+
+const stepOf = (run: WorkflowSummary, state: WorkflowsPageState) => state.step ?? defaultStep(run)
+const taskOf = (run: WorkflowSummary, step: string | undefined) => (step?.startsWith("t:") ? run.tasks.find((task) => task.id === step.slice(2)) : undefined)
+const phaseOfStep = (run: WorkflowSummary, step: string | undefined) => runView(run).phases.find((phase) => phase.key === step || phase.steps.some((task) => `t:${task.id}` === step))
+
+/** The session `enter` opens from the run: the cursor's step, the auditor on the verification block, else the latest step's, else the run's own. */
+function openTarget(run: WorkflowSummary, step: string | undefined): string | undefined {
+  if (step === "v") return run.verification?.audit?.sessionId ?? run.rootSessionId
+  const task = taskOf(run, step)
+  if (task?.sessionId) return task.sessionId
+  const latest = [...run.tasks].filter((each) => each.sessionId).sort((a, b) => (b.endedAt ?? b.startedAt ?? 0) - (a.endedAt ?? a.startedAt ?? 0))[0]
+  return latest?.sessionId ?? run.rootSessionId
 }
 
 /** Handles one raw key over the runs shown. Returns the same state object when nothing changed. */
 export function workflowsPageKey(state: WorkflowsPageState, key: string, runs: WorkflowSummary[]): { state: WorkflowsPageState; action: WorkflowsPageAction } {
-  const selected = clamp(state.selected, runs.length)
-  const target = runs[selected]
+  const same = { state, action: NONE }
+  const { rows } = listRows(runs, state)
+  const at = cursorAt(rows, state)
+  const row = rows[at]
+  // Actions need one run: a run's own row (a group, batch or fold opens first).
+  const run = row?.kind === "run" ? row.run : undefined
   const { confirm, ...withoutConfirm } = state
   if (confirm) {
     const confirmed = (confirm.kind === "stop" && (key === "x" || key === "y")) || (confirm.kind === "delete" && (key === "d" || key === "y"))
-    if (confirmed && target?.workflowId === confirm.workflowId) return { state: withoutConfirm, action: { type: "control", workflowId: confirm.workflowId, action: confirm.kind } }
+    if (confirmed && run?.workflowId === confirm.workflowId) return { state: withoutConfirm, action: { type: "control", workflowId: confirm.workflowId, action: confirm.kind } }
     return { state: withoutConfirm, action: NONE }
   }
-  if (key === "\x1b" || key === "q") return { state, action: { type: "close" } }
-  if (key === "\t") {
-    const scope: WorkflowsScope = state.scope === "project" ? "all" : "project"
-    return { state: { selected: 0, scope }, action: { type: "scope", scope } }
+  if (key === "?") return { state: { ...state, keys: !state.keys }, action: NONE }
+  if (state.keys && key === "\x1b") return { state: { ...state, keys: false }, action: NONE }
+  if (key === "q") return { state, action: { type: "close" } }
+  const scoped = (scope: WorkflowsScope) => (scope === state.scope ? same : { state: createWorkflowsPageState(scope), action: { type: "scope" as const, scope } })
+  if (key === "\t") return scoped(state.scope === "project" ? "all" : "project")
+  if (key === "1") return scoped("project")
+  if (key === "2") return scoped("all")
+  const inRun = state.focus === "run" && run !== undefined
+  if (key === "\x1b") {
+    if (!inRun) return { state, action: { type: "close" } }
+    const { step: _step, info: _info, ...rest } = state
+    return { state: { ...rest, focus: "list" }, action: NONE }
   }
-  const moveRun = (index: number) => {
-    const next = clamp(index, runs.length)
-    return next === state.selected ? { state, action: NONE } : { state: withTask({ ...state, selected: next }, undefined), action: NONE }
+
+  if (!inRun) {
+    const move = (delta: number) => {
+      for (let index = at + delta; index >= 0 && index < rows.length; index += delta) {
+        if (!selectable(rows[index])) continue
+        const { step: _step, info: _info, ...rest } = state
+        return { state: { ...rest, focus: "list" as const, row: rows[index]!.key }, action: NONE }
+      }
+      return same
+    }
+    if (UP.has(key)) return move(-1)
+    if (DOWN.has(key)) return move(1)
+    if (!row || row.kind === "heading") return same
+    const toggle = (target: Row): WorkflowsPageState => {
+      if (target.kind === "group" && target.group.live) return target.open ? { ...state, row: target.key, closed: [...(state.closed ?? []), target.key], opened: (state.opened ?? []).filter((each) => each !== target.key) } : { ...state, row: target.key, closed: (state.closed ?? []).filter((each) => each !== target.key), opened: [...(state.opened ?? []), target.key] }
+      return { ...state, row: target.key, opened: toggled(state.opened, target.key) }
+    }
+    if (key === "\r" || RIGHT.has(key)) {
+      if (row.kind === "run") return { state: { ...state, row: row.key, focus: "run" }, action: NONE }
+      return row.kind === "group" || row.kind === "pack" ? { state: toggle(row), action: NONE } : same
+    }
+    if (key === " ") {
+      if (row.kind === "group" || row.kind === "pack") return { state: toggle(row), action: NONE }
+      const parent = row.parent ? rows.find((each) => each.key === row.parent) : undefined
+      return parent ? { state: toggle(parent), action: NONE } : same
+    }
+    if (LEFT.has(key)) {
+      const parent = row.kind !== "group" && row.parent ? rows.find((each) => each.key === row.parent) : row.kind === "group" || row.kind === "pack" ? row : undefined
+      return parent && (parent.kind === "group" || parent.kind === "pack") && parent.open ? { state: toggle(parent), action: NONE } : same
+    }
+  } else {
+    const keys = timelineKeys(run, state)
+    const current = stepOf(run, state)
+    const index = current === undefined ? -1 : keys.indexOf(current)
+    const moveStep = (delta: number) => {
+      const next = keys[index < 0 ? (delta > 0 ? 0 : keys.length - 1) : Math.max(0, Math.min(keys.length - 1, index + delta))]
+      return next === undefined || next === state.step ? same : { state: { ...state, step: next }, action: NONE }
+    }
+    if (state.info && (UP.has(key) || DOWN.has(key))) {
+      const offset = Math.max(0, (state.infoOffset ?? 0) + (UP.has(key) ? -1 : 1))
+      return offset === (state.infoOffset ?? 0) ? same : { state: { ...state, infoOffset: offset }, action: NONE }
+    }
+    if (UP.has(key)) return moveStep(-1)
+    if (DOWN.has(key)) return moveStep(1)
+    if (LEFT.has(key)) {
+      const { step: _step, info: _info, ...rest } = state
+      return { state: { ...rest, focus: "list" }, action: NONE }
+    }
+    if (key === "i") {
+      const { infoOffset: _offset, ...rest } = state
+      return { state: { ...rest, info: !state.info }, action: NONE }
+    }
+    const phase = phaseOfStep(run, current)
+    if (key === " " || ((key === "\r" || RIGHT.has(key)) && current?.startsWith("p:"))) {
+      return phase && phase.checks > 0 ? { state: { ...state, checks: toggled(state.checks, checksKey(run, phase.key)) }, action: NONE } : same
+    }
+    if (key === "\r" || RIGHT.has(key)) {
+      const sessionId = openTarget(run, current)
+      return { state, action: sessionId ? { type: "open", sessionId } : NONE }
+    }
   }
-  if (UP.has(key)) return moveRun(selected - 1)
-  if (DOWN.has(key)) return moveRun(selected + 1)
-  if (!target) return { state, action: NONE }
-  const order = workflowTaskOrder(target)
-  const slots = slotCount(target)
-  const moveTask = (delta: number) => {
-    const base = effectiveSlot(target, state, order) ?? -1
-    const next = Math.max(0, Math.min(base + delta, slots - 1))
-    return slots === 0 || next === state.task ? { state, action: NONE } : { state: { ...state, selected, task: next }, action: NONE }
-  }
-  if (LEFT.has(key)) return moveTask(-1)
-  if (RIGHT.has(key)) return moveTask(1)
-  const control = (action: WorkflowControlAction): { state: WorkflowsPageState; action: WorkflowsPageAction } => ({ state, action: { type: "control", workflowId: target.workflowId, action } })
-  if (key === "\r") {
-    const sessionId = openTarget(target, state, order)
-    return { state, action: sessionId ? { type: "open", sessionId } : NONE }
-  }
-  if (key === "p") return canPause(target) ? control("pause") : canResume(target) ? control("resume") : { state, action: NONE }
-  if (key === "v") return canVerify(target) ? control("verify") : { state, action: NONE }
-  if (key === "a") return canAccept(target) ? { state, action: { type: "accept", workflowId: target.workflowId } } : { state, action: NONE }
+
+  if (!run) return same
+  const control = (action: WorkflowControlAction): { state: WorkflowsPageState; action: WorkflowsPageAction } => ({ state, action: { type: "control", workflowId: run.workflowId, action } })
+  if (key === "p") return canPause(run) ? control("pause") : canResume(run) ? control("resume") : same
+  if (key === "v") return canVerify(run) ? control("verify") : same
+  if (key === "a") return canAccept(run) ? { state, action: { type: "accept", workflowId: run.workflowId } } : same
+  const cursor = inRun ? taskOf(run, stepOf(run, state)) : undefined
   if (key === "t") {
-    const task = retryTarget(target, state, order)
-    return task ? { state, action: { type: "retry", workflowId: target.workflowId, taskId: task.id } } : { state, action: NONE }
+    const task = cursor?.state === "failed" ? cursor : run.tasks.find((each) => each.state === "failed" && !isCheck(each)) ?? run.tasks.find((each) => each.state === "failed")
+    return task ? { state, action: { type: "retry", workflowId: run.workflowId, taskId: task.id } } : same
   }
   if (key === "y" || key === "n") {
-    const task = humanTarget(target, state, order)
-    return task ? { state, action: { type: "answer", workflowId: target.workflowId, taskId: task.id, decision: key === "y" ? "approve" : "reject" } } : { state, action: NONE }
+    const task = cursor?.kind === "human" && cursor.state === "needs_input" ? cursor : run.tasks.find((each) => each.kind === "human" && each.state === "needs_input")
+    return task ? { state, action: { type: "answer", workflowId: run.workflowId, taskId: task.id, decision: key === "y" ? "approve" : "reject" } } : same
   }
-  if (key === "x" && canStop(target)) return { state: { ...state, selected, confirm: { kind: "stop", workflowId: target.workflowId } }, action: NONE }
-  if (key === "d") return { state: { ...state, selected, confirm: { kind: "delete", workflowId: target.workflowId } }, action: NONE }
-  return { state, action: NONE }
+  if (key === "x" && canStop(run)) return { state: { ...state, confirm: { kind: "stop", workflowId: run.workflowId } }, action: NONE }
+  if (key === "d") return { state: { ...state, confirm: { kind: "delete", workflowId: run.workflowId } }, action: NONE }
+  return same
 }
 
 /** True while a shown run has a live clock (running, waiting for input or verifying): the page needs a 1 s tick. */
 export function needsTick(runs: WorkflowSummary[]) {
-  return runs.some((run) => run.state === "running" || run.state === "needs_input" || run.state === "verifying")
+  return runs.some((run) => TICKING.has(run.state))
 }
 
-// ---------------------------------------------------------------------------------------------- rendering
+// ---------------------------------------------------------------------------------------------- rendering helpers
 
 function elapsed(ms: number) {
   const minutes = Math.floor(Math.max(0, ms) / 60_000)
@@ -233,100 +583,7 @@ function elapsed(ms: number) {
 }
 
 function runElapsed(run: WorkflowSummary, now: number) {
-  const ticking = run.state === "running" || run.state === "needs_input"
-  return elapsed((run.endedAt ?? (ticking ? now : run.updatedAt)) - run.startedAt)
-}
-
-function label(text: string, value: string, width: number, fg: ColorName = "body"): Line {
-  return clip([{ text: text.padEnd(LABEL_WIDTH), fg: "muted" }, { text: truncateEnd(value, Math.max(0, width - LABEL_WIDTH)), fg }], width)
-}
-
-function wrapped(text: string, width: number, max: number, indent: string, fg: ColorName): Line[] {
-  const lines = wrap(text.replace(/\s+/g, " ").trim(), Math.max(1, width - indent.length))
-  return lines.slice(0, max).map((line, i): Line => [{ text: indent }, { text: i === max - 1 && lines.length > max ? truncateEnd(`${line} …`, width - indent.length) : line, fg }])
-}
-
-/** The confirm question replaces the list's first row while a stop/delete is pending; `undefined` otherwise. */
-function confirmRow(state: WorkflowsPageState, runs: WorkflowSummary[], width: number): Line | undefined {
-  if (!state.confirm) return undefined
-  const pending = runs.find((run) => run.workflowId === state.confirm!.workflowId)
-  if (!pending) return undefined
-  const key = state.confirm.kind === "stop" ? "x" : "d"
-  const texts = [`${state.confirm.kind} "${pending.name}"? ${key} or y confirms · any key cancels`, `${state.confirm.kind}? ${key}/y confirm`]
-  const fitted = texts.find((text) => textWidth(text) <= width) ?? texts[1]!
-  return clip([{ text: fitted, fg: "warning", bold: true }], width)
-}
-
-type Column = { text: string; fg: ColorName; width: number }
-
-function runRow(input: { run: WorkflowSummary; selected: boolean; width: number; now: number; glyphs: Glyphs }): Line {
-  const { run, selected, width, now, glyphs } = input
-  const style = STATE[run.state]
-  const done = run.tasks.filter((task) => task.state === "done").length
-  const columns: Column[] = [
-    { text: `${style.dot ? `${glyphs.running} ` : ""}${style.label}`, fg: style.fg, width: 13 },
-    // A script run's agent calls are made as it goes: progress is finished calls out of calls so far.
-    { text: run.script ? `${run.script.counts.done}/${run.script.calls}` : `${done}/${run.tasks.length}`, fg: "muted", width: 8 },
-    { text: run.state === "verifying" ? "in review" : runElapsed(run, now), fg: "muted", width: 10 },
-  ]
-  let shown = columns.length
-  const nameRoom = () => width - 2 - columns.slice(0, shown).reduce((sum, column) => sum + column.width, 0)
-  while (shown > 1 && nameRoom() < 14) shown--
-  const room = Math.max(4, nameRoom())
-  const name = truncateEnd(run.name, room - 1)
-  const line: Line = [
-    selected ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " },
-    { text: name, fg: selected ? "primary" : "text", bold: selected },
-    { text: " ".repeat(Math.max(1, room - textWidth(name))) },
-  ]
-  for (const column of columns.slice(0, shown)) {
-    const text = truncateEnd(column.text, column.width - 1)
-    line.push({ text, fg: column.fg }, { text: " ".repeat(column.width - textWidth(text)) })
-  }
-  return clip(line, width)
-}
-
-function taskGlyph(state: WorkflowTaskState, glyphs: Glyphs): Span {
-  switch (state) {
-    case "done":
-      return { text: glyphs.ok, fg: "success" }
-    case "running":
-      return { text: glyphs.running, fg: "text" }
-    case "needs_input":
-      return { text: glyphs.ask, fg: "warning" }
-    case "failed":
-      return { text: glyphs.fail, fg: "error" }
-    case "skipped":
-    case "stopped":
-      return { text: "–", fg: "muted" }
-    case "pending":
-      return { text: "·", fg: "muted" }
-  }
-}
-
-function taskNote(task: WorkflowTaskSummary, byId: Map<string, WorkflowTaskSummary>): Span {
-  if (task.kind === "map" && task.expanded) {
-    const children = [...byId.values()].filter((entry) => entry.mapParentId === task.id && !entry.mapRetired)
-    return { text: `${children.filter((entry) => entry.state === "done").length}/${children.length} items${task.reason ? ` · ${task.reason}` : ""}`, fg: task.state === "failed" ? "error" : "body" }
-  }
-  switch (task.state) {
-    case "running":
-      return { text: task.latest ? `▸ ${task.latest}` : "", fg: "body" }
-    case "needs_input":
-      return { text: task.kind === "human" ? `y approve · n reject${task.latest ? ` · ${task.latest}` : ""}` : "needs input", fg: "warning" }
-    case "pending": {
-      if (task.reason?.startsWith("retrying")) return { text: task.reason, fg: "warning" }
-      const waits = task.needs.filter((id) => byId.get(id)?.state !== "done")
-      return { text: waits.length ? `waits ${waits.join(", ")}` : "queued", fg: "muted" }
-    }
-    case "failed":
-      return { text: task.reason ?? "failed", fg: "error" }
-    case "skipped":
-    case "stopped":
-      return { text: task.reason ?? task.state, fg: "muted" }
-    case "done":
-      return { text: [task.outputKind, task.attempt > 1 ? `attempt ${task.attempt}` : undefined].filter(Boolean).join(" · "), fg: "muted" }
-  }
+  return elapsed((run.endedAt ?? (TICKING.has(run.state) ? now : run.updatedAt)) - run.startedAt)
 }
 
 function taskElapsed(task: WorkflowTaskSummary, now: number) {
@@ -335,30 +592,510 @@ function taskElapsed(task: WorkflowTaskSummary, now: number) {
   return task.endedAt !== undefined ? elapsed(task.endedAt - task.startedAt) : ""
 }
 
-/** The row painted on the element background, padded to the full width, for the cursor. */
-function highlighted(line: Line, width: number): Line {
-  return fit(line, width).map((span) => ({ ...span, bg: "element" as const }))
+/** The literals the page writes besides the glyph set, in ASCII when the glyphs are. */
+function literals(glyphs: Glyphs) {
+  const ascii = glyphs.rule === "-"
+  return { activity: ascii ? ">" : "▸", skipped: ascii ? "-" : "–", times: ascii ? "x" : "×", more: ascii ? ".." : "…" }
 }
 
-function taskRow(input: { entry: Entry; showLevel: boolean; nameWidth: number; byId: Map<string, WorkflowTaskSummary>; cursor: boolean; compact: boolean; width: number; now: number; glyphs: Glyphs }): Line {
-  const { entry, showLevel, nameWidth, byId, cursor, compact, width, now, glyphs } = input
-  const { task } = entry
-  const note = taskNote(task, byId)
-  const time = taskElapsed(task, now)
-  const line: Line = [
-    { text: `${showLevel ? `L${entry.level}` : ""}`.padEnd(4), fg: "muted" },
-    taskGlyph(task.state, glyphs),
-    { text: " " },
-    { text: truncateEnd(task.label ?? task.id, nameWidth - 1).padEnd(nameWidth), fg: task.state === "pending" || task.state === "skipped" || task.state === "stopped" ? "muted" : "text", bold: cursor },
-  ]
-  if (!compact) line.push({ text: (task.kind === "map" ? "map" : task.kind === "check" ? "check" : task.kind === "human" ? "human" : task.execution?.readOnly ? "read" : (task.mode ?? "work")).padEnd(6), fg: "muted" })
-  if (!compact && task.engine) line.push({ text: `${truncateEnd(`${task.engine}${task.modelId ? `/${task.modelId}` : ""}`, 22)} `, fg: "accent" })
-  line.push({ text: time.padEnd(8), fg: "muted" }, note)
-  const row = clip([{ text: "  " }, ...line], width)
-  return cursor ? highlighted(row, width) : row
+/** `left` and `right` on one row of `width` cells, the left cut first. */
+function spread(left: Line, right: Line, width: number): Line {
+  const rightWidth = Math.min(width, right.reduce((sum, each) => sum + textWidth(each.text), 0))
+  const room = Math.max(0, width - rightWidth - 1)
+  const head = clip(left, room)
+  const gap = width - head.reduce((sum, each) => sum + textWidth(each.text), 0) - rightWidth
+  return [...head, { text: " ".repeat(Math.max(1, gap)) }, ...clip(right, rightWidth)]
 }
+
+const pad = (text: string, cells: number) => text + " ".repeat(Math.max(0, cells - textWidth(text)))
+const padStart = (text: string, cells: number) => " ".repeat(Math.max(0, cells - textWidth(text))) + text
+
+/** The cursor's row: `❯` in its gutter (bright in the focused pane) and the element background across it. */
+function cursorRow(line: Line, width: number, glyphs: Glyphs, focused: boolean): Line {
+  // The marker takes the row's first two blank cells, so nothing after it moves.
+  const first = line[0]?.text ?? ""
+  const body = first.startsWith("  ") ? [...(first.length > 2 ? [{ ...line[0]!, text: first.slice(2) }] : []), ...line.slice(1)] : line
+  return fit([{ text: `${glyphs.user} `, fg: focused ? "primary" : "muted", bold: focused }, ...body], width).map((each) => ({ ...each, bg: "element" as const }))
+}
+
+function markSpan(kind: MarkKind, glyphs: Glyphs): Span {
+  switch (kind) {
+    case "fail": return { text: glyphs.fail, fg: "error" }
+    case "ask": return { text: glyphs.ask, fg: "warning" }
+    case "dot": return { text: glyphs.dot, fg: "primary" }
+    case "done": return { text: glyphs.done, fg: "warning" }
+    case "ok": return { text: glyphs.ok, fg: "success" }
+    case "sep": return { text: glyphs.sep, fg: "muted" }
+  }
+}
+
+/** A run at a glance: live, waiting, failed, ended with a draft-like outcome, done, or at rest. */
+function markOf(run: WorkflowSummary): MarkKind {
+  if (run.state === "needs_input") return "ask"
+  if (run.state === "running" || run.state === "verifying") return "dot"
+  if (run.state === "failed" || run.state === "blocked") return "fail"
+  if (run.state === "completed") {
+    const outcome = runView(run).outcome
+    return outcome?.tone === "error" ? "fail" : outcome?.tone === "warning" ? "done" : "ok"
+  }
+  return "sep"
+}
+
+/** A batch takes as long as its slowest run. */
+const slowest = (runs: WorkflowSummary[], now: number) => runs.reduce((longest, run) => ((run.endedAt ?? now) - run.startedAt > (longest.endedAt ?? now) - longest.startedAt ? run : longest))
+const worst = (kinds: MarkKind[]) => MARK_RANK.find((kind) => kinds.includes(kind)) ?? "sep"
+
+/** What a run's row says instead of a count: where it is (`Audit 5/7`) while it lives, how it ended once it has. */
+function statusOf(run: WorkflowSummary, group = false): { text: string; fg: ColorName } {
+  const view = runView(run)
+  const position = view.position ? `${view.position.title} ${view.position.index}/${view.position.total}` : undefined
+  switch (run.state) {
+    case "needs_input": return { text: group ? "needs you" : position ?? "needs input", fg: "warning" }
+    case "verifying": return { text: "in review", fg: "warning" }
+    case "running": {
+      if (position) return { text: position, fg: "text" }
+      const agents = run.script ? run.script.calls : 0
+      return { text: run.script ? `${agents} agent${agents === 1 ? "" : "s"}` : `step ${Math.max(1, view.phases.findIndex((phase) => phase.state === "running") + 1)}/${Math.max(1, view.phases.length)}`, fg: "text" }
+    }
+    case "failed":
+    case "blocked": return { text: position && !group ? position : STATE[run.state].label, fg: "error" }
+    case "completed": return view.outcome ? { text: view.outcome.word, fg: view.outcome.tone } : { text: "done", fg: "success" }
+    default: return { text: STATE[run.state].label, fg: "muted" }
+  }
+}
+
+/** A batch's status: `3 reviews` when every run made one agent call of the same kind, else `3 runs`; `1 of 3 failed` when any failed. */
+function batchStatus(runs: WorkflowSummary[]): { text: string; fg: ColorName } {
+  const failed = runs.filter((run) => markOf(run) === "fail").length
+  if (failed) return { text: `${failed} of ${runs.length} failed`, fg: "error" }
+  const words = runs.map((run) => {
+    const agents = run.tasks.filter((task) => !isCheck(task))
+    return agents.length === 1 ? (agents[0]!.label ?? "").split(/\s+/)[0]?.toLowerCase() : undefined
+  })
+  const word = words[0] && words.every((each) => each === words[0]) ? words[0] : "run"
+  return { text: `${runs.length} ${word}s`, fg: runs.some((run) => LIVE.has(run.state)) ? "text" : "success" }
+}
+
+// ---------------------------------------------------------------------------------------------- the list
+
+/** One list row in `width` cells: indent, mark, name, status, time (and on the full-width list, how many runs or when it started). */
+function listLine(row: Exclude<Row, { kind: "heading" }>, input: { width: number; now: number; glyphs: Glyphs; full: boolean }): Line {
+  const { width, now, glyphs, full } = input
+  const lit = literals(glyphs)
+  const depth = row.kind === "group" ? 0 : row.depth
+  let name: string
+  let mark: MarkKind
+  let status: { text: string; fg: ColorName }
+  let time: string
+  let extra = ""
+  let bright: boolean
+  if (row.kind === "group") {
+    const live = row.group.runs.find((run) => LIVE.has(run.state))
+    const shown = live ?? row.group.runs[0]!
+    name = row.group.title
+    // A finished group reads as its newest entry: how the item stands now, not every attempt before.
+    mark = live ? markOf(live) : worst(entryRuns(row.group.entries[0]!).map(markOf))
+    status = live ? statusOf(live, true) : row.group.entries[0]!.kind === "batch" ? batchStatus(entryRuns(row.group.entries[0]!)) : statusOf(shown, true)
+    time = live && TICKING.has(live.state) ? runElapsed(live, now) : todayTimeOrDateTime(shown.startedAt, now)
+    extra = `${row.group.runs.length} runs`
+    bright = live !== undefined
+  } else if (row.kind === "pack") {
+    const runs = row.entry.runs
+    name = `${runs[0]!.name} ${lit.times}${runs.length}`
+    mark = worst(runs.map(markOf))
+    status = row.entry.kind === "batch" ? batchStatus(runs) : statusOf(runs[0]!)
+    // A batch takes as long as its slowest run.
+    time = runElapsed(slowest(runs, now), now)
+    extra = todayTimeOrDateTime(runs[0]!.startedAt, now)
+    bright = runs.some((run) => LIVE.has(run.state))
+  } else {
+    // A run alone at the top level stands for its item: the item names the row, the workflow follows.
+    name = row.depth === 0 && row.run.subject ? `${row.run.subject} ${glyphs.sep} ${row.run.name}` : row.run.name
+    mark = markOf(row.run)
+    status = statusOf(row.run)
+    time = runElapsed(row.run, now)
+    extra = todayTimeOrDateTime(row.run.startedAt, now)
+    bright = LIVE.has(row.run.state)
+  }
+  const statusCells = full ? 15 : width >= 44 ? 13 : 0
+  const timeCells = full ? 9 : 8
+  const extraCells = full ? 10 : 0
+  const lead = 2 + depth * 2
+  const nameRoom = Math.max(4, width - lead - 2 - statusCells - timeCells - extraCells)
+  const line: Line = [
+    { text: " ".repeat(lead) },
+    markSpan(mark, glyphs),
+    { text: " " },
+    { text: pad(truncateEnd(name, nameRoom - 1), nameRoom), fg: bright ? "text" : "muted", bold: bright && row.kind === "group" },
+  ]
+  if (statusCells) line.push({ text: pad(truncateEnd(status.text, statusCells - 1), statusCells), fg: status.fg })
+  line.push({ text: padStart(truncateEnd(time, timeCells - 1), timeCells), fg: "muted" })
+  if (extraCells) line.push({ text: padStart(truncateEnd(extra, extraCells - 1), extraCells), fg: "muted" })
+  return clip(line, width)
+}
+
+function listPane(input: { runs: WorkflowSummary[]; state: WorkflowsPageState; width: number; rows: number; now: number; glyphs: Glyphs; full: boolean; focused: boolean }): Line[] {
+  const { runs, state, width, rows: room, now, glyphs, full, focused } = input
+  const { rows } = listRows(runs, state)
+  const at = cursorAt(rows, state)
+  const offset = Math.min(Math.max(0, at - room + 1), Math.max(0, rows.length - room))
+  return rows.slice(offset, offset + room).map((row, index): Line => {
+    if (row.kind === "heading") return clip([{ text: row.text, fg: "muted", bold: true }, { text: ` · ${row.count}`, fg: "muted" }], width)
+    const line = listLine(row, { width, now, glyphs, full })
+    return offset + index === at ? cursorRow(line, width, glyphs, focused) : line
+  })
+}
+
+// ---------------------------------------------------------------------------------------------- the run
+
+/** The phases in one row: `✓ Plan ── ● Audit ── ◇ Card`, narrower joiners, then marks only for the phases not in play. */
+function stepperRow(view: RunView, width: number, glyphs: Glyphs): Line | undefined {
+  if (!view.stepper) return undefined
+  const lit = literals(glyphs)
+  const named = view.phases.filter((phase) => phase.title)
+  const marks = named.map((phase) => phaseMark(phase, glyphs, lit.skipped))
+  const build = (joiner: string, titled: (phase: Phase) => boolean): Line => named.flatMap((phase, index): Span[] => [
+    ...(index ? [{ text: joiner, fg: "border" as const }] : []),
+    marks[index]!,
+    ...(titled(phase) ? [{ text: ` ${phase.title}`, fg: phase.state === "pending" ? "muted" as const : "text" as const }] : []),
+  ])
+  const width_ = (line: Line) => line.reduce((sum, each) => sum + textWidth(each.text), 0)
+  const inPlay = (phase: Phase) => phase.state === "running" || phase.state === "blocked" || phase.waiting
+  for (const line of [build(` ${glyphs.rule.repeat(2)} `, () => true), build(` ${glyphs.rule} `, () => true), build(glyphs.rule, inPlay)]) if (width_(line) <= width) return line
+  return clip(build(glyphs.rule, inPlay), width)
+}
+
+function phaseMark(phase: Phase, glyphs: Glyphs, skipped: string): Span {
+  if (phase.waiting) return { text: glyphs.ask, fg: "warning" }
+  if (phase.state === "done") return { text: glyphs.ok, fg: "success" }
+  if (phase.state === "running") return { text: glyphs.dot, fg: "primary" }
+  if (phase.state === "blocked") return { text: glyphs.fail, fg: "error" }
+  return phase.notRun ? { text: skipped, fg: "muted" } : { text: glyphs.collapsed, fg: "muted" }
+}
+
+function stepMark(task: WorkflowTaskSummary, glyphs: Glyphs, skipped: string): Span {
+  switch (task.state) {
+    case "done": return { text: glyphs.ok, fg: "success" }
+    case "running": return { text: glyphs.dot, fg: "primary" }
+    case "needs_input": return { text: glyphs.ask, fg: "warning" }
+    case "failed": return { text: glyphs.fail, fg: "error" }
+    case "skipped":
+    case "stopped": return { text: skipped, fg: "muted" }
+    case "pending": return { text: glyphs.collapsed, fg: "muted" }
+  }
+}
+
+const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
+const compactCount = (value: number) => (value >= 1_000_000 ? `${+(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${+(value / 1_000).toFixed(1)}k` : String(value))
+
+function phaseTime(phase: Phase, now: number): string {
+  if (phase.startedAt === undefined) return ""
+  if (phase.state === "running" || phase.waiting) return elapsed(now - phase.startedAt)
+  return phase.endedAt !== undefined ? elapsed(phase.endedAt - phase.startedAt) : ""
+}
+
+function phaseLine(phase: Phase, input: { titleWidth: number; now: number; glyphs: Glyphs }): Line {
+  const { titleWidth, now, glyphs } = input
+  const lit = literals(glyphs)
+  const pending = phase.state === "pending"
+  const failedSteps = phase.steps.filter((task) => task.state === "failed" && !isCheck(task)).length
+  const note: Span[] = phase.notRun ? [{ text: "not run", fg: "muted" }]
+    : phase.waiting ? [{ text: "waiting for you", fg: "warning" }]
+    : pending && phase.agents + phase.checks === 0 ? (phase.detail ? [{ text: phase.detail, fg: "muted" }] : [])
+    : [
+      ...(failedSteps ? [{ text: `${plural(failedSteps, "agent")} failed`, fg: "error" as const }] : []),
+      ...(phase.checksFailed ? [{ text: `${plural(phase.checksFailed, "check")} failed`, fg: "error" as const }] : []),
+      ...(phase.agents - failedSteps > 0 ? [{ text: plural(phase.agents - failedSteps, "agent"), fg: "muted" as const }] : []),
+      ...(phase.checks - phase.checksFailed > 0 ? [{ text: plural(phase.checks - phase.checksFailed, "check"), fg: "muted" as const }] : []),
+    ].flatMap((each, index): Span[] => (index ? [{ text: ` ${glyphs.sep} `, fg: "muted" }, each] : [each]))
+  return [
+    { text: "  " },
+    phaseMark(phase, glyphs, lit.skipped),
+    { text: " " },
+    { text: pad(phase.title, titleWidth), fg: pending ? "muted" : "text" },
+    { text: padStart(phaseTime(phase, now), TIME_CELLS), fg: "muted" },
+    { text: "  " },
+    ...note,
+  ]
+}
+
+/** A step: mark, label, what it runs on (or `you`), its tokens and time, the time against the right edge. */
+function stepLine(task: WorkflowTaskSummary, input: { run: WorkflowSummary; labelWidth: number; width: number; now: number; glyphs: Glyphs }): Line {
+  const { run, labelWidth, width, now, glyphs } = input
+  const lit = literals(glyphs)
+  const model = task.modelId ?? task.execution?.model?.model
+  const effort = task.execution?.model?.variant ? `#${task.execution.model.variant}` : task.execution?.model?.effort
+  const route: Span[] = task.kind === "human" ? [{ text: "you", fg: "warning" }]
+    : task.kind === "check" ? [{ text: "check", fg: "muted" }]
+    : task.kind === "map" ? [{ text: "map", fg: "muted" }]
+    : model ? [
+      { text: model, fg: "accent" },
+      ...(width >= ENGINE_AT ? [{ text: ` ${glyphs.sep} ${task.engine ?? "native"}`, fg: "muted" as const }] : []),
+      ...(width >= EFFORT_AT && effort ? [{ text: ` ${glyphs.sep} ${effort}`, fg: "muted" as const }] : []),
+      ...(task.attempt > 1 ? [{ text: ` ${glyphs.sep} attempt ${task.attempt}`, fg: "muted" as const }] : []),
+    ] : []
+  const tokens = task.usage && width >= TOKENS_AT ? `${compactCount(task.usage.input + task.usage.output)} tok` : ""
+  const time = taskElapsed(task, now)
+  const right: Span[] = [...(tokens ? [{ text: `${tokens}   `, fg: "muted" as const }] : []), { text: padStart(time, TIME_CELLS), fg: "muted" }]
+  const left: Line = [
+    { text: "  " },
+    { text: `${glyphs.track} `, fg: "border" },
+    stepMark(task, glyphs, lit.skipped),
+    { text: " " },
+    { text: pad(truncateEnd(stepLabel(task, run.subject), labelWidth), labelWidth), fg: task.state === "pending" || task.state === "skipped" ? "muted" : "text", bold: task.state === "running" || task.state === "needs_input" },
+    { text: "  " },
+    ...route,
+  ]
+  return spread(left, right, width)
+}
+
+/** What goes under a step: what it does now, the question it asks, why it failed or why it waits to retry. */
+function stepDetail(task: WorkflowTaskSummary, input: { run: WorkflowSummary; width: number; glyphs: Glyphs }): Line[] {
+  const { run, width, glyphs } = input
+  const lit = literals(glyphs)
+  const lead: Span[] = [{ text: "  " }, { text: `${glyphs.track}   `, fg: "border" }]
+  const room = Math.max(1, width - 6)
+  const rows = (text: string, max: number, fg: ColorName): Line[] => {
+    const lines = wrap(text.replace(/\s+/g, " ").trim(), room)
+    return lines.slice(0, max).map((each, index): Line => [...lead, { text: index === max - 1 && lines.length > max ? truncateEnd(`${each} ${lit.more}`, room) : each, fg }])
+  }
+  if (task.kind === "map" && task.expanded) {
+    const children = run.tasks.filter((entry) => entry.mapParentId === task.id && !entry.mapRetired)
+    return [[...lead, { text: `${children.filter((entry) => entry.state === "done").length}/${children.length} items`, fg: "muted" }]]
+  }
+  switch (task.state) {
+    case "running": return task.latest ? [clip([...lead, { text: `${lit.activity} ${task.latest.replace(/\s+/g, " ")}`, fg: "body" }], width)] : []
+    case "needs_input": return task.kind === "human" ? rows(task.latest ?? "y approve · n reject", 2, "body") : [clip([...lead, { text: "needs your approval · enter opens the session", fg: "warning" }], width)]
+    case "failed": return rows(task.reason ?? "failed", FAILURE_ROWS, "error")
+    case "pending": return task.reason?.startsWith("retrying") ? rows(task.reason, 1, "warning") : []
+    default: return []
+  }
+}
+
+/** Checks of an opened phase, grouped by label: `✓ 38 × node … check   9.8s`. */
+function checkRows(phase: Phase, input: { width: number; glyphs: Glyphs }): Line[] {
+  const { width, glyphs } = input
+  const lit = literals(glyphs)
+  const groups = new Map<string, { label: string; state: WorkflowTaskState; count: number; ms: number }>()
+  for (const task of phase.checkTasks) {
+    const label = task.label ?? task.id
+    const key = `${label}\0${task.state}`
+    const entry = groups.get(key) ?? { label, state: task.state, count: 0, ms: 0 }
+    entry.count++
+    entry.ms += task.startedAt !== undefined && task.endedAt !== undefined ? task.endedAt - task.startedAt : 0
+    groups.set(key, entry)
+  }
+  const all = [...groups.values()]
+  const shown = all.slice(0, CHECK_ROWS_MAX).map((entry): Line => {
+    const time = padStart(elapsed(entry.ms), TIME_CELLS)
+    const left: Line = [{ text: "  " }, { text: `${glyphs.track} `, fg: "border" }, stepMark({ state: entry.state } as WorkflowTaskSummary, glyphs, lit.skipped), { text: ` ${String(entry.count).padStart(2)} ${lit.times} `, fg: "muted" }, { text: shortenMiddle(entry.label, Math.max(8, width - 18)), fg: "body" }]
+    return spread(left, [{ text: time, fg: "muted" }], width)
+  })
+  return all.length > CHECK_ROWS_MAX ? [...shown, [{ text: "  " }, { text: `${glyphs.track} `, fg: "border" }, { text: `${lit.more} ${all.length - CHECK_ROWS_MAX} more`, fg: "muted" }]] : shown
+}
+
+type Item = { key?: string; line: Line }
+
+/** The run's timeline: one row per phase, its steps under it with what each does now, the opened checks, then verification. */
+function timeline(run: WorkflowSummary, input: { state: WorkflowsPageState; width: number; now: number; glyphs: Glyphs }): Item[] {
+  const { state, width, now, glyphs } = input
+  const view = runView(run)
+  const titleWidth = Math.max(0, ...view.phases.map((phase) => textWidth(phase.title)))
+  const labelWidth = Math.min(view.labelWidth, Math.max(6, width - 30))
+  const items: Item[] = []
+  if (run.script?.omitted) items.push({ line: [{ text: "  " }, { text: `${literals(glyphs).more} ${plural(run.script.omitted, "earlier call")} not listed`, fg: "muted" }] })
+  for (const phase of view.phases) {
+    if (phase.title) items.push({ key: phase.key, line: phaseLine(phase, { titleWidth, now, glyphs }) })
+    if (state.checks?.includes(checksKey(run, phase.key))) for (const line of checkRows(phase, { width, glyphs })) items.push({ line })
+    for (const task of phase.steps) {
+      items.push({ key: `t:${task.id}`, line: stepLine(task, { run, labelWidth, width, now, glyphs }) })
+      for (const line of stepDetail(task, { run, width, glyphs })) items.push({ line })
+    }
+  }
+  if (hasVerify(run)) {
+    const rows = verificationRows(run, Math.max(1, width - 2), glyphs)
+    items.push({ line: [] })
+    rows.forEach((line, index) => items.push({ ...(index === 0 ? { key: "v" } : {}), line: [{ text: "  " }, ...line] }))
+  }
+  return items
+}
+
+/** One row under the header: what waits for the user, why it stopped, how it ended, or what the run is for. */
+function noticeRow(run: WorkflowSummary, view: RunView, width: number, glyphs: Glyphs): Line {
+  const sep = ` ${glyphs.sep} `
+  const row = (text: string, fg: ColorName): Line => [{ text: "  " }, { text: truncateEnd(text.replace(/\s+/g, " ").trim(), Math.max(1, width - 2)), fg }]
+  if (view.waiting) return row(view.waiting.kind === "human" ? `Waiting for you: ${stepLabel(view.waiting, run.subject)}${sep}y approve${sep}n reject` : `${stepLabel(view.waiting, run.subject)} needs your approval${sep}enter opens its session`, "warning")
+  if (run.state === "failed" || run.state === "blocked") {
+    const phase = view.failed ? view.phases.find((each) => each.steps.includes(view.failed!)) : undefined
+    if (view.failed) return row(`Stopped${phase?.title ? ` in ${phase.title}` : ""}: ${stepLabel(view.failed, run.subject)} failed${sep}t retry`, "error")
+    return row(run.reason ?? run.script?.error ?? STATE[run.state].label, "error")
+  }
+  if (view.outcome) return row(`${view.outcome.word}${view.outcome.reason ? `: ${view.outcome.reason}` : ""}`, view.outcome.tone)
+  if (run.queuedBehind) return row(`waits for ${run.queuedBehind}`, "muted")
+  if (run.state === "paused" && run.reason) return row(run.reason, "warning")
+  return row(run.objective, "muted")
+}
+
+/** The run's header: mark, name and work item; its state and time on the right. */
+function headerRow(run: WorkflowSummary, input: { width: number; now: number; glyphs: Glyphs }): Line {
+  const { width, now, glyphs } = input
+  const mark = markSpan(markOf(run), glyphs)
+  const state = run.state === "completed" && runView(run).outcome ? { label: runView(run).outcome!.word, fg: runView(run).outcome!.tone as ColorName } : STATE[run.state]
+  const left: Line = [{ text: "  " }, mark, { text: " " }, { text: run.name, fg: "text", bold: true }, ...(run.subject ? [{ text: ` ${glyphs.sep} ${run.subject}`, fg: "text" as const }] : [])]
+  return spread(left, [{ text: state.label, fg: state.fg }, { text: ` ${glyphs.sep} ${run.state === "verifying" ? "in review" : runElapsed(run, now)}`, fg: "muted" }], width)
+}
+
+/** `phase 5 of 7 · 1 of 16 agents · 52 checks passed · 1 failed`. */
+function progressRow(run: WorkflowSummary, view: RunView, width: number, glyphs: Glyphs): Line | undefined {
+  const sep = ` ${glyphs.sep} `
+  const parts: Span[] = []
+  const add = (text: string, fg: ColorName = "muted") => parts.push(...(parts.length ? [{ text: sep, fg: "muted" as const }] : []), { text, fg })
+  if (view.position) add(`phase ${view.position.index} of ${view.position.total}`)
+  if (run.script) add(`${run.script.usage.agents} of ${run.script.budget.agents ?? "-"} agents`)
+  else if (run.tasks.length) add(`${run.tasks.filter((task) => task.state === "done").length} of ${plural(run.tasks.length, "task")} done`)
+  if (view.checksPassed) add(`${plural(view.checksPassed, "check")} passed`)
+  if (view.checksFailed) add(`${view.checksFailed} failed`, "error")
+  if (view.agentsFailed) add(`${plural(view.agentsFailed, "agent")} failed`, "error")
+  return parts.length ? clip([{ text: "  " }, ...parts], width) : undefined
+}
+
+/** Ids, hashes, limits and the cursor step's policy: what `i` shows in place of the timeline. */
+function infoRows(run: WorkflowSummary, input: { step: string | undefined; width: number; now: number }): Line[] {
+  const { step, width, now } = input
+  const inner = Math.max(1, width - 2)
+  const identity = kvList([
+    { label: "workflow", value: run.workflowId },
+    ...(run.definitionId ? [{ label: "definition", value: run.definitionId }] : []),
+    ...(run.revisionId ? [{ label: "revision", value: `#${run.revision} ${"·"} ${run.revisionId}` }] : []),
+    { label: "plan hash", value: shortenMiddle(run.planHash, Math.max(8, inner - LABEL_WIDTH)) },
+    ...(run.script ? [{ label: "script", value: `${run.script.origin} · sha ${run.script.hash.slice(0, 12)}${run.script.host === "running" || run.script.host === "done" ? "" : ` · host ${run.script.host}`}` }] : []),
+    { label: "folder", value: shortenMiddle(run.directory, Math.max(8, inner - LABEL_WIDTH)) },
+  ], inner)
+  const contract = contractText(run)
+  const script = run.script
+  const minutes = Math.floor(((run.endedAt ?? now) - run.startedAt) / 60_000)
+  // The static plan's phase under the cursor (else the one in progress) and when it counts as done.
+  const stepTask = taskOf(run, step)
+  const barrier = run.phases?.find((phase) => (stepTask ? phase.tasks.includes(stepTask.id) : `p:${phase.id}` === step)) ?? run.phases?.find((phase) => phase.state === "running")
+  const limits = kvList([
+    { label: "permission", value: permsText(run) },
+    { label: "contract", value: contract.text, tone: contract.fg },
+    ...(script ? [{ label: "caps", value: [
+      `agents ${script.usage.agents}/${script.budget.agents ?? "-"}`,
+      `tokens ${compactCount(script.usage.tokens)}${script.budget.tokens !== undefined ? `/${compactCount(script.budget.tokens)}` : ""}`,
+      ...(script.budget.usd !== undefined || script.usage.costMicros ? [`$${((script.usage.costMicros ?? 0) / 1_000_000).toFixed(2)}${script.budget.usd !== undefined ? `/$${script.budget.usd}` : ""}`] : []),
+      ...(script.budget.minutes !== undefined ? [`${minutes}/${script.budget.minutes} min`] : []),
+    ].join(" · ") }] : []),
+    ...(script && Object.keys(script.usage.engines ?? {}).length ? [{ label: "engines", value: Object.entries(script.usage.engines ?? {}).map(([name, entry]) => `${name} ${plural(entry.agents, "agent")} ${compactCount(entry.tokens)} tok`).join(" · ") }] : []),
+    ...(run.overlapPolicy ? [{ label: "overlap", value: `${run.overlapPolicy}${run.queuedBehind ? ` · waits ${run.queuedBehind}` : ""}` }] : []),
+    ...(barrier ? [{ label: "barrier", value: `${barrier.title} · ${barrier.barrier.kind}${barrier.barrier.kind === "quorum" ? ` ${barrier.barrier.quorum}` : barrier.barrier.kind === "condition" ? ` ${barrier.barrier.expression}` : ""}` }] : []),
+  ], inner)
+  // How the cursor's step runs; with no step chosen, the first step that has a recorded execution.
+  const task = stepTask?.execution ? stepTask : run.tasks.find((each) => each.execution)
+  const execution = task?.execution
+  const stepRows = execution ? kvList([
+    { label: "agent", value: [execution.agent, execution.model?.model, execution.model?.variant ? `#${execution.model.variant}` : execution.model?.effort].filter(Boolean).join(" · ") || (execution.readOnly ? "read-only" : execution.permission) },
+    { label: "workspace", value: `${execution.workspace.mode}${execution.directory !== run.directory ? ` · ${shortenMiddle(execution.directory, Math.max(8, inner - 24))}` : ""}` },
+    { label: "permission", value: execution.readOnly ? "read-only" : execution.permission },
+  ], inner) : []
+  const indent = (lines: Line[]) => lines.map((line): Line => [{ text: "  " }, ...line])
+  // The cursor's step first: on a short terminal it is what the user opened `i` for.
+  return [
+    ...(stepRows.length && task ? [...indent(section({ title: stepLabel(task, run.subject), body: stepRows, width: inner })), []] : []),
+    ...indent(section({ title: "Limits", body: limits, width: inner })), [],
+    ...indent(section({ title: "Identity", body: identity, width: inner })),
+    ...(script?.result && !script.outcome ? [[], ...indent(section({ title: "Result", body: wrap(script.result, inner).slice(0, 4).map((text): Line => [{ text, fg: "body" }]), width: inner }))] : []),
+    ...(script?.logs.length ? [[], ...indent(section({ title: "Log", body: script.logs.slice(-5).map((text): Line => [{ text: truncateEnd(text.replace(/\s+/g, " "), inner), fg: "body" }]), width: inner }))] : []),
+  ]
+}
+
+/** The run pane: header, notice, stepper, progress, then the timeline (or the info view), scrolled to keep the cursor in sight. */
+function runPane(run: WorkflowSummary, input: { state: WorkflowsPageState; width: number; rows: number; now: number; glyphs: Glyphs; focused: boolean }): Line[] {
+  const { state, width, rows, now, glyphs, focused } = input
+  const view = runView(run)
+  const stepper = stepperRow(view, Math.max(1, width - 2), glyphs)
+  const progress = progressRow(run, view, width, glyphs)
+  const head: Line[] = [headerRow(run, { width, now, glyphs }), noticeRow(run, view, width, glyphs), [], ...(stepper ? [[{ text: "  " }, ...stepper]] : []), ...(progress ? [progress] : []), []]
+  const step = state.focus === "run" ? stepOf(run, state) : undefined
+  if (state.info) {
+    const info = infoRows(run, { step, width, now })
+    const room = Math.max(0, rows - head.length)
+    // Scrolled no further than the last row reaching the bottom.
+    const offset = Math.min(state.infoOffset ?? 0, Math.max(0, info.length - room))
+    return [...head, ...info.slice(offset, offset + room)]
+  }
+  const items = timeline(run, { state, width, now, glyphs })
+  const room = Math.max(0, rows - head.length)
+  const at = step === undefined ? -1 : items.findIndex((item) => item.key === step)
+  // The cursor's step with its detail rows in sight.
+  const tail = at >= 0 ? at + items.slice(at + 1).findIndex((item) => item.key !== undefined || item.line.length === 0) : -1
+  const last = at < 0 ? -1 : tail < at ? items.length - 1 : tail
+  const offset = at < 0 ? 0 : Math.min(Math.max(0, last - room + 1), Math.max(0, items.length - room), at)
+  const body = items.slice(offset, offset + room).map((item, index) => (offset + index === at && focused ? cursorRow(item.line, width, glyphs, true) : offset + index === at ? cursorRow(item.line, width, glyphs, false) : clip(item.line, width)))
+  return [...head, ...body]
+}
+
+/** A batch or a fold: each of its runs as a lane, with its one agent, its time and its phases in marks. */
+function packPane(entry: Extract<Entry, { kind: "batch" | "fold" }>, input: { width: number; now: number; glyphs: Glyphs }): Line[] {
+  const { width, now, glyphs } = input
+  const lit = literals(glyphs)
+  const first = entry.runs[0]!
+  const status = entry.kind === "batch" ? batchStatus(entry.runs) : statusOf(first)
+  const header = spread([{ text: "  " }, markSpan(worst(entry.runs.map(markOf)), glyphs), { text: " " }, { text: `${first.name} ${lit.times}${entry.runs.length}`, fg: "text", bold: true }, ...(first.subject ? [{ text: ` ${glyphs.sep} ${first.subject}`, fg: "text" as const }] : [])], [{ text: status.text, fg: status.fg }, { text: ` ${glyphs.sep} ${runElapsed(slowest(entry.runs, now), now)}`, fg: "muted" }], width)
+  const lanes = entry.runs.map((run): Line => {
+    const agent = run.tasks.find((task) => !isCheck(task))
+    const model = agent?.modelId ?? agent?.execution?.model?.model
+    const marks = runView(run).phases.filter((phase) => phase.title).map((phase) => phaseMark(phase, glyphs, lit.skipped))
+    const left: Line = [{ text: "  " }, markSpan(markOf(run), glyphs), { text: " " }, { text: agent ? stepLabel(agent, run.subject) : "no agent", fg: "text" }, ...(model ? [{ text: `  ${model}`, fg: "accent" as const }, { text: ` ${glyphs.sep} ${agent?.engine ?? "native"}`, fg: "muted" as const }] : [])]
+    return spread(left, [{ text: `${padStart(runElapsed(run, now), TIME_CELLS)}   `, fg: "muted" }, ...marks.flatMap((mark, index): Span[] => [...(index ? [{ text: glyphs.rule, fg: "border" as const }] : []), mark])], width)
+  })
+  return [header, [{ text: "  " }, { text: truncateEnd(first.objective.replace(/\s+/g, " "), Math.max(1, width - 2)), fg: "muted" }], [], ...lanes, [], [{ text: "  " }, { text: `space opens the ${entry.kind === "batch" ? "batch" : "runs"}`, fg: "muted" }]]
+}
+
+/** The third column from 170 cells: when and where the run is, how much of its limits it used, the models it ran on, its log. */
+function factsPane(run: WorkflowSummary, input: { width: number; now: number }): Line[] {
+  const { width, now } = input
+  const worktree = run.tasks.map((task) => task.execution?.directory).find((directory) => directory && directory !== run.directory)
+  const script = run.script
+  const minutes = Math.floor(((run.endedAt ?? now) - run.startedAt) / 60_000)
+  const models = new Map<string, { agents: number; tokens: number }>()
+  for (const task of run.tasks) {
+    const model = task.modelId ?? task.execution?.model?.model
+    if (!model || isCheck(task)) continue
+    const key = `${model}\0${task.engine ?? "native"}`
+    const entry = models.get(key) ?? { agents: 0, tokens: 0 }
+    models.set(key, { agents: entry.agents + 1, tokens: entry.tokens + (task.usage ? task.usage.input + task.usage.output : 0) })
+  }
+  const atCap = script && script.budget.agents !== undefined && script.usage.agents >= script.budget.agents
+  const logs = (script?.logs ?? []).slice(-3).flatMap((text) => wrap(text.replace(/\s+/g, " ").trim(), Math.max(1, width)).slice(0, 3)).map((text): Line => [{ text, fg: "body" }])
+  return [
+    ...section({ title: "Run", body: kvList([
+      { label: "started", value: todayTimeOrDateTime(run.startedAt, now) },
+      { label: "folder", value: shortenMiddle(run.directory.replace(/^\/Users\/[^/]+/, "~"), Math.max(8, width - 12)) },
+      ...(worktree ? [{ label: "worktree", value: shortenMiddle(worktree.startsWith(`${run.directory}/`) ? worktree.slice(run.directory.length + 1) : worktree, Math.max(8, width - 12)) }] : []),
+      { label: "permission", value: run.permission },
+    ], width), width }), [],
+    ...(script ? [...section({ title: "Limits", body: kvList([
+      { label: "agents", value: `${script.usage.agents} / ${script.budget.agents ?? "-"}`, ...(atCap ? { tone: "warning" as const } : {}) },
+      { label: "tokens", value: `${compactCount(script.usage.tokens)}${script.budget.tokens !== undefined ? ` / ${compactCount(script.budget.tokens)}` : ""}` },
+      ...(script.budget.minutes ?? run.maxRuntimeMinutes ? [{ label: "time", value: `${minutes} / ${script.budget.minutes ?? run.maxRuntimeMinutes} min` }] : []),
+    ], width), width }), []] : []),
+    ...(models.size ? [...section({ title: "Models", body: kvList([...models].map(([key, entry]) => {
+      const [model, engine] = key.split("\0")
+      return { label: model!, value: `${engine} · ${plural(entry.agents, "agent")}${entry.tokens ? ` · ${compactCount(entry.tokens)}` : ""}` }
+    }), width), width }), []] : []),
+    ...(logs.length ? section({ title: "Log", body: logs, width }) : []),
+  ]
+}
+
+// ---------------------------------------------------------------------------------------------- verification (unchanged)
 
 type AuditCriteria = NonNullable<NonNullable<WorkflowSummary["verification"]>["audit"]>["criteria"]
+
+function wrapped(text: string, width: number, max: number, indent: string, fg: ColorName): Line[] {
+  const lines = wrap(text.replace(/\s+/g, " ").trim(), Math.max(1, width - indent.length))
+  return lines.slice(0, max).map((line, i): Line => [{ text: indent }, { text: i === max - 1 && lines.length > max ? truncateEnd(`${line} …`, width - indent.length) : line, fg }])
+}
 
 /** Per-criterion audit rows: `✓ id  evidence`, the evidence wrapped to two lines. */
 function criterionRows(criteria: AuditCriteria, width: number, glyphs: Glyphs): Line[] {
@@ -378,7 +1115,7 @@ function criterionRows(criteria: AuditCriteria, width: number, glyphs: Glyphs): 
 /** How completion is verified and what the last round found: checks, audit, criteria, rejection, override. Row 0 is the header. */
 function verificationRows(run: WorkflowSummary, width: number, glyphs: Glyphs): Line[] {
   const v = run.verification
-  const head: Span[] = [{ text: "verification".padEnd(LABEL_WIDTH + 3), fg: "muted" }]
+  const head: Span[] = [{ text: "Verify".padEnd(LABEL_WIDTH), fg: "text", bold: true }]
   // Blocked: the round could not finish (the audit stalled, failed or could not start); the reason line says why.
   if (run.state === "blocked" && run.contract && run.reason?.startsWith("audit ")) head.push({ text: `round ${run.rounds + 1} — did not finish`, fg: "warning" })
   else if (!v) head.push(run.contract ? { text: `round ${run.rounds} — ${run.state === "verifying" ? "running" : "not started"}`, fg: run.state === "verifying" ? "warning" : "body" } : { text: "none — tasks are not verified", fg: "muted" })
@@ -422,172 +1159,117 @@ function permsText(run: WorkflowSummary): string {
   return parts.join(" · ")
 }
 
-type ScriptInfo = NonNullable<WorkflowSummary["script"]>
+// ---------------------------------------------------------------------------------------------- keys and the page
 
-const compactCount = (value: number) => (value >= 1_000_000 ? `${+(value / 1_000_000).toFixed(1)}M` : value >= 1_000 ? `${+(value / 1_000).toFixed(1)}k` : String(value))
+type KeyHint = { key: string; label: string }
+/** Every run has a ledger of events, artifacts and receipts (`b`, handled by the app). */
+const EVIDENCE: KeyHint = { key: "b", label: "evidence" }
 
-function scriptPhaseLine(script: ScriptInfo, width: number): Line {
-  return label("phases", script.phases.map((phase) => `${phase.title} ${phase.completed}/${phase.total}${phase.state === "running" ? "…" : phase.state === "blocked" ? " !" : ""}`).join(" · "), width)
+/** The keys that act here, most useful first; the title row keeps the ones that fit, always `? keys` and the `esc` one. */
+function keyHints(input: { run: WorkflowSummary | undefined; row: Row | undefined; state: WorkflowsPageState; empty: boolean }): KeyHint[] {
+  const { run, row, state, empty } = input
+  if (empty) return [{ key: "tab", label: "scope" }]
+  if (state.focus === "run" && run) {
+    const failed = run.tasks.some((task) => task.state === "failed")
+    const waiting = run.tasks.some((task) => task.kind === "human" && task.state === "needs_input")
+    const pause = canPause(run) ? [{ key: "p", label: "pause" }] : canResume(run) ? [{ key: "p", label: "resume" }] : []
+    const stop = canStop(run) ? [{ key: "x", label: "stop" }] : []
+    const checks = runView(run).phases.some((phase) => phase.checks > 0) ? [{ key: "space", label: "checks" }] : []
+    if (waiting) return [{ key: "y", label: "approve" }, { key: "n", label: "reject" }, { key: "enter", label: "session" }, ...pause, ...stop, { key: "i", label: "info" }]
+    if (failed || run.state === "blocked") return [...(failed ? [{ key: "t", label: "retry" }] : []), ...(canVerify(run) ? [{ key: "v", label: "verify" }] : []), ...(canAccept(run) ? [{ key: "a", label: "accept" }] : []), { key: "enter", label: "session" }, EVIDENCE, ...pause, { key: "d", label: "delete" }, { key: "i", label: "info" }]
+    if (LIVE.has(run.state)) return [{ key: "enter", label: "session" }, { key: "↑↓", label: "step" }, ...checks, ...pause, ...stop, EVIDENCE, { key: "i", label: "info" }]
+    return [{ key: "enter", label: "session" }, { key: "↑↓", label: "step" }, ...checks, EVIDENCE, { key: "d", label: "delete" }, { key: "i", label: "info" }]
+  }
+  const fold = row && (row.kind === "group" || row.kind === "pack") ? [{ key: "space", label: row.open ? "close" : "open" }] : []
+  const own = row?.kind === "run" ? [...(canPause(row.run) ? [{ key: "p", label: "pause" }] : canResume(row.run) ? [{ key: "p", label: "resume" }] : []), ...(canStop(row.run) ? [{ key: "x", label: "stop" }] : [])] : []
+  return [{ key: "enter", label: row?.kind === "run" ? "open" : "expand" }, { key: "↑↓", label: "select" }, ...fold, ...own, EVIDENCE, { key: "tab", label: "scope" }]
 }
 
-/** Script runs: where the script came from, the live use of every cap, the log tail and how it ended. Rows that fit nowhere else are dropped first in compact mode. */
-function scriptRows(input: { run: WorkflowSummary; script: ScriptInfo; width: number; now: number; compact: boolean }): Line[] {
-  const { run, script, width, now, compact } = input
-  const caps = script.budget
-  const minutes = Math.floor(((run.endedAt ?? now) - run.startedAt) / 60_000)
-  const used = [
-    `agents ${script.usage.agents}/${caps.agents ?? "-"}`,
-    `tokens ${compactCount(script.usage.tokens)}${caps.tokens !== undefined ? `/${compactCount(caps.tokens)}` : ""}`,
-    ...(caps.usd !== undefined || script.usage.costMicros ? [`$${((script.usage.costMicros ?? 0) / 1_000_000).toFixed(2)}${caps.usd !== undefined ? `/$${caps.usd}` : ""}`] : []),
-    ...(caps.minutes !== undefined ? [`${minutes}/${caps.minutes} min`] : []),
+/** The hints that fit in `room` cells, in order, with `? keys` and the `esc` hint always kept. */
+function keysText(hints: KeyHint[], escape: KeyHint, room: number, glyphs: Glyphs): string {
+  const fixed = [{ key: "?", label: "keys" }, escape]
+  const join = (list: KeyHint[]) => list.map((hint) => `${hint.key} ${hint.label}`).join(` ${glyphs.sep} `)
+  const chosen: KeyHint[] = []
+  for (const hint of hints) if (textWidth(join([...chosen, hint, ...fixed])) <= room) chosen.push(hint)
+  const text = join([...chosen, ...fixed])
+  return textWidth(text) <= room ? text : join([escape])
+}
+
+/** Every key, for `?`: as the first rows of the body, in as many columns as fit. */
+function allKeysRows(width: number): Line[] {
+  const keys: Array<[string, string]> = [
+    ["↑↓ jk", "move"], ["enter →", "open run / session"], ["space", "fold · checks"], ["← esc", "list / back"], ["tab 1 2", "scope"], ["i", "info"],
+    ["p", "pause · resume"], ["x", "stop"], ["d", "delete"], ["t", "retry step"], ["y n", "approve · reject"], ["v", "verify"], ["a", "accept"], ["b", "evidence"], ["q", "close"],
   ]
-  const nearCap = (caps.agents !== undefined && script.usage.agents >= caps.agents) || (caps.tokens !== undefined && script.usage.tokens >= caps.tokens)
-  const rows: Line[] = [label("caps", used.join(" · "), width, nearCap ? "warning" : "body")]
-  if (!compact) rows.unshift(label("script", `${script.origin} · sha ${script.hash.slice(0, 12)}${script.host === "running" || script.host === "done" ? "" : ` · host ${script.host}`}`, width))
-  const engines = Object.entries(script.usage.engines ?? {})
-  if (engines.length) rows.push(label("engines", engines.map(([name, entry]) => `${name} ${entry.agents} agent${entry.agents === 1 ? "" : "s"} ${compactCount(entry.tokens)} tok`).join(" · "), width))
-  if (!compact && script.logs.length) rows.push(label("log", script.logs.at(-1)!, width, "muted"))
-  if (script.error) rows.push(label("error", script.error.replace(/\s+/g, " "), width, "error"))
-  else if (script.result) rows.push(label("result", script.result.replace(/\s+/g, " "), width))
-  if (script.omitted) rows.push(label("older", `${script.omitted} finished calls not listed`, width, "muted"))
-  return rows
+  const cell = 28
+  const columns = Math.max(1, Math.floor((width - 2) / cell))
+  const rows: Line[] = []
+  for (let index = 0; index < keys.length; index += columns) {
+    rows.push(clip([{ text: "  " }, ...keys.slice(index, index + columns).flatMap(([key, label]): Span[] => [{ text: pad(key, 9), fg: "accent" }, { text: pad(label, cell - 9), fg: "muted" }])], width))
+  }
+  return [...rows, []]
 }
 
-/** The selected run: where it lives, its objective and contract, the tasks by level, and the verification block, fitted to `rows`. */
-function detailRows(input: { run: WorkflowSummary; state: WorkflowsPageState; width: number; rows: number; now: number; glyphs: Glyphs; compact: boolean }): Line[] {
-  const { run, state, width, rows, now, glyphs, compact } = input
-  const order = workflowTaskOrder(run)
-  const byId = new Map(run.tasks.map((task) => [task.id, task]))
-  const slot = effectiveSlot(run, state, order)
-  const contract = contractText(run)
-  const head: Line[] = []
-  if (!compact) head.push([{ text: shortenMiddle(run.directory, width), fg: "muted", dim: true }])
-  head.push(label("objective", run.objective.replace(/\s+/g, " ").trim(), width))
-  if (!compact) head.push(label("contract", contract.text, width, contract.fg))
-  if (run.revisionId) {
-    head.push(label("revision", `#${run.revision} · ${run.revisionId}`, width))
-    if (!compact) head.push(label("definition", run.definitionId ?? "", width), label("plan hash", run.planHash, width))
-  }
-  if (!compact) head.push(label("perms", permsText(run), width))
-  if (run.overlapPolicy) head.push(label("overlap", `${run.overlapPolicy}${run.queuedBehind ? ` · waits ${run.queuedBehind}` : ""}`, width))
-  if (run.script) head.push(...scriptRows({ run, script: run.script, width, now, compact }))
-  const phaseLine = run.phases?.length ? label("phases", run.phases.map((phase) => `${phase.id} ${phase.completed}/${phase.total} ${phase.state}`).join(" · "), width) : run.script?.phases.length ? scriptPhaseLine(run.script, width) : undefined
-  if (phaseLine) head.push(phaseLine)
-  if (run.reason) head.push(label("reason", run.reason.replace(/\s+/g, " ").trim(), width, run.state === "blocked" || run.state === "failed" ? "error" : "warning"))
-  const focused = order[slot === undefined ? 0 : slot]?.task
-  const phase = run.phases?.find((entry) => entry.id === focused?.phaseId)
-  if (phase && !compact) head.push(label("barrier", `${phase.title} · ${phase.barrier.kind}${phase.barrier.kind === "quorum" ? ` ${phase.barrier.quorum}` : phase.barrier.kind === "condition" ? ` ${phase.barrier.expression}` : ""}`, width))
-  const execution = focused?.execution
-  if (execution) {
-    const model = execution.model
-    const route = [execution.agent, model?.model, model?.variant ? `#${model.variant}` : model?.effort].filter(Boolean).join(" · ")
-    head.push(label(focused!.id, route || (execution.readOnly ? "read-only" : execution.permission), width))
-    head.push(label("workspace", `${execution.workspace.mode}${execution.directory !== run.directory && !compact ? ` · ${execution.directory}` : ""}`, width))
-    const policy = execution.permissions
-    const restrictions = [execution.readOnly ? "read-only" : execution.permission, ...(policy?.allowedTools ? [`tools: ${policy.allowedTools.join(", ") || "none"}`] : []), ...(policy?.approvalRequiredFor?.length ? [`ask: ${policy.approvalRequiredFor.join(", ")}`] : []), ...(policy?.allowEdits === false ? ["no edits"] : []), ...(policy?.allowMutatingCommands === false ? ["no commands"] : []), ...(policy?.allowExternalSend === false ? ["no sends"] : [])]
-    if (!compact && rows >= 16) head.push(label("policy", restrictions.join(" · "), width))
-    const budget = execution.budget
-    const usage = focused?.usage
-    const limits = [budget?.maxTokens !== undefined ? `${(usage?.input ?? 0) + (usage?.output ?? 0)}/${budget.maxTokens} tokens` : undefined, budget?.maxCost !== undefined ? `${usage?.costUnknown ? "unknown cost" : `$${((usage?.costMicros ?? 0) / 1_000_000).toFixed(4)}`}/$${budget.maxCost}` : undefined, budget?.maxTurns !== undefined ? `${usage?.calls ?? 0}/${budget.maxTurns} calls` : undefined, budget?.maxRuntimeMs !== undefined ? `${Math.round(budget.maxRuntimeMs / 1000)}s` : undefined, budget?.maxChildren !== undefined ? `${usage?.children ?? 0}/${budget.maxChildren} children` : undefined, budget?.maxDepth !== undefined ? `depth ${budget.maxDepth}` : undefined].filter(Boolean)
-    if (limits.length) head.push(label("budget", limits.join(" · "), width))
-  }
-
-  const verification = verificationRows(run, width, glyphs)
-  const shownHead = compact && phaseLine ? [phaseLine, ...head.filter((line) => line !== phaseLine)].slice(0, Math.max(0, rows - 1 - Math.min(order.length, 2))) : head
-  const fixed = shownHead.length + 1
-  const minTasks = Math.min(order.length, 3, Math.max(0, rows - fixed))
-  const verificationRoom = Math.max(0, rows - fixed - minTasks)
-  const shownVerification = verification.slice(0, verificationRoom)
-  const taskRoom = Math.max(0, rows - fixed - shownVerification.length)
-  const cursorIndex = slot === undefined ? 0 : Math.min(slot, order.length - 1)
-  const offset = Math.min(Math.max(0, cursorIndex - taskRoom + 1), Math.max(0, order.length - taskRoom))
-  // A script's calls are labelled by the script and have no levels (no static dependencies): they get a wider name column and no L marker.
-  const nameWidth = Math.min(run.script ? SCRIPT_NAME_MAX : NAME_MAX, Math.max(6, ...order.map((entry) => textWidth(entry.task.label ?? entry.task.id) + 1)))
-
-  const taskRows: Line[] = []
-  for (let index = offset; index < Math.min(order.length, offset + taskRoom); index++) {
-    const entry = order[index]!
-    const showLevel = !run.script && (index === offset || order[index - 1]!.level !== entry.level)
-    taskRows.push(taskRow({ entry, showLevel, nameWidth, byId, cursor: index === slot, compact: compact || width < 60, width, now, glyphs }))
-  }
-  if (slot === order.length && shownVerification[0]) shownVerification[0] = highlighted(shownVerification[0], width)
-  return [...shownHead, [{ text: "tasks", fg: "muted" }], ...taskRows, ...shownVerification]
-}
-
-function emptyRows(width: number): Line[] {
-  const rows: Line[] = [
-    [{ text: "No workflows", fg: "muted" }],
-    [{ text: "/workflows <name|file> --yes", fg: "text" }],
-    [{ text: "/workflows run <file.js> --yes · /workflows new <name>", fg: "muted" }],
-  ]
-  return rows.map((line) => clip(line, width))
+function emptyRows(state: WorkflowsPageState, width: number): Line[] {
+  return section({
+    title: state.scope === "all" ? "No workflows" : "No workflows in this project",
+    ...(state.scope === "project" ? { subtitle: "Runs started here show up as they start. Tab shows every project." } : {}),
+    body: [[{ text: "/workflows <name|file> --yes", fg: "text" }], [{ text: "/workflows run <file.js> --yes · /workflows new <name>", fg: "muted" }]],
+    width,
+  })
 }
 
 /** Renders exactly `height` lines of at most `width` cells. `now` drives the elapsed times. */
-export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: WorkflowsPageState; width: number; height: number; now: number; glyphs?: Glyphs }): Line[] {
+export function renderWorkflowsPage(input: { runs: WorkflowSummary[]; state: WorkflowsPageState; width: number; height: number; now: number; glyphs?: Glyphs; directory?: string }): Line[] {
   const { runs, state, width, height, now } = input
   if (height <= 0) return []
   const glyphs = input.glyphs ?? defaultGlyphs()
-  const selected = clamp(state.selected, runs.length)
-
-  const counts = new Map<WorkflowRunState, number>()
-  for (const run of runs) counts.set(run.state, (counts.get(run.state) ?? 0) + 1)
-  const summaryParts = SUMMARY_ORDER.filter((s) => counts.get(s)).map((s) => `${counts.get(s)} ${STATE[s].label}`)
-  const subtitle = state.scope === "all" ? "all projects" : "this project"
-  const status: PageStatus | undefined = state.confirm
-    ? { label: "Confirm", tone: "warn" }
-    : counts.get("blocked")
-      ? { label: "Blocked", tone: "error" }
-      : counts.get("needs_input")
-        ? { label: "Needs input", tone: "warn" }
-        : counts.get("running") || counts.get("verifying")
-          ? { label: "Live", tone: "live" }
-          : undefined
-  // The most urgent counts that still fit on the title row beside the title and the status.
-  let summaryRoom = width - 2 - textWidth(`Workflows · ${subtitle}`) - 1 - (status && status.tone !== "live" ? textWidth(status.label) + 3 : 0)
-  const fitted: string[] = []
-  for (const part of summaryParts) {
-    const cost = textWidth(part) + (fitted.length ? 3 : 0)
-    if (cost > summaryRoom) break
-    fitted.push(part)
-    summaryRoom -= cost
-  }
-  const summary = summaryParts.length ? fitted.join(" · ") : "no workflows"
-
   const inner = Math.max(1, width - 2)
-  const wide = width >= 110
-  const compact = width < COMPACT_WIDTH || height < COMPACT_HEIGHT
-  const room = Math.max(0, height - 5)
-  const frame = (body: Line[]) => {
-    const lines = page({ title: "Workflows", context: subtitle, summary, ...(status ? { status } : {}), body, hints: [], back: false, width, height })
-    const hints = [{ key: "b", label: "evidence" }, ...(width >= 135 ? [...HINTS, BACK] : width < 70 ? [HINTS[0]!, HINTS[1]!, HINTS[2]!, BACK] : [HINTS[0]!, HINTS[1]!, HINTS[2]!, HINTS[3]!, HINTS[5]!, BACK])]
-    lines[0] = [{ text: " " }, ...spread([], [{ text: hints.map((h) => `${h.key} ${h.label}`).join(" · "), fg: "muted" }], inner), { text: " " }]
-    return lines
+  const { rows } = listRows(runs, state)
+  const row = rows[cursorAt(rows, state)]
+  const shown = runOfRow(row)
+  const run = row?.kind === "run" ? row.run : undefined
+  const wide = width >= WIDE
+  const inRun = state.focus === "run" && run !== undefined
+  const tabs: PageTab[] = [
+    { key: "1", label: "This project", short: "Project", ...(state.scope === "project" && runs.length ? { count: runs.length } : {}) },
+    { key: "2", label: "All projects", short: "All", ...(state.scope === "all" && runs.length ? { count: runs.length } : {}) },
+  ]
+  // Under "All projects" the title says so in one word (the tabs below name the scope in full), so the key hints keep their room.
+  const context = !wide && inRun ? (run.subject ?? run.name) : state.scope === "all" ? "all" : input.directory ? basename(input.directory) : "this project"
+  const confirmRun = state.confirm ? runs.find((each) => each.workflowId === state.confirm!.workflowId) : undefined
+  const status: PageStatus | undefined = state.confirm && confirmRun ? { label: `${state.confirm.kind} "${confirmRun.name}${confirmRun.subject ? ` · ${confirmRun.subject}` : ""}"? ${state.confirm.kind === "stop" ? "x" : "d"}/y confirm`, tone: "warn" } : undefined
+  const escape = { key: "esc", label: inRun ? "list" : "back" }
+  const titleWidth = textWidth(`Workflows · ${context}`) + 3
+  const summary = status ? "" : keysText(keyHints({ run: inRun ? run : row?.kind === "run" ? row.run : undefined, row, state, empty: runs.length === 0 }), escape, Math.max(8, inner - titleWidth), glyphs)
+  const room = Math.max(0, height - pageChrome({ tabs: true, hints: [], back: false, width }))
+  const frame = (body: Line[]) => page({ title: "Workflows", context, ...(summary ? { summary } : {}), ...(status ? { status } : {}), tabs, activeTab: state.scope === "project" ? 0 : 1, body, hints: [], back: false, width, height })
+  const keys = state.keys ? allKeysRows(inner) : []
+  const bodyRoom = Math.max(0, room - keys.length)
+
+  if (runs.length === 0) return frame([...keys, ...emptyRows(state, inner)])
+
+  const runSide = (paneWidth: number, focused: boolean): Line[] => {
+    if (row?.kind === "pack" && !inRun) return packPane(row.entry, { width: paneWidth, now, glyphs })
+    return shown ? runPane(inRun ? run : shown, { state: inRun ? state : { ...state, focus: "list" }, width: paneWidth, rows: bodyRoom, now, glyphs, focused }) : []
   }
 
-  if (runs.length === 0) return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [room], rows: [[{ title: "Workflows", body: emptyRows(inner - 4) }]] }))
-
-  const listWidth = Math.min(56, Math.max(40, Math.floor(inner * 0.36)))
-  const confirm = confirmRow(state, runs, wide ? listWidth - 4 : inner - 4)
-  const confirmRows: Line[] = confirm ? [confirm] : []
-  const windowed = (listRows: number, rowWidth: number): Line[] => {
-    const offset = Math.min(Math.max(0, selected - listRows + 1), Math.max(0, runs.length - listRows))
-    const rows: Line[] = []
-    for (let index = offset; index < Math.min(runs.length, offset + listRows); index++) rows.push(runRow({ run: runs[index]!, selected: index === selected, width: rowWidth, now, glyphs }))
-    return rows
+  if (!wide) {
+    const body = inRun ? runSide(inner, true) : listPane({ runs, state, width: inner, rows: bodyRoom, now, glyphs, full: true, focused: true })
+    return frame([...keys, ...body])
   }
 
-  if (wide) {
-    return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [room], rows: [[
-      { title: "Workflows", weight: 2, active: true, body: (w) => [...confirmRows, ...windowed(Math.max(1, room - 4 - confirmRows.length), w)] },
-      { title: runs[selected]!.revision ? `Detail · revision #${runs[selected]!.revision}` : "Detail", weight: 3, body: (w) => detailRows({ run: runs[selected]!, state, width: w, rows: Math.max(1, room - 4), now, glyphs, compact }) },
-    ]] }))
-  }
-
-  const listRows = Math.max(1, Math.min(runs.length, room - DETAIL_ROWS - 9))
-  const top = Math.min(room, listRows + confirmRows.length + 4)
-  return frame(panelGrid({ width: inner, padding: true, compact: false, heights: [top, Math.max(0, room - top - 1)], rows: [
-    [{ title: "Workflows", active: true, body: (w) => [...confirmRows, ...windowed(listRows, w)] }],
-    [{ title: runs[selected]!.revision ? `Detail · revision #${runs[selected]!.revision}` : "Detail", body: (w) => detailRows({ run: runs[selected]!, state, width: w, rows: Math.max(1, room - top - 5), now, glyphs, compact }) }],
-  ] }))
+  const facts = width >= FACTS_AT
+  const railWidth = facts ? RAIL_MAX : Math.min(RAIL_MAX, Math.max(RAIL_MIN, Math.floor(inner * RAIL_SHARE)))
+  const rest = inner - railWidth - 3 - (facts ? FACTS_WIDTH + 3 : 0)
+  const runWidth = Math.max(1, facts ? Math.min(RUN_MAX, rest) : rest)
+  const left = listPane({ runs, state, width: railWidth, rows: bodyRoom, now, glyphs, full: false, focused: !inRun })
+  const middle = runSide(runWidth, inRun)
+  const right = facts && shown && row?.kind !== "pack" ? factsPane(inRun ? run : shown, { width: FACTS_WIDTH, now }) : []
+  const divider: Span = { text: ` ${glyphs.track} `, fg: "border" }
+  const body = Array.from({ length: bodyRoom }, (_, index): Line => [
+    ...fit(left[index] ?? [], railWidth), divider, ...fit(middle[index] ?? [], runWidth),
+    ...(facts ? [divider, ...fit(right[index] ?? [], FACTS_WIDTH)] : []),
+  ])
+  return frame([...keys, ...body])
 }

@@ -28,7 +28,7 @@ import { GoalObjective, GoalTokenBudget } from "./goals"
 import { UsageLimitAction } from "./usage-limit"
 import { LoopBudget, LoopTrigger, LoopCostBudget, LoopRubric, LoopApprovalPolicy, LoopApprovalAction } from "./loops"
 import { ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule } from "./providers"
-import { MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
+import { BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
 import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelivery, ResourceMode, TurnOptions } from "./states"
 import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
@@ -293,6 +293,8 @@ export const TurnCancel = lazySchema(() => z.strictObject({
   type: z.literal("turn.cancel"),
   sessionId: SessionId,
   turnId: TurnId,
+  /** Only the turn stops: sub-agents it started keep running (a foreground one goes on in the background and reports when it ends). */
+  spareAgents: z.literal(true).optional(),
 }))
 
 export const RequestResolve = lazySchema(() => z.strictObject({
@@ -1987,6 +1989,8 @@ export const IdeOpen = lazySchema(() => z.strictObject({ ...base, type: z.litera
 export const UrlOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("url.open"), url: z.string().max(2048).regex(/^https?:\/\/[\x21-\x7e]+$/i) }))
 /** A generated image's buttons: opens the image (an absolute path to a PNG, JPEG, WebP or GIF file) in the system's viewer, or, with `reveal`, shows it in its folder. Local clients only. */
 export const ImageOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("image.open"), path: z.string().min(2).max(4096).startsWith("/"), reveal: z.boolean().optional() }))
+/** A bot card's "Open in <app>": opens the desktop app the bot's connector named (macOS `open -a`). The name is one plain app name, never a path or an option. Local clients only. */
+export const AppOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("app.open"), app: z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f/-][^\x00-\x1f\x7f/]*$/) }))
 export const ComputerCapture = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.capture"), sessionId: SessionId, input: ComputerCaptureInput }))
 export const ComputerKey = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.key"), sessionId: SessionId, input: ComputerKeyInput }))
 export const ComputerSession = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.session"), sessionId: SessionId, input: ComputerSessionInput }))
@@ -2272,6 +2276,14 @@ export const COMMAND_SCHEMAS = {
   "theme.select": ThemeSelect,
   "agent.create": AgentCreate,
   "agent.debug": AgentDebug,
+  "bot.list": BotList,
+  "bot.create": BotCreate,
+  "bot.duplicate": BotDuplicate,
+  "bot.file": BotFile,
+  "bot.save": BotSave,
+  "bot.draft": BotDraft,
+  "bot.delete": BotDelete,
+  "bot.memory": BotMemory,
   "loop.draft": LoopDraft,
   "loop.snapshot": LoopSnapshotQuery,
   "loop.activate": LoopActivate,
@@ -2417,6 +2429,7 @@ export const COMMAND_SCHEMAS = {
   "ide.open": IdeOpen,
   "url.open": UrlOpen,
   "image.open": ImageOpen,
+  "app.open": AppOpen,
   "computer.capture": ComputerCapture,
   "computer.key": ComputerKey,
   "computer.session": ComputerSession,
