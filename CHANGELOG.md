@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
 - When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
 - Send now works on a steering message the model already took while a tool runs: it stops that tool and sends the message; Esc gives it back to edit or drop, as the notice now says.
 - A model you pick in a bot's chat now runs there instead of the bot's own model; picking the default again goes back to the bot's.
