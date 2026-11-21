@@ -1,4 +1,5 @@
 import { estimateTokens } from "@mendcode/protocol/wire"
+import { inProject } from "../../view/project-scope"
 import { compactFallback } from "./compact-fallback"
 import type { SidebarWidget, McpStatusReport, Loop, SessionTreeNode, WorkflowSummary, ChangesReport, ContextReport } from "@mendcode/protocol"
 import type { SlotContext } from "@mendcode/extension-api"
@@ -291,7 +292,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     query("mcp", { type: "mcp.status", directory }, (result) => { state.sidebarMcp = (result as McpStatusReport | undefined)?.servers })
     query("jobs", { type: "background.list" }, (result) => { if (Array.isArray(result?.tasks)) state.agentShells = result.tasks as typeof state.agentShells })
     query("loops", { type: "loop.list", directory }, (result) => { state.loops = (result?.loops ?? []) as Loop[] })
-    query("workflows", { type: "workflow.list", directory }, (result) => { state.workflows = (result?.workflows ?? []) as WorkflowSummary[] })
+    // This folder's runs only: the Workflows page owns the list while it is open (its "all projects" view must not shrink to this folder).
+    query("workflows", { type: "workflow.list", directory }, (result) => { if (state.page !== "workflows") state.workflows = (result?.workflows ?? []) as WorkflowSummary[] })
     // The backlog card asks only while its feature is on; off, the card says so and the daemon is not asked.
     if (featureOn(state.settingsNow, "backlog")) query("backlog", { type: "backlog.get", directory }, (result) => { state.backlog = Array.isArray(result?.items) ? result.items as BacklogItem[] : [] })
     query("git", { type: "git.status", directory }, (result) => {
@@ -492,7 +494,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       case "changes": return lines(state.changedFiles.length ? [`${state.changedFiles.length} file${state.changedFiles.length === 1 ? "" : "s"} · +${state.diffTotals?.added ?? 0} -${state.diffTotals?.removed ?? 0}`, ...state.changedFiles.map((file) => `${file.status} ${file.path} +${file.additions} -${file.deletions}`)] : [], state.diffTotals ? "No changed files" : "Changes unavailable")
       case "jobs": return lines(state.agentShells.filter((job) => job.sessionId === state.sessionId).map((job) => `${job.status}: ${job.command}`), "No background jobs")
       case "loops": return lines(state.loops.filter((loop) => loop.directory === input.directory).map((loop) => `${loop.name}: ${loop.state}`), "No loops")
-      case "workflows": return lines(state.workflows.filter((run) => run.directory === input.directory).map((run) => `${run.name}: ${run.state}`), "No workflows")
+      case "workflows": return lines(state.workflows.filter((run) => inProject(run.directory, input.directory)).map((run) => `${run.name}: ${run.state}`), "No workflows")
       case "agents": return state.sidebarTree ? agentsTreeCard({ nodes: state.sidebarTree.map((node) => ({ sessionId: node.sessionId, parentId: node.parentId, kind: node.kind ?? "fork", title: node.title, ...(node.model ? { model: modelLabel(node.model, state.modelReport) } : {}), state: node.state, agent: node.agent, headline: node.headline, unmerged: node.unmerged })), rootId: state.sessionId, width, glyphs: ctx.glyphs, ...(widget.options.maxRows ? { maxNodes: Math.max(1, Math.floor(widget.options.maxRows / 3)) } : {}) }) : agentsCard(state.transcript.blocks().filter((block) => block.kind === "tool_call" && block.title?.startsWith("task:")).map((block) => ({ title: block.title!, status: toolStatus(block), ...(durationOf(block) !== undefined ? { durationMs: durationOf(block)! } : {}) })), width, ctx.glyphs)
       case "mcp": return lines((state.sidebarMcp ?? []).map((server) => `${server.name}: ${server.enabled ? server.state : "off"} · ${server.tools} tools`), state.sidebarMcp ? "No MCP servers" : "MCP status unavailable")
       case "git": return git.branch ? [text(git.branch), text(`${git.ahead === undefined ? "ahead unavailable" : `${git.ahead} ahead`} · ${git.behind === undefined ? "behind unavailable" : `${git.behind} behind`}`), text(`${git.dirty ?? state.changedFiles.length} dirty`)] : [text(git.error ?? "No Git repository", "muted")]

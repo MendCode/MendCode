@@ -1,4 +1,5 @@
 import type { createSession } from "./session"
+import { inProject } from "../../view/project-scope"
 import type { createLoops } from "./loops"
 import type { createWorkflows } from "./workflows"
 import type { createChanges } from "./changes"
@@ -338,7 +339,7 @@ export function createEvents(ctx: AppContext, actions: {
       noteWorkflow(run, event.deleted === true)
       if (run.state === "completed" && !event.deleted) state.pet?.cheer("jumping")
       if (state.page !== "workflows" || !state.workflowsLoaded) return requestFrame()
-      if (state.workflowsState.scope === "project" && run.directory !== input.directory) return
+      if (state.workflowsState.scope === "project" && !inProject(run.directory, input.directory)) return
       const known = state.workflows.some((entry) => entry.workflowId === run.workflowId)
       state.workflows = event.deleted ? state.workflows.filter((entry) => entry.workflowId !== run.workflowId) : known ? state.workflows.map((entry) => (entry.workflowId === run.workflowId ? run : entry)) : [run, ...state.workflows]
       return requestFrame()

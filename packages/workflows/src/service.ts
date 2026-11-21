@@ -29,7 +29,7 @@ import {
   type AuditOutcome,
   type TaskEnd,
 } from "./run"
-import { effectiveScriptBudget, startedQueueIds, WORKFLOW_PERMISSION_RANK, WORKFLOW_SESSION_PREFIX } from "@mendcode/protocol"
+import { effectiveScriptBudget, sameFolder, startedQueueIds, WORKFLOW_PERMISSION_RANK, WORKFLOW_SESSION_PREFIX } from "@mendcode/protocol"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type TimerHandle = { cancel(): void }
@@ -699,7 +699,7 @@ export function createWorkflowService(options: {
       return runs.get(workflowId)!
     },
     list(directory?: string) {
-      return [...runs.values()].filter((run) => !directory || run.directory === directory).sort((a, b) => b.updatedAt - a.updatedAt)
+      return [...runs.values()].filter((run) => !directory || sameFolder(run.directory, directory)).sort((a, b) => b.updatedAt - a.updatedAt)
     },
     get: (workflowId: WorkflowId) => runs.get(workflowId),
     recordUsage,

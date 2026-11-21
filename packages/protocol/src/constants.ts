@@ -4,6 +4,12 @@ export const PROTOCOL_VERSION = 1 as const
 /** The title the daemon gives a workflow's own sessions: `workflow · <name>` for the run, `workflow · <name> · <task>` for each task. */
 export const WORKFLOW_SESSION_PREFIX = "workflow · "
 
+/** Whether two folder paths name the same folder as a project key: a trailing slash never makes another project. */
+export const sameFolder = (a: string, b: string): boolean => {
+  const trim = (value: string) => (value.length > 1 ? value.replace(/\/+$/, "") : value)
+  return trim(a) === trim(b)
+}
+
 /** Text-only estimate in UTF-16 code units, rounded up. Provider usage remains authoritative. */
 export const estimateTokens = (chars: number) => Math.ceil(chars / 4)
 /** What one attached image counts for when no provider count exists: about what the providers charge for a typical screenshot (Anthropic caps near 1.6k, OpenAI high detail is 0.8k-1.5k). */
