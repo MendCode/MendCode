@@ -656,7 +656,7 @@ export function createApp(input: AppInput) {
   const { loadContext, contextWindowCommand, filesCommand } = createContext(ctx)
   const { loadSecretTails, noteSecretMarkers, loadSecrets, dropRevealedSecret, revealSecret, forgetSecret, secretTail } = createSecrets(ctx)
   const environmentPanel = createEnvironmentPanel(ctx)
-  const { openTranscript, loadEarlier, loadThreadStart } = createPaging(ctx, {
+  const { openTranscript, loadEarlier, loadThreadStart, releaseFar } = createPaging(ctx, {
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,
     replay: (event) => onEvent(event),
@@ -1236,6 +1236,7 @@ export function createApp(input: AppInput) {
     searchBar: composer.searchRow,
     loadEarlier,
     loadThreadStart,
+    releaseFar,
     compactionLive,
     statusRow: (...args) => statusRow(...args),
     statusRows: (...args) => statusRows(...args),
@@ -1298,6 +1299,7 @@ export function createApp(input: AppInput) {
     },
     reloadExtensions,
     noteTurnEnded,
+    releaseFar,
     openSession: (sessionId) => switchSession(sessionId),
     loadMcps,
     chatWidth: () => transcriptWidth(),

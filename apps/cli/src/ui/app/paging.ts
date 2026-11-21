@@ -3,6 +3,7 @@ import { createContinuity } from "./continuity"
 import type { createSecrets } from "./secrets"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
+import { RELEASE_AT, RELEASE_KEEP } from "../../view/transcript"
 
 /** Opening a chat pages back until its transcript fills this many screens, at most this many pages. */
 const FILL_SCREENS = 2
@@ -11,6 +12,8 @@ const FILL_PAGES = 6
 const EMPTY_PAGES = 400
 /** The screen height assumed before the first frame has measured one. */
 const MIN_SCREEN = 10
+/** Screens above the viewport a release always keeps, besides the screen itself. */
+const RELEASE_SCREENS = 3
 
 export function createPaging(ctx: AppContext, actions: {
   chatWidth(): number
@@ -145,5 +148,24 @@ export function createPaging(ctx: AppContext, actions: {
     }
   }
 
-  return { openTranscript, loadEarlier, loadThreadStart }
+  /**
+   * Back within a screen of the bottom (or following live output) after reading far up: the transcript lets go of the history above
+   * its last `RELEASE_KEEP` blocks and paging restarts from the cut, so scrolling up fetches it again as the first time. Never while a
+   * page is on its way, a sub-agent's thread is open, or the find bar or a selection counts rows from the transcript's top.
+   */
+  function releaseFar() {
+    const paging = state.paging
+    const transcript = state.transcript
+    if (!paging?.ready || paging.loading || transcript.visibleCount < RELEASE_AT) return
+    if (state.agentView !== undefined || state.agentRoot || state.find || state.selection) return
+    const local = view.get(state.sessionId)
+    const height = Math.max(MIN_SCREEN, state.lastBodyHeight)
+    if (local.offset > height) return
+    const cursor = transcript.release({ keep: RELEASE_KEEP, width: chatWidth(), rows: local.offset + height * RELEASE_SCREENS })
+    if (cursor === undefined) return
+    paging.firstSeq = cursor
+    paging.more = true
+  }
+
+  return { openTranscript, loadEarlier, loadThreadStart, releaseFar }
 }

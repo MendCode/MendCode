@@ -98,6 +98,8 @@ export type Block = {
   limit?: LimitCard
   /** On the synthetic line a usage event leaves (cache miss, thinking left off, what a compaction cost); drawn only when the `cacheNotices` setting is on. */
   note?: UsageNote
+  /** The seq of the event that made the block: older history let go (`release`) is everything before a seq. */
+  seq?: number
 }
 
 /** `spans` carry style; `text` is the same content as plain text (tests, search, width). */
@@ -200,6 +202,17 @@ const DEFAULT_REASONING_ROWS = 7
 export const WINDOW_BLOCKS = 400
 /** Blocks added to the window each time the reader reaches its top. */
 export const WINDOW_STEP = 200
+/**
+ * Blocks a chat keeps once the reader is back at the bottom after reading far up (`release`): the default window and one step above
+ * it, the same 600 blocks whose rows `ROWS_CACHE_BLOCKS` keeps, so nothing kept is laid out again. Like Codex's bounded window, unlike
+ * opencode's, which holds every message it ever loaded: the older history is fetched again, page by page, when the reader goes back up.
+ */
+export const RELEASE_KEEP = WINDOW_BLOCKS + WINDOW_STEP
+/**
+ * Older history is let go only past two more steps: a reader who went a few pages up and back keeps them, and each release frees at
+ * least that much, so going up and down near the top of the kept part never fetches the same pages over and over.
+ */
+export const RELEASE_AT = RELEASE_KEEP + 2 * WINDOW_STEP
 
 /** v1's reasoning body height: clamp(floor(viewport × 0.32), 4, 14) rows. */
 function reasoningRowsFor(height: number) {
@@ -330,6 +343,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   const history = new Map<number, SessionEvent>()
   const deltaSeqs = new Map<ItemId, number>()
   let firstSeq: number | undefined
+  /** The seq of the event being applied: the blocks it makes carry it (`Block.seq`). */
+  let applying = 0
+  /** How many blocks were shown when `release` last ran: it looks again only once another step of them has arrived. */
+  let releasedAt = 0
 
   function remember(event: SessionEvent) {
     switch (event.type) {
@@ -388,6 +405,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** A log block joins the list; one of an undone turn is kept but not shown. */
   function add(block: Block) {
+    block.seq ??= applying
     all.push(block)
     byItem.set(block.itemId, block)
     if (undoneTurns.has(block.turnId) || deletedItems.has(block.itemId)) return
@@ -401,11 +419,14 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if (notes.length) invalidateCounts()
   }
 
-  /** The undone turns changed: the visible list is rebuilt from the log's blocks, a marker standing in each run of undone turns. */
-  function rebuild() {
+  /**
+   * The undone turns changed: the visible list is rebuilt from the log's blocks, a marker standing in each run of undone turns. With
+   * `keepRows` (only blocks above the kept ones went) the blocks keep their laid-out rows; the markers, made anew, are laid out again.
+   */
+  function rebuild(keepRows = false) {
     blocks.length = 0
     index.clear()
-    cache.clear()
+    if (!keepRows) cache.clear()
     let marker: Block | undefined
     let runMessages = 0
     let runTurns = new Set<TurnId>()
@@ -414,6 +435,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       if (undoneTurns.has(block.turnId)) {
         if (!marker) {
           marker = { itemId: `undone:${block.turnId}` as ItemId, turnId: block.turnId, kind: "status", text: "", status: "ok", undone: 1, ...(block.at !== undefined ? { at: block.at } : {}) }
+          cache.delete(marker.itemId)
           index.set(marker.itemId, blocks.length)
           blocks.push(marker)
           runMessages = 0
@@ -1080,6 +1102,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if (event.seq <= lastSeq) return
     firstSeq ??= event.seq
     lastSeq = event.seq
+    applying = event.seq
     revision++
     // A sub-agent's item is part of the loaded history too: a rebuild for an older page gives the thread its beginning.
     if (routeAgent(event)) return remember(event)
@@ -1358,6 +1381,88 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     invalidateCounts()
   }
 
+  /** The item an event belongs to for `release`: a sub-agent's items belong to the call that started it. */
+  function unitOf(event: SessionEvent): ItemId | undefined {
+    const itemId = "itemId" in event && typeof event.itemId === "string" ? (event.itemId as ItemId) : undefined
+    return itemId === undefined ? undefined : (threadOf.get(itemId) ?? itemId)
+  }
+
+  /**
+   * The latest seq at or before `target` that history can be cut at: no item kept from it on began before it (its deltas are held as
+   * one text, which a page fetched again would add to). Undefined when no such seq drops anything.
+   */
+  function cutSeqAtOrBefore(target: number) {
+    const events = [...history.values()]
+    const began = new Map<ItemId, number>()
+    for (const event of events) {
+      const unit = unitOf(event)
+      // An item whose start is not loaded began before everything here: no cut after its first event.
+      if (unit !== undefined && !began.has(unit)) began.set(unit, event.type === "item.started" ? event.seq : -Infinity)
+    }
+    let reach = Infinity
+    for (let at = events.length - 1; at > 0 && reach > -Infinity; at--) {
+      const event = events[at]!
+      const unit = unitOf(event)
+      if (unit !== undefined) reach = Math.min(reach, began.get(unit)!)
+      if (event.seq <= target && reach >= event.seq) return event.seq
+    }
+    return undefined
+  }
+
+  /**
+   * Lets go of the history far above the reader: the blocks, their rows and the events behind them, so a session read to its top
+   * holds no more than one read from its bottom. The newest `keep` blocks stay, and so does every block within `rows` rows of the
+   * bottom and from the newest prompt down (the sticky prompt shows it). Offsets count from the bottom, so the viewport does not move.
+   * What the replay of older pages counts (usage, the goal, the permission) stays as it is until such a page comes back.
+   * Returns the seq to page back from (the daemon's `before` cursor) or undefined when nothing went.
+   */
+  function release({ keep, width, rows }: { keep: number; width: number; rows: number }): number | undefined {
+    if (firstSeq === undefined || blocks.length < keep + 2 * WINDOW_STEP || blocks.length < releasedAt + WINDOW_STEP) return undefined
+    releasedAt = blocks.length
+    const perBlock = counts(width)
+    const first = firstShown()
+    let cut = blocks.length
+    // Blocks above the laid-out window are never on screen: past it, the rows to keep are already kept.
+    for (let kept = 0; cut > 0 && (blocks.length - cut < keep || kept < rows); kept += cut >= first ? (perBlock[cut - first] ?? 0) : rows) cut--
+    const prompt = blocks.findLastIndex((block) => block.kind === "user_message")
+    if (prompt >= 0) cut = Math.min(cut, prompt)
+    const target = blocks.slice(cut).find((block) => block.seq !== undefined)?.seq
+    const cutSeq = target === undefined ? undefined : cutSeqAtOrBefore(target)
+    if (cutSeq === undefined) return undefined
+    let drop = 0
+    while (drop < all.length && (all[drop]!.seq ?? -Infinity) < cutSeq) drop++
+    if (drop < WINDOW_STEP) return undefined
+    const shownBefore = blocks.length
+    const gone = new Set(all.splice(0, drop).map((block) => block.itemId))
+    for (const itemId of gone) {
+      byItem.delete(itemId)
+      cache.delete(itemId)
+      retained.delete(itemId)
+      grown.delete(itemId)
+      threads.delete(itemId)
+    }
+    for (const [itemId, parent] of threadOf) if (gone.has(parent)) threadOf.delete(itemId)
+    for (const [itemId, seq] of deltaSeqs) if (seq < cutSeq) deltaSeqs.delete(itemId)
+    // History is in seq order: the events before the cut are its head.
+    for (const seq of history.keys()) {
+      if (seq >= cutSeq) break
+      history.delete(seq)
+    }
+    const keptTurns = new Set<TurnId>()
+    for (const event of history.values()) if ("turnId" in event && typeof event.turnId === "string") keptTurns.add(event.turnId as TurnId)
+    if (activeTurn) keptTurns.add(activeTurn)
+    for (const turnId of turns.keys()) if (!keptTurns.has(turnId)) turns.delete(turnId)
+    for (const turnId of compactionUpdates.keys()) if (!keptTurns.has(turnId)) compactionUpdates.delete(turnId)
+    for (const turnId of undoneTurns) if (!keptTurns.has(turnId)) undoneTurns.delete(turnId)
+    firstSeq = cutSeq
+    rebuild(true)
+    // The laid-out window keeps its first block, or starts at the first kept one when that went.
+    const shownFirst = Math.max(0, first - (shownBefore - blocks.length))
+    olderLoaded = Math.max(0, blocks.length - WINDOW_BLOCKS - shownFirst)
+    releasedAt = blocks.length
+    return cutSeq
+  }
+
   /** Line counts of all blocks at `width`; recomputed only when blocks were added/finished or width changed. */
   function counts(width: number) {
     const first = firstShown()
@@ -1405,6 +1510,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
      */
     agentThreadLoaded: (itemId: ItemId): boolean => index.has(itemId),
     prepend,
+    release,
     get lastSeq() {
       return lastSeq
     },

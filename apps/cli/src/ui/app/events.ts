@@ -48,6 +48,8 @@ export function createEvents(ctx: AppContext, actions: {
   reloadExtensions: (revision: number) => Promise<void>
   /** A turn of this session ended: a `/reload` or `/restart` that waited for it runs. */
   noteTurnEnded: () => void
+  /** A turn started or ended under a reader following the bottom: the history far above is let go (paging.ts). */
+  releaseFar: () => void
   /** The agent's `session_open` asked for this session: the same switch as choosing it in /sessions. */
   openSession: (sessionId: import("@mendcode/protocol").SessionId) => Promise<void>
 
@@ -159,6 +161,8 @@ export function createEvents(ctx: AppContext, actions: {
     // A /compact that did nothing says why; with no card in the transcript it would otherwise just vanish.
     if (event.type === "compaction.updated" && event.state === "skipped" && event.reason === "manual") say(event.note ?? "Nothing to compact", "info")
     if (measured) view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
+    // After the growth is counted: a release shortens the transcript above the reader, which is no growth to follow.
+    if (following && (event.type === "turn.started" || event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed")) actions.releaseFar()
     requestFrame()
   }
 
