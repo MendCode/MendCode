@@ -657,9 +657,10 @@ export function createApp(input: AppInput) {
   const { loadContext, contextWindowCommand, filesCommand } = createContext(ctx)
   const { loadSecretTails, noteSecretMarkers, loadSecrets, dropRevealedSecret, revealSecret, forgetSecret, secretTail } = createSecrets(ctx)
   const environmentPanel = createEnvironmentPanel(ctx)
-  const { openTranscript, loadEarlier, loadThreadStart, releaseFar } = createPaging(ctx, {
+  const { openTranscript, resumeTranscript, loadEarlier, loadThreadStart, releaseFar } = createPaging(ctx, {
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,
+    loadSecretTails,
     replay: (event) => onEvent(event),
     recoverMissingSession: () => recoverMissingSession(),
   })
@@ -732,6 +733,8 @@ export function createApp(input: AppInput) {
     loadProjectLists: async () => { await Promise.all([loadLiveLoops(), loadLiveWorkflows()]) },
     keepDiscarded: (...args) => keepDiscarded(...args),
     openTranscript,
+    resumeTranscript,
+    syncAppearance: () => syncAppearance(),
     loadEarlier,
     checkResume: (options) => returnFlow.checkResume(options),
     sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec() },
@@ -1268,7 +1271,7 @@ export function createApp(input: AppInput) {
     render,
   })
   const { queueCommand, queueKey, noteQueue } = createQueue(ctx, (...args) => applySettings(...args))
-  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes } = createSettings(ctx, {
+  const { watchStatus, setPermission, setMode, applySettings, settingsValues, changeProfile, ringTurnBell, profileLayers, refreshThemes, syncAppearance } = createSettings(ctx, {
     syncSlashDefault: slashMenu.syncDefault,
     syncAudio: audio.sync,
     syncImages: images.syncImages,

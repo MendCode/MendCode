@@ -357,7 +357,7 @@ export function createClient(options: {
   }
 
   /** `session.events` as a typed answer; a read, so it is sent again after a reconnect like any command. */
-  async function readWindow(query: { sessionId: SessionId; before?: number; after?: number; limit?: number }): Promise<WindowReply> {
+  async function readWindow(query: { sessionId: SessionId; before?: number; after?: number; limit?: number; includeReverted?: true }): Promise<WindowReply> {
     const reply = await request({ id: ids("command"), clientId, type: "session.events", ...query } as Command, true)
     return reply.ok ? { ok: true, window: reply.result as unknown as EventsWindow } : reply
   }
@@ -533,9 +533,12 @@ export function createClient(options: {
     loadBefore(sessionId: SessionId, seq: number, limit?: number): Promise<WindowReply> {
       return readWindow({ sessionId, before: seq, ...(limit === undefined ? {} : { limit }) })
     },
-    /** The first `limit` events newer than `seq`, for a client that kept a cursor but did not subscribe. */
-    loadAfter(sessionId: SessionId, seq: number, limit?: number): Promise<WindowReply> {
-      return readWindow({ sessionId, after: seq, ...(limit === undefined ? {} : { limit }) })
+    /**
+     * The first `limit` events newer than `seq`, for a client that kept a cursor but did not subscribe. `includeReverted` returns
+     * the events of undone turns and the undo/redo markers too: the same stream a subscriber received.
+     */
+    loadAfter(sessionId: SessionId, seq: number, limit?: number, options: { includeReverted?: boolean } = {}): Promise<WindowReply> {
+      return readWindow({ sessionId, after: seq, ...(limit === undefined ? {} : { limit }), ...(options.includeReverted ? { includeReverted: true } : {}) })
     },
     async history(sessionId: SessionId, query: { before?: number; after?: number; limit?: number; turnId?: import("@mendcode/protocol").TurnId } = {}): Promise<{ ok: true; history: HistoryReport } | { ok: false; error: ErrorPayload }> {
       const reply = await request({ id: ids("command"), clientId, type: "session.history", sessionId, ...query }, true)

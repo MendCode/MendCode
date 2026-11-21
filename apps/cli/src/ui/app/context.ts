@@ -79,6 +79,11 @@ export type AppInput = {
   events?: {
     loadWindow(sessionId: SessionId): Promise<WindowReply>
     loadBefore(sessionId: SessionId, firstSeq: number): Promise<WindowReply>
+    /**
+     * Up to `limit` events newer than `seq`, undone turns and their markers included (what a subscriber received), one page:
+     * how a chat kept from an earlier visit catches up. Absent, a chat is never kept and each visit opens its window again.
+     */
+    loadAfter?(sessionId: SessionId, seq: number, limit: number): Promise<WindowReply>
   }
   exit(): void
   /** Real project path: new sessions are created here. Shown with `home` abbreviated to "~". */
@@ -233,8 +238,11 @@ export type AppState = {
   /** Last characters of the session's pasted secrets by marker number, from `secrets.list`: `‹secret:N›` is drawn as `‹secret ··<tail>›`. Never a value. */
   secretTails: Map<number, string>
   transcript: ReturnType<typeof createTranscript>
-  /** `held` keeps live events of the session that arrive before its first window lands; they replay after it. */
-  paging: { firstSeq: number; more: boolean; loading: boolean; ready: boolean; loadedEarlier: boolean; held: Array<import("@mendcode/protocol").SessionEvent> } | undefined
+  /**
+   * `held` keeps live events of the session that arrive before its first window lands; they replay after it. `loaded` counts the
+   * events read for it (window, older pages, catch-up): what decides whether the chat is kept when it is left (session-cache.ts).
+   */
+  paging: { firstSeq: number; more: boolean; loading: boolean; ready: boolean; loadedEarlier: boolean; held: Array<import("@mendcode/protocol").SessionEvent>; loaded?: number } | undefined
   memoryWorkspaces?: import("@mendcode/protocol").MemoryWorkspacesReport | undefined
   sharingStatus?: import("@mendcode/protocol").SharingStatusReport | undefined
   sharingResult?: import("@mendcode/protocol").SharingResult | undefined
