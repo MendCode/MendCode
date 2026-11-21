@@ -1,4 +1,4 @@
-import type { ExternalBotInfo } from "@mendcode/protocol"
+import type { BotActivityReport, ExternalBotInfo } from "@mendcode/protocol"
 import type { AcpAgentConfig } from "../../engine-acp/src/agents"
 import { offerConnectorAgents } from "./bot-connector-agents"
 import type { BotConnector } from "./bot-service"
@@ -31,6 +31,18 @@ const LIST_TTL_MS = 8_000
 const TIMEOUT_MS = 4_000
 /** A profile with a session Hermes calls active is working. */
 const ACTIVE_SESSIONS = 50
+/** The running sessions listed for one profile (the list shows fewer). */
+const ACTIVITY_MAX = 8
+const MESSAGES_DEFAULT = 40
+const MESSAGES_MAX = 100
+const MESSAGE_TEXT_MAX = 4000
+const TOOL_TEXT_MAX = 200
+const PROFILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/
+type HermesSession = { id?: string; profile?: string; profile_name?: string; is_active?: boolean; title?: string | null; preview?: string | null; source?: string | null; started_at?: number | null; last_active?: number | null; last_activity_at?: number | null }
+type HermesMessage = { role?: string; content?: unknown; tool_name?: string | null; timestamp?: number | null }
+/** Hermes keeps times in seconds with a fraction. */
+const millis = (seconds: number | null | undefined) => typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : undefined
 const SERVE = /^(.*?) -m hermes_cli\.main serve\b/
 
 async function defaultRun(argv: string[]): Promise<string> {
@@ -108,15 +120,26 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
         listed = { at: now(), bots: [] }
         return []
       }
-      // Both requests go out together; the sessions only give the working mark, so a failure of theirs costs only that.
-      const activeRequest = get<{ sessions?: Array<{ profile?: string; profile_name?: string; is_active?: boolean }> }>(from, `/api/profiles/sessions?limit=${ACTIVE_SESSIONS}`)
-        .then((report) => (report.sessions ?? []).filter((session) => session.is_active).map((session) => session.profile ?? session.profile_name ?? ""))
-        .catch(() => [] as string[])
+      // Both requests go out together; the sessions only give the working mark and what each profile is doing, so a failure of theirs costs only that.
+      const activeRequest = get<{ sessions?: HermesSession[] }>(from, `/api/profiles/sessions?limit=${ACTIVE_SESSIONS}`)
+        .then((report) => (report.sessions ?? []).filter((session) => session.is_active))
+        .catch(() => [] as HermesSession[])
       const profiles = (await get<{ profiles?: Profile[] }>(from, "/api/profiles")).profiles ?? []
-      // Hermes' own rule for "active now" is on its sessions.
-      const active = new Set<string>(await activeRequest)
+      // Hermes' own rule for "active now" is on its sessions: a profile with one works, and its newest ones say on what.
+      const activity = new Map<string, NonNullable<ExternalBotInfo["activity"]>>()
+      for (const session of await activeRequest) {
+        const profile = session.profile ?? session.profile_name ?? ""
+        const listed = activity.get(profile) ?? []
+        activity.set(profile, listed)
+        if (typeof session.id !== "string" || !SESSION_ID.test(session.id)) continue
+        const title = (session.title || session.preview || "").replace(/\s+/g, " ").trim().slice(0, 200)
+        const startedAt = millis(session.started_at)
+        const activeAt = millis(session.last_active ?? session.last_activity_at)
+        listed.push({ id: session.id, ...(title ? { title } : {}), ...(typeof session.source === "string" && session.source ? { source: session.source.slice(0, 64) } : {}), ...(startedAt !== undefined ? { startedAt } : {}), ...(activeAt !== undefined ? { activeAt } : {}) })
+      }
+      const active = new Set<string>(activity.keys())
       const agents: Record<string, AcpAgentConfig> = {}
-      const bots = profiles.filter((profile) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,57}$/.test(profile.name ?? "")).map((profile): ExternalBotInfo => {
+      const bots = profiles.filter((profile) => PROFILE_NAME.test(profile.name ?? "")).map((profile): ExternalBotInfo => {
         const agent = `hermes-${profile.name}`
         agents[agent] = {
           command: from.command,
@@ -133,6 +156,7 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
           ...(profile.model ? { model: profile.model.slice(0, 100) } : {}),
           chat: `acp:${agent}`,
           ...(from.app ? { app: from.app } : {}),
+          ...(activity.get(profile.name)?.length ? { activity: activity.get(profile.name)!.sort((a, b) => (b.activeAt ?? b.startedAt ?? 0) - (a.activeAt ?? a.startedAt ?? 0)).slice(0, ACTIVITY_MAX) } : {}),
         }
       })
       offerConnectorAgents("hermes-", agents)
@@ -144,6 +168,27 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
 
   return {
     id: "hermes",
+    /**
+     * The newest messages of one of a profile's own Hermes sessions, oldest first, to read: what it was asked, what it answered and
+     * which tools it ran. Read from Hermes when asked for and never kept; nothing is written to Hermes.
+     */
+    async session({ bot, session, limit = MESSAGES_DEFAULT }) {
+      if (!PROFILE_NAME.test(bot) || !SESSION_ID.test(session)) throw new Error("[HERMES]: that is not a Hermes session")
+      const from = await resolve()
+      if (!from) throw new Error("[HERMES]: Hermes is not running; start its app, or set MENDCODE_HERMES_URL")
+      const asked = Math.max(1, Math.min(MESSAGES_MAX, Math.floor(limit)))
+      const report = await get<{ messages?: HermesMessage[] }>(from, `/api/sessions/${encodeURIComponent(session)}/messages?profile=${encodeURIComponent(bot)}&limit=${asked}&order=latest`)
+      const messages: BotActivityReport["messages"] = []
+      for (const message of report.messages ?? []) {
+        const role = message.role === "user" || message.role === "assistant" || message.role === "tool" ? message.role : undefined
+        const text = typeof message.content === "string" ? message.content.trim() : ""
+        if (!role || (!text && role !== "tool")) continue
+        const at = millis(message.timestamp)
+        // A tool's result is its name and a short start of what it answered; a message is kept up to a readable length.
+        messages.push({ role, text: text.slice(0, role === "tool" ? TOOL_TEXT_MAX : MESSAGE_TEXT_MAX), ...(role === "tool" && typeof message.tool_name === "string" && message.tool_name ? { tool: message.tool_name.slice(0, 100) } : {}), ...(at !== undefined ? { at } : {}) })
+      }
+      return { messages, more: (report.messages ?? []).length >= asked }
+    },
     /**
      * Never makes the caller wait for Hermes once it has answered before: the last answer is returned at once and, when it is older
      * than `LIST_TTL_MS`, one discovery runs in the background for the next list. Only the first list (nothing known yet) waits.

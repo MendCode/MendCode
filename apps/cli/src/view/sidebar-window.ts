@@ -25,6 +25,37 @@ export function sidebarWindowStart({ total, shownRoom, overflow, anchorIndex, sc
   return start
 }
 
+/**
+ * A click lands on the row that was under the pointer when the hand moved, not the one a redraw slid there since: a click on a line
+ * whose row changed less than `CLICK_GUARD_MS` ago is dropped. A change the user caused (a key, a click, the wheel just before:
+ * `own`) is theirs and guards nothing. Kept per frame at the cost of one small map; no timer.
+ */
+export type SidebarClickGuard = { rows: Map<number, string>; changedAt: Map<number, number> }
+export const CLICK_GUARD_MS = 250
+/** How long after the user's own act a change of rows still counts as theirs. */
+export const OWN_INPUT_MS = 300
+
+/** Records what each line shows in this frame. */
+export function noteSidebarFrame(guard: SidebarClickGuard | undefined, hits: ReadonlyArray<{ row: number; sessionId: string }>, now: number, own: boolean): SidebarClickGuard {
+  const rows = new Map(hits.map((hit) => [hit.row, hit.sessionId]))
+  const changedAt = new Map<number, number>()
+  // A list that fills from empty slid nothing under the pointer.
+  if (guard && guard.rows.size > 0 && !own) {
+    // A line that was blank and a line that went blank count too: the row someone aimed at is not there.
+    for (const row of new Set([...rows.keys(), ...guard.rows.keys()])) {
+      const at = rows.get(row) !== guard.rows.get(row) ? now : guard.changedAt.get(row)
+      if (at !== undefined && now - at < CLICK_GUARD_MS) changedAt.set(row, at)
+    }
+  }
+  return { rows, changedAt }
+}
+
+/** Whether a click on `row` now goes through. */
+export function sidebarClickAllowed(guard: SidebarClickGuard | undefined, row: number, now: number): boolean {
+  const at = guard?.changedAt.get(row)
+  return at === undefined || now - at >= CLICK_GUARD_MS
+}
+
 /** Moves a list's window by `rows` (positive goes down); true when it moved. */
 export function scrollSidebarWindow(scroll: SidebarScroll | undefined, rows: number): boolean {
   if (!scroll || scroll.max <= 0) return false

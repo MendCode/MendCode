@@ -168,7 +168,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   placeholderText: "own placeholder text for the empty prompt",
   sidebarHeader: "the sessions sidebar's title row ('Sessions')",
   sidebarProjects: "sessions the sidebar lists: auto (all projects with bots on, else the opened one), folder (the opened one) or all",
-  sidebarPreviewCount: "sessions each project of the all-projects (or bots) sidebar shows before its '+ N more' row (1..50, default 5); the open and busy ones always show",
+  sidebarPreviewCount: "sessions each project and bot of the all-projects (or bots) sidebar shows before its '+ N more' row (1..50, default 3)",
   sidebarProjectsFrom: "projects the all-projects sidebar lists: you (where you typed, or work is running) or all; the rest sit behind '+ N more projects'",
   sidebarHiddenProjects: "project folders hidden with x in the sidebar (up to 200); never listed, the open folder apart. Enter here brings one back",
   sidebarProjectCount:"projects the all-projects sidebar shows before '+ N more projects' (1..30; 0, the default, fills its height); open and busy ones always show",

@@ -28,7 +28,7 @@ import { GoalObjective, GoalTokenBudget } from "./goals"
 import { UsageLimitAction } from "./usage-limit"
 import { LoopBudget, LoopTrigger, LoopCostBudget, LoopRubric, LoopApprovalPolicy, LoopApprovalAction } from "./loops"
 import { ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule } from "./providers"
-import { BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
+import { BotActivity, BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
 import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelivery, ResourceMode, TurnOptions } from "./states"
 import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
@@ -2280,6 +2280,7 @@ export const COMMAND_SCHEMAS = {
   "bot.draft": BotDraft,
   "bot.delete": BotDelete,
   "bot.memory": BotMemory,
+  "bot.activity": BotActivity,
   "loop.draft": LoopDraft,
   "loop.snapshot": LoopSnapshotQuery,
   "loop.activate": LoopActivate,

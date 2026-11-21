@@ -20,9 +20,9 @@ const REPOS = Array.from({ length: 24 }, (_, n) => `/repos/r${String(n).padStart
 function chatApp({ multi, profile = {}, height = 18 }: { multi: boolean; profile?: Partial<TuiProfile>; height?: number }) {
   const clock = { at: NOW }
   const current = ids("session")
-  const make = (directory: string, title: string, age: number): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW, updatedAt: NOW - age, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary
+  const make = (directory: string, title: string, age: number): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW - age, updatedAt: NOW - age, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary
   const sessions: SessionSummary[] = [
-    { sessionId: current, title: "Chrome", directory: "/work/app", createdAt: NOW, updatedAt: NOW - MINUTE, lastSeq: 0, state: "idle", queued: 0 } as SessionSummary,
+    { sessionId: current, title: "Chrome", directory: "/work/app", createdAt: NOW - MINUTE, updatedAt: NOW - MINUTE, lastSeq: 0, state: "idle", queued: 0 } as SessionSummary,
     ...(multi ? REPOS.map((directory, n) => make(directory, `chat ${n}`, (n + 2) * MINUTE)) : Array.from({ length: 40 }, (_, n) => make("/work/app", `chat ${String(n).padStart(2, "0")}`, (n + 2) * MINUTE))),
   ]
   const dataDir = tempDir()

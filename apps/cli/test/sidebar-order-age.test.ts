@@ -67,7 +67,7 @@ describe("old sessions stay behind a row", () => {
     expect(drawn).toContain("show less")
   })
 
-  test("running, waiting, pinned and the open session show whatever their age", () => {
+  test("pinned and the open session show whatever their age; old ones that work or wait are counted in the header", () => {
     const kept = [
       session("s-app", "/work/app", 30 * DAY),
       session("s-run", "/work/app", 20 * DAY, { state: "generating" }),
@@ -76,9 +76,10 @@ describe("old sessions stay behind a row", () => {
       old(1),
     ]
     const drawn = text(renderMultiSidebar(input({ sessions: kept, recentDays: 7 })).rows)
-    for (const id of ["s-app", "s-run", "s-wait", "s-pin"]) expect(drawn).toContain(`chat ${id}`)
-    expect(drawn).not.toContain("chat s-old1")
-    expect(drawn).toMatch(/\+ 1 older/)
+    for (const id of ["s-app", "s-pin"]) expect(drawn).toContain(`chat ${id}`)
+    for (const id of ["s-run", "s-wait", "s-old1"]) expect(drawn).not.toContain(`chat ${id}`)
+    expect(drawn).toMatch(/2 active 5 \+ │/)
+    expect(drawn).toMatch(/\+ 3 older/)
   })
 
   test("a project with nothing recent still lists as a group: its header and the older row", () => {

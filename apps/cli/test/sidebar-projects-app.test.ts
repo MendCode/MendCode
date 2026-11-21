@@ -15,12 +15,13 @@ const REPOS = ["/work/app", "/other/api", "/work/site", "/repos/r1", "/repos/r2"
 const NOT_REPOS = ["/work/plain", HOME, `${HOME}/.ssh`, "/tmp/kit-fix-v-1", "/private/tmp/ui4-login--2"]
 
 /** The app with the owner's shape of data: a few repos with a different recency, scratch folders, the home and a hidden one. */
-function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [], child, height = 60 }: { profile?: Partial<TuiProfile>; bots?: boolean; empty?: boolean; extraSessions?: SessionSummary[]; /** A sub-agent of the opened session, in this state. */ child?: string; height?: number } = {}) {
+function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [], child, height = 60, clock = { at: NOW } }: { clock?: { at: number }; profile?: Partial<TuiProfile>; bots?: boolean; empty?: boolean; extraSessions?: SessionSummary[]; /** A sub-agent of the opened session, in this state. */ child?: string; height?: number } = {}) {
   const current = ids("session")
   const created = ids("session")
-  const make =(directory: string, title: string, age: number, state = "idle"): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW, updatedAt: NOW - age, lastSeq: 0, state, queued: 0 }) as SessionSummary
+  // Each session was made `age` ago and nobody wrote in it since: its place in the list is its creation, as its age is.
+  const make =(directory: string, title: string, age: number, state = "idle"): SessionSummary => ({ sessionId: ids("session"), title, directory, createdAt: NOW - age, updatedAt: NOW - age, lastSeq: 0, state, queued: 0 }) as SessionSummary
   const sessions: SessionSummary[] = [
-    { sessionId: current, title: "Chrome", directory: "/work/app", createdAt: NOW, updatedAt: NOW - MINUTE, lastSeq: 0, state: "idle", queued: 0 } as SessionSummary,
+    { sessionId: current, title: "Chrome", directory: "/work/app", createdAt: NOW - MINUTE, updatedAt: NOW - MINUTE, lastSeq: 0, state: "idle", queued: 0 } as SessionSummary,
     make("/work/app", "Client reconnect", 10 * MINUTE),
     make("/other/api", "Waiting review", 5 * DAY, "waiting_approval"),
     make("/work/site", "Marketing", 2 * MINUTE),
@@ -35,7 +36,7 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
   const h = appHarness({
-    width: 120, height, mode: "balanced", sessionId: current, dataDir, directory: "/work/app",
+    width: 120, height, mode: "balanced", sessionId: current, dataDir, directory: "/work/app", now: () => clock.at,
     inspectProject: async (directory: string) => { inspected.push(directory); return { git: REPOS.includes(directory) } },
     reply: (command: CommandInput) => {
       if (command.type === "session.list") return reply({ sessions })
@@ -48,7 +49,12 @@ function chatApp({ profile = {}, bots = true, empty = false, extraSessions = [],
   })
   h.app.applySettings(bots ? { experimental: { bots: true } } : {})
   if (!empty) conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
-  return { ...h, inspected, sessions, current, created, dataDir }
+  return { ...h, inspected, sessions, current, created, dataDir, clock }
+}
+/** The list has stood still for longer than the click guard, as it has by the time a hand reaches a row. */
+function steady(h: { clock: { at: number }; app: { render(): void } }) {
+  h.clock.at += 300
+  h.app.render()
 }
 type App = ReturnType<typeof chatApp>
 const side = (h: App) => h.text().map((row) => row.slice(0, SIDEBAR_WIDTH))
@@ -228,7 +234,7 @@ describe("folding a project past the first six with the default count", () => {
     await until(h, "▾ app")
     const groups = side(h).filter((row) => /▾ /.test(row)).map((row) => row.replace(/│$/, "").replace(/\s+/g, " ").trim())
     expect(groups.length).toBeGreaterThan(6)
-    const last = groups.at(-1)!.replace(/^[›▌] /, "").replace(/\s+\d+( active)?$/, "")
+    const last = groups.at(-1)!.replace(/^[›▌] /, "").replace(/\s+(\d+ active )?\d+ \+$/, "")
     const title = last.replace(/^▾ /, "")
     await h.type(LEFT)
     await goTo(h, new RegExp(`^› ▾ ${title}`))
@@ -237,32 +243,81 @@ describe("folding a project past the first six with the default count", () => {
   })
 })
 
-describe("Enter on a project starts a chat in it; Space, the arrows and the glyph fold it", () => {
+describe("a project's row only folds; `n` or its `+` starts a chat in it", () => {
   const onApi = async (h: App) => {
     await until(h, "▾ api")
     await h.type(LEFT)
     await goTo(h, /^› ▾ api/)
   }
 
-  test("Enter reuses a blank chat in that folder and opens it; the folder is the terminal's now", async () => {
+  test("Enter folds and opens the project and starts nothing", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await onApi(h)
     await h.type("\r")
+    expect(sidebarText(h)).toContain("▸ api")
+    expect(sidebarText(h)).not.toContain("Waiting review")
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("▾ api")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    expect(h.app.sessionId).toBe(h.current)
+    expect(sidebarText(h)).toContain("↵ fold")
+  })
+
+  test("`n` reuses a blank chat in that folder and opens it; the folder is the terminal's now", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await onApi(h)
+    await h.type("n")
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true, title: "" })
     expect(h.app.sessionId).toBe(h.created)
     expect(h.app.page).toBe("chat")
     expect(sidebarText(h)).not.toContain("→ prompt")
   })
 
-  test("Enter on a folded project opens it too, so the new chat shows in it", async () => {
+  test("`n` on a folded project leaves it folded", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await onApi(h)
     await h.type(" ")
     expect(sidebarText(h)).toContain("▸ api")
-    await h.type("\r")
+    await h.type("n")
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api" })
     h.app.render()
-    expect(sidebarText(h)).toContain("▾ api")
+    expect(sidebarText(h)).toContain("▸ api")
+    expect(sidebarText(h)).not.toContain("Waiting review")
+  })
+
+  test("the `+ New chat…` row and `N` ask for the folder: the open one on top, a typed name, or a typed path the list does not hold", async () => {
+    const h = chatApp({ profile: { sidebarProjectCount: 30 } })
+    await until(h, "▾ api")
+    await h.type(LEFT)
+    await goTo(h, /^› \+ New chat…/)
+    expect(side(h)[0]).toContain("↵ pick a folder")
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(side(h).find((row) => /^ › /.test(row))).toMatch(/^ › app +open +│$/)
+    // Every project listed is offered, hidden and scratch folders are not.
+    for (const name of ["api", "site", "r1"]) expect(sidebarText(h)).toContain(name)
+    expect(sidebarText(h)).not.toContain(".ssh")
+    await h.type("site")
+    expect(side(h).find((row) => /^ › /.test(row))).toContain("site")
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/site", reuseEmpty: true, title: "" })
+    // A path: the directories of the disk, read as `/cd` reads them; Enter on one starts the chat there, listed or not.
+    await h.type(LEFT)
+    await h.type("N")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    await h.type(`${h.dataDir}/`)
+    expect(sidebarText(h)).toContain("tab into")
+    expect(side(h).find((row) => /^ › /.test(row))).toBeDefined()
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: h.dataDir, reuseEmpty: true })
+    // A path that is no directory starts nothing.
+    await h.type(LEFT)
+    await h.type("N")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    await h.type("/no/such/place/at/all")
+    expect(sidebarText(h)).toContain("No such directory")
+    await h.type("\r")
+    expect(h.sentOf("session.create")).toHaveLength(2)
   })
 
   test("left folds an open project, right opens a folded one, and right on an open one returns to the prompt", async () => {
@@ -281,16 +336,20 @@ describe("Enter on a project starts a chat in it; Space, the arrows and the glyp
     expect(h.sentOf("session.create")).toHaveLength(0)
   })
 
-  test("a click on the arrow glyph folds the project and a click on its name starts the chat", async () => {
+  test("a click on the arrow glyph or on the name folds the project; a click on its `+` starts the chat", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await until(h, "▾ api")
+    steady(h)
     const row = side(h).findIndex((line) => line.includes("▾ api"))
     const glyph = side(h)[row]!.indexOf("▾")
     await h.type(click(glyph, row))
     h.app.render()
     expect(sidebarText(h)).toContain("▸ api")
-    expect(h.sentOf("session.create")).toHaveLength(0)
     await h.type(click(glyph + 3, row))
+    h.app.render()
+    expect(sidebarText(h)).toContain("▾ api")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type(click(side(h)[row]!.lastIndexOf("+"), row))
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true })
     expect(h.app.sessionId).toBe(h.created)
   })
@@ -298,8 +357,8 @@ describe("Enter on a project starts a chat in it; Space, the arrows and the glyp
   test("the header hint names the keys on a project row", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await onApi(h)
-    expect(side(h)[0]).toContain("↵ new")
-    expect(side(h)[0]).toContain("spc fold")
+    expect(side(h)[0]).toContain("↵ fold")
+    expect(side(h)[0]).toContain("n new")
     expect(side(h)[0]).toContain("x hide")
   })
 })
@@ -324,8 +383,9 @@ describe("the keyboard drives the whole list", () => {
     expect(seen.some((row) => row.includes("calm"))).toBe(true)
     expect(seen.some((row) => row.includes("more projects"))).toBe(true)
     // Up walks back.
+    const before = picked(h)
     await h.type(UP)
-    expect(picked(h)).not.toBe(seen.at(-1))
+    expect(picked(h)).not.toBe(before)
     await h.type(RIGHT)
     expect(sidebarText(h)).not.toContain("→ prompt")
     await h.type(LEFT)
@@ -345,8 +405,8 @@ describe("the keyboard drives the whole list", () => {
   })
 
   test("Enter on a session opens it, on a more row expands its project, on a bot starts a chat and o opens its card", async () => {
-    const extra = [1, 2, 3].map((n) => ({ sessionId: ids("session"), title: `Site extra ${n}`, directory: "/work/site", createdAt: NOW, updatedAt: NOW - (3 + n) * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
-    const h = chatApp({ profile: { sidebarProjectCount: 30, sidebarPreviewCount: 5 }, extraSessions: extra })
+    const extra = [1, 2, 3].map((n) => ({ sessionId: ids("session"), title: `Site extra ${n}`, directory: "/work/site", createdAt: NOW - (3 + n) * MINUTE, updatedAt: NOW - (3 + n) * MINUTE, lastSeq: 0, state: "idle", queued: 0 }) as SessionSummary)
+    const h = chatApp({ profile: { sidebarProjectCount: 30, sidebarPreviewCount: 3 }, extraSessions: extra })
     await until(h, "▾ site")
     expect(sidebarText(h)).toMatch(/\+ 1 more/)
     await h.type(LEFT)
@@ -365,6 +425,7 @@ describe("the keyboard drives the whole list", () => {
   test("a mouse click still works beside the keyboard", async () => {
     const h = chatApp({ profile: { sidebarProjectCount: 30 } })
     await until(h, "▾ api")
+    steady(h)
     const row = side(h).findIndex((line) => line.includes("Waiting review"))
     await h.type(click(8, row))
     expect(h.app.sessionId).not.toBe(h.current)

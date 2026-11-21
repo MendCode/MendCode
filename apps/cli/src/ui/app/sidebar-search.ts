@@ -140,9 +140,9 @@ export function createSidebarSearch(ctx: AppContext) {
     if (at < 0 || !index) return
     const kind = index.kind[at]
     close(false)
-    // A project or a bot does what Enter on its row in the list does (a new chat in the folder, a chat with the bot).
+    // A project or a bot does what `n` on its row in the list does (a new chat in the folder; for a bot, after its folder is picked).
     const multi = state.sidebarBots?.live() ? state.sidebarBots : undefined
-    if ((kind === KIND_PROJECT || kind === KIND_BOT) && multi) return multi.activate(id, deps)
+    if ((kind === KIND_PROJECT || kind === KIND_BOT) && multi) return multi.newChat(id, deps)
     // The classic one-folder list has no project rows of its own to delegate to.
     if (kind === KIND_PROJECT) return newChatIn(id.slice("group:".length), deps)
     if (kind === KIND_BOT) return

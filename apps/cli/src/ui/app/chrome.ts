@@ -40,7 +40,7 @@ import { sessionDisplayTitle } from "./display-title"
 import { boxPanel } from "../../view/deck"
 import { createCacheClock } from "./cache-clock"
 import { usageInForce } from "./usage-in-force"
-import type { SidebarScroll } from "../../view/sidebar-window"
+import { noteSidebarFrame, OWN_INPUT_MS, type SidebarScroll } from "../../view/sidebar-window"
 
 /** The shortest terminal that gives the full view's footer its second row (docs/layout.md "Footer by tier"). */
 const DETAIL_ROW_MIN_HEIGHT = 24
@@ -167,10 +167,17 @@ export function createChrome(ctx: AppContext, actions: {
     return scroll
   }
 
-  /** The project's sessions, with hit rows for mouse navigation. */
+  /** The project's sessions, with hit rows for mouse navigation; the click guard notes which row each line shows in this frame. */
   function sidebarRows(height: number): Line[] {
-    // The search (`/` in the list) draws over whichever list shows, in the same cells.
-    const found = state.sidebarSearch?.draw({ height, width: sidebarCells(input.screen.size.width) || SIDEBAR_WIDTH, now: now(), ascii: asciiMarks(), ...sidebarMotion() })
+    const lines = drawSidebar(height)
+    const at = now()
+    state.sidebarGuard = noteSidebarFrame(state.sidebarGuard, state.sidebarHits ?? [], at, state.sidebarInputAt !== undefined && at - state.sidebarInputAt < OWN_INPUT_MS)
+    return lines
+  }
+
+  function drawSidebar(height: number): Line[] {
+    // The folder picker (`+ New chat…`, `n`) and the search (`/` in the list) draw over whichever list shows, in the same cells.
+    const found = state.sidebarPicker?.draw({ height, width: sidebarCells(input.screen.size.width) || SIDEBAR_WIDTH, ascii: asciiMarks() }) ?? state.sidebarSearch?.draw({ height, width: sidebarCells(input.screen.size.width) || SIDEBAR_WIDTH, now: now(), ascii: asciiMarks(), ...sidebarMotion() })
     if (found) {
       state.sidebarHits = found.hits.map((hit) => ({ row: hit.row, sessionId: hit.id }))
       state.sidebarImages = undefined
@@ -186,13 +193,13 @@ export function createChrome(ctx: AppContext, actions: {
       } else {
         const sessions = multi.sessions()
         const drawn = multi.draw({ height, icons: sidebarKindNow(input.screen.size.width) === "icons", unread: unreadSessions(sessions), ...sidebarMotion(), ascii: asciiMarks(), header: state.tuiProfile.sidebarHeader, scroll: sidebarScrollNow() })
-        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id, ...(hit.fold ? { fold: hit.fold } : {}) }))
+        state.sidebarHits = drawn.hits.map((hit) => ({ row: hit.row, sessionId: hit.id, ...(hit.fold ? { fold: hit.fold } : {}), ...(hit.plus ? { plus: hit.plus } : {}) }))
         state.sidebarImages = drawn.images
         return drawn.lines
       }
     }
     // A session whose PR is merged or closed settles by itself (see `autoSettled`), unless it is the open one, pinned or busy.
-    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId).map(({ sessionId, title, state: sessionState, queued, updatedAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind, agents, compacting, named }) => ({ sessionId, title, state: sessionState, queued, updatedAt, ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}), ...(agents ? { agents } : {}), ...(compacting ? { compacting } : {}), ...(named ? { named } : {}) }))
+    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId).map(({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, lastHumanAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind, agents, compacting, named }) => ({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, ...(lastHumanAt !== undefined ? { lastHumanAt } : {}), ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}), ...(agents ? { agents } : {}), ...(compacting ? { compacting } : {}), ...(named ? { named } : {}) }))
     const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder(), scroll: sidebarScrollNow() } })
     state.sidebarImages = undefined
     state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "more" ? [{ row: hit.row, sessionId: SETTLED_MORE }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])

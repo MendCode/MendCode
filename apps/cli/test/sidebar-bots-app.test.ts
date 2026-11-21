@@ -3,6 +3,7 @@ import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionSummary } from "@mendcode/protocol"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { ICON_SIDEBAR_WIDTH, SIDEBAR_GAP, SIDEBAR_WIDTH } from "../src/view/sidebar"
+import { CLICK_GUARD_MS } from "../src/view/sidebar-window"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 
 afterAll(cleanTemps)
@@ -10,7 +11,7 @@ const reply = (result: unknown) => ({ ok: true, result }) as CommandReply
 const MINUTE = 60_000
 
 /** The app with a bots list and sessions in three folders; `bots: false` is a terminal that never turned the flag on. */
-function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock, more = [], inspect, waitingChild, home = false }: { /** An empty conversation: the home screen with its own Bots block. */ home?: boolean; /** A sub-agent of the open session that waits on you with this kind of request. */ waitingChild?: "approval" | "question" | "plan"; bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
+function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, clock = { at: NOW }, more = [], inspect, waitingChild, home = false }: { /** An empty conversation: the home screen with its own Bots block. */ home?: boolean; /** A sub-agent of the open session that waits on you with this kind of request. */ waitingChild?: "approval" | "question" | "plan"; bots?: boolean; profile?: Partial<TuiProfile>; width?: number; height?: number; extra?: (command: CommandInput) => CommandReply | undefined; clock?: { at: number }; /** Sessions of other folders the daemon lists besides the four. */ more?: SessionSummary[]; inspect?: (directory: string) => Promise<{ git: boolean }> } = {}) {
   const current = ids("session")
   const second = ids("session")
   const elsewhere = ids("session")
@@ -37,7 +38,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
   }
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
-  const h = appHarness({ width, height, mode: "balanced", inspectProject: inspect ?? (async () => ({ git: true })), ...(clock ? { now: () => clock.at } : {}), sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
+  const h = appHarness({ width, height, mode: "balanced", inspectProject: inspect ?? (async () => ({ git: true })), now: () => clock.at, sessionId: current, dataDir, directory: "/work/app", reply: (command) => {
     const extraReply = extra?.(command)
     if (extraReply) return extraReply
     if (command.type === "session.list") return reply({ sessions: (command as { directory?: string }).directory ? sessions.filter((session) => session.directory === (command as { directory?: string }).directory) : sessions })
@@ -50,7 +51,7 @@ function chatApp({ bots = true, profile = {}, width = 120, height = 24, extra, c
   h.app.applySettings(bots ? { experimental: { bots: true } } : {})
   // A started conversation: with an empty one the arrow keys belong to the home screen's list.
   if (!home) conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("Show the layout", "Done.")
-  return { ...h, ids: { current, second, elsewhere, docs, created } }
+  return { ...h, clock, ids: { current, second, elsewhere, docs, created } }
 }
 type App = ReturnType<typeof chatApp>
 const side = (h: App, cells = SIDEBAR_WIDTH) => h.text().map((row) => row.slice(0, cells))
@@ -66,6 +67,11 @@ async function until(h: App, needle: string, over = sidebarText) {
 }
 const rowOf = (h: App, needle: string) => side(h).findIndex((row) => row.includes(needle))
 const click = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}M`
+/** The list has stood still for longer than the click guard, as it has by the time a hand reaches a row. */
+function steady(h: App) {
+  h.clock.at += CLICK_GUARD_MS + 50
+  h.app.render()
+}
 
 describe("flag off and default settings: today's sidebar, nothing new asked", () => {
   test("the sidebar is the one it was, and no bot or all-project request goes out", async () => {
@@ -97,13 +103,13 @@ describe("flag on: the bots section and the bot's icon in its project", () => {
   test("a row per bot with its state; the bot's chat lives under the bot, not in the project", async () => {
     const h = chatApp()
     await until(h, "Bots")
-    expect(side(h)[rowOf(h, "calm")]).toMatch(/^ {3}● calm +mendcode +● working │$/)
-    expect(side(h)[rowOf(h, "scout")]).toMatch(/scout +mendcode +◌ idle │$/)
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/^ {3}● calm +mendcode +● working \+ │$/)
+    expect(side(h)[rowOf(h, "scout")]).toMatch(/scout +mendcode +◌ idle \+ │$/)
     // Bots first by default; Chrome (the bot's, and the open one) sits under calm's chats row, after the Bots heading.
     expect(rowOf(h, "Bots")).toBeLessThan(rowOf(h, "Projects"))
     expect(rowOf(h, "Chrome")).toBeGreaterThan(rowOf(h, "calm"))
     expect(rowOf(h, "Chrome")).toBeLessThan(rowOf(h, "Projects"))
-    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
+    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 \+ │$/)
     expect(h.sentOf("bot.list")).toHaveLength(1)
   })
 })
@@ -163,10 +169,10 @@ describe("the lists follow pushes without asking", () => {
     const { h, push, count, frame, base } = await live()
     push(h.ids.current, { state: "idle", title: "Chrome" })
     await frame()
-    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle │$/)
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle \+ │$/)
     push(h.ids.current, { state: "waiting_approval", title: "Chrome" })
     await frame()
-    expect(side(h)[rowOf(h, "calm")]).toMatch(/… waiting │$/)
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/… waiting \+ │$/)
     expect(count()).toEqual(base)
   })
 
@@ -236,7 +242,7 @@ describe("the lists follow pushes without asking", () => {
     release!()
     await Bun.sleep(10)
     await frame()
-    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle │$/)
+    expect(side(h)[rowOf(h, "calm")]).toMatch(/◌ idle \+ │$/)
   })
 })
 
@@ -285,20 +291,48 @@ describe("all projects", () => {
     expect(sidebarText(h)).toContain("Other project")
     expect(h.sentOf("session.list").some((command) => (command as { directory?: string }).directory === undefined)).toBe(true)
     const glyph = side(h)[rowOf(h, "▾ api")]!.indexOf("▾")
+    await steady(h)
     await h.type(click(glyph, rowOf(h, "▾ api")))
     expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Other project")
-    expect(side(h)[rowOf(h, "▸ api")]).toMatch(/▸ api +1 active │$/)
+    expect(side(h)[rowOf(h, "▸ api")]).toMatch(/▸ api +1 active 2 \+ │$/)
     await h.type(click(glyph, rowOf(h, "▸ api")))
     expect(sidebarText(h)).toContain("Other project")
-    // The keyboard: focus the list, go down to the group (Chrome, Client reconnect, then api), Space folds it.
+    // A click on the group's name folds it too, and starts no chat: only the `+` that ends the row does.
+    await h.type(click(glyph + 3, rowOf(h, "▾ api")))
+    expect(sidebarText(h)).toContain("▸ api")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type(click(glyph + 3, rowOf(h, "▸ api")))
+    expect(sidebarText(h)).toContain("Other project")
+    // The keyboard: focus the list on the open session, go to the api group, Space folds it and Enter opens it again.
     await h.type("\x1b[D")
-    for (let turn = 0; turn < 2; turn++) await h.type("\x1b[B")
+    for (let turn = 0; turn < 12 && !/^ › /.test(side(h)[rowOf(h, "▾ api")]!); turn++) await h.type("\x1b[B")
     expect(side(h)[rowOf(h, "api")]).toMatch(/^ › /)
     await h.type(" ")
     expect(sidebarText(h)).toContain("▸ api")
     expect(sidebarText(h)).not.toContain("Other project")
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("▾ api")
+    expect(sidebarText(h)).toContain("Other project")
+    expect(h.sentOf("session.create")).toHaveLength(0)
     expect(h.app.sessionId).toBe(h.ids.current)
+  })
+
+  test("a new chat in a project: `n` on its row, or a click on the `+` that ends it", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
+    await until(h, "▾ api")
+    await steady(h)
+    const row = side(h)[rowOf(h, "▾ api")]!
+    expect(row).toMatch(/ \+ │$/)
+    await h.type(click(row.lastIndexOf("+"), rowOf(h, "▾ api")))
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", title: "", reuseEmpty: true })
+    expect(h.app.sessionId).toBe(h.ids.created)
+    // `n` on one of the project's sessions starts the chat in that session's folder.
+    await h.type("\x1b[D")
+    for (let turn = 0; turn < 12 && !/^ › /.test(side(h)[rowOf(h, "Client reconnect")]!); turn++) await h.type("\x1b[B")
+    await h.type("n")
+    expect(h.sentOf("session.create")).toHaveLength(2)
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
   })
 
   test("the preview: sidebarPreviewCount sessions and a more row that Enter and a click expand and collapse, in memory only", async () => {
@@ -329,8 +363,138 @@ describe("all projects", () => {
   test("a click on a session of another folder opens it", async () => {
     const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
     await until(h, "Other project")
+    await steady(h)
     await h.type(click(8, rowOf(h, "Other project")))
     expect(h.app.sessionId).toBe(h.ids.elsewhere)
+  })
+
+  test("a click on a line whose row changed a moment ago is dropped; once the list has stood still it goes through", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false })
+    await until(h, "Other project")
+    await steady(h)
+    const line = rowOf(h, "Docs pass")
+    // A session appears in the project from another terminal: every row below slides down one line under the pointer.
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: h.clock.at, sessionId: "ses_01M7C3T9P0JHRKM9", directory: "/other/api", title: "Arrived", state: "idle", updatedAt: h.clock.at + MINUTE } as never)
+    h.app.render()
+    expect(rowOf(h, "Docs pass")).not.toBe(line)
+    await h.type(click(8, line))
+    expect(h.app.sessionId).toBe(h.ids.current)
+    await steady(h)
+    await h.type(click(8, rowOf(h, "Docs pass")))
+    expect(h.app.sessionId).toBe(h.ids.docs)
+  })
+})
+
+describe("a list that holds still under the hand", () => {
+  const arrive = (h: App, title: string) => h.app.onGlobal({ type: "session.activity", gseq: Math.floor(h.clock.at), at: h.clock.at, sessionId: `ses_01M7C3T9P0JHRK${title.slice(0, 2).toUpperCase()}`, directory: "/other/api", title, state: "idle", createdAt: h.clock.at, updatedAt: h.clock.at } as never)
+  const move = (col: number, row: number) => `\x1b[<35;${col + 1};${row + 1}M`
+
+  test("while the list has the keyboard no row comes or goes; `r` lets it catch up", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false, height: 30 })
+    await until(h, "Other project")
+    await h.type("\x1b[D")
+    // Each row keeps its line; what a row says stays live (the project's count already includes the newcomer).
+    const places = () => side(h).slice(2).map((row) => row.replace(/^ [›▌] /, "   ").replace(/\d+ \+ │$/, "+ │"))
+    const before = places()
+    arrive(h, "MMnew one")
+    h.clock.at += 500
+    h.app.render()
+    expect(sidebarText(h)).not.toContain("MMnew one")
+    expect(places()).toEqual(before)
+    expect(side(h)[rowOf(h, "▾ api")]).toMatch(/▾ api +3 \+ │$/)
+    await h.type("r")
+    expect(sidebarText(h)).toContain("MMnew one")
+  })
+
+  test("the pointer over the list holds it too, and it catches up by itself a moment after the pointer leaves", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false, height: 30 })
+    await until(h, "Other project")
+    await h.app.onKey(move(8, rowOf(h, "Docs pass")))
+    h.app.render()
+    arrive(h, "PPnew one")
+    h.clock.at += 500
+    h.app.render()
+    expect(sidebarText(h)).not.toContain("PPnew one")
+    // The row under the pointer is the one it was: the click opens it.
+    steady(h)
+    await h.type(click(8, rowOf(h, "Docs pass")))
+    expect(h.app.sessionId).toBe(h.ids.docs)
+    await h.app.onKey(move(80, 8))
+    h.clock.at += 1000
+    h.app.render()
+    expect(sidebarText(h)).not.toContain("PPnew one")
+    h.clock.at += 1500
+    h.app.render()
+    expect(sidebarText(h)).toContain("PPnew one")
+  })
+
+  test("a reply or a working session never moves a row: only what you send does", async () => {
+    const h = chatApp({ profile: { sidebarProjects: "all" }, bots: false, height: 30 })
+    await until(h, "Other project")
+    const order = () => ["Chrome", "Client reconnect"].map((title) => rowOf(h, title))
+    const first = order()
+    expect(first[0]).toBeLessThan(first[1]!)
+    // The older session works and answers: its activity is the newest of the project now.
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: h.clock.at, sessionId: h.ids.second, directory: "/work/app", title: "Client reconnect", state: "generating", updatedAt: h.clock.at + 5 * MINUTE } as never)
+    h.clock.at += 5000
+    h.app.render()
+    expect(order()).toEqual(first)
+  })
+})
+
+describe("what a bot of another app is doing there", () => {
+  const ada = { origin: "hermes", id: "ada", name: "Ada", state: "working", chat: "acp:hermes-ada", app: "Hermes", identity: { origin: "hermes" }, activity: [{ id: "run-1", title: "Flash the board", source: "telegram", startedAt: NOW - 10 * MINUTE, activeAt: NOW - MINUTE }] }
+  const bots = { bots: [], external: [ada], problems: [] }
+  const messages = { messages: [{ role: "user", text: "Flash the board", at: NOW - 10 * MINUTE }, { role: "tool", tool: "terminal", text: "ok" }, { role: "assistant", text: "Flashed and verified." }], more: false }
+  async function onRun(h: App) {
+    await until(h, "Flash the board")
+    await h.type("\x1b[D")
+    for (let turn = 0; turn < 20 && !/^ › .*Flash the board/.test(side(h)[rowOf(h, "Flash the board")]!); turn++) await h.type("\x1b[B")
+    expect(side(h)[rowOf(h, "Flash the board")]).toMatch(/^ › /)
+  }
+
+  test("a working bot lists its sessions there; Enter on one shows its messages to read, and nothing is made in MendCode", async () => {
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply(bots) : command.type === "bot.activity" ? reply(messages) : undefined })
+    await onRun(h)
+    expect(side(h)[rowOf(h, "Flash the board")]).toMatch(/Flash the board +1m │$/)
+    expect(side(h)[0]).toContain("↵ read")
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("Flashed and verified."); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.app.page).toBe("text")
+    const page = h.text().join("\n")
+    for (const needle of ["Ada in Hermes", "read-only", "started by telegram", "Asked", "Flash the board", "terminal: ok", "Answered", "Flashed and verified."]) expect(page).toContain(needle)
+    expect(h.sentOf("bot.activity").at(-1)).toMatchObject({ origin: "hermes", bot: "ada", session: "run-1" })
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    expect(h.app.sessionId).toBe(h.ids.current)
+    await h.type("\x1b")
+    expect(h.app.page).toBe("chat")
+  })
+
+  test("when the app will not give the messages the page says so and keeps what the list knew", async () => {
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply(bots) : command.type === "bot.activity" ? { ok: false, error: { code: "failed", message: "[HERMES]: Hermes is not running" } } as never : undefined })
+    await onRun(h)
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("Messages not read"); turn++) { await Bun.sleep(5); h.app.render() }
+    const page = h.text().join("\n")
+    for (const needle of ["Flash the board", "started by telegram", "Messages not read", "Hermes is not running"]) expect(page).toContain(needle)
+    expect(page).not.toContain("[HERMES]")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+  })
+
+  test("Enter or a click on the bot's own row makes no empty session: it folds; `n` asks for the folder", async () => {
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply(bots) : undefined })
+    await until(h, "Ada")
+    steady(h)
+    await h.type(click(8, rowOf(h, "Ada")))
+    await h.type("\x1b[D")
+    for (let turn = 0; turn < 20 && !/^ › .*Ada/.test(side(h)[rowOf(h, "Ada")]!); turn++) await h.type("\x1b[A")
+    await h.type("\r")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    expect(h.app.sessionId).toBe(h.ids.current)
+    await h.type("n")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("Chat with Ada in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(sidebarText(h)).toContain("Chat with Ada in…")
+    expect(h.sentOf("session.create")).toHaveLength(0)
   })
 })
 
@@ -342,11 +506,17 @@ describe("the bot card", () => {
     await h.type("b")
     h.app.render()
   }
+  /** `n` on the bot's row asks for the folder, the open one on top; Enter takes it. */
+  async function chatWithBot(h: App) {
+    await h.type("n")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("Chat with"); turn++) { await Bun.sleep(5); h.app.render() }
+    await h.type("\r")
+  }
 
   test("o on a bot opens its page, shown in the hint: identity, origin, description, model, permission, chats by folder", async () => {
     const h = chatApp()
     await onBot(h)
-    expect(sidebarText(h)).toContain("↵ chat  o page")
+    expect(sidebarText(h)).toContain("↵ fold n chat o page")
     await h.type("o")
     expect(h.app.page).toBe("bot")
     h.app.render()
@@ -356,9 +526,32 @@ describe("the bot card", () => {
     expect(h.app.page).toBe("chat")
   })
 
-  test("Enter on a bot opens a blank chat with it selected: no agent is set and no row is listed until the first message", async () => {
-    const h = chatApp()
+  test("Enter or a click on a bot only folds and opens its chats: no chat is started and no session is made", async () => {
+    const h = chatApp({ height: 40 })
     await onBot(h)
+    expect(sidebarText(h)).toContain("Docs pass")
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(sidebarText(h)).not.toContain("Docs pass")
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("Docs pass")
+    await steady(h)
+    await h.type(click(8, rowOf(h, "calm")))
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    expect(h.app.sessionId).toBe(h.ids.current)
+  })
+
+  test("`n` on a bot asks where, the open folder on top: Enter opens a blank chat with it selected, no agent set and no row listed until the first message", async () => {
+    const h = chatApp({ height: 40 })
+    await onBot(h)
+    await h.type("n")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("Chat with"); turn++) { await Bun.sleep(5); h.app.render() }
+    const picker = side(h)
+    expect(picker[0]).toContain("Chat with calm in…")
+    expect(picker.find((row) => row.includes("app"))).toMatch(/^ › app +open +│$/)
+    expect(sidebarText(h)).toContain("api")
+    expect(h.sentOf("session.create")).toHaveLength(0)
     await h.type("\r")
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
     expect(h.sentOf("session.create").at(-1)).not.toHaveProperty("agent")
@@ -367,6 +560,30 @@ describe("the bot card", () => {
     expect(h.app.page).toBe("chat")
     h.app.render()
     expect(h.text().join("\n")).not.toContain("Untitled")
+  })
+
+  test("a chat with a bot in another folder: the `+` that ends its row, a typed name, Enter", async () => {
+    const h = chatApp({ height: 40 })
+    await until(h, "Bots")
+    await steady(h)
+    const row = side(h)[rowOf(h, "calm")]!
+    await h.type(click(row.lastIndexOf("+"), rowOf(h, "calm")))
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("Chat with"); turn++) { await Bun.sleep(5); h.app.render() }
+    await h.type("api")
+    expect(sidebarText(h)).not.toContain("open")
+    expect(side(h).find((row) => /^ › /.test(row))).toContain("api")
+    await h.type("\r")
+    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/other/api", reuseEmpty: true })
+    expect(h.app.sessionId).toBe(h.ids.created)
+    await h.type("hello there\r")
+    expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
+    // Esc in the picker starts nothing and gives the list back.
+    await h.type("\x1b[D")
+    await h.type("N")
+    for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    await h.type("\x1b")
+    expect(sidebarText(h)).toContain("Bots")
+    expect(h.sentOf("session.create")).toHaveLength(1)
   })
 
   describe("a bot's chat wears the bot's colour", () => {
@@ -381,7 +598,7 @@ describe("the bot card", () => {
       expect(borders(h).length).toBeGreaterThan(0)
       for (const line of borders(h)) expect(line.find((span) => /─/.test(span.text))?.fg).toBe("success")
       await onBot(h)
-      await h.type("\r")
+      await chatWithBot(h)
       for (let turn = 0; turn < 40 && h.app.sessionId !== h.ids.created; turn++) await Bun.sleep(5)
       await Bun.sleep(20)
       h.app.render()
@@ -394,6 +611,7 @@ describe("the bot card", () => {
     test("a plain session keeps the prompt as it was", async () => {
       const h = chatApp({ height: 30 })
       await until(h, "Other project")
+      await steady(h)
       await h.type(click(8, rowOf(h, "Other project")))
       expect(h.app.sessionId).toBe(h.ids.elsewhere)
       h.app.render()
@@ -406,7 +624,7 @@ describe("the bot card", () => {
   test("a bot's blank chat names the bot's own model under the prompt, not the session's default", async () => {
     const h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: { directory: "/work/app", current: "build", agents: [{ name: "calm", mode: "primary", model: "claude-sonnet", source: "user" }], problems: [] } } as never : undefined })
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     for (let turn = 0; turn < 40 && h.app.page !== "chat"; turn++) await Bun.sleep(5)
     await Bun.sleep(20)
     h.app.render()
@@ -415,7 +633,7 @@ describe("the bot card", () => {
     expect(footer).not.toContain("GPT-6-Luna")
   })
 
-  test("Enter on a bot that reuses the blank chat already open names the bot's model under the prompt", async () => {
+  test("a chat with a bot that reuses the blank chat already open names the bot's model under the prompt", async () => {
     let h!: App
     h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : command.type === "models.list" ? { ok: true, result: { engine: "codex", selectable: false, models: [], defaults: { model: "gpt-6.1-terra" }, effective: { model: "gpt-6.1-terra" }, roles: {} } } as never : undefined })
     await until(h, "Bots")
@@ -423,7 +641,7 @@ describe("the bot card", () => {
     h.app.render()
     expect(h.text().at(-1)!.toLowerCase()).toContain("terra")
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
     await Bun.sleep(20)
     h.app.render()
@@ -436,7 +654,7 @@ describe("the bot card", () => {
     let h!: App
     h = chatApp({ height: 30, extra: (command) => command.type === "session.create" ? { ok: true, result: { sessionId: h.ids.current } } as never : undefined })
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
     await h.type("/new\r")
     for (let turn = 0; turn < 40 && h.sentOf("session.create").length < 2; turn++) await Bun.sleep(5)
@@ -454,7 +672,7 @@ describe("the bot card", () => {
     // Enter on the bot switches to the new blank chat (the harness answers session.create with it, `/new` reuses it), which loads its agent report.
     h = chatApp({ height: 30, extra: (command) => command.type === "agents.list" ? { ok: true, result: agents } as never : command.type === "bot.list" ? reply(bots) : undefined })
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     for (let turn = 0; turn < 40 && !h.sentOf("session.create").length; turn++) await Bun.sleep(5)
     for (let turn = 0; turn < 40 && !h.text().at(-1)!.includes("calm"); turn++) { await Bun.sleep(5); h.app.render() }
     expect(h.text().at(-1)!).toContain("calm")
@@ -483,7 +701,7 @@ describe("the bot card", () => {
   test("the first message of a bot's new chat gives the session the bot's agent, before the message goes", async () => {
     const h = chatApp()
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     await h.type("hello bot\r")
     const order = h.sent.map((command) => command.type)
     expect(h.sentOf("session.agent.set").at(-1)).toMatchObject({ sessionId: h.ids.created, agent: "calm" })
@@ -498,7 +716,7 @@ describe("the bot card", () => {
     const held = new Promise<void>((resolve) => { release = resolve })
     const h = chatApp({ height: 30, extra: (command) => command.type === "session.agent.set" ? held.then(() => ({ ok: true, result: {} }) as never) as never : undefined })
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     expect(h.app.sessionId).toBe(h.ids.created)
     const sending = h.app.onInput("hello bot\r")
     for (let turn = 0; turn < 40 && !h.sentOf("session.agent.set").length; turn++) await Bun.sleep(5)
@@ -512,29 +730,36 @@ describe("the bot card", () => {
     expect(h.sentOf("user.submit")).toHaveLength(1)
   })
 
-  test("a new chat with a bot sits under the bot's chats the moment its summary arrives, never under Projects, and the chats open", async () => {
+  test("a new chat with a bot sits under the bot's chats the moment its summary arrives, never under Projects; folded chats stay folded and carry its bar", async () => {
     const h = chatApp({ height: 60 })
     await onBot(h)
-    // Fold calm's chats first: starting a chat opens them again.
+    // Fold calm's chats first: starting a chat does not open them again.
     await h.type(" ")
     expect(sidebarText(h)).toContain("▸ chats")
-    await h.type("\r")
+    await chatWithBot(h)
     await h.type("hello bot\r")
     // The daemon pushes the new session as an ordinary summary (no agent in it).
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.ids.created, directory: "/work/app", title: "hello bot", state: "generating", updatedAt: NOW } as never)
     h.app.render()
+    expect(sidebarText(h)).not.toContain("hello bot")
+    // The folded row holds the open chat (its bar) and counts the one that works out of sight.
+    expect(side(h)[rowOf(h, "▸ chats")]).toMatch(/^ ▌ +▸ chats +1 active \d+ │$/)
+    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 \+ │$/)
+    // Opened by hand, the chat is there, once, under the bot.
+    await h.type("\x1b[D")
+    await h.type("b")
+    await h.type(" ")
     const text = sidebarText(h)
     expect(text).toContain("▾ chats")
     expect(text.indexOf("hello bot")).toBeGreaterThan(text.indexOf("Bots"))
     expect(text.indexOf("hello bot")).toBeLessThan(text.indexOf("Projects"))
     expect(text.match(/hello bot/g)).toHaveLength(1)
-    expect(side(h)[rowOf(h, "▾ app")]).toMatch(/▾ app +1 │$/)
   })
 
   test("a bot chat stays in the list under Projects once the bots flag is turned off", async () => {
     const h = chatApp({ height: 60, profile: { sidebarProjects: "all" } })
     await onBot(h)
-    await h.type("\r")
+    await chatWithBot(h)
     await h.type("hello bot\r")
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.ids.created, directory: "/work/app", title: "hello bot", state: "generating", updatedAt: NOW } as never)
     h.app.applySettings({})
@@ -544,20 +769,13 @@ describe("the bot card", () => {
     expect(text).toContain("hello bot")
   })
 
-  test("a click on the bot's row does the same", async () => {
-    const h = chatApp()
-    await until(h, "Bots")
-    await h.type(click(8, rowOf(h, "calm")))
-    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
-    expect(h.app.sessionId).toBe(h.ids.created)
-  })
-
-  test("a click on the arrow of a bot's chats row folds and opens them; a click on its name starts a chat with the bot", async () => {
+  test("a click anywhere on a bot's chats row folds and opens them, and starts no chat", async () => {
     const h = chatApp({ height: 40 })
-    // The open chat belongs to calm, so its chats start open; a click on the arrow folds them, another opens them.
+    // A MendCode bot's chats start open; a click on the arrow folds them, another opens them.
     await until(h, "▾ chats")
     expect(sidebarText(h)).toContain("Docs pass")
     const glyph = side(h)[rowOf(h, "▾ chats")]!.indexOf("▾")
+    await steady(h)
     await h.type(click(glyph, rowOf(h, "▾ chats")))
     h.app.render()
     expect(sidebarText(h)).toContain("▸ chats")
@@ -567,11 +785,13 @@ describe("the bot card", () => {
     expect(sidebarText(h)).toContain("Docs pass")
     expect(h.sentOf("session.create")).toHaveLength(0)
     await h.type(click(glyph + 3, rowOf(h, "▾ chats")))
-    expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
-    expect(h.app.sessionId).toBe(h.ids.created)
+    h.app.render()
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    expect(h.app.sessionId).toBe(h.ids.current)
   })
 
-  test("Space on a bot or on its chats row folds the chats; Enter on the chats row starts a chat with the bot", async () => {
+  test("Space or Enter on a bot or on its chats row folds the chats; `n` on the chats row asks where to chat with the bot", async () => {
     const h = chatApp({ height: 40 })
     await onBot(h)
     await h.type(" ")
@@ -582,9 +802,13 @@ describe("the bot card", () => {
     h.app.render()
     expect(sidebarText(h)).toContain("Docs pass")
     await h.type("\x1b[B")
-    expect(sidebarText(h)).toContain("↵ chat")
-    expect(sidebarText(h)).toContain("spc fold")
+    expect(sidebarText(h)).toContain("↵ fold  n chat")
     await h.type("\r")
+    expect(sidebarText(h)).toContain("▸ chats")
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type("\r")
+    expect(sidebarText(h)).toContain("Docs pass")
+    await chatWithBot(h)
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: "/work/app", reuseEmpty: true })
     expect(h.app.sessionId).toBe(h.ids.created)
   })

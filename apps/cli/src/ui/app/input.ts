@@ -119,6 +119,7 @@ export function createInput(ctx: AppContext, actions: {
       else if (state.page === "chat") {
         // The left list's search takes a paste as it takes keys (keys.ts): into its query, never the prompt behind it.
         if (state.sidebarSearch?.paste(token.text)) continue
+        if (state.sidebarPicker?.paste(token.text)) continue
         if (state.promptSearch && actions.composer.searchPaste(token.text)) continue
         if (state.find && !state.palette && actions.findPaste(token.text)) continue
         if (state.palette) {
@@ -340,6 +341,9 @@ export function createInput(ctx: AppContext, actions: {
     if (!reply.ok) state.clearPending = false
     if (!reply.ok && restorable) { state.attachments = sending; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
     if (reply.ok) {
+      // The left list orders sessions by the last message a person typed: this one moves up now, without waiting for the next list.
+      const typedAt = now()
+      state.sessions = state.sessions.map((session) => session.sessionId === submissionSession ? { ...session, lastHumanAt: typedAt } : session)
       // Sent from a sub-agent's thread: it goes to the session, and while queued it is that thread's to see and edit.
       const queueId = reply.result?.queueId
       if (state.agentView && state.sessionId === submissionSession && typeof queueId === "string") state.agentViews?.get(state.agentView)?.queued.set(queueId, false)

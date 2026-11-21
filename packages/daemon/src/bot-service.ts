@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import path from "node:path"
 import { BOT_COLORS, BOT_SHAPES, MAX_AGENT_BYTES, parseAgentFile } from "@mendcode/packages"
-import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotInfo, type BotListReport, type BotSchedule, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
+import { redactSecrets, type AgentCreateReport, type AgentsReport, type BotActivityReport, type BotInfo, type BotListReport, type BotSchedule, type BotState, type Command, type ExternalBotInfo, type SessionDetail } from "@mendcode/protocol"
 import { AGENT_CREATE_PERMISSIONS, agentName } from "@mendcode/protocol/wire"
 import { canonicalDir } from "@mendcode/tools"
 import type { createAgentFile } from "./agent-create"
@@ -24,6 +24,8 @@ export type BotConnector = {
   /** The origin its bots carry in their `bot.origin`. */
   id: string
   list(): Promise<ExternalBotInfo[]>
+  /** The newest messages of one of a bot's sessions in its own app (`activity[].id`), to read; absent when the app offers none. */
+  session?(input: { bot: string; session: string; limit?: number | undefined }): Promise<BotActivityReport>
 }
 
 /** How long a failed chat keeps its bot in `problem`; a failure is news for a few minutes, not a permanent mark on the bot. */
@@ -74,6 +76,9 @@ export type BotContext = {
 
 const isBot = (agent: AgentsReport["agents"][number]) => agent.bot !== undefined && agent.source === "user" && agent.trusted
 
+/** A chat as the bot list carries it; `orderAt` is where a list places it (the last message a person typed, else its creation), so replies never move it. */
+const botSession = (session: SessionDetail) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt, orderAt: session.lastHumanAt ?? session.createdAt })
+
 /**
  * An external bot with the MendCode chats on its model, grouped by folder like a MendCode bot's, and the state those chats show
  * (the connector's own state stands while they are all idle). Generic per origin: nothing here names an app.
@@ -91,7 +96,7 @@ function withChats(bot: ExternalBotInfo, context: BotContext, now: number): Exte
     projects: [...byProject].map(([directory, group]) => ({
       directory,
       state: botStateOf(group, now),
-      sessions: group.map((session) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })),
+      sessions: group.map(botSession),
     })).sort((a, b) => a.directory.localeCompare(b.directory)),
   }
 }
@@ -116,7 +121,7 @@ export async function listBots(context: BotContext): Promise<BotListReport> {
       projects: [...byProject].map(([directory, group]) => ({
         directory,
         state: botStateOf(group, now),
-        sessions: group.map((session) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })),
+        sessions: group.map(botSession),
       })).sort((a, b) => a.directory.localeCompare(b.directory)),
     }
   })
@@ -333,6 +338,15 @@ export async function deleteBot(context: BotContext, command: Extract<Command, {
   }
   await rm(file, { force: true })
   return { file, memoryRemoved, sessions }
+}
+
+/** `bot.activity`: what a bot of another app said and did in one of its own sessions there, read through its connector, with anything that looks like a secret taken out. */
+export async function botActivity(context: BotContext, command: Extract<Command, { type: "bot.activity" }>): Promise<BotActivityReport> {
+  const connector = context.connectors().find((candidate) => candidate.id === command.origin)
+  if (!connector) throw new Error(`[BOT]: no connector named ${command.origin}`)
+  if (!connector.session) throw new Error(`[BOT]: ${command.origin} does not let its sessions be read from here`)
+  const report = await connector.session({ bot: command.bot, session: command.session, limit: command.limit })
+  return { messages: report.messages.map((message) => ({ ...message, text: redactSecrets(message.text).text })), more: report.more }
 }
 
 export function botMemory(context: BotContext, command: Extract<Command, { type: "bot.memory" }>): { global: string; project?: string } {
