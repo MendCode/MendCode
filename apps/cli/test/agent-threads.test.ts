@@ -85,7 +85,8 @@ test("an open background sub-agent moves after its parent's turn ended: its mode
   const text = screen(h)
   expect(text).toMatch(/general-purpose · claude-sonnet-5-5 · await/)
   expect(text).toContain("Checking the size next.")
-  expect(text).toMatch(/read \/work\/a\.txt…/)
+  // Its own working row says what it does now, by kind, and its step; the call's title is on its card.
+  expect(text).toMatch(/Reading… .*\(step 2 · /)
 })
 
 test("with the left list shown, left in an open sub-agent's thread changes sibling instead of entering the list", async () => {
