@@ -30,6 +30,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A bot on the balanced or full tier can message, wait on and interrupt other sessions like the main agent, instead of being limited to reading them.
+- Another session's work no longer redraws the terminal and asks the daemon for its background work several times a second; only a change you can see does.
 - Scrolling to the top of a chat or a sub-agent's thread reaches its first line and stays there, instead of bouncing a row short and hiding the start of the message sent to the sub-agent.
 - An open sub-agent's thread stops loading the session's older history once its own start is shown, and no longer draws "earlier · scroll up" over its first line.
 - The right panel's galaxy and clocks stop redrawing the screen while an open file or another view hides them.

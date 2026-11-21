@@ -8,7 +8,7 @@ import type { createAgents } from "./agents"
 import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
-import { mergeActivity } from "../../view/session-activity"
+import { createActivityMemory, mergeActivity } from "../../view/session-activity"
 import { normalizeTuiProfile, panelStarted } from "../../view/tui-profile"
 import { resolvePanel } from "../../view/sidebar-spec"
 import { profilePanel } from "./session-look"
@@ -161,6 +161,9 @@ export function createEvents(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** What each session's last activity push showed, so a push that moved only its clock draws nothing. */
+  const activityMemory = createActivityMemory()
+
   function onGlobal(event: GlobalEvent) {
     if (event.type === "mflow.waiting") {
       if (event.sessionId !== state.sessionId) return
@@ -281,10 +284,13 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "session.activity") {
+      // Most pushes of a working session move only its clock and current tool: no frame and no request of their own.
+      const shows = activityMemory.changed(event)
       noteActivity(event)
       // A sub-agent of the open session started or stopped working: the pet's `agents` state follows it.
       if (event.sessionId !== state.sessionId) followPet(state)
-      if (state.statusLoaded || state.page === "agents" || (state.page === "chat" && (state.dockOpen || state.tuiProfile.rightSidebar && state.tuiProfile.sidebarWidgets.some((widget) => widget.type === "jobs")))) {
+      // Background work starts and ends with a change of state: the list of it is asked again then, not on every push of every session.
+      if ((shows || state.page === "agents") && (state.statusLoaded || state.page === "agents" || (state.page === "chat" && (state.dockOpen || state.tuiProfile.rightSidebar && state.tuiProfile.sidebarWidgets.some((widget) => widget.type === "jobs"))))) {
         void loadAgentShells()
         requestFrame()
       }
@@ -295,7 +301,7 @@ export function createEvents(ctx: AppContext, actions: {
       // Sessions pushed by other terminals join at the top; past the cap the oldest go (the open one stays), and /sessions reads the rest again.
       state.sessions = mergeActivity(state.sessions, event, { cap: PUSHED_SESSIONS_MAX, keep: state.sessionId })
       state.paletteSessions = state.paletteSessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, title }, event.draft) : session))
-      if (state.page === "sessions" || state.page === "chat" && (state.sidebarBots?.live() === true || sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" }))) requestFrame()
+      if (state.page === "sessions" || state.page === "chat" && shows && (state.sidebarBots?.live() === true || sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" }))) requestFrame()
       return
     }
     if (event.type === "memory.changed") {

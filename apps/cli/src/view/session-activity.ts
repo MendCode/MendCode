@@ -4,6 +4,30 @@ import { withPushedDraft } from "./session-label"
 export type ActivityEvent = Extract<GlobalEvent, { type: "session.activity" }>
 
 /**
+ * What a push changes in a session's row, as one comparable string: its state, tool, title, queue, pause, agents, compaction, the request
+ * it waits on, its draft, archive or lifecycle. A working session pushes up to four times a second with only its clock moved; those
+ * pushes need no frame of their own (the spinner tick redraws the list) and no new list of background work.
+ */
+export function activityShown(event: ActivityEvent): string {
+  return JSON.stringify([event.state, event.tool, event.title, event.queued ?? 0, event.paused === true, event.agents, event.compacting, event.pendingKind, event.pending, event.draft, event.archivedAt, event.lifecycle])
+}
+
+/** Remembers what each session's last push showed (bounded): `changed` is true for a push that shows something new. */
+export function createActivityMemory(max = 500) {
+  const shown = new Map<string, string>()
+  return {
+    changed(event: ActivityEvent): boolean {
+      const next = activityShown(event)
+      if (shown.get(event.sessionId) === next) return false
+      shown.delete(event.sessionId)
+      shown.set(event.sessionId, next)
+      if (shown.size > max) shown.delete(shown.keys().next().value!)
+      return true
+    },
+  }
+}
+
+/**
  * One `session.activity` push applied to a session list: a listed session takes the pushed fields in place, an unlisted one joins at
  * the top, and past `cap` the oldest go (`keep`, the open session, stays). The one rule for every list that follows the pushes.
  */
