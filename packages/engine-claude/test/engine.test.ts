@@ -1390,6 +1390,47 @@ describe("claude compaction spend", () => {
     expect(recorded).toEqual([3_000_000, 500])
   })
 
+  test("Claude Code compacting on its own inside a turn shows as a compaction item, from its compacting status to its boundary", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamText(api, 0, "before")
+        api.push({ type: "system", subtype: "status", status: "compacting" })
+        api.push({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 205_000, post_tokens: 70_000 } })
+        api.push({ type: "system", subtype: "status", status: null, compact_result: "success" })
+        streamText(api, 1, "after")
+        api.push(result())
+      },
+    })
+    const h = engineWith([fake], { notify: () => {} })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    const compactions = turn.events.filter((event) => (event.type === "item.started" && event.kind === "compaction") || (event.type === "item.completed" && turn.events.some((started) => started.type === "item.started" && started.kind === "compaction" && started.itemId === event.itemId)))
+    expect(compactions).toHaveLength(2)
+    expect(compactions[0]).toMatchObject({ type: "item.started", kind: "compaction", meta: { compactionMethod: "Claude Code" } })
+    expect(compactions[1]).toMatchObject({ type: "item.completed", status: "ok", text: "Claude Code compacted its context: ~205000 → ~70000 tokens." })
+    h.engine.stop()
+  })
+
+  test("a compaction Claude Code reports as failed closes its item as an error", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "status", status: "compacting" })
+        api.push({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "prompt too long" })
+        streamText(api, 0, "after")
+        api.push(result())
+      },
+    })
+    const h = engineWith([fake], { notify: () => {} })
+    const turn = turnInput()
+    await h.engine.runTurn(turn.input)
+    const started = turn.events.find((event) => event.type === "item.started" && event.kind === "compaction")
+    expect(started).toBeDefined()
+    expect(turn.events.find((event) => event.type === "item.completed" && started?.type === "item.started" && event.itemId === started.itemId)).toMatchObject({ status: "error", text: "Claude Code could not compact its context: prompt too long" })
+    h.engine.stop()
+  })
+
   test("a turn without compaction keeps Claude Code's own figures, and a first result has no gap to add", () => {
     expect(turnUsage({}, [{ type: "system", subtype: "compact_boundary" }, hello])).toMatchObject({ input: 2, output: 23, cacheWrite: 37_283 })
     const mark = {}
