@@ -1063,12 +1063,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   /** While `prepend` rebuilds: each thread's events of the replay, handed to that thread's own prepend at the end. */
   let replayed: Map<ThreadState, SessionEvent[]> | undefined
 
-  /** An item of a sub-agent goes to its thread, not to this conversation; true when `event` was one. */
-  function routeAgent(event: SessionEvent): boolean {
-    if (event.type !== "item.started" && event.type !== "item.delta" && event.type !== "item.completed") return false
-    const parent = event.type === "item.started" && typeof event.meta?.agentParent === "string" ? (event.meta.agentParent as ItemId) : threadOf.get(event.itemId)
-    if (!parent) return false
-    threadOf.set(event.itemId, parent)
+  /** The thread of the sub-agent call `parent`, made empty on first need. */
+  function threadState(parent: ItemId): ThreadState {
     let thread = threads.get(parent)
     if (!thread) {
       // A thread opened after the view changed starts the way the conversation reads now.
@@ -1076,6 +1072,16 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       if (appearanceChanged) transcript.setAppearance({ ...appearance, reasoning: reasoningVisibility, toolOutput })
       threads.set(parent, (thread = { transcript, tools: 0, last: undefined, model: undefined, open: new Map(), steps: 0, stepAt: undefined, ended: undefined }))
     }
+    return thread
+  }
+
+  /** An item of a sub-agent goes to its thread, not to this conversation; true when `event` was one. */
+  function routeAgent(event: SessionEvent): boolean {
+    if (event.type !== "item.started" && event.type !== "item.delta" && event.type !== "item.completed") return false
+    const parent = event.type === "item.started" && typeof event.meta?.agentParent === "string" ? (event.meta.agentParent as ItemId) : threadOf.get(event.itemId)
+    if (!parent) return false
+    threadOf.set(event.itemId, parent)
+    const thread = threadState(parent)
     // The thread reads the item as one of its own: without the mark, which would send it to a thread of the thread.
     let own: SessionEvent = event
     if (event.type === "item.started" && event.meta) {
@@ -1933,7 +1939,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     /** The sub-agents an engine reported inside this session, in the order they were called. */
     agentThreads: (): AgentThread[] => blocks.filter((block) => block.kind === "tool_call" && block.meta?.subagent === true).map(agentThread),
     /** The transcript of the sub-agent called by `itemId` (a transcript like this one), when it has reported anything. */
-    agentTranscript: (itemId: ItemId): unknown => threads.get(itemId)?.transcript,
+    // A sub-agent that has not reported a step yet (still starting, or thinking) opens on an empty thread that fills as it works.
+    agentTranscript: (itemId: ItemId): unknown => threads.get(itemId)?.transcript ?? (blocks.some((block) => block.kind === "tool_call" && block.meta?.subagent === true && block.itemId === itemId) ? threadState(itemId).transcript : undefined),
     /**
      * Whether a sub-agent's thread holds its whole start: the call that started it is loaded, and every event after it is (a session
      * loads newest first, without gaps). False while the window starts inside the thread, which then begins mid-message.

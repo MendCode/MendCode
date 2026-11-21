@@ -130,7 +130,8 @@ export function createChatRows(ctx: AppContext, actions: {
     const editorLines = editor.lines()
     // Balanced and full draw v1's prompt: straight rules with a 2-cell margin, a `❭` lead, v1's row under it. Minimal keeps bare rules and nothing below.
     const rich = state.mode !== "minimal"
-    const home = state.transcript.blocks().length === 0 && !(state.paging?.loading || state.paging?.more)
+    // A sub-agent's thread that has no step yet is still that thread, never the start screen.
+    const home = state.agentView === undefined && state.transcript.blocks().length === 0 && !(state.paging?.loading || state.paging?.more)
     // The /customize preset frames the prompt (top-bottom, the default, is the rules above); every preset leaves the footer outside it.
     const customChrome = state.ext?.promptChrome()
     const preset = customChrome?.preset ?? state.tuiProfile.promptChrome
