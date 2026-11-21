@@ -1379,6 +1379,11 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     agentThreads: (): AgentThread[] => blocks.filter((block) => block.kind === "tool_call" && block.meta?.subagent === true).map(agentThread),
     /** The transcript of the sub-agent called by `itemId` (a transcript like this one), when it has reported anything. */
     agentTranscript: (itemId: ItemId): unknown => threads.get(itemId)?.transcript,
+    /**
+     * Whether a sub-agent's thread holds its whole start: the call that started it is loaded, and every event after it is (a session
+     * loads newest first, without gaps). False while the window starts inside the thread, which then begins mid-message.
+     */
+    agentThreadLoaded: (itemId: ItemId): boolean => index.has(itemId),
     prepend,
     get lastSeq() {
       return lastSeq

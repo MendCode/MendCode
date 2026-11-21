@@ -134,6 +134,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
   }
   const velocity = { yaw: 0, pitch: 0 }
   let tickMs = 0
+  /** A frame drew the panel's cards since the last tick; a tick that finds none stops. */
+  let panelDrawn = false
   let orbitHeight = 12
   const ascii = () => asciiChrome(state)
   const orbitAllowed = () => featureOn(state.settingsNow, "panel_orbit") && (state.settingsNow.tier !== undefined || state.mode === "full")
@@ -212,6 +214,16 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     tickMs = interval
     if (interval && !state.rightTick) {
       state.rightTick = setInterval(() => {
+        // No frame drew the panel since the last tick (a file has the slot, a side chat, a terminal too narrow): nothing of it is in
+        // sight, so nothing of it moves. The next frame that draws it starts the tick again. The galaxy redrew the whole screen ten
+        // times a second behind an open file.
+        if (!panelDrawn) {
+          clearInterval(state.rightTick)
+          state.rightTick = undefined
+          tickMs = 0
+          return
+        }
+        panelDrawn = false
         ensureData()
         if (state.page !== "chat" || !state.tuiProfile.rightSidebar) return
         if (orbit?.orbitAnimating(true, state.rightFocus, isRunning(), state.reducedMotion, firedAt(), now()) && hasOrbit) orbit.stepOrbit(activeCamera(), velocity, state.reducedMotion)
@@ -503,6 +515,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
 
   function panelRows(width: number, height: number): Line[] {
     orbitHeight = Math.min(34, Math.max(3, height - 4))
+    panelDrawn = true
     ensureData()
     const chat = sideChat(ctx)
     const flat = input.screen.size.width < 70

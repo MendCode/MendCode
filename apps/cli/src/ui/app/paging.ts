@@ -130,5 +130,20 @@ export function createPaging(ctx: AppContext, actions: {
     }
   }
 
-  return { openTranscript, loadEarlier }
+  /**
+   * With a sub-agent's thread open, the session's earlier pages matter only until the thread's start is among them: pages back until
+   * it is (each page is 200 events of every kind, so one scroll could add nothing to the thread), then never again for it.
+   */
+  async function loadThreadStart() {
+    const root = state.agentRoot
+    const itemId = state.agentView
+    if (!root || !itemId) return
+    for (let page = 0; page < EMPTY_PAGES && !root.agentThreadLoaded(itemId); page++) {
+      const first = state.paging?.firstSeq
+      await loadEarlier()
+      if (state.agentRoot !== root || state.agentView !== itemId || state.paging?.firstSeq === first) return
+    }
+  }
+
+  return { openTranscript, loadEarlier, loadThreadStart }
 }

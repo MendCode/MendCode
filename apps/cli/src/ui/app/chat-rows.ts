@@ -86,6 +86,8 @@ export function createChatRows(ctx: AppContext, actions: {
   transcriptWidth: () => number
   promptStatusLine: (room: number, activity?: Line) => Line | undefined
   loadEarlier(): Promise<void>
+  /** With a sub-agent's thread open: the session's earlier pages until the thread's start is loaded. */
+  loadThreadStart(): Promise<void>
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
   const { input, state, now, editor, view, glyphs: g, homeTipText, leader } = ctx
@@ -355,7 +357,10 @@ export function createChatRows(ctx: AppContext, actions: {
     const pet = pill && petShown && jumpHint === "right" ? petCells(bodyHeight) : undefined
     const pillFrom = pill && jumpHint !== "off" ? jumpFrom({ position: jumpHint, width: tw, labelWidth: pillWidth, gutter: pet ? Math.max(0, pet.cols + 1 - gutter) : 0 }) : 0
     const lastRow = visible[visible.length - 1]
-    const pillOwnRow = !!pill && bodyHeight > STICKY_MIN_BODY && visible.length >= bodyHeight && !!lastRow && textWidth(lastRow.spans.map((span) => span.text).join("").trimEnd()) > pillFrom
+    // Whether the transcript fills the body is asked of the whole transcript, not of the rows on screen: at the very top a body one row
+    // taller shows one row fewer, so asking the screen took the row back, the farthest scroll moved down a row with it and the next
+    // step up bounced, never reaching the first row (a sub-agent's brief lost its opening line).
+    const pillOwnRow = !!pill && bodyHeight > STICKY_MIN_BODY && state.transcript.totalLines(tw) >= bodyHeight && !!lastRow && textWidth(lastRow.spans.map((span) => span.text).join("").trimEnd()) > pillFrom
     if (pillOwnRow) {
       bodyHeight -= 1
       visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
@@ -403,7 +408,9 @@ export function createChatRows(ctx: AppContext, actions: {
     // At the top of the laid-out window with older blocks waiting: scrolling up lays out the next slice of them.
     const topBefore = body[0]
     if (!inlineBody && !home && state.transcript.olderBlocks > 0 && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) body[0] = withRightLabel(body[0] ?? [], tw, `↑ ${state.transcript.olderBlocks} earlier · scroll up`)
-    else if (!inlineBody && !home && state.paging && !localState.follow && state.transcript.totalLines(tw) > bodyHeight && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) {
+    // A sub-agent's thread whose start is loaded has nothing earlier: the session's paging is not about it, and its label would
+    // cover the right end of the thread's first row (the message the sub-agent was sent).
+    else if (!inlineBody && !home && state.paging && !(state.agentView !== undefined && state.agentRoot?.agentThreadLoaded(state.agentView)) && !localState.follow && state.transcript.totalLines(tw) > bodyHeight && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) {
       const label = state.paging.loading ? "loading earlier…" : !state.paging.ready ? "history unavailable" : state.paging.more ? "↑ earlier · scroll up" : state.paging.loadedEarlier ? "start of session" : ""
       if (label) body[0] = withRightLabel(body[0] ?? [], tw, label)
     }
@@ -882,7 +889,8 @@ export function createChatRows(ctx: AppContext, actions: {
       else if (view.get(state.sessionId).offset >= maxScroll()) state.transcript.loadOlder()
     }
     view.scroll(state.sessionId, lines, maxScroll())
-    if (pastTop && state.transcript.olderBlocks === 0) void actions.loadEarlier()
+    // A sub-agent's thread pages the session back only until its own start is there; past that its top is the top.
+    if (pastTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
   }
 
   return { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript }
