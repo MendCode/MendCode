@@ -97,6 +97,7 @@ export const mines: ArcadeDefinition = {
       get best() {
         return record
       },
+      moving: false,
       tick() {},
       key(key: ArcadeKey) {
         if (key === "restart") return reset()

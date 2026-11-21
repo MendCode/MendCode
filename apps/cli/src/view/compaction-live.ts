@@ -301,7 +301,8 @@ export function liveRowsNeeded(mode: LiveMode, width: number, field = 0): number
  * project note, `quiet` is one line. A mode that does not fit `maxRows` gives way to a smaller one.
  */
 export function renderLiveCompaction(input: LiveInput): LiveOutput {
-  const fits = (mode: LiveMode) => liveRowsNeeded(mode, input.width, input.arcade?.fieldRows ?? 0) <= input.maxRows
+  // A game started on a wider terminal is never drawn cut: until there is room again the panel shows instead.
+  const fits = (mode: LiveMode) => liveRowsNeeded(mode, input.width, input.arcade?.fieldRows ?? 0) <= input.maxRows && (mode !== "arcade" || (input.arcade?.view.width ?? 0) <= input.width)
   const order: LiveMode[] = input.mode === "arcade" || input.mode === "stats" || input.mode === "scratchpad" ? [input.mode, "panel", "quiet"] : input.mode === "panel" ? ["panel", "quiet"] : ["quiet"]
   const mode = order.find(fits) ?? "quiet"
   const sized = { ...input, mode }

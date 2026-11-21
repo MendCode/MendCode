@@ -1,7 +1,7 @@
 import { compactFallback } from "./compact-fallback"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { SPINNER_FRAMES } from "../../view/tool-card"
-import { advanceArcade, arcadeField, arcadeInput, isLoaded, pickGame, preload, renderLiveCompaction, startArcade } from "../lazy-pages"
+import { advanceArcade, arcadeField, arcadeInput, isLoaded, pickGame, preload, pressArcade, renderLiveCompaction, startArcade, stepArcade, viewArcade } from "../lazy-pages"
 import type { Line } from "../theme"
 import type { AppContext } from "./context"
 
@@ -39,7 +39,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     live.session = undefined
     const definition = pickGame(random, avoid)
     const field = arcadeField(definition, fitted.width, fitted.room)
-    if (field) live.session = startArcade({ definition, ...field, random, best: live.best[definition.id] ?? 0, frame: state.spinFrame })
+    if (field) live.session = startArcade({ definition, ...field, random, best: live.best[definition.id] ?? 0, now: performance.now() })
   }
 
   /** Lets go of the game, the keyboard and the scratchpad editor the panel was holding. */
@@ -73,10 +73,9 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       live.session = undefined
       live.focused = false
     }
-    if (live.session) {
-      if (live.focused) advanceArcade(live.session, state.spinFrame)
-      else live.session.frame = state.spinFrame
-    }
+    // Play time is the monotonic clock, not the app's: a game steps by the time that passed while it had the keys.
+    // Reduced motion draws no frames of its own, so there each move key is the step instead.
+    if (live.session) advanceArcade(live.session, performance.now(), live.focused && !state.reducedMotion)
   }
 
   /** The panel's rows for `width` columns and at most `room` rows, margin included; undefined when nothing shows. `indicator` says the activity line already shows a spinner, so the panel draws none. */
@@ -93,7 +92,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     const chosen = mode() === "arcade" && !live.session ? "panel" : mode()
     if (chosen === "scratchpad") void actions.ensureScratch()
     const session = live.session
-    const view = chosen === "arcade" && session ? session.instance.view({ focused: live.focused }) : undefined
+    const view = chosen === "arcade" && session ? viewArcade(session, live.focused) : undefined
     const out = renderLiveCompaction({
       mode: chosen,
       width,
@@ -144,9 +143,9 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     else if (action?.type === "leave") live.focused = false
     else if (action?.type === "next") startGame(session.definition.id)
     else if (action) {
-      session.instance.key(action.key)
+      pressArcade(session, action.key)
       // Reduced motion draws no frames of its own, so each move key is also one step of the game.
-      if (state.reducedMotion && session.definition.ticks && action.key !== "restart" && action.key !== "space") session.instance.tick()
+      if (state.reducedMotion && session.definition.ticks && action.key !== "restart" && action.key !== "space") stepArcade(session)
     }
     requestFrame()
   }

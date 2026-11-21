@@ -7,13 +7,28 @@ const PADDLE = 5
 /** Pixels the player's paddle moves per key press. */
 const STRIDE = 2
 
+/** The ball's row and vertical speed after one move of `vy` rows, mirrored off the top and bottom walls. */
+function bounce(y: number, vy: number, height: number): [number, number] {
+  const ny = y + vy
+  if (ny < 0) return [-ny, -vy]
+  if (ny >= height) return [2 * (height - 1) - ny, -vy]
+  return [ny, vy]
+}
+
+/**
+ * The ball's vertical speed off a paddle hit `offset` pixels below the paddle's top: steep off the end pixels, shallow
+ * next to them, shallow and the same way in the middle.
+ */
+export function returnAngle(offset: number, vy: number): number {
+  return offset <= 0 ? -2 : offset === 1 ? -1 : offset === 2 ? Math.sign(vy) : offset === 3 ? 1 : 2
+}
+
 /** Where a ball at (x, y) moving (vx, vy) meets column `goal` on a field `height` pixels tall, walls bouncing it. */
 export function landing(ball: { x: number; y: number; vx: number; vy: number }, goal: number, height: number): number {
   let { x, y, vy } = ball
   for (let guard = 0; x !== goal && guard < 1_000; guard++) {
-    if (y + vy < 0 || y + vy >= height) vy = -vy
+    ;[y, vy] = bounce(y, vy, height)
     x += ball.vx
-    y += vy
   }
   return y
 }
@@ -44,6 +59,14 @@ export const pong: ArcadeDefinition = {
     function serve(toward: 1 | -1) {
       ball = { x: Math.floor(width / 2), y: Math.floor(height / 2), vx: toward, vy: next() < 0.5 ? -1 : 1 }
       serving = true
+      misjudge()
+    }
+    /**
+     * The computer misjudges each ball coming its way by up to three pixels, drawn afresh for every return and every
+     * serve: one bad guess kept for every serve made it miss them all in a row.
+     */
+    function misjudge() {
+      aim = Math.floor(next() * 7) - 3
     }
     function reset() {
       points = { you: 0, cpu: 0 }
@@ -57,18 +80,19 @@ export const pong: ArcadeDefinition = {
     /** A paddle's answer: the ball goes back, steeper off the paddle's ends. */
     const returns = (top: number, y: number) => y >= top && y < top + PADDLE
     function step() {
-      let { x, y, vx, vy } = ball
-      if (y + vy < 0 || y + vy >= height) vy = -vy
+      const { x, vx } = ball
+      // The ball's height is kept in fractions of a pixel and drawn on the nearest one.
+      const [ny, vy] = bounce(ball.y, ball.vy, height)
+      const row = Math.round(ny)
       const nx = x + vx
-      const ny = y + vy
-      if (nx === 0 && vx < 0 && returns(you, ny)) {
-        ball = { x: 1, y: ny, vx: 1, vy: ny - you < 2 ? -1 : ny - you > 2 ? 1 : vy }
-        // The computer misjudges each return by up to three pixels.
-        aim = Math.floor(next() * 7) - 3
+      if (nx === 0 && vx < 0 && returns(you, row)) {
+        ball = { x: 1, y: ny, vx: 1, vy: returnAngle(row - you, vy) }
+        misjudge()
         return
       }
-      if (nx === width - 1 && vx > 0 && returns(cpu, ny)) {
-        ball = { x: width - 2, y: ny, vx: -1, vy: ny - cpu < 2 ? -1 : ny - cpu > 2 ? 1 : vy }
+      if (nx === width - 1 && vx > 0 && returns(cpu, row)) {
+        // Its returns vary in pace a little, so on no field size does a rally retrace one path for ever.
+        ball = { x: width - 2, y: ny, vx: -1, vy: returnAngle(row - cpu, vy) * (0.75 + next() * 0.5) }
         return
       }
       if (nx < 0 || nx >= width) {
@@ -87,6 +111,9 @@ export const pong: ArcadeDefinition = {
       },
       get best() {
         return record
+      },
+      get moving() {
+        return !serving && !over()
       },
       tick() {
         if (serving || over()) return
@@ -112,7 +139,7 @@ export const pong: ArcadeDefinition = {
       },
       view({ focused }) {
         const at = (x: number, y: number): Pixel => {
-          if (!over() && x === ball.x && y === ball.y) return "text"
+          if (!over() && x === ball.x && y === Math.round(ball.y)) return "text"
           if (x === 0 && returns(you, y)) return "primary"
           if (x === width - 1 && returns(cpu, y)) return "error"
           if (x === Math.floor(width / 2) && y % 4 < 2) return "border"
