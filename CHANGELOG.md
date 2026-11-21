@@ -34,6 +34,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
 - A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.
 - Send now on a queued message that the daemon had already taken no longer leaves a "queued message not found" notice stuck on the prompt.
+- The sessions list no longer reorders as you move between chats: a half-typed prompt saved when you leave a chat, or typed in the one you just opened, does not lift it to the top; only conversation moves a chat up.
 - While a turn runs with the galaxy in the panel, the terminal draws less than half as many frames: the galaxy moves on the spinner's frames instead of its own.
 - Switching to another chat of the same folder asks the daemon less: no second read of the session list, and one read of the chat's details instead of two; a bot's chat in another folder opens without a lookup first.
 - The activity line shows how long a turn has run and its tokens also when the turn started before the terminal opened it or longer ago than the loaded history reaches.

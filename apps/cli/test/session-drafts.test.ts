@@ -218,14 +218,51 @@ describe("a session with only a draft is a draft in the left list", () => {
     expect(row.map((span) => span.text).join("").length).toBeLessThanOrEqual(SIDEBAR_WIDTH)
   })
 
-  test("the time is that of the draft when it is newer than the session, and the list orders by it", () => {
+  test("the time and the order are the session's own: a draft typed after the last turn moves neither", () => {
     const base = { directory: PROJECT, createdAt: 1, lastSeq: 0, state: "idle", queued: 0, title: "" } as const
     const older = { ...base, sessionId: "a" as SessionId, updatedAt: NOW - 3_600_000 } as SessionSummary
     const typedLately = { ...base, sessionId: "b" as SessionId, updatedAt: NOW - 7_200_000, draft: { preview: "x", chars: 1, attachments: 0, images: 0, updatedAt: NOW - 60_000 } } as SessionSummary
-    expect(sessionActivityAt(typedLately)).toBe(NOW - 60_000)
+    expect(sessionActivityAt(typedLately)).toBe(NOW - 7_200_000)
     expect(sessionActivityAt(older)).toBe(NOW - 3_600_000)
     const out = renderSessionSidebar({ sessions: [older, typedLately], current: "none", focused: false, height: 20, now: NOW })
-    expect(out.rows.map((row) => row.map((span) => span.text).join("")).join("\n")).toMatch(/Draft · x +1m │/)
+    expect(out.rows.map((row) => row.map((span) => span.text).join("")).join("\n")).toMatch(/Draft · x +2h │/)
+  })
+})
+
+describe("the sessions list keeps its order while the user navigates", () => {
+  test("a prompt left half typed, saved when the user opens another chat, does not move its session up the list", async () => {
+    const d = boot()
+    // Oldest first, so the list reads Top, Mid, Old.
+    const old = d.createSession("Old chat")
+    await Bun.sleep(4)
+    const mid = d.createSession("Mid chat")
+    await Bun.sleep(4)
+    d.createSession("Top chat")
+    const t = await terminal(d, { sessionId: old })
+    const order = () => t.sidebar().flatMap((line) => ["Top chat", "Mid chat", "Old chat"].filter((title) => line.includes(title)))
+    expect(order()).toEqual(["Top chat", "Mid chat", "Old chat"])
+    await t.h.type("a half typed thought")
+    await t.click("Mid chat")
+    expect(t.h.app.sessionId).toBe(mid)
+    expect(d.store.drafts.get(old)?.text).toBe("a half typed thought")
+    expect(order()).toEqual(["Top chat", "Mid chat", "Old chat"])
+  })
+
+  test("typing in the chat just opened does not move it either", async () => {
+    const d = boot()
+    const old = d.createSession("Old chat")
+    await Bun.sleep(4)
+    d.createSession("Top chat")
+    const t = await terminal(d, { sessionId: d.store.listSessions({ directory: PROJECT })[0]!.sessionId })
+    const order = () => t.sidebar().flatMap((line) => ["Top chat", "Old chat"].filter((title) => line.includes(title)))
+    await t.click("Old chat")
+    expect(t.h.app.sessionId).toBe(old)
+    await t.h.type("typing here now")
+    await t.h.app.saveDrafts()
+    await Bun.sleep(30)
+    t.h.app.render()
+    expect(d.store.drafts.get(old)?.text).toBe("typing here now")
+    expect(order()).toEqual(["Top chat", "Old chat"])
   })
 })
 

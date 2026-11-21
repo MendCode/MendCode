@@ -73,8 +73,12 @@ export function labelSpans(label: SessionLabel, width: number, style: { fg: Colo
 /** The label as one string, for the places that cannot style the marker (the top bar, the terminal title, the palette). */
 export const labelString = (label: SessionLabel): string => (label.marker ? `${label.marker} · ${label.text}` : label.text)
 
-/** When the session last had something happen: a draft typed after the last turn is the latest thing in it. */
-export const sessionActivityAt = (session: { updatedAt: number; draft?: SessionDraft | undefined }): number => Math.max(session.updatedAt, session.draft?.updatedAt ?? 0)
+/**
+ * When the session last had conversation: the age every list shows and orders by. An unsent draft is not activity (saving one on
+ * leaving a chat, or typing in the one just opened, must not lift it up the list), the same way t3code orders threads by the latest
+ * message, never by what is being typed.
+ */
+export const sessionActivityAt = (session: { updatedAt: number }): number => session.updatedAt
 
 /** A `session.activity` push says the draft appeared or changed (an object) or went (null); a push without the field leaves it as it was. */
 export function withPushedDraft(session: SessionSummary, pushed: SessionDraft | null | undefined): SessionSummary {
