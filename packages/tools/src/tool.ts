@@ -42,7 +42,7 @@ export type ToolContext = {
   /** Asks the user a question (free text, or options plus free text); resolves to the answer, or a refusal with its reason. */
   ask?(question: QuestionPrompt): Promise<{ answered: true; text: string; answers?: string[][] } | { answered: false; reason: string }>
   /** The session's background commands (`shell` with background, `shell_output`, `shell_kill`); absent where none can run. */
-  taskStatus?(input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }): Promise<string>
+  taskStatus?(input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | "progress" | undefined; timeout_ms?: number | undefined }): Promise<string>
   background?: BackgroundPort
   /** How long a foreground `shell` command runs before it moves to the background and the model gets control back; 0 never moves it. */
   shellYieldMs?: number | undefined

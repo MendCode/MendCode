@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Ask the main agent how far along a running sub-agent is and it now answers: a short summary of what the sub-agent has done, what it is doing and what seems left, with an estimate labelled as such or "cannot estimate". It is written by a cheap model only when you ask, from the sub-agent's recorded work, for MendCode's sub-agents and for Claude Code's own.
 - The compaction arcade has new games: Blocks, Mines, Pong and Cycles against the computer, Glide, Stars and Crossing.
 - A game you are playing when compaction ends stays on screen with its score until you close it with Esc.
 - When a model greps for a function, class or symbol in a project that has a code graph, the search result now also says where it is declared and who calls it. It works for MendCode's own models and for Claude Code and its sub-agents.
