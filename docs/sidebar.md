@@ -31,7 +31,13 @@ With `/experimental bots on` the list can also hold the bots. A bot is one row: 
 
 A session row starts with a symbol: a spinner while it works, `?` while it waits for you to approve a tool, `◎` while it asks you a question, `◈` when a plan waits for your review, `✗` after a failed turn, `●` for a reply you have not read, `…` when messages are queued. The header counts every kind that waits for you. A daemon that does not say what it waits on shows `?`.
 
-On the right, a working row shows how long its turn has run (`42s`, `2m14s`, `12m`, `1h05m`), counting on the same tick that moves its spinner and only while it works; every other row shows its age. A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
+On the right, a working row shows how long its turn has run (`42s`, `2m14s`, `12m`, `1h05m`), counting on the same tick that moves its spinner and only while it works; every other row shows its age. While the session
+compacts its conversation the time reads `compacting`. A session whose sub-agents work shows how many after it, `↳2` in the working
+colour (ASCII `^2`), and spins even while it rests itself; the count covers its child sessions in a turn and an engine's own agent
+calls (Claude Code's `Agent`, background ones until their end is reported), and the selected row's detail line says
+`2 sub-agents working`. With none working, the one-folder list keeps the dim count of its listed child sessions. A bot whose chat
+rests while its sub-agents work stays working. The daemon sends both in `session.activity` and `session.list` (`agents`,
+`compacting`). A linked PR shows its number and state, `#812 open`, `#812 merged` or `#812 closed`, in the state's colour. A long title gives way first, and when it would keep under ten cells the number goes and the state stays.
 
 The selected row's detail line adds the PR's branch (or, for the open session, the folder's branch) and, in a linked worktree, `worktree <name>`. Other rows never show them.
 

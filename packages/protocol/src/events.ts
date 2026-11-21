@@ -497,6 +497,10 @@ export const SessionActivity = lazySchema(() => z.strictObject({
   pendingKind: z.enum(["approval", "question", "plan"]).optional(),
   /** True while the session is paused (`session.control`); omitted otherwise. */
   paused: z.boolean().optional(),
+  /** How many of its sub-agents work right now (child sessions in a turn, an engine's own agent calls, background ones too); omitted at none. */
+  agents: z.number().int().nonnegative().max(99).optional(),
+  /** True while the running turn compacts the conversation; omitted otherwise. */
+  compacting: z.boolean().optional(),
   /** Null explicitly clears the archive timestamp; omitted by older daemons. */
   archivedAt: z.number().int().nonnegative().nullable().optional(),
   /** The session's unsent draft, so other terminals can label an untitled session; null says it was cleared; omitted by older daemons and for peers. */

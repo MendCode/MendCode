@@ -21,6 +21,21 @@ export function elapsedLabel(ms: number): string {
   return hours < 10 ? `${hours}h${String(minutes % 60).padStart(2, "0")}m` : `${hours}h`
 }
 
+type Live = Pick<SessionSummary, "state"> & Partial<Pick<SessionSummary, "agents" | "compacting">>
+
+/** Whether the session compacts its conversation right now: the native engine's own state, or an engine's compaction in a turn. */
+export const isCompacting = (session: Live) => session.compacting === true || session.state === "compacting"
+
+/** The sub-agents working for the session right now: `↳2` in the working colour (ASCII `^2`); nothing when none works. */
+export function agentsSpans(session: Live, ascii: boolean | undefined): Array<{ text: string; fg: ColorName }> {
+  return session.agents ? [{ text: ` ${ascii ? "^" : "↳"}${session.agents}`, fg: "primary" }] : []
+}
+
+/** The selected row's words for its sub-agents: `2 sub-agents working` (compacting is already said on the row itself). */
+export function liveDetail(session: Live): string[] {
+  return session.agents ? [`${session.agents} sub-agent${session.agents === 1 ? "" : "s"} working`] : []
+}
+
 type Pr = NonNullable<NonNullable<SessionSummary["lifecycle"]>["pr"]>
 
 const PR_WORD: Record<string, string> = { OPEN: "open", MERGED: "merged", CLOSED: "closed" }

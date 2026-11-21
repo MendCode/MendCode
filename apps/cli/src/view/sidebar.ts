@@ -8,7 +8,7 @@ import type { TodoItem, TodoStatus } from "./dock"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
 import { draftSizeLabel, labelSpans, sessionActivityAt, sessionLabel } from "./session-label"
 import { lineWidth, textWidth, wrap } from "./wrap"
-import { elapsedLabel, prSpans, SETTLED_FIRST } from "./sidebar-marks"
+import { agentsSpans, elapsedLabel, isCompacting, liveDetail, prSpans, SETTLED_FIRST } from "./sidebar-marks"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
 
 /**
@@ -200,12 +200,15 @@ const RUNNING_STATES: ReadonlySet<string> = new Set(["generating", "tool", "comp
 const MARK_RANK: Record<SessionMark, number> = { approval: 0, question: 1, plan: 2, error: 3, unread: 4, running: 5, queued: 6, settled: 7, idle: 8 }
 const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", question: "info", plan: "accent", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
 
-type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind">>
+type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting">>
 
-/** The row's state: waiting for you (to approve, to answer, or to review a plan), working, failed, a reply you have not opened yet, queued or paused, settled, or nothing. */
+/**
+ * The row's state: waiting for you (to approve, to answer, or to review a plan), working, failed, a reply you have not opened yet, queued
+ * or paused, settled, or nothing. A session at rest whose sub-agents still work is working.
+ */
 export function sessionMark(session: SidebarSession, unread: boolean): SessionMark {
   if (session.state === "waiting_approval") return session.pendingKind === "question" ? "question" : session.pendingKind === "plan" ? "plan" : "approval"
-  if (RUNNING_STATES.has(session.state)) return "running"
+  if (RUNNING_STATES.has(session.state) || (session.agents ?? 0) > 0) return "running"
   if (session.state === "error") return "error"
   if (session.archivedAt !== undefined) return "settled"
   // Messages still waiting to run mean the session is not done, so queued wins over a reply not read yet.
@@ -308,7 +311,10 @@ export function renderSessionSidebar(input: {
     const time = mark === "running" && session.since !== undefined && input.now >= session.since ? elapsedLabel(input.now - session.since) : relativeTime(input.now, sessionActivityAt(session))
     const childCount = children.get(session.sessionId) ?? 0
     const pr = session.lifecycle?.pr
-    const metaOf = (withNumber: boolean): Line => [{ text: time, fg: "muted" }, ...(childCount ? [{ text: ` ${input.ascii ? "^" : "↳"}${childCount}`, fg: "muted" as const }] : []), ...(pr ? prSpans(pr, withNumber) : [])]
+    // Compacting takes the time's place; sub-agents at work show their live count in the working colour, else the listed children stay dim.
+    const clock = isCompacting(session) ? { text: "compacting", fg: "info" as const } : { text: time, fg: "muted" as const }
+    const kids = session.agents ? agentsSpans(session, input.ascii) : childCount ? [{ text: ` ${input.ascii ? "^" : "↳"}${childCount}`, fg: "muted" as const }] : []
+    const metaOf = (withNumber: boolean): Line => [clock, ...kids, ...(pr ? prSpans(pr, withNumber) : [])]
     // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
     const full = metaOf(true)
     const meta = pr && inner - 2 - lineWidth(full) - 2 < 10 ? metaOf(false) : full
@@ -320,7 +326,7 @@ export function renderSessionSidebar(input: {
     list.push({ line: spread([{ ...symbol(mark), text: `${symbol(mark).text} ` }, ...title], meta, inner), lead, id: session.sessionId, fill: selected })
     if (!selected) return
     const branch = pr?.branch || (current ? input.folder?.branch : undefined)
-    const detail = [branch ?? "", input.folder?.worktree ? `worktree ${input.folder.worktree}` : "", session.tool ? `tool ${session.tool}` : "", session.queued > 0 ? `${session.queued} queued` : "", session.paused ? "paused" : "", session.draft ? `draft ${draftSizeLabel(session.draft)}` : "", childCount ? `${childCount} child${childCount === 1 ? "" : "ren"}` : "", pr ? `PR ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : "open"}` : "", mark === "unread" ? "new reply" : mark === "error" ? "failed" : mark === "approval" ? "needs approval" : mark === "question" ? "asks you a question" : mark === "plan" ? "plan ready" : ""].filter(Boolean)
+    const detail = [branch ?? "", input.folder?.worktree ? `worktree ${input.folder.worktree}` : "", ...liveDetail(session), session.tool ? `tool ${session.tool}` : "", session.queued > 0 ? `${session.queued} queued` : "", session.paused ? "paused" : "", session.draft ? `draft ${draftSizeLabel(session.draft)}` : "", childCount ? `${childCount} child${childCount === 1 ? "" : "ren"}` : "", pr ? `PR ${pr.state === "MERGED" ? "merged" : pr.state === "CLOSED" ? "closed" : "open"}` : "", mark === "unread" ? "new reply" : mark === "error" ? "failed" : mark === "approval" ? "needs approval" : mark === "question" ? "asks you a question" : mark === "plan" ? "plan ready" : ""].filter(Boolean)
     if (detail.length) list.push({ line: [{ text: `  ${truncateEnd(detail.join(" · "), inner - 2)}`, fg: "muted" }], id: session.sessionId, detail: true, fill: true })
   }
   const settled = input.sessions.filter((session) => session.archivedAt !== undefined)
