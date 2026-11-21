@@ -38,6 +38,12 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
 - A mermaid block in an answer is now drawn whatever the model wrote: every link and node form of a flowchart, names in any language, and diagrams too wide or too large for the chat (wrapped, stacked, cut at the edge with `/diagram` to see them whole, or listed); only text that is not a diagram shows as source, with the line that was not understood instead of "unsupported diagram".
 - Clicking elsewhere or scrolling no longer pauses the arcade game or moves the keys to the prompt; Esc, q or Tab leave it.
+- In Stars, a shot always takes down a raider it meets, also one that marches into it; shots also fly faster.
+- In Breakout, the ball no longer slips between two bricks that touch at a corner, and the ends of the paddle catch it.
+- In Pong, the computer no longer misses serve after serve in a row, and on small fields a paddle that never moves no longer wins: shots off the ends of a paddle are steeper and the computer's returns vary.
+- In Glide, holding the flap key through a crash no longer starts a new flight before you see the crash.
+- An arcade game is no longer drawn cut off when the terminal gets narrower than its field: the compaction panel shows until it fits again, and the game waits where it was.
+- Arcade games keep an even pace even when frames come late, and a game that is paused, over or waiting for its first move no longer keeps the screen redrawing; Snake now says Paused when you pause it.
 - When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
 - Send now works on a steering message the model already took while a tool runs: it stops that tool and sends the message; Esc gives it back to edit or drop, as the notice now says.
 - A model you pick in a bot's chat now runs there instead of the bot's own model; picking the default again goes back to the bot's.

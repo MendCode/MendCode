@@ -15,8 +15,13 @@ export type ArcadeView = {
 
 /** A running game. State is private to the instance; the app only ticks, feeds keys and draws. */
 export type ArcadeInstance = {
-  /** One frame (about 125 ms) of the render loop; a no-op for games that only move on keys. */
+  /** One step of the game (125 ms of play); a no-op for games that only move on keys. */
   tick(): void
+  /**
+   * Whether a step would change anything now: false before the first move, while paused and once the game is over.
+   * The app keeps no frame clock for a game that is standing still.
+   */
+  readonly moving: boolean
   key(key: ArcadeKey): void
   view(options: { focused: boolean }): ArcadeView
   readonly score: number

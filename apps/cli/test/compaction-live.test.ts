@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { b59Harness } from "./b59-harness"
 import { cleanTemps, ids, NOW } from "./session-ui-harness"
 import { preload } from "../src/ui/lazy-pages"
-import { ARCADE_GAMES, advanceArcade, arcadeField, arcadeInput, pickGame, startArcade } from "../src/view/compaction-arcade"
+import { ARCADE_GAMES, advanceArcade, arcadeField, arcadeInput, pickGame, pressArcade, startArcade, viewArcade } from "../src/view/compaction-arcade"
 import { slideRow } from "../src/view/arcade/game2048"
 import { snake } from "../src/view/arcade/snake"
 import { breakout } from "../src/view/arcade/breakout"
@@ -126,6 +126,21 @@ test("under 70 columns every mode drops its frame and keeps a compact layout ins
   expect(text(await compacting("arcade", [60, 30]))).toContain("tab plays")
 })
 
+test("a game started on a wide terminal is never drawn cut when it narrows: the panel shows until the game fits again", async () => {
+  const harness = await compacting("arcade")
+  await harness.type("\t")
+  await harness.type("\x1b[C")
+  harness.size.width = 30
+  harness.app.render()
+  expect(text(harness)).not.toContain("Snake")
+  expect(text(harness)).toContain("step 2 of 3")
+  fits(harness, 30, 34)
+  harness.size.width = 100
+  harness.app.render()
+  expect(text(harness)).toContain("Arcade · Snake")
+  expect(text(harness)).toContain("tab · click  play")
+})
+
 test("a terminal too short for the chosen mode falls back to the quiet line", async () => {
   const short = await compacting("arcade", [100, 17])
   expect(text(short)).not.toContain("Arcade")
@@ -222,6 +237,33 @@ test("a game being played when the compaction completes stays, still moving and 
     expect(harness.app.editor.text).toBe("done")
     await Bun.sleep(300)
     expect(intervals.size).toBe(0)
+  })
+})
+
+test("a kept game that stands still (paused or over) holds no frame timer; moving again brings it back", async () => {
+  await liveIntervals(async (intervals) => {
+    const harness = await compacting("arcade")
+    await harness.type("\t")
+    await harness.type("\x1b[C")
+    harness.finish()
+    harness.app.render()
+    expect(text(harness)).toContain("compaction done · esc to close")
+    expect(intervals.size).toBeGreaterThan(0)
+    await Bun.sleep(300)
+    harness.app.render()
+    await harness.type(" ")
+    expect(text(harness)).toContain("Paused")
+    expect(intervals.size).toBe(0)
+    const parked = pixelsOf(harness)
+    await Bun.sleep(300)
+    harness.app.render()
+    expect(pixelsOf(harness)).toBe(parked)
+    await harness.type(" ")
+    expect(intervals.size).toBeGreaterThan(0)
+    await Bun.sleep(300)
+    harness.app.render()
+    expect(pixelsOf(harness)).not.toBe(parked)
+    await harness.type("\x1b")
   })
 })
 
@@ -325,7 +367,7 @@ test("every game has a field it can be played on and picks are random but never 
 })
 
 test("snake eats, grows, and dies on a wall; the same seed replays the same board", () => {
-  const play = () => startArcade({ definition: snake, cols: 10, rows: 6, random: () => 0.5, best: 0, frame: 0 })
+  const play = () => startArcade({ definition: snake, cols: 10, rows: 6, random: () => 0.5, best: 0, now: 0 })
   const game = play()
   const first = game.instance.view({ focused: true }).rows.map((row) => row.map((span) => span.text).join("")).join("\n")
   expect(play().instance.view({ focused: true }).rows.map((row) => row.map((span) => span.text).join("")).join("\n")).toBe(first)
@@ -338,7 +380,7 @@ test("snake eats, grows, and dies on a wall; the same seed replays the same boar
 })
 
 test("breakout launches, bounces and ends after three lost balls; 2048 slides and merges", () => {
-  const game = startArcade({ definition: breakout, cols: 12, rows: 10, random: () => 0.3, best: 0, frame: 0 })
+  const game = startArcade({ definition: breakout, cols: 12, rows: 10, random: () => 0.3, best: 0, now: 0 })
   game.instance.tick()
   expect(game.instance.view({ focused: true }).status).toBe("Space launches")
   game.instance.key("space")
@@ -348,18 +390,67 @@ test("breakout launches, bounces and ends after three lost balls; 2048 slides an
   expect(slideRow([2, 2, 4, 0])).toEqual({ row: [4, 4, 0, 0], gained: 4 })
   expect(slideRow([2, 0, 2, 2])).toEqual({ row: [4, 2, 0, 0], gained: 4 })
   expect(slideRow([2, 4, 8, 16])).toEqual({ row: [2, 4, 8, 16], gained: 0 })
-  const board = startArcade({ definition: ARCADE_GAMES[2]!, cols: 14, rows: 7, random: () => 0.1, best: 0, frame: 0 })
+  const board = startArcade({ definition: ARCADE_GAMES[2]!, cols: 14, rows: 7, random: () => 0.1, best: 0, now: 0 })
   const tiles = () => board.instance.view({ focused: true }).rows.map((row) => row.map((span) => span.text).join("")).join("\n").match(/\d+/g) ?? []
   expect(tiles()).toHaveLength(2)
   for (const key of ["left", "up", "right", "down", "left"] as const) board.instance.key(key)
   expect(tiles().length).toBeGreaterThanOrEqual(2)
 })
 
-test("a stalled render loop never fast-forwards a game by more than a few frames", () => {
-  const game = startArcade({ definition: snake, cols: 12, rows: 8, random: () => 0.5, best: 0, frame: 0 })
+test("a stalled render loop never fast-forwards a game by more than a few steps", () => {
+  const game = startArcade({ definition: snake, cols: 12, rows: 8, random: () => 0.5, best: 0, now: 0 })
   game.instance.key("right")
+  advanceArcade(game, 0)
   advanceArcade(game, 10_000)
   expect(game.instance.view({ focused: true }).status).not.toContain("Game over")
+})
+
+/** The snake's head column in a session's drawn view (its head is the one primary pixel). */
+const headOf = (session: ReturnType<typeof startArcade>) => session.instance.view({ focused: true }).rows.flatMap((row) => {
+  let column = 0
+  for (const span of row) {
+    if (span.fg === "primary") return [column]
+    column += span.text.length
+  }
+  return []
+})[0]
+
+test("games step by play time: one step per 125 ms whatever the frame timing, and paused or unfocused time is never played back", () => {
+  const game = startArcade({ definition: snake, cols: 20, rows: 12, random: () => 0.5, best: 0, now: 1_000 })
+  const start = headOf(game)!
+  pressArcade(game, "right")
+  advanceArcade(game, 1_000)
+  // Frames a little early or late, and extra frames from key presses, still give one step each 125 ms.
+  for (const at of [1_118, 1_131, 1_252, 1_290, 1_370, 1_380, 1_500]) advanceArcade(game, at)
+  expect(headOf(game)! - start).toBe(4)
+  // Unfocused for a minute, then played again: it picks up from where it was.
+  advanceArcade(game, 61_500, false)
+  advanceArcade(game, 61_510)
+  expect(headOf(game)! - start).toBe(4)
+  advanceArcade(game, 61_635)
+  expect(headOf(game)! - start).toBe(5)
+  // Paused (space) for a while: no steps owed when it moves again.
+  pressArcade(game, "space")
+  advanceArcade(game, 70_000)
+  expect(game.instance.moving).toBe(false)
+  pressArcade(game, "space")
+  advanceArcade(game, 70_010)
+  expect(headOf(game)! - start).toBe(5)
+})
+
+test("a game's view is drawn again only after a step, a key or a change of focus", () => {
+  const game = startArcade({ definition: snake, cols: 12, rows: 8, random: () => 0.5, best: 0, now: 0 })
+  const first = viewArcade(game, true)
+  expect(viewArcade(game, true)).toBe(first)
+  advanceArcade(game, 500)
+  expect(viewArcade(game, true)).toBe(first)
+  expect(viewArcade(game, false)).not.toBe(first)
+  pressArcade(game, "right")
+  const moved = viewArcade(game, true)
+  expect(moved).not.toBe(first)
+  advanceArcade(game, 500)
+  advanceArcade(game, 625)
+  expect(viewArcade(game, true)).not.toBe(moved)
 })
 
 test("the facts fold events into the numbers the panel draws and ignore replayed ones", () => {

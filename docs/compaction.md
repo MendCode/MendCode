@@ -56,7 +56,7 @@ Panels draw no spinner while the activity line shows one: a single loading indic
 | Stars | ←→ move your ship, space fires at the marching formation; three ships |
 | Crossing | arrows cross lanes of traffic to the top kerb; three knocks |
 
-The prompt gets no key while the game has focus. Clicks outside the panel and the mouse wheel do not pause the game or take its keys; only Esc/q/Tab/ctrl+c do. Games advance on the render loop's frames only while focused (one step per move key with reduced motion). Snake, Pong, Cycles and Glide draw square half-block pixels, two per character row. Each game keeps its best score for the run of the terminal.
+The prompt gets no key while the game has focus. Clicks outside the panel and the mouse wheel do not pause the game or take its keys; only Esc/q/Tab/ctrl+c do. Games advance only while focused, one step per 125 ms of play time whatever the frame timing (one step per move key with reduced motion); a game waiting for its first move, paused or over keeps no frame timer, and time spent unfocused or paused is never played back. A field wider than the terminal gives way to the compaction panel until it fits again. Snake, Pong, Cycles and Glide draw square half-block pixels, two per character row. Each game keeps its best score for the run of the terminal.
 
 A game that has focus when compaction ends stays above the prompt, still running and with its score, with "compaction done · esc to close" in its frame, until Esc/q/Tab/ctrl+c closes it. A game without focus is dropped when compaction ends; the next compaction picks a new one.
 

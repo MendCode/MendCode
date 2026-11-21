@@ -113,6 +113,9 @@ export const blocks: ArcadeDefinition = {
       get best() {
         return record
       },
+      get moving() {
+        return !over
+      },
       tick() {
         if (over) return
         frames++

@@ -71,6 +71,9 @@ export const crossing: ArcadeDefinition = {
       get best() {
         return record
       },
+      get moving() {
+        return started && !over()
+      },
       tick() {
         if (!started || over()) return
         frames++

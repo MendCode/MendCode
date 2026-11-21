@@ -1,20 +1,20 @@
 import { expect, test } from "bun:test"
 import { ARCADE_GAMES, startArcade } from "../src/view/compaction-arcade"
 import { blocks, clearRows, rotateCells } from "../src/view/arcade/blocks"
-import { breakout, paddleStride } from "../src/view/arcade/breakout"
+import { breakout, moveBall, paddleStride } from "../src/view/arcade/breakout"
 import { crossing, shiftLane } from "../src/view/arcade/crossing"
 import { cycles, reach } from "../src/view/arcade/cycles"
-import { glide, hitsGate } from "../src/view/arcade/glide"
+import { CRASH_GRACE, glide, hitsGate } from "../src/view/arcade/glide"
 import { mines, neighbours } from "../src/view/arcade/mines"
 import { pixelRows } from "../src/view/arcade/pixels"
-import { landing, MATCH_POINTS, pong } from "../src/view/arcade/pong"
+import { landing, MATCH_POINTS, pong, returnAngle } from "../src/view/arcade/pong"
 import { snake } from "../src/view/arcade/snake"
 import { stars } from "../src/view/arcade/stars"
-import type { ArcadeDefinition, ArcadeInstance, ArcadeKey } from "../src/view/arcade/types"
+import { seeded, type ArcadeDefinition, type ArcadeInstance, type ArcadeKey } from "../src/view/arcade/types"
 import type { ColorName, Line } from "../src/ui/theme"
 import { textWidth } from "../src/view/wrap"
 
-const play = (definition: ArcadeDefinition, cols = 20, rows = 12, seed = 0.42, best = 0) => startArcade({ definition, cols, rows, random: () => seed, best, frame: 0 }).instance
+const play = (definition: ArcadeDefinition, cols = 20, rows = 12, seed = 0.42, best = 0) => startArcade({ definition, cols, rows, random: () => seed, best, now: 0 }).instance
 const view = (game: ArcadeInstance) => game.view({ focused: true })
 const plain = (game: ArcadeInstance) => view(game).rows.map((row) => row.map((span) => span.text).join(""))
 const press = (game: ArcadeInstance, ...keys: ArcadeKey[]) => keys.forEach((key) => game.key(key))
@@ -99,6 +99,23 @@ test("breakout's paddle moves several cells a press, so a held key crosses the f
   expect(paddle()).toBe(0)
 })
 
+test("breakout's ball never slips between two bricks touching at a corner, and the paddle's end cells catch it", () => {
+  const field = { cols: 12, paddle: 0, paddleY: 9 }
+  const walls = new Set(["2,2", "3,3"])
+  const squeeze = moveBall({ ...field, ball: { x: 2, y: 3, vx: 1, vy: -1 }, brick: (x, y) => walls.has(`${x},${y}`) })
+  expect(squeeze.broke).toEqual({ x: 2, y: 2 })
+  expect(squeeze.ball).toEqual({ x: 2, y: 3, vx: 1, vy: 1 })
+  const beside = moveBall({ ...field, ball: { x: 5, y: 3, vx: 1, vy: 1 }, brick: (x, y) => x === 6 && y === 3 })
+  expect(beside.broke).toEqual({ x: 6, y: 3 })
+  expect(beside.ball.vx).toBe(-1)
+  // Over the paddle's last cell and heading off its end: caught, not lost.
+  const edge = moveBall({ ...field, paddle: 3, ball: { x: 7, y: 8, vx: 1, vy: 1 }, brick: () => false })
+  expect(edge.lost).toBeUndefined()
+  expect(edge.ball).toMatchObject({ y: 8, vy: -1, vx: 1 })
+  const missed = moveBall({ ...field, paddle: 3, ball: { x: 8, y: 9, vx: 1, vy: 1 }, brick: () => false })
+  expect(missed.lost).toBe(true)
+})
+
 test("blocks: pieces turn inside their box, full rows clear, a hard drop locks and scores, and the well stacks out", () => {
   expect(rotateCells([{ x: 0, y: 1 }, { x: 1, y: 1 }, { x: 2, y: 1 }, { x: 3, y: 1 }])).toEqual([{ x: 2, y: 0 }, { x: 2, y: 1 }, { x: 2, y: 2 }, { x: 2, y: 3 }])
   expect(clearRows([[1, 0], [1, 1], [0, 1], [2, 2]])).toEqual({ well: [[0, 0], [0, 0], [1, 0], [0, 1]], cleared: 2 })
@@ -152,6 +169,24 @@ test("pong: the computer reads where the ball lands, points are scored, and the 
   expect(game.score).toBe(mine!)
 })
 
+test("pong: a paddle that never moves loses its matches on small fields and large ones; shots off the paddle's ends are steep", () => {
+  expect([0, 1, 2, 3, 4].map((offset) => returnAngle(offset, -1))).toEqual([-2, -1, -1, 1, 2])
+  expect(returnAngle(2, 1.2)).toBe(1)
+  for (const [cols, rows] of [[12, 6], [16, 8], [20, 12]] as const) {
+    let won = 0
+    for (const seed of [0.1, 0.3, 0.5, 0.7, 0.9]) {
+      const game = play(pong, cols, rows, seed)
+      for (let i = 0; i < 20_000 && !/You win|computer wins/.test(view(game).status); i++) {
+        if (view(game).status.includes("serves")) press(game, "space")
+        game.tick()
+      }
+      expect(view(game).status).toMatch(/You win|computer wins/)
+      if (view(game).status.includes("You win")) won++
+    }
+    expect(won).toBeLessThanOrEqual(1)
+  }
+})
+
 test("cycles: room ahead is counted, a rider that never turns crashes, and a won round scores", () => {
   expect(reach([0, 0, 0, 1, 0, 1, 0, 1, 0], 3, 3, 0, 0, 100)).toBe(4)
   expect(reach([1, 0, 0, 0], 2, 2, 0, 0, 100)).toBe(0)
@@ -191,6 +226,21 @@ test("glide: gravity brings it down onto the floor, and flapping through the gap
   expect(game.score).toBeGreaterThan(0)
 })
 
+test("glide: a flap key still held through a crash does not skip it; once the crash has shown, space flies again", () => {
+  const game = play(glide)
+  press(game, "space")
+  for (let i = 0; i < 60 && !view(game).status.includes("Crashed"); i++) game.tick()
+  expect(view(game).status).toContain("Crashed")
+  // Key repeat keeps sending flaps between frames.
+  press(game, "space", "up", "space")
+  expect(view(game).status).toContain("Crashed")
+  expect(game.moving).toBe(true)
+  ticks(game, CRASH_GRACE)
+  expect(game.moving).toBe(false)
+  press(game, "space")
+  expect(view(game).status).not.toContain("Crashed")
+})
+
 test("stars: shots bring raiders down for points, and a ship that never fires is overrun or bombed out", () => {
   const game = play(stars)
   for (let i = 0; i < 300; i++) {
@@ -205,6 +255,39 @@ test("stars: shots bring raiders down for points, and a ship that never fires is
   expect(view(idle).status).toContain("Overrun")
   press(idle, "restart")
   expect(view(idle).title).toContain("◢◢◢")
+})
+
+test("stars: a shot never slips past a raider that marches into its cell; it only vanishes on a hit or off the top", () => {
+  /** Where the shot is drawn, or undefined while it is not on the field (or hidden under a raider). */
+  const shotOf = (game: ArcadeInstance) => {
+    const lines = plain(game)
+    const y = lines.findIndex((line) => line.includes("▕▏"))
+    return y < 0 ? undefined : { x: lines[y]!.indexOf("▕▏") / 2, y }
+  }
+  let checked = 0
+  for (let seed = 0; seed < 40; seed++) {
+    const game = play(stars, 16, 10, seed / 40)
+    const steer = seeded(seed + 1)
+    for (let i = 0; i < 400 && !view(game).status.includes("Overrun"); i++) {
+      const roll = steer()
+      if (roll < 0.3) press(game, "left")
+      else if (roll < 0.6) press(game, "right")
+      if (!shotOf(game)) {
+        const score = game.score
+        press(game, "space")
+        // A shot fired straight into a raider takes it at once; otherwise it is on the field.
+        expect(shotOf(game) !== undefined || game.score > score).toBe(true)
+      }
+      const before = shotOf(game)
+      const score = game.score
+      game.tick()
+      if (before && !shotOf(game)) {
+        checked++
+        expect(game.score > score || before.y < 2).toBe(true)
+      }
+    }
+  }
+  expect(checked).toBeGreaterThan(100)
 })
 
 test("crossing: lanes shift and wrap, the kerb is safe, traffic knocks you back, and reaching the top scores", () => {
