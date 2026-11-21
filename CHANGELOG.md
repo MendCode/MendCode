@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.19 - 2026-11-21
+
+Everything since v0.0.17 comes to stable, v0.0.18 included. Bots (`experimental.bots`) with a face, a page, memory, skills and schedules, Hermes Agent bots, and a model you pick in a bot's chat that runs there. The sessions list starts a chat in any folder with `+`, orders by what you sent and holds still under the pointer. `/today` is one chat per day that sorts memories with you. Long chats scroll and switch faster with less memory. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when started again. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, and the compaction arcade has more games.
+
+### Upgrade notes
+
+- Same code as v0.0.19-beta.3.
+
+## v0.0.19-beta.3 - 2026-11-21
+
+The sessions list starts a chat in any folder with `+` or `n`, orders by what you sent and holds still under the pointer, and a working Hermes bot shows what it runs. `/today` is one chat per day on the main model that sorts memories with you and learns what you want in it. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when a message starts them again; a session with many of them opens at once. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, a model picked in a bot's chat runs there, and the compaction arcade has seven more games that stay when compaction ends.
+
 ### New
 
 - Ask the main agent how far along a running sub-agent is and it now answers: a short summary of what the sub-agent has done, what it is doing and what seems left, with an estimate labelled as such or "cannot estimate". It is written by a cheap model only when you ask, from the sub-agent's recorded work, for MendCode's sub-agents and for Claude Code's own.
