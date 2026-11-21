@@ -214,7 +214,7 @@ it streams. `mendcode -s <id>`, `--continue` or Ctrl+S attach; a reconnecting te
 [sessions](docs/sessions.md)).
 
 `/sessions` lists them by folder, this folder or all projects, with a search row that finds a title, a folder or a pasted id.
-`/today` lists what waits for you, the sessions worth picking up and Dream's memory proposals, read-only ([today](docs/today.md)).
+`/today` opens the day's brief as a chat: what was done since yesterday per project, what waits for you and pending memories as groups; you tell it what to accept, what to decide from now on and what to report every day ([today](docs/today.md)).
 
 <p align="center">
   <img src="docs/assets/readme/sessions.svg" alt="The sessions page over all projects: sessions grouped by folder under a search row, the selected session's state, last update and id beside them." width="100%">

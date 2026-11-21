@@ -437,7 +437,7 @@ export const PROFILE_KEY_ALIASES: Readonly<Record<string, string>> = {
 }
 
 /** Keys kept so old files still read; they draw nothing of their own and are never suggested. */
-export const LEGACY_PROFILE_KEYS: ReadonlySet<string> = new Set(["rightSidebar", "showFooterContext", "tutorialDone"])
+export const LEGACY_PROFILE_KEYS: ReadonlySet<string> = new Set(["rightSidebar", "showFooterContext", "tutorialDone", "todayLastVisit", "todayMarks", "todayDismissed"])
 
 /** Profile keys that look like a guessed name: `hideTopbar` → `showTopbar`, `panel_header` → `panelHeader`, `showFooter` → `showStatus`. */
 export function nearProfileKeys(guess: string): string[] {

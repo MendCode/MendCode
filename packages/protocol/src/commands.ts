@@ -1458,17 +1458,13 @@ export const LoopUpdate = lazySchema(() => z.strictObject({
  */
 export const LoopInterpret = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.interpret"), text: z.string().min(1).max(2_000), directory: z.string().min(1).max(4096).optional() }))
 
-/** One row `/today` shows, as the triage model reads it: the page's own id, its tab and kind, and the row's text. */
-export const TodayTriageItem = lazySchema(() => z.strictObject({ id: z.string().min(1).max(200), tab: z.enum(["attention", "pickup", "memory"]), kind: z.string().min(1).max(40), title: z.string().max(120), why: z.string().max(200) }))
-export type TodayTriageItem = z.infer<typeof TodayTriageItem>
-/** What accepting a group does on `/today`: walk through the rows, pin them for today, review them in `/memory`, or nothing now. */
-export type TodayTriageAction = "review" | "mark" | "memory" | "wait"
-export type TodayTriageGroup = { title: string; reason: string; example: string; action: TodayTriageAction; ids: string[] }
 /**
- * `/today`'s `t` (docs/today.md): one tool-less call of a cheap model (the `small` role, else the main model's cheaper peer, never a
- * large model) that groups the rows and proposes one action per group. Runs nothing. Ack: `{ model, groups: TodayTriageGroup[] }`.
+ * `/today` (docs/today.md): the Today chat of this day, made in `directory` (the daemon's default folder without one) when none was
+ * opened yet today. It is a plain session on the default model of a new session; the daemon gives its turns Today's instructions
+ * and tool. Local only. Ack: `{ sessionId, fresh, kickoff? }`: `kickoff` is the first message a client submits (`user.submit`) for a
+ * chat with no turn yet, so the session's own model writes the brief.
  */
-export const TodayTriage = lazySchema(() => z.strictObject({ ...base, type: z.literal("today.triage"), directory: z.string().min(1).max(4096).optional(), items: z.array(TodayTriageItem).min(1).max(60) }))
+export const TodayOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("today.open"), directory: z.string().min(1).max(4096).optional() }))
 
 /** Read-only. Ack: `{ templates: LoopTemplateInfo[] }`. */
 export const LoopTemplates = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.templates") }))
@@ -2073,7 +2069,7 @@ export const COMMAND_SCHEMAS = {
   "loop.fire": LoopFire,
   "loop.templates": LoopTemplates,
   "loop.interpret": LoopInterpret,
-  "today.triage": TodayTriage,
+  "today.open": TodayOpen,
   "workflow.start": WorkflowStart,
   "workflow.list": WorkflowList,
   "workflow.get": WorkflowGet,

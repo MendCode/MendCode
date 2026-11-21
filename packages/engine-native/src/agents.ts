@@ -5,6 +5,8 @@ import { toolMatches, type AgentDefinition } from "@mendcode/packages"
 export type AgentProfile = Pick<AgentDefinition, "name" | "description" | "mode" | "model" | "effort" | "tools" | "deny" | "permission" | "permissionRules" | "prompt" | "temperature" | "top_p" | "options" | "steps" | "variant"> & {
   /** Set by the daemon for a bot's turn while `experimental.bots` is on: the `threads` tool is offered to it for its own chats and notes. */
   botTurn?: true
+  /** Set by the daemon for a Today chat (docs/today.md): the `today` tool is offered to it and to no other session. */
+  todayTurn?: true
 }
 
 /** The engine's view of custom agents; the daemon reads the agent files (and their trust) behind it. */

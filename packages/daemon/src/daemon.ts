@@ -176,6 +176,7 @@ import {
   DREAM_DEFAULT_MAX_TOKENS,
   MAX_PINNED_MEMORIES,
   MEMORY_CATEGORIES,
+  memoryCategoryId,
   memoryPolicyFor,
   redactEventText,
   redactSecrets,
@@ -283,7 +284,7 @@ import { searchFiles } from "./files-index"
 import { createInteractiveProcesses } from "./interactive-processes"
 import { createBackgroundTasks, type BackgroundPort, type InteractivePort, type LoopPort, type PeerPort, type ReviewPort, type WorkflowPort } from "@mendcode/tools"
 import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-notice"
-import { catalogId, catalogModel, claudeFamilyId, cheapAuxiliaryModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
+import { catalogId, catalogModel, claudeFamilyId, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
 import { createLiveTokens } from "./live-tokens"
@@ -426,7 +427,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; bot(sessionId: SessionId): import("@mendcode/tools").BotPort | undefined; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string; command?: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; bot(sessionId: SessionId): import("@mendcode/tools").BotPort | undefined; today(sessionId: SessionId): import("@mendcode/tools").TodayPort | undefined; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -998,6 +999,38 @@ export async function startDaemon(options: DaemonOptions) {
   let botRecallModule: typeof import("./bot-recall") | undefined
   /** What a bot learns with (notes, skills, schedules), loaded with the same first turn. */
   let botLearnModule: typeof import("./bot-learn") | undefined
+  /**
+   * `/today` (docs/today.md, today.ts): loaded by the first `today.open` or the first turn of a Today chat, never at start. What the
+   * user asked Today to do from now on lives in `today.json`; the daemon reads it once, on the first memory proposal or turn that
+   * asks, so a rule decides a proposal and a Today chat is recognized without loading the module.
+   */
+  let todayModule: typeof import("./today") | undefined
+  let todayPrefsNow: import("./today").TodayPrefs | undefined
+  const todayPrefs = (): import("./today").TodayPrefs => todayPrefsNow ??= (() => {
+    const none = { version: 1 as const, onboarded: false, instructions: [], rules: [], sessions: [] }
+    try {
+      const raw = JSON.parse(readFileSync(path.join(options.dir, "today.json"), "utf8")) as Partial<import("./today").TodayPrefs>
+      const list = <T,>(value: T[] | undefined, keep: (entry: T) => boolean) => (Array.isArray(value) ? value.filter((entry) => !!entry && typeof entry === "object" && keep(entry)) : [])
+      return { ...none, onboarded: raw.onboarded === true, instructions: list(raw.instructions, (entry) => typeof entry.text === "string"), rules: list(raw.rules, (rule) => rule.action === "accept" || rule.action === "decline"), sessions: list(raw.sessions, (entry) => typeof entry.sessionId === "string") }
+    } catch { return none }
+  })()
+  const isTodaySession = (sessionId: SessionId) => todayPrefs().sessions.some((entry) => entry.sessionId === sessionId)
+  /** What a Today rule says of a memory proposed in `directory` with `category`: the most specific rule wins (project and kind, project, kind). */
+  function todayMemoryRule(directory: string | undefined, category: string): "accept" | "decline" | undefined {
+    const rules = todayPrefs().rules
+    if (!rules.length) return undefined
+    const project = directory ? canonicalDir(directory) : undefined
+    const kind = memoryCategoryId(category)
+    const weight = (rule: (typeof rules)[number]) => (rule.project ? 2 : 0) + (rule.category ? 1 : 0)
+    return rules.filter((rule) => (!rule.project || rule.project === project) && (!rule.category || rule.category === kind)).sort((a, b) => weight(b) - weight(a))[0]?.action
+  }
+  async function loadToday() {
+    if (!todayModule) {
+      todayModule = await import("./today")
+      todayPrefsNow = todayModule.readTodayPrefs(options.dir)
+    }
+    return todayModule
+  }
   /** The bot a session runs as: a trusted bot of the user's own folder while the flag is on; undefined for every other session. */
   function botNameOf(sessionId: SessionId): string | undefined {
     const name = botMemoryModule && botsOn() ? store.sessionAgent(sessionId) : undefined
@@ -1050,6 +1083,7 @@ export async function startDaemon(options: DaemonOptions) {
       : "",
     botHint: () => botRecallModule && botsOn() ? `${botRecallModule.BOT_RECALL_HINT} ${botRecallModule.BOT_TOOLS_HINT}` : "",
     botMemory: (name, directory) => botMemoryModule && botsOn() ? botMemoryModule.botMemoryPrompt({ dir: options.dir, name, directory: canonicalDir(directory) }) : "",
+    today: (sessionId) => isTodaySession(sessionId),
   })
   /**
    * The model a session's agent names (a bot's `model:`) when the catalog lists it. At turn time the agent's model wins over the session's
@@ -1426,6 +1460,8 @@ export async function startDaemon(options: DaemonOptions) {
       const directory = name ? store.sessionDirectory(sessionId) : undefined
       return name && directory ? botLearnModule!.createBotPort({ dir: options.dir, name, directory: canonicalDir(directory), sessionId, redact: (text) => secrets.mask(sessionId, text), loops: { list: () => loops.list(), stop: (loopId) => loops.stop(loopId), create: createLoop } }) : undefined
     },
+    // The Today chat's tool: only for a Today chat, once its module is loaded (the turn's start loads it).
+    today: (sessionId) => (todayModule && isTodaySession(sessionId) ? todayService().port : undefined),
     loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
     // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
     loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => {
@@ -1538,6 +1574,8 @@ export async function startDaemon(options: DaemonOptions) {
         botRecallModule ??= await import("./bot-recall")
         botLearnModule ??= await import("./bot-learn")
       }
+      // A Today chat's turn loads Today's module (its tool's port), also after a restart; no other turn does.
+      if (isTodaySession(turn.sessionId)) await loadToday()
       const unread =!turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
         loopNotes.delete(turn.sessionId)
@@ -2483,7 +2521,11 @@ export async function startDaemon(options: DaemonOptions) {
     const policy = memoryPolicyFor(entry.category, settings.memoryPolicies)
     if (policy === "never") return { outcome: "dropped" }
     if (entry.scope === "session" && !(entry.sessionId && store.hasSession(entry.sessionId))) return { outcome: "dropped" }
-    const review = policy === "review" || safe.count > 0 || entry.forceReview === true || entry.cap === "review"
+    // What the user told Today for this project or kind (docs/today.md): "never keep" drops the proposal, "always accept" saves it
+    // without a review, so nothing piles up in Pending. A redacted secret and a caller's review cap still wait for the user.
+    const rule = todayMemoryRule(entry.directory, entry.category)
+    if (rule === "decline") return { outcome: "dropped" }
+    const review = safe.count > 0 || entry.cap === "review" || rule !== "accept" && (policy === "review" || entry.forceReview === true)
     const { forceReview: _forceReview, cap: _cap, origin, ...rest } = entry
     const memoryId = addMemory({ ...rest, ...(origin ? { details: { ...rest.details, ...origin } } : {}), text: safe.text, source: "agent", status: review ? "pending" : "saved" })
     return { memoryId, outcome: review ? "pending" : "saved" }
@@ -2505,6 +2547,9 @@ export async function startDaemon(options: DaemonOptions) {
   function addRevision(entry: { kind: "update" | "archive"; targetId: string; text: string; reason: string }) {
     const target = store.memories.get(entry.targetId as MemoryId)
     if (!target || target.status !== "saved") return undefined
+    // A Today rule for the target's project or kind decides the revision too: declined ones are never stored, accepted ones are applied below.
+    const rule = todayMemoryRule(target.directory, target.category)
+    if (rule === "decline") return undefined
     const memoryId = ids("memory")
     store.memories.add({
       memoryId,
@@ -2520,7 +2565,64 @@ export async function startDaemon(options: DaemonOptions) {
       reason: entry.reason,
     })
     announceMemory(memoryId, "added")
+    if (rule === "accept") decidePendingMemory(memoryId, true)
     return memoryId
+  }
+
+  /**
+   * Decides one pending proposal as `memory.update` does: a Dream revision is applied to its target or dropped, a new memory is
+   * saved or archived. A drafted action of the Memory assistant is not decided here (`/memory` reviews those).
+   */
+  function decidePendingMemory(memoryId: MemoryId, accept: boolean): "done" | "stale" | "missing" {
+    const memory = store.memories.get(memoryId)
+    if (!memory || memory.status !== "pending" || memory.details?.action) return "missing"
+    if (memory.kind === "update" || memory.kind === "archive") {
+      const resolved = store.memories.resolveRevision(memoryId, accept)
+      if (resolved.result === "not_a_revision") return "missing"
+      globalSink.append({ type: "memory.changed", memoryId, change: "deleted" })
+      if (resolved.result === "applied") globalSink.append({ type: "memory.changed", memoryId: resolved.targetId, change: "updated" })
+      return resolved.result === "stale" ? "stale" : "done"
+    }
+    if (!store.memories.update(memoryId, { status: accept ? "saved" : "archived" })) return "missing"
+    announceMemory(memoryId, "updated")
+    return "done"
+  }
+
+  /** Today's service over this daemon's sessions and memories (docs/today.md); built once, after `loadToday`. */
+  let todayBuilt: ReturnType<typeof import("./today").createToday> | undefined
+  function todayService() {
+    const brief = (session: import("@mendcode/protocol").SessionDetail): import("./today").TodaySession => ({ sessionId: session.sessionId, title: session.title, directory: session.directory, updatedAt: session.updatedAt, status: session.status ?? "idle", ...(session.summary ? { summary: session.summary } : {}), ...(session.agent ? { agent: session.agent } : {}) })
+    return todayBuilt ??= todayModule!.createToday({
+      dir: options.dir,
+      now: () => clock.now(),
+      prefs: { get: todayPrefs, set: (next) => { todayPrefsNow = next } },
+      sessions: (since) => sessionAutomation.list({ roots: true, since, hideEmpty: true, limit: 120 }).map(brief),
+      waiting: () => sessionAutomation.list({ roots: true, state: "waiting", limit: 30 }).map(brief),
+      pending: () => {
+        const waiting = store.memories.list({ status: "pending", session: "all" })
+        const origin = (memory: MemoryEntry) => (memory.details?.originSessionId ? store.sessionDirectory(memory.details.originSessionId as SessionId) : undefined)
+        return {
+          drafts: waiting.filter((memory) => memory.details?.action).length,
+          memories: waiting.filter((memory) => !memory.details?.action).map((memory) => {
+            const project = memory.directory ?? origin(memory)
+            return { memoryId: memory.memoryId, ...(project ? { project: canonicalDir(project) } : {}), category: memory.category, kind: memory.kind === "update" || memory.kind === "archive" ? memory.kind : "new" as const, text: memory.text }
+          }),
+        }
+      },
+      decide: (memoryId, accept) => decidePendingMemory(memoryId as MemoryId, accept),
+      // As the `threads` tool reads a session's last answer: its newest assistant message, only the start.
+      ending: (sessionId) => {
+        for (const item of store.recall.page(sessionId as SessionId, Number.MAX_SAFE_INTEGER, 12)) {
+          if (item.kind !== "agent_message") continue
+          let text = ""
+          for (const chunk of store.recall.chunks(item)) { text += chunk; if (text.length >= 400) break }
+          if (text.trim()) return text
+        }
+        return undefined
+      },
+      loops: () => loops.list().length,
+      canonical: canonicalDir,
+    })
   }
 
   const sessionScopes = new Map<SessionId, ReturnType<typeof root.child>>()
@@ -4847,18 +4949,33 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
         }
       }
-      case "today.triage": {
-        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: triage needs the native engine" })
-        const directory = command.directory ?? options.defaultDirectory
-        const model = cheapAuxiliaryModel({ roles: rolesFor(store.settings.get(), directory), catalog })
-        if (!model) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: no cheap model is available for triage; set the small role in /model" })
-        const { TODAY_TRIAGE_SYSTEM, TODAY_TRIAGE_TIMEOUT_MS, readTriage, todayTriageRequest } = await import("./today-triage")
+      case "today.open": {
+        // Today reads and decides memories, which are local only (as the `memory.*` commands).
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[TODAY]: Today is local only: it reads and decides memories" })
         try {
-          const answer = await completeBudgeted({ system: TODAY_TRIAGE_SYSTEM, prompt: todayTriageRequest(command.items.map((item) => ({ ...item, title: redactSecrets(item.title).text, why: redactSecrets(item.why).text }))), signal: AbortSignal.any([...(connection.signal ? [connection.signal] : []), AbortSignal.timeout(TODAY_TRIAGE_TIMEOUT_MS)]), model, auxiliary: { role: "todayTriage", ...(directory ? { directory: canonicalDir(directory) } : {}) } })
-          const groups = readTriage(answer, command.items)
-          return groups ? reply(connection, command.id, { ok: true, result: { model: model.model, groups } }) : reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${model.model} did not return groups; try again` })
+          await loadToday()
+          const directory = command.directory ?? options.defaultDirectory ?? homedir()
+          // A plain session with no model and no agent of its own: its turns run on the default model of any new session (the main role).
+          const opened = await todayService().open({
+            alive: (sessionId) => store.hasSession(sessionId as SessionId) && !store.sessionInfo(sessionId as SessionId)?.archivedAt,
+            turns: (sessionId) => store.turns.list(sessionId as SessionId).length,
+            create: async (title) => {
+              const id = ids("session")
+              store.createSession({ id, directory, title, origin: connectionOrigin(connection) })
+              sessionSharing.created(id)
+              store.meta.set(`session.title.manual:${id}`, "true")
+              announceSession(id, directory)
+              const actor = actorFor(id)
+              publishActivity(id, "idle", true)
+              // The user's default permission mode, as any new session (a session's own shell cannot send this command).
+              const mode = defaultPermissionFor(store.settings.get(), directory)
+              if (actor && mode && mode !== "ask") await actor.handle({ id: command.id, clientId: command.clientId, type: "session.permission.set", sessionId: id, mode })
+              return id
+            },
+          })
+          return reply(connection, command.id, { ok: true, result: opened })
         } catch (error) {
-          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[TODAY]: ${(error instanceof Error ? error.message : String(error)).replace(/^\[TODAY\]:\s*/, "").slice(0, 300)}` })
         }
       }
       case "loop.templates": {

@@ -1,91 +1,77 @@
 # Today
 
-`/today` is the page to open when you come back to MendCode. It lists what waits for you, the sessions worth picking up and what Dream proposes for your memory, so you can see where to get back in control. Opening the page runs nothing and calls no model; it stores only the time of your last visit, the rows you pin for today and the rows you dismiss.
+`/today` is what you open when you start your day. It is one chat: it opens with a short brief of what was done since yesterday, and then you talk to it. Ask it to accept or decline memories, to decide a project's memories from now on, or to report something in every Today, and it does that from then on.
 
-Every row says why it is there and which command or page manages it. `/today` relates what [`/reviews`](pr-review.md), [`/memory`](memory.md), `/workflows` and [`/sessions`](sessions.md) already track; it does not replace them.
+```
+Today · Sat 21 Nov
 
-## The three tabs
+  shop      3 sessions: coupon route finished; the login test still fails on CI
+  site      1 session: landing copy rewritten, not pushed
+  Waiting   shop "Run the migration" waits for your approval
+  Memory    151 pending in 3 groups: shop · conventions 120, user · preferences 30, shop · stack 1
+  Checks    status.example.test answered 200 in 0.3 s; the dashboard's newest row is from 08:55
 
-| Tab | What it lists | Read from |
+> accept the shop conventions, and from now on always accept that project's memories
+```
+
+## What the brief has
+
+| Part | What it says | Read from |
 |---|---|---|
-| Attention | sessions waiting for an approval or an answer, however long ago they asked; open pull requests whose newest review waits for you or has a blocking finding (one row per pull request, see below); workflows waiting for input; saved memories that contradict each other | `session.list`, `pr.review` status, `workflow.list`, `memory.graph` |
-| Pick up | sessions from the last 7 days whose last turn was interrupted or failed, paused sessions, and finished sessions whose folder has uncommitted changes or unpushed commits and no linked pull request | `session.list`, `git.status` (one per folder, at most six) |
-| Memory | what Dream did in its last run, then every pending memory proposal with the memory before and after | `dream.list`, `memory.list` |
+| Done | per project, the sessions that ran since yesterday 00:00 and how each ended; when nothing ran yesterday, the last day anything ran in the past week | every folder's root sessions, each with its saved summary or, without one, the start of its last answer |
+| Waiting | sessions with an approval or a question open, and sessions whose last turn failed or was interrupted | the sessions' state |
+| Memory | pending memory proposals as groups by project and kind, with counts; never one line per memory unless you ask | every project's pending proposals |
+| Standing requests | what you asked Today to do every time, carried out when the brief is written | Today's own file |
 
-**Attention or Pick up?** An Attention row is blocked: the session, review or workflow does not continue until you answer. A Pick up row waits on nobody: it was left half-done and you continue it when you choose. Each list says so in a line under its title.
+The brief is written by the chat's model, which is the default model of any new session (your `main` model role), never the `small` role. You can change the model in that chat as in any other.
 
-The paragraph on top is built from counts of these lists. "Since" is your last visit to `/today`; the first time it is the last 24 hours. A visit is recorded when the page opens, as `todayLastVisit` in the terminal profile (`tui/profile.json`). Pressing `r` reloads without moving "since".
+There is one Today chat per day. The first `/today` of the day makes it, titled `Today · <day>`, in the folder your terminal is in; later `/today` commands that day reopen it without writing a second brief (ask "brief me again" in it when you want a fresh one). Earlier days' Today chats stay in `/sessions` as ordinary sessions you can read; the 14 newest still answer as Today.
 
-A tab with nothing in it says so, for example "nothing needs you". An empty list means the daemon had nothing to report, not that a source failed: a source that could not be read adds a line under the paragraph that names it.
+## Talking to it
 
-## Keys
-
-| Key | Action |
+| You say | What Today does |
 |---|---|
-| `↑` `↓` or `j` `k` | select a row |
-| `1` `2` `3` or `tab` | switch tab |
-| `Enter` | jump to the row's session; a row without one opens the page that manages it (`/reviews`, `/workflows`, `/memory`) |
-| `m` | pin the row for today, or unpin it |
-| `x` | dismiss the row; in the dismissed list, bring it back |
-| `X` | dismiss every review untouched for 7 days or more, after one `y` (`+` and `-` change the days); in the dismissed list, bring every row back |
-| `d` | list only the dismissed rows, and back |
-| `o` | list or fold the older reviews |
-| `t` | triage: group the rows with a cheap model (see below) |
-| `[` `]` | scroll the detail |
-| `r` | read everything again |
-| `?` | show every key |
-| `esc` or `q` | back (with a triage group listed, `esc` first shows every row again) |
+| "accept the shop conventions", "accept this whole group" | saves the pending memories of that project and kind |
+| "decline the memories about the old deploy script" | reads the pending memories that mention it and declines those |
+| "from now on always accept this project's memories" | saves a rule: that project's proposals are saved without waiting, and the ones waiting now are accepted |
+| "never keep preference memories from the site project" | saves a rule: those proposals are not kept, and the ones waiting now are declined |
+| "go back to asking me about shop" | removes the rule |
+| "in every today, tell me how the billing project ended up" | saves a standing instruction that every following Today carries out |
+| "check that my VPS and the dashboards are up and receiving data" | saves a standing instruction; each Today runs the check and reports what it saw |
+| "stop checking the VPS" | removes that instruction |
 
-The header and each row's detail say what `enter` and `m` do on the selected row.
+Accepting a pending memory saves it; accepting a proposed change to a saved memory (Dream's updates and archives) applies the change. Declining archives a new proposal and drops a proposed change. A drafted action of the Memory assistant is not decided here: `/memory` reviews those.
 
-## Pinned for today
+### Memory rules
 
-`m` puts the row in a **Today** group at the top of its tab, above **The rest**. Pinning runs nothing, changes nothing in the session, review or memory, and MendCode never pins a row by itself. Pins are kept in the terminal profile as `todayMarks` (the day and at most 50 row ids) and read as none from the next day on.
+A rule names a project, a kind of memory (`commands`, `conventions`, `preferences`, `architecture`, `stack`, `release`, `constraints`, `security`, `objective`, `other`, `volatile`), or both, and says accept or decline. The most specific rule decides a proposal: project and kind, then project, then kind. A project is the folder a memory was proposed in, so a rule for a project also decides the user-wide memories proposed while working there.
 
-## Pull requests in Attention
+With an accept rule, a proposal is saved when it is made instead of waiting in Pending, so the pile does not grow. Two things still wait for you: a proposal whose text had a secret redacted, and one from Evolution in suggest mode. The limits on how many memories a project and a profile keep apply as before, and a kind whose [policy](memory.md) is `never` is still dropped. A rule set here does not change the kind's policy in `/memory`; it is applied on top of it.
 
-A pull request is one row, however many times it was reviewed. The row shows the newest head: the newest review job names it, and the newest finished, checkpointed or waiting review of that head says what waits. Earlier heads and re-reviews fold into the row's history and evidence ("4 earlier reviews of 2 older heads folded in").
+### Standing instructions
 
-A pull request has no row when:
+A standing instruction is one request in your words. Every Today lists them to its model, which carries each one out when it writes the brief, with the tools and the [permission mode](permissions.md) of that chat: a check of a server runs as a command or a web request you can see in the transcript, and asks for your approval when your mode asks for commands. The answer says what was run and what came back. When a check could not run or was refused, Today says so; it does not report a result it did not observe.
 
-- GitHub reports it merged or closed (the page reads each repository's pull requests once, cached and time-boxed, as `/reviews` does);
-- its newest head is being reviewed right now, or every review of that head failed (`/reviews` shows those);
-- its newest review has no open blocking finding and does not wait for you. Open means open on the pull request, as the commit status counts it: that review's own findings plus earlier published ones nobody resolved, so an incremental review that found nothing new keeps an earlier blocker's row.
+An instruction that carries a credential is refused: say where the secret is kept instead ([secrets](secrets.md)).
 
-A review row nobody touched for 7 days folds under one line at the end of the list, "3 older reviews folded (untouched 7+ days) · o lists them". The tab count and the paragraph count only the rows the list shows and say how many are folded or dismissed.
+## The first Todays
 
-## Dismissing rows
+While you have saved nothing, the brief ends with a short question: how do you want your Today? It proposes a shape built from what you really did in the last week (your most active projects, the agents you used, your scheduled loops, how many memories wait). Your answer is saved as standing instructions; "keep it like that" saves the proposal as it is. After that Today stops asking.
 
-`x` hides the selected row from its tab, in any tab. It stays hidden until something newer happens on it: a new question in the session, a review of a new head. `X` dismisses every review untouched for 7 days or more in one go: the paragraph asks first, `+` and `-` change the days, `y` confirms and any other key cancels.
+## What is stored and where
 
-`d` lists the dismissed rows, where `x` brings one back and `X` (after `y`) brings back every row. Dismissing runs nothing and changes nothing in the session, review or memory. The page keeps the dismissals in the terminal profile as `todayDismissed` (the row id and the row's time, the newest 300), written by MendCode; you never edit a file for it. Attention lists at most 40 rows plus 40 older reviews, counted without the dismissed ones, so dismissing rows brings up the waiting ones past the limit.
+Today keeps one file, `today.json`, in MendCode's data directory, written only by Today: your standing instructions (at most 30), your memory rules (at most 60), whether the first question was answered, and which session is each day's Today chat (the newest 14). The chat itself is an ordinary session.
 
-## Triage
+## Permissions and remote terminals
 
-With many rows (50 memory proposals, 30 sessions waiting), `t` sends the rows the tabs list (not the dismissed or folded ones; at most 60, as short text: tab, kind, title and why) to a cheap model in one call, and shows the groups it proposes: a title, why the rows belong together, an example row and one action. Nothing calls a model before you press `t`, and the answer is kept until the page closes (`t` shows it again; inside the triage view `t` asks again).
+Reading the brief and saving or removing a standing instruction ask nothing. Accepting or declining memories and setting a rule are writes: they follow the chat's permission mode like any other write.
 
-The model is the memory or `small` role when you set one, else the main model's cheaper peer (Luna for Sol). With only a large model or an external engine available, triage says so and does not call. The model's name is in the triage view's first line, and the call is counted in [usage](usage.md) as `todayTriage`.
-
-In the triage view, `↑` `↓` select a group, `enter` lists only its rows (one by one, each with its own enter), and `a` accepts the proposed action:
-
-| Action | What accepting does |
-|---|---|
-| one by one | lists only the group's rows; each one stays your call |
-| pin for today | pins the group's rows |
-| review in /memory | opens `/memory`, where `A` or `X` approve or reject what the list shows after you confirm with `y` |
-| nothing now | sets the group aside |
-
-The model never approves a command or permission, never accepts or rejects a memory and never pins a row: groups with approvals, questions, reviews or contradictions can only be walked through or pinned, and only memory rows go to `/memory`. A failed or offline call says why and leaves the rows as they were.
-
-## Remote and read-only terminals
-
-Over `--connect`, `/today` shows what the connection may read:
-
-- PR reviews are local-only and are not listed.
-- A read-only token cannot read memory, so the Memory tab and memory contradictions are not listed, and the page says so.
-- Sessions, workflows, Dream's last run and the git state of session folders are listed.
-- A read-only token cannot triage: `t` shows the daemon's refusal.
+Today is local only, as memory is: over `--connect` the command answers that it is not available.
 
 ## Cost
 
-The page loads on its first use, like the other pages, so a terminal that never opens it pays nothing at start-up. Each open asks the daemon for at most one list per source: sessions (100 at most), workflows, pending memories, Dream's runs and, with the `pr_review` feature on and a started session, the review dashboard with the pull requests' GitHub state (one cached `gh` read per repository). Nothing polls while the page is open, and no model is called except by `t`.
+Nothing of Today loads when MendCode starts: the terminal's part loads with the first `/today`, the daemon's with the first `/today` or the first turn of a Today chat. Nothing runs between visits and no timer is kept. The first `/today` of a day is one turn of your main model; reopening the chat calls no model. The daemon reads `today.json` once, the first time a memory is proposed or a turn starts.
+
+## What replaced the old page
+
+`/today` used to be a page with three tabs (Attention, Pick up, Memory), pins, dismissed rows and a triage key. Those are gone: the brief says the same in one screen and the chat does what the keys did. `/sessions`, `/reviews`, `/workflows` and `/memory` still list everything one by one. The terminal profile keys `todayLastVisit`, `todayMarks` and `todayDismissed` are no longer used and are kept only so old profile files read without a warning.
