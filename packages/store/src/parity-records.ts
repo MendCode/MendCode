@@ -47,6 +47,11 @@ export function createParityRecords(db: Database) {
       list(): TaskRecord[] {
         return db.query<{ payload: string }, []>("SELECT payload FROM child_tasks").all().map((row) => TaskRecord.parse(JSON.parse(row.payload)))
       },
+      /** One task by its id: a lookup made per session event must not read and parse every task the data directory ever held. */
+      get(id: string): TaskRecord | undefined {
+        const row = db.query<{ payload: string }, [string]>("SELECT payload FROM child_tasks WHERE id = ?").get(id)
+        return row ? TaskRecord.parse(JSON.parse(row.payload)) : undefined
+      },
       put(task: TaskRecord) {
         db.query("INSERT OR REPLACE INTO child_tasks VALUES (?, ?)").run(task.taskId, JSON.stringify(TaskRecord.parse(task)))
       },
