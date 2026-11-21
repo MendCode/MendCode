@@ -14,7 +14,6 @@ export function createWorkflows(ctx: AppContext) {
       if (omitted > 0) say(`${omitted} older workflow${omitted === 1 ? " is" : "s are"} not listed; the newest are shown`, "info")
       state.workflowsLoaded = true
       state.workflowsError = ""
-      state.workflowsState = { ...state.workflowsState, selected: Math.max(0, Math.min(state.workflowsState.selected, state.workflows.length - 1)) }
     } else state.workflowsError = reply.error.message
     requestFrame()
   }
@@ -40,7 +39,7 @@ export function createWorkflows(ctx: AppContext) {
     if (at < 0) return false
     await preload("workflows")
     state.workflows = runs
-    state.workflowsState = { ...createWorkflowsPageState("all"), selected: at }
+    state.workflowsState = createWorkflowsPageState("all", runs[at]!.workflowId)
     state.workflowsLoaded = true
     state.workflowsError = ""
     state.page = "workflows"

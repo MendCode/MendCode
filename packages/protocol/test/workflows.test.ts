@@ -10,6 +10,7 @@ import {
   WorkflowSummary,
   createIdFactory,
   summarizeWorkflow,
+  subjectOf,
   type WorkflowRun as WorkflowRunType,
 } from "../src"
 
@@ -309,5 +310,16 @@ describe("workflow.changed", () => {
     expect(GlobalEvent.safeParse({ gseq: 1, at, type: "workflow.changed", workflow: summary, deleted: true }).success).toBe(true)
     expect(GlobalEvent.safeParse({ gseq: 1, at, type: "workflow.changed" }).success).toBe(false)
     expect(GlobalEvent.safeParse({ gseq: 1, at, type: "workflow.changed", workflow: { ...summary, tasks: [{}] } }).success).toBe(false)
+  })
+})
+
+describe("subjectOf", () => {
+  test("the item a run is about, as a short name: the first of item, subject, target, without folders or extension", () => {
+    expect(subjectOf({ item: ".mend/items/cu-vault-probe.json" })).toBe("cu-vault-probe")
+    expect(subjectOf({ subject: "fix-login" })).toBe("fix-login")
+    expect(subjectOf({ item: "  ", target: "C:\\work\\api.ts" })).toBe("api")
+    expect(subjectOf({ other: "x" })).toBeUndefined()
+    expect(subjectOf(undefined)).toBeUndefined()
+    expect(subjectOf({ item: "x".repeat(300) })!.length).toBeLessThanOrEqual(120)
   })
 })

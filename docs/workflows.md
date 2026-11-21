@@ -95,27 +95,40 @@ A headless run targeting a session with an earlier pending approval exits instea
 
 ### Page keys
 
-The page opens with workflows from all projects. Press Tab to limit it to the current project.
-Each run's row leads with its state mark (`●` working, `?` waiting for you, `✓` done, `✗` failed or blocked, `·` paused,
-stopped or queued), then its name, state, tasks done and time. The selected run shows on the right from 110 columns, past a thin
-rule, and below the list under that: its mark, name, state and time, its objective, a progress bar with what is done, running,
-waiting and failed, then its folder, contract and permissions, then its tasks under their phase or step (`Step 2  0/2`; a run
-of one step has no headings) and the verification. There are no boxes. The footer lists only the keys that act on the selected
-run: `p` reads pause or resume, `t` shows when a task failed, `v` and `a` when they apply.
-After opening a task session from the list, press ↑ at an empty prompt to return to the list.
+The page opens with workflows from all projects; tab, `1` and `2` switch between this project and all. Its keys sit on the
+title row and change with what the cursor is on; `?` lists them all.
+
+The list groups runs by the work item they are about (a script's `item`, `subject` or `target` argument), else by the chat that
+started them. A group with a live run comes first and is open; finished groups stay closed until `space`. Runs of one name
+started together, such as a council's reviewers, show as one row `mend-council ×3`; repeated instant runs with the same outcome
+fold the same way. Each row leads with a mark (`●` working, `?` waiting for you, `✓` done, `◈` ended as a draft, `✗` failed or
+blocked, `·` paused, stopped or queued), then where the run is (`Build 2/7`) or how it ended (`merge-ready`, `draft`,
+`1 of 3 failed`), then its time.
+
+`enter` opens a run. Its header names the run, its item, its state and time, with one line under it: what waits for you, where it
+stopped, its outcome or its objective. Then its phases in one row (`✓ Plan ── ● Build ── ◇ Review`), how far it got
+(`phase 2 of 7 · 2 of 16 agents · 14 checks passed`), and a timeline: each phase with its time, and under it each step with its
+model, engine and effort, its tokens and time, what it is doing now, and why it failed. Checks are folded into their phase's
+count; `space` on the phase lists them. `i` shows the run's identity and limits instead. Below 110 columns the list and the run
+take the page in turn; from 110 the run sits beside the list; from 170 a third column shows its folder, limits, models and log.
+After opening a step's session, press ↑ at an empty prompt to return to the page.
 
 | Key in `/workflows` | Does |
 |---|---|
-| `↑↓` | Select run |
-| `←→` | Select task |
-| `enter` | Open the task's session |
+| `↑↓` | Select a row; in a run, a phase or step |
+| `enter` `→` | Open the run; in a run, the step's session (on a phase, its checks) |
+| `space` | Open or close a group; in a run, a phase's checks |
+| `←` `esc` | Back to the list; `esc` on the list closes the page |
+| `i` | The run's identity and limits |
 | `p` | Pause/resume |
 | `x` | Stop |
-| `t` | Retry |
+| `t` | Retry the failed step |
+| `y` `n` | Approve or reject the step that waits for you |
 | `v` | Verify |
 | `a` | Accept |
+| `b` | Evidence ledger |
 | `d` | Delete |
-| `tab` | This project / all |
+| `tab` `1` `2` | This project / all |
 
 ### Evidence ledger
 
@@ -227,7 +240,7 @@ Waiting follows pushed events, with the same completion/failure/input/timeout ex
 
 Resume/retry approval shows every frozen check command. Smart permissions always ask for autonomous controls. All model access stays in the current project.
 
-Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity, tasks and verification, with its keys in the footer and one column below 110 cells.
+Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity under `i`, the tasks as a timeline and the verification, with its keys on the title row and one pane below 110 cells.
 
 ### Protocol and client helpers
 
@@ -392,7 +405,7 @@ Queued time does not consume runtime budgets. Pause/resume cannot bypass the que
 
 Policies use existing approved workflow commands and authenticated local transport. No listener, network service, read-only remote command or dependency is added.
 
-The `/workflows` page shows phase progress/barriers, map child counts, output kinds and queue status, with tasks grouped under their phase and a compact single-column layout.
+The `/workflows` page shows phase progress, map child counts and queue status, with tasks under their phase; `i` names the barrier of the phase under the cursor.
 
 ## Script workflows
 
