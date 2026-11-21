@@ -33,11 +33,11 @@ async function boot(extra: Partial<DaemonOptions> = {}) {
   }
   const of = (sessionId: SessionId) => events.filter((event) => event.sessionId === sessionId)
   const completed = (sessionId: SessionId) => of(sessionId).filter((event) => event.type === "turn.completed").length
-  const say = async (sessionId: SessionId, text: string) => {
+  const say = async (sessionId: SessionId, text: string, ms?: number) => {
     const before = completed(sessionId)
     const sent = await client.send({ type: "user.submit", sessionId, text, attachments: [] })
     if (!sent.ok) throw new Error(sent.error.message)
-    await until(() => completed(sessionId) === before + 1)
+    await until(() => completed(sessionId) === before + 1, ms)
   }
   return { dir, daemon, client, create, of, say, port: (sessionId: SessionId) => portFor!(sessionId) }
 }
@@ -73,6 +73,29 @@ describe("threads port", () => {
     expect(text(await port(a).read({ sessionId: a }))).toContain("this session")
     expect(text(await port(a).read({ sessionId: b, before: "item_00000000000000000000000000" }))).toContain("unknown cursor")
   })
+
+  test("a long message is cut in a page, and limit=1 reads it whole, in parts with offset when it is longer still", async () => {
+    const { create, say, port } = await boot()
+    const a = await create("/work/app", "api")
+    const b = await create("/work/app", "ui")
+    const report = `${"finding ".repeat(1_000)}END-OF-REPORT`
+    await say(b, report)
+    const page = text(await port(a).read({ sessionId: b }))
+    expect(page).not.toContain("END-OF-REPORT")
+    expect(page).toContain("cut: whole with limit=1")
+    const whole = text(await port(a).read({ sessionId: b, limit: 1 }))
+    expect(whole).toContain("END-OF-REPORT")
+    expect(whole).not.toContain("cut at")
+    const huge = "x".repeat(30_000)
+    // The scripted engine streams a 30 KB answer for a few seconds, longer on a busy machine.
+    await say(b, `${huge}TAIL`, 30_000)
+    const first = text(await port(a).read({ sessionId: b, limit: 1 }))
+    expect(first).toContain("cut at 24000 characters; the rest: limit=1 offset=24000")
+    expect(first).not.toContain("TAIL")
+    const rest = text(await port(a).read({ sessionId: b, limit: 1, offset: 24_000 }))
+    expect(rest).toContain("xTAIL")
+    expect(rest).not.toContain("cut at")
+  }, 60_000)
 
   test("the end of an id names a session, and an ambiguous or unknown end names none", async () => {
     const { create, say, port } = await boot()

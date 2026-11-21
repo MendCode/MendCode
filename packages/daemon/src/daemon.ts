@@ -1741,8 +1741,11 @@ export async function startDaemon(options: DaemonOptions) {
       } finally { lease?.release() }
     },
     async compact(turn) {
-      const selected = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const agentModel = agentModelOf(turn.sessionId, catalog, turn.selection?.agent)
+      const selected = agentModel ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(selected)) return retiredEngineError
+      // Like a turn, a bot's compaction names the bot's model so the engine router picks the engine its turns ran on, not the session's default.
+      if (agentModel && turn.selection?.model?.model !== agentModel.model) turn = { ...turn, selection: { ...turn.selection, model: agentModel } }
       if (options.info?.engine !== "native") {
         const model = resolveModel({ role: "compaction", roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
         try { await budgets.guard({ model: model.model, signal: turn.signal }) }
@@ -3931,7 +3934,7 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
-  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); return snapshot !== undefined && snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
+  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); /* No actor yet: a stored queue is restored held (createSessionActor), so it waits for the user. */ return snapshot === undefined || snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
   const loopControl = async (command: Parameters<ReturnType<typeof import("./loop-control").createLoopControl>>[0]) => {
     const { createLoopControl } = await import("./loop-control")
     return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)

@@ -308,3 +308,23 @@ test("a busy owner's batch does not block another owner's ready notifications", 
     expect(h.store.sessionBackground.wakes.pending(100)).toHaveLength(16)
   } finally { wake.stop() }
 })
+
+test("the owner's notice carries a child's whole report when it fits, and names the call that reads all of a longer one", async () => {
+  const h = await start()
+  const parent = await openSession(h)
+  const compose = async (result: string) => {
+    const taskId = await openSession(h)
+    const task: TaskRecord = { taskId, parentId: parent, rootId: parent, depth: 1, generation: 1, description: "Inspect", agent: "general", background: true, state: "completed", result, createdAt: Date.now(), updatedAt: Date.now() }
+    h.store.sessionBackground.wakes.finish(task, ids("queue"))
+    let text = ""
+    const wake = createTaskOwnerWake({ store: h.store, mask: (_id, value) => value, notify: async (_id, value, id) => { text = value; return id } })
+    try { await wake.drain() } finally { wake.stop() }
+    return { text, taskId }
+  }
+  const fits = `${"finding ".repeat(500)}END-OF-REPORT`
+  expect((await compose(fits)).text).toContain("END-OF-REPORT")
+  const longer = await compose(`${"finding ".repeat(1_500)}END-OF-REPORT`)
+  expect(longer.text).not.toContain("END-OF-REPORT")
+  expect(longer.text).toContain(`sessionId=${longer.taskId} limit=1`)
+  expect(longer.text.length).toBeLessThan(7_000)
+})

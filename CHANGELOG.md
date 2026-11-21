@@ -47,6 +47,8 @@ The sessions list starts a chat in any folder with `+` or `n`, orders by what yo
 
 ### Fixed
 
+- A finished sub-agent's report now reaches the model whole: the completion notice carries it, and reading the child's thread with `limit=1` returns its last message in full instead of cut off.
+- Compacting a bot chat that runs on Claude Code now goes to Claude Code instead of answering "Nothing to compact".
 - Launching a sub-agent with a given model and reasoning effort is now one call: the `task` tool and the `delegate_task` bridge tool take `effort` (or `variant`) next to `model`, so no agent file is needed, and an effort the model does not have is refused naming the valid ones.
 - Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
 - Interrupting another session with `threads` now says when that session's queue was left held and that the user must release it; before, the answer said the queue was untouched and the calling session waited for work that did not start. The held queue of the interrupted session names the session that cancelled it instead of saying "your cancel".

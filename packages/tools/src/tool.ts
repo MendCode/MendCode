@@ -277,7 +277,7 @@ export type ThreadPort = {
   start?(input: PeerStart): Promise<ThreadResult>
   /** What a `start` into `directory` would do, for the approval: its folder, the permission mode the session would get and whether the folder is trusted. */
   startPlan?(directory: string): string
-  read(input: { sessionId: string; limit?: number | undefined; before?: string | undefined }): ThreadResult | Promise<ThreadResult>
+  read(input: { sessionId: string; limit?: number | undefined; before?: string | undefined; offset?: number | undefined }):ThreadResult | Promise<ThreadResult>
   search(input: { sessionId: string; query: string; limit?: number | undefined; before?: string | undefined }): ThreadResult | Promise<ThreadResult>
   /** `elsewhere` lets `sessionId` name a session of another project (its full id); only the `threads` tool sets it, and it always asks first. */
   message(input: { sessionId: string; text: string; elsewhere?: boolean | undefined }): Promise<ThreadResult>
