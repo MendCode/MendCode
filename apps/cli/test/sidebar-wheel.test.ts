@@ -155,6 +155,21 @@ describe("a horizontal swipe on the sidebar", () => {
     expect(shown(h)).toBe(true)
   })
 
+  test("a real trackpad swipe: dozens of reports, a decaying inertia tail, then the swipe back 250 ms after the last one", async () => {
+    const h = chatApp({ multi: false })
+    await settled(h, "chat 00")
+    await flick(h, swipeLeft, 5, 40, 12)
+    for (let gap = 16; gap <= 120; gap += 6) await flick(h, swipeLeft, 5, 1, gap)
+    expect(shown(h)).toBe(false)
+    h.clock.at += 250
+    await flick(h, swipeRight, 2, 25, 12)
+    expect(shown(h)).toBe(true)
+    for (let gap = 16; gap <= 120; gap += 6) await flick(h, swipeRight, 2, 1, gap)
+    h.clock.at += 250
+    await flick(h, swipeLeft, 5, 25, 12)
+    expect(shown(h)).toBe(false)
+  })
+
   test("away from the edge on an open list does nothing", async () => {
     const h = chatApp({ multi: false })
     await settled(h, "chat 00")

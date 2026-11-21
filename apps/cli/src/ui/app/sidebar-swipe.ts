@@ -2,8 +2,11 @@
 export const SWIPE_GAP_MS = 150
 /** Events it takes to count as a swipe: a single stray notch of a sideways wheel never toggles the list. */
 export const SWIPE_EVENTS = 3
-/** After a swipe fired, sideways events keep being ignored until this long passed without one (the tail of a trackpad's inertia). */
-export const SWIPE_COOLDOWN_MS = 400
+/**
+ * After a swipe fired, sideways events keep being ignored until this long passed without one (the tail of a trackpad's inertia, whose
+ * reports come at most about 120 ms apart). Longer than that and the swipe back, started soon after the fingers stopped, never counted.
+ */
+export const SWIPE_COOLDOWN_MS = 200
 
 export type SwipeDirection = "left" | "right"
 
