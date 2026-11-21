@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The activity line shows how long a turn has run and its tokens also when the turn started before the terminal opened it or longer ago than the loaded history reaches.
 - A bot on the balanced or full tier can message, wait on and interrupt other sessions like the main agent, instead of being limited to reading them.
 - Another session's work no longer redraws the terminal and asks the daemon for its background work several times a second; only a change you can see does.
 - Scrolling to the top of a chat or a sub-agent's thread reaches its first line and stays there, instead of bouncing a row short and hiding the start of the message sent to the sub-agent.
