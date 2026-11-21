@@ -5,7 +5,7 @@ import path from "node:path"
 import type { EnginePort, TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
 import { PROGRAM_NAME } from "@mendcode/program"
-import { graphAutopilotText } from "./prompt-guidance"
+import { graphAutopilotText, graphLocateText } from "./prompt-guidance"
 import { hostMcpPrefix } from "./host-mcp-sweep"
 
 /** The MCP server name Claude Code sees; its tools are `mcp__mendcode__<name>` there. */
@@ -34,6 +34,9 @@ export function hostInstructions(tools: readonly HostTool[], harness: "claude" |
   return [
     `MendCode's own tools (mcp__mendcode__<tool>) run in MendCode with its approvals; where one fits, call it first.${codex ? " One not listed as a tool of its own is a nested tool of exec (await tools.mcp__mendcode__graph_find({ query })), named in ALL_TOOLS." : ""}`,
     ...(has("graph_") ? [`Code: for where something is, how it works, who calls it or what a file exports, call mcp__mendcode__graph_find (then graph_callers, graph_file_api, graph_map) BEFORE ${codex ? "rg, grep, find or reading whole files" : "Bash grep/rg/find, Grep, Glob or reading whole files"}; it answers with file:line. Text search is for literal strings, logs, non-code files or when the graph has no answer.${codex ? "" : " If deferred, load them once at the first code task: ToolSearch \"select:mcp__mendcode__graph_find,mcp__mendcode__graph_callers,mcp__mendcode__graph_file_api\"."}`] : []),
+    // Where a symbol is looked up, and what the `[code graph]` block on a search is (the line a native session carries too).
+    // Its second line is about the block, which only Claude Code's searches get (a `PostToolUse` hook; Codex has none).
+    ...(has("graph_find") ? [codex ? graphLocateText().harness.split("\n")[0]! : graphLocateText().harness.replace("\n", " ")] : []),
     // The same line a native session carries (feature `graph_autopilot`): MendCode builds and refreshes the graph, so it is never skipped for lack of one.
     ...(graphAutopilot && has("graph_") ? [graphAutopilotText().harness] : []),
     ...(has("computer_") ? ["Screen and apps: you DO have computer use here. To look at, click or type in an app on the user's computer, call mcp__mendcode__computer_session, computer_observe, computer_key and computer_capture. Do not drive apps with AppleScript or say you have no computer use."] : []),

@@ -194,6 +194,64 @@ A native model always has `graph_find`, `graph_callers` and `graph_file_api` in 
 
 Graph nodes carry at most 24 edges and labels of at most 120 characters. A `codemap` entry is `{label, file?, line?, kind?, depth?}` and a side is `{title, entries, more?, flow?}` (`more` counts entries left out, `flow` is `in`, `out` or `none`); the protocol caps a side at 50 entries.
 
+## Graph answers in a text search
+
+Models reach for `grep` first. When a search asks for identifiers and the project already has a graph, MendCode adds the graph's answer to that search, so the model gets the declaration and its callers without making a second call:
+
+```
+[code graph] Where the searched names are declared and who calls them (graph_find and graph_callers give more):
+helper  function  src/b.ts:1  export  2 callers
+  called by main  src/a.ts:3
+  called by Service.run  src/a.ts:13
+  also declared: function helper  svc/main.go:16
+
+src/a.ts:1:import { helper } from "./b"
+src/b.ts:1:export function helper() {
+```
+
+The search's own output follows the block unchanged. A search that names nothing the graph knows gets no block.
+
+| Engine | Searches that get it | How |
+| --- | --- | --- |
+| Native | The `grep` tool, and `shell` running `grep`, `egrep`, `fgrep`, `rg`, `ag`, `ack`, `ugrep` or `git grep` (also after `cd … &&`, a pipe, `xargs` or `find -exec`). Sub-agents too. | The block is put above the tool's output. |
+| Claude Code | Its `Grep` tool and `Bash` running the same programs, for the main agent and its own sub-agents. | A `PostToolUse` hook MendCode registers at `initialize` returns the block as that call's `additionalContext`. |
+| Codex, pi, ACP agents | None. | They run their own tools and give MendCode no way to add to a result. They still get the prompt line below while MendCode serves them the graph tools. |
+
+### What is answered
+
+- Identifiers are read from the pattern: each alternative of `a|b`, `a\|b` or `(a|b)` that is one plain name, with anchors, `\b`, a trailing `\(` and a leading declaration word (`function`, `class`, `def`, `fn`…) set aside. `Class.method` works with `-F` or `\.`. Anything else regex-like, names shorter than three characters and common words (`TODO`, `error`…) are not identifiers.
+- A name is answered only when the graph declares exactly that name in at most four places. More than that is not one symbol, and nothing is said.
+- At most three identifiers per search, five callers of each one's most used declaration and two further declarations. The block never exceeds 25 lines or 2 KB; a line is left out, never cut.
+- A file changed since it was indexed is left out, since its line numbers may have moved.
+- A search run in a folder below the indexed one is answered from it, with a line saying where the paths start.
+
+### What it costs
+
+Nothing runs until a model searches. The command is tested for a search word; its identifiers are read by a module with no imports; the indexer loads only when they name something in a folder that already has a cache file. The graph comes from memory or, the first time, from that cache file: no walk, no scan and no build, and a project without an index is never indexed for this. An answer that is not there within 50 ms is dropped and the search returns as usual; a cache file still loading then serves the next search. A graph loaded this way is kept and dropped like any other (two projects in memory, ten idle minutes).
+
+It follows feature `codegraph` (balanced and full) and the project's `/graph off`; `MENDCODE_CODEGRAPH=0` removes it.
+
+### The prompt line
+
+While `graph_find` is listed (balanced and full, in a folder the graph indexes), the system prompt of focus, guide and full modes carries one static line (`packages/daemon/prompts/graph-locate.md`):
+
+> To locate a function, class or symbol, call graph_find first; call graph_callers before you change a symbol. A `[code graph]` block above a search result is the graph's answer for the names you searched: use its file:line instead of searching again.
+
+Claude Code (its server instructions and its sub-agents' `SubagentStart` context), Codex and ACP agents get the same with the `mcp__mendcode__` names while MendCode serves them the graph tools; only Claude Code is told about the block.
+
+### Measure it
+
+Graph calls are already in the tools breakdown of `/usage` and `mendcode stats --tools 0` (`graph_find`, `graph_callers`…; `mcp__mendcode__graph_*` from Claude Code and Codex). A search that carried a block records the identifiers answered as `meta.graphHint` on its result, in the event the session already stores. Both are read with the read-only `mendcode db`:
+
+```bash
+# Searches that carried the graph's answer, and identifiers answered
+mendcode db "SELECT count(*) AS searches, sum(json_extract(payload, '$.meta.graphHint')) AS identifiers FROM events WHERE type = 'item.completed' AND json_extract(payload, '$.meta.graphHint') > 0"
+# Graph tool calls per day
+mendcode db "SELECT day, tool, sum(calls) AS calls FROM usage_scope_tools WHERE tool LIKE '%graph_%' GROUP BY day, tool ORDER BY day"
+```
+
+A Claude Code search is counted when its hook input names the call (`tool_use_id`); the block is added either way.
+
 ## Call map in the terminal
 
 The terminal draws a `codemap` as a map, not a file list (`apps/cli/src/view/code-map.ts`):

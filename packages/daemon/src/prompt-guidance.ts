@@ -16,6 +16,7 @@ import selfKnowledgeFile from "../prompts/self-knowledge.md" with { type: "file"
 import visiblePlanFile from "../prompts/visible-plan.md" with { type: "file" }
 import renderingFile from "../prompts/rendering.md" with { type: "file" }
 import graphAutopilotFile from "../prompts/graph-autopilot.md" with { type: "file" }
+import graphLocateFile from "../prompts/graph-locate.md" with { type: "file" }
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
@@ -147,11 +148,23 @@ export function modelNote(family: PromptFocus, modelID: string | undefined): Mod
  * `harness`, appended to what MendCode tells Claude Code, Codex and ACP agents about its graph tools. Static text, so a turn's prompt never changes.
  */
 export function graphAutopilotText(): { native: string; harness: string } {
-  return once("graph-autopilot", () => {
-    const [native = "", harness = ""] = readFileSync(graphAutopilotFile, "utf8").split(/^<!-- harness -->$/m).map((block) => block.trim())
-    if (!native || !harness) throw new TypeError("[GUIDANCE]: graph-autopilot.md needs a native line, a <!-- harness --> line and a harness line")
-    return { native, harness }
-  })
+  return once("graph-autopilot", () => twoLines(graphAutopilotFile, "graph-autopilot.md"))
+}
+
+/**
+ * Where to look for a symbol, in two lines (feature `codegraph`): `native`, one line in the system prompt while `graph_find` is listed;
+ * `harness`, added to what Claude Code, Codex and ACP agents are told while MendCode serves them the graph tools. Both name the
+ * `[code graph]` block a text search gets (docs/code-graph.md, "Graph answers in a text search"); in `harness` that is its second
+ * line, sent only to the harness whose searches get the block (Claude Code). Static text.
+ */
+export function graphLocateText(): { native: string; harness: string } {
+  return once("graph-locate", () => twoLines(graphLocateFile, "graph-locate.md"))
+}
+
+function twoLines(file: string, name: string): { native: string; harness: string } {
+  const [native = "", harness = ""] = readFileSync(file, "utf8").split(/^<!-- harness -->$/m).map((block) => block.trim())
+  if (!native || !harness) throw new TypeError(`[GUIDANCE]: ${name} needs a native line, a <!-- harness --> line and a harness line`)
+  return { native, harness }
 }
 
 /** The generated texts name the program as `{{program}}`: the name the user typed (`mendcode`, or a developer's wrapper) is only known at run time. */
