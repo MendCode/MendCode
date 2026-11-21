@@ -12,6 +12,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
+- An unsent draft is no longer lost when you switch to a chat and leave it again before it finished opening.
+- The start screen's title under a pet fades from white to grey in the MendCode theme, with no light blue.
 
 ## v0.0.19-beta.2 - 2026-11-21
 

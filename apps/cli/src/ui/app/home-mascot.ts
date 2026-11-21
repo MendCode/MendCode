@@ -106,7 +106,8 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       const theme = activeTheme()
       // A 16-color palette or ASCII glyphs cannot carry a picture: the home draws its ASCII mascot instead.
       const textOnly = options.ascii() || theme.ansi !== undefined
-      const title = (row: string, width: number) => gradientSpans(row, width, theme.colors.primary, theme.colors.info)
+      // The title fades from the theme's primary to its secondary: under MendCode that is ink (#fafafa) to grey, with no hue the brand lacks.
+      const title = (row: string, width: number) => gradientSpans(row, width, theme.colors.primary, theme.colors.secondary)
       if (state.tuiProfile.homeMascot === "mend") {
         // A pet chosen before in this run stops: its picture and timer are not the built-in Mend's.
         if (visible) {

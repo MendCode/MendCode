@@ -350,6 +350,8 @@ export function createSession(ctx: AppContext, actions: {
     state.returnPrompt = undefined
     if (state.editingGoal) endGoalEdit()
     if (promptOwned) {
+      // Its draft comes back once the chat has opened (`restoreDraft` below): leaving before that must not save this empty prompt over it.
+      drafts.opening(next)
       editor.clear()
       editor.resetHistory()
       state.attachments = []
