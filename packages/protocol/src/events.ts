@@ -116,6 +116,8 @@ export const TurnCancelled = lazySchema(() => z.strictObject({
   type: z.literal("turn.cancelled"),
   turnId: TurnId,
   by: z.enum(["user", "promotion"]),
+  /** The session whose `threads` interrupt cancelled the turn; absent when the user cancelled it themselves. */
+  cancelledBy: z.strictObject({ sessionId: SessionId, title: z.string().max(200) }).optional(),
 }))
 
 export const TurnInterrupted = lazySchema(() => z.strictObject({

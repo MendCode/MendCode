@@ -42,6 +42,8 @@ You comment on specific passages of the assistant's answer, and everything goes 
 
 Pending comments are saved with the draft. A session switch keeps each session's own, and a restart brings them back with their marks.
 
+Each send of comments, and each time comments come back as chips (from the session's draft, a stashed draft or a queued message taken back), adds one line to `<data dir>/logs/comments.log`: the time, what happened, the session and how many comments, never their text. It starts over past 64 KB. It is there to trace a comment that came back after it was sent.
+
 ### Keys
 
 | action | default key | does |

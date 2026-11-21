@@ -21,6 +21,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Comments on the answer that are sent, or that come back as chips, leave one line without their text in `logs/comments.log`, so a comment that returns after it was sent can be traced.
 - Breakout's paddle moves faster, and Snake is drawn with square cells.
 - In the sessions list, Enter or a click on a project, a bot or its chats only folds and opens it; a chat starts from its `+` or `n`. Looking at a Hermes bot no longer makes an empty session.
 - Sessions and projects in the list are ordered by the last message you sent, so an agent that works or answers no longer moves rows.
@@ -35,6 +36,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
+- Interrupting another session with `threads` now says when that session's queue was left held and that the user must release it; before, the answer said the queue was untouched and the calling session waited for work that did not start. The held queue of the interrupted session names the session that cancelled it instead of saying "your cancel".
+- `mendcode session inspect`, `status` and `list` now show a session with no turn and a held queue as `held`, with how many messages wait, instead of `running`.
 - A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
 - A mermaid block in an answer is now drawn whatever the model wrote: every link and node form of a flowchart, names in any language, and diagrams too wide or too large for the chat (wrapped, stacked, cut at the edge with `/diagram` to see them whole, or listed); only text that is not a diagram shows as source, with the line that was not understood instead of "unsupported diagram".
 - Clicking elsewhere or scrolling no longer pauses the arcade game or moves the keys to the prompt; Esc, q or Tab leave it.

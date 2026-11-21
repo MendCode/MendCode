@@ -7,7 +7,8 @@ import { fastReach } from "./view/fast-mode"
 export function sessionHuman(session: SessionDetail, waiting: ReadonlyArray<{ requestId: string; kind: string; tool?: string; detail: string }> = []) {
   return [
     `${session.sessionId}  ${session.title}`,
-    `State: ${session.status}`,
+    // Held is not running: the queue waits for the user, and whoever reads this must not wait for the session to go on.
+    `State: ${session.status === "held" ? `held (${session.queued} queued; no turn is running; the queue waits for the user to send it)` : session.status}`,
     `Agent: ${session.agent ?? (session.permission === "plan" ? "plan" : "build")}`,
     `Model: ${session.model ? `${session.model.model}${session.model.variant ? ` (${session.model.variant})` : ""}` : "runtime default"}`,
     `Directory: ${session.directory}`,
