@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A chat whose latest turns are mostly sub-agent work no longer opens at the top over an empty band: it sits at the bottom over the prompt and older history is read until the screen is full.
 - New ChatGPT subscription models appear in the native harness by themselves: the list is asked as the latest Codex release, checked once a day, so a model OpenAI adds needs no MendCode update.
 - A pasted block or multi-line message that mentions a command such as `/mend-decide` is sent as your message instead of running that command with the whole text as its arguments and showing it as a notice.
 - A message brought back into the prompt (↑ history, a queued message taken back, Esc Esc, a stash or a draft) shows its large pastes and images as the same chips it was written with, and a message sent after a draft is left and reopened keeps its paste. A bot's unsent new chat is the one you return to from its row.
