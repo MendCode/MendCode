@@ -12,7 +12,7 @@ import { until } from "./native-harness"
 
 const cleanups: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close() })
-async function boot(fakeAcp = false) {
+async function boot(fakeAcp = false, extra: Partial<Parameters<typeof startDaemon>[0]> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "thread-bridge-daemon-"))
   const project = path.join(dir, "project")
   mkdirSync(project)
@@ -67,6 +67,7 @@ async function boot(fakeAcp = false) {
       { id: "acp:demo", name: "ACP", efforts: [] },
       { id: "pi:configured", name: "pi", engine: "pi", efforts: [] },
     ] },
+    ...extra,
     threadMcpListener: (fetch) => { handler = fetch; opened++; return { url: "http://127.0.0.1:12345/mcp", stop: () => { stopped++ } } },
     engine: (ports) => { tasks = ports.tasks; return { needsCompaction: () => false, compact: async () => ({ status: "ok" }), runTurn: async (turn) => {
       seen.push(turn)
@@ -356,4 +357,40 @@ test("an external peer turn without the bridge retains its local-data restrictio
   await h.remote({ type: "user.submit", sessionId: parent, text: "bridge", attachments: [] })
   await until(() => h.daemon.store.turns.list(parent).at(-1)?.status === "completed")
   expect(h.daemon.store.meta.get(`session.local-tools.restricted:${parent}`)).toBe("true")
+})
+
+test("task_progress on a Claude Code session reads its sub-agent's thread and asks the Claude Haiku or Sonnet tier, counted as an auxiliary call", async () => {
+  const asked: Array<{ model: string; prompt: string }> = []
+  const h = await boot(false, {
+    claudeComplete: async (request) => { asked.push({ model: request.model.model, prompt: request.prompt }); return { text: "Done: searched exports.\nNow: reading the diff.\nLeft: the report.\nEstimate: cannot estimate.", usage: { provider: "claude", model: request.model.model, input: 900, output: 60 } } },
+    complete: async () => { throw new Error("a Claude Code session does not use the native provider here") },
+  })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true } } })
+  const parent = await h.create()
+  const results: any[] = []
+  h.run(async (turn) => {
+    const call = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent review the API", subagent: true, background: true } })
+    const prompt = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: prompt, kind: "user_message", meta: { agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: prompt, status: "ok", text: "Review the public API for breaking changes.", meta: { agentParent: call } })
+    const step = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: step, kind: "tool_call", meta: { tool: "Grep: export", agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: step, status: "ok", text: "found", meta: { agentParent: call } })
+    await until(() => (h.daemon.store.lastSeq(parent) ?? 0) >= 8)
+    results.push(await h.invoke(turn, "task_progress", {}))
+    results.push(await h.invoke(turn, "task_progress", { task_id: "ses_nope" }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(results[0].result.isError).toBe(false)
+  expect(results[0].result.content[0].text).toContain("Estimate: cannot estimate.")
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.model).toBe("claude-sonnet")
+  expect(asked[0]!.prompt).toContain("Review the public API for breaking changes.")
+  expect(asked[0]!.prompt).toContain("tool: Grep: export")
+  expect(results[1].result.content[0].text).toContain("Unknown sub-agent ses_nope")
+  const day = new Date().toISOString().slice(0, 10)
+  const rows = h.daemon.store.usageAuxiliary.report({ from: day, to: day })
+  expect(rows.filter((row) => row.role === "summary").map((row) => [row.role, row.model, row.input, row.output, row.calls])).toEqual([["summary", "claude-sonnet", 900, 60, 1]])
 })

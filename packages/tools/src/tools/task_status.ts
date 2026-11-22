@@ -11,19 +11,20 @@ const BACKGROUND_ID = /^bg_/
 export default defineTool({
   name: "task_status",
   description:
-    "Status of this session's background shell tasks and workflows (id from workflow_start), without waiting or consuming output; without id, lists both. With an id: state, exit code, how much output is unread and its end. Child tasks: task_id with action list/get/cancel/wait (a wait defaults to 30000 ms, max 300000). Do not poll in a loop: shell_output with waitMs waits.",
+    "Status of this session's background shell tasks and workflows (id from workflow_start), without waiting or consuming output; without id, lists both. With an id: state, exit code, how much output is unread and its end. Child tasks: task_id with action list/get/cancel/wait (a wait defaults to 30000 ms, max 300000). Action progress, only when the user asks how far a sub-agent is: summary of done, now and left. Do not poll in a loop: shell_output with waitMs waits.",
   permission: "read",
   args: z.object({
     task_id: z.string().optional(),
-    action: z.enum(["list", "get", "wait", "cancel"]).optional(),
+    action: z.enum(["list", "get", "wait", "cancel", "progress"]).optional(),
     timeout_ms: z.number().int().min(1).max(300_000).optional(),
     id: z.string().min(1).max(200).optional().describe("A background task id (bg_…) or a workflow id; omit to list everything"),
     tailChars: z.number().int().min(0).max(MAX_TAIL_CHARS).optional().describe(`Characters of a task's output to show from its end (default ${DEFAULT_TAIL_CHARS})`),
   }),
   async execute({ id, tailChars, task_id, action, timeout_ms }, context) {
     if (task_id || action) {
+      if (action === "progress" && !context.taskStatus) return fail({ title: "task_status", message: "sub-agent progress is not available here" })
       if (!context.taskStatus) return fail({ title: "task_status", message: "child tasks are not available here" })
-      if (action && action !== "list" && !task_id) return fail({ title: "task_status", message: "task_id required for get, wait and cancel" })
+      if (action && action !== "list" && action !== "progress" && !task_id) return fail({ title: "task_status", message: "task_id required for get, wait and cancel" })
       try { return { output: await context.taskStatus({ task_id, action, timeout_ms }), title: "child task", truncated: false, isError: false } }
       catch (error) { return fail({ title: "task_status", message: String(error) }) }
     }

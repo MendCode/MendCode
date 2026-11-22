@@ -37,6 +37,7 @@ const schemas = {
     bare: z.boolean().optional(),
     ...retry,
   }),
+  task_progress: z.strictObject({ task_id: z.string().min(1).max(80).optional() }),
   orchestrator_capabilities: z.strictObject({}),
 }
 type Name = keyof typeof schemas
@@ -49,9 +50,10 @@ const descriptions: Record<Name, string> = {
   thread_search: "Search a bounded page of another project thread. Follow the before cursor for older history.",
   thread_interrupt: "Interrupt the running turn of another project thread.",
   delegate_task: "Start a child agent on any configured engine/model with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
+  task_progress: "Use only when the user asks how far along a running sub-agent is (yours, or one started with delegate_task): a short summary from a cheap model of what it has done, what it is doing now and what seems left, with a labelled estimate or \"cannot estimate\". task_id is optional when one sub-agent runs; a finished or unknown one is answered plainly. Do not call it to poll.",
   orchestrator_capabilities: "Describe this process's project-scoped thread tools and limits.",
 }
-const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "orchestrator_capabilities"].includes(name) } }))
+const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "task_progress", "orchestrator_capabilities"].includes(name) } }))
 
 /**
  * What the other harness's model is told about delegation (MCP `instructions`, which Claude Code puts in its system prompt; Codex
@@ -65,6 +67,7 @@ export function threadInstructions(input: { engine: BridgeEngine; models: Readon
   const call = input.engine === "codex" ? "tools.mcp__mendcode_threads__delegate_task (a nested tool of exec)" : "mcp__mendcode_threads__delegate_task"
   return [
     `Sub-agents on MendCode's models, not only this harness's own (your own sub-agent tool runs only those): ${call}, with model an exact id below and engine its group (none for native). A model the user names is one of these ids; never say it does not exist without looking here.${input.engine === "claude" ? ` If it is deferred, load it with ToolSearch "select:mcp__mendcode_threads__delegate_task".` : ""}`,
+    `When the user asks how far along a running sub-agent is, call ${input.engine === "codex" ? "tools.mcp__mendcode_threads__task_progress" : "mcp__mendcode_threads__task_progress"}: it summarizes the sub-agent's recorded work; never answer that progress cannot be known.`,
     ...(listed.length ? [`Models: ${listed.join("; ")}. \`${PROGRAM_NAME} models\` lists all.`] : []),
   ].join("\n")
 }
@@ -211,6 +214,8 @@ export function createThreadMcp(options: {
       threads: ThreadPort
       create(title: string): Promise<ThreadResult>
       delegate(args: TaskInput, signal: AbortSignal): Promise<ThreadResult>
+      /** A short summary of how far along a running sub-agent is (cheap model, on demand); absent: `task_progress` says it is unavailable. */
+      progress?(taskId: string | undefined, signal: AbortSignal): Promise<string>
       /** Normal host tool policy, including explicit deny; rechecked after approval. */
       authorize(name: string, args: Record<string, unknown>, read: boolean): Promise<boolean>
       receipts?: { project: string; run: ReturnType<typeof createOrchestrationReceipts>["run"] }
@@ -233,8 +238,8 @@ export function createThreadMcp(options: {
         instructions: threadInstructions({ engine: input.engine, models: input.models ?? [] }),
         allowed: input.allowed,
         async run(name, args, signal) {
-          if (name === "orchestrator_capabilities") return { ok: true, output: "Local project only. create, message, wait, read, search, interrupt, delegate_task. Full tier; normal approvals; child permission ceiling; 10-minute idle / 1-hour maximum token lifetime. 200 calls per turn; calls sent together run one after another. delegate_task children: 4 running at once per agent and 16 in the conversation by default (the user changes both in /settings, Subagents); a limit error says the current number. No engine-internal child projection." }
-          const read = name === "thread_list" || (["thread_read", "thread_search", "thread_wait"].includes(name) && input.threads.granted(String(args.sessionId)))
+          if (name === "orchestrator_capabilities") return { ok: true, output: "Local project only. create, message, wait, read, search, interrupt, delegate_task, task_progress (how far along a running sub-agent is, only when the user asks). Full tier; normal approvals; child permission ceiling; 10-minute idle / 1-hour maximum token lifetime. 200 calls per turn; calls sent together run one after another. delegate_task children: 4 running at once per agent and 16 in the conversation by default (the user changes both in /settings, Subagents); a limit error says the current number. No engine-internal child projection." }
+          const read = name === "thread_list" || name === "task_progress" || (["thread_read", "thread_search", "thread_wait"].includes(name) && input.threads.granted(String(args.sessionId)))
           if (!await input.authorize(name, args, read) || !valid(lease)) return { ok: false, message: "Thread operation denied" }
           const execute = async (): Promise<ThreadResult> => {
             switch (name) {
@@ -245,6 +250,7 @@ export function createThreadMcp(options: {
               case "thread_search": return input.threads.search(args as { sessionId: string; query: string; limit?: number; before?: string })
               case "thread_wait": return input.threads.wait({ ...args as { sessionId: string; timeoutSeconds?: number }, signal })
               case "thread_interrupt": return input.threads.interrupt(args as { sessionId: string })
+              case "task_progress": return input.progress ? { ok: true, output: redact(lease, await input.progress(args.task_id as string | undefined, signal)) } : { ok: false, message: "Sub-agent progress is not available here" }
               case "delegate_task": return input.delegate({ ...args as TaskInput, background: args.background !== false }, signal)
             }
           }

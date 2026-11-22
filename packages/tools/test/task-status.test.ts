@@ -90,6 +90,18 @@ describe("task_status", () => {
     expect(list.meta).toMatchObject({ background: 1, running: 1 })
   })
 
+  test("action progress asks the child-task port for the sub-agent's progress, with or without an id", async () => {
+    const seen: unknown[] = []
+    const context = { ...makeContext({ cwd: tempDir() }), taskStatus: async (input: unknown) => (seen.push(input), "progress text") }
+    expect(await runTool(taskStatus, { action: "progress" }, context)).toMatchObject({ isError: false, output: "progress text" })
+    expect(await runTool(taskStatus, { action: "progress", task_id: "ses_child" }, context)).toMatchObject({ isError: false, output: "progress text" })
+    expect(seen).toEqual([{ task_id: undefined, action: "progress", timeout_ms: undefined }, { task_id: "ses_child", action: "progress", timeout_ms: undefined }])
+    expect(taskStatus.description).toContain("only when the user asks how far a sub-agent is")
+    expect(await runTool(taskStatus, { action: "progress" }, makeContext({ cwd: tempDir() }))).toMatchObject({ isError: true, output: "sub-agent progress is not available here" })
+    // The other actions still need an id.
+    expect((await runTool(taskStatus, { action: "wait" }, context)).isError).toBe(true)
+  })
+
   test("without the ports it says what is missing instead of failing oddly", async () => {
     const bare = makeContext({ cwd: tempDir() })
     expect(await runTool(taskStatus, {}, bare)).toMatchObject({ isError: false, output: "Background tasks:\nnone" })

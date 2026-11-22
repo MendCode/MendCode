@@ -1082,6 +1082,7 @@ export const daemon = await startDaemon({
   formatter,
   models: modelCatalog,
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
+  ...(engineName === "native" ? { claudeComplete: (request: { system: string; prompt: string; signal: AbortSignal; model: import("@mendcode/protocol").ModelChoice }) => runClaudeAdvisor({ bin: claudeBin, cwd: quotaProbeDir(dir), ...request }) } : {}),
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
       const fullMemory = fullMemoryTier(extractionSettings())

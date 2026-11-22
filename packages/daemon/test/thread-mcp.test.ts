@@ -33,7 +33,7 @@ function fixture(engine: "claude" | "codex" | "acp:demo" = "codex") {
   let allow = true
   let enabled = true
   let authorize = async () => allow
-  const lease = service.open({ engine, turn: turn(), allowed: () => enabled, threads: port, authorize: () => authorize(), create: async () => (calls.push("create"), { ok: true, output: "created" }), delegate: async (args) => (calls.push(`delegate:${args.engine}:${args.background}${args.task_id ? `:${args.task_id}:${args.model}` : ""}`), { ok: true, output: "child queued" }) })
+  const lease = service.open({ engine, turn: turn(), allowed: () => enabled, threads: port, authorize: () => authorize(), create: async () => (calls.push("create"), { ok: true, output: "created" }), delegate: async (args) => (calls.push(`delegate:${args.engine}:${args.background}${args.task_id ? `:${args.task_id}:${args.model}` : ""}`), { ok: true, output: "child queued" }), progress: async (taskId) => (calls.push(`progress:${taskId}`), `progress of ${taskId ?? "the only one"}`) })
   const config = engine === "claude" ? JSON.parse(readFileSync(lease.args[1]!, "utf8")).mcpServers.mendcode_threads : undefined
   const authorization = lease.servers[0]!.headers[0]!.value
   const request = (method: string, params: unknown = {}, patch: { authorization?: string; origin?: string; url?: string; body?: string } = {}) => service.handle(new Request(patch.url ?? "http://127.0.0.1:12345/mcp", {
@@ -93,11 +93,23 @@ test("ACP leases use a session server list, per-agent opt-in and the existing re
   expect((await released.request("tools/list")).status).toBe(403)
 })
 
+test("task_progress asks for a sub-agent's progress, is read-only and takes only a task id", async () => {
+  const h = fixture("claude")
+  const listed = (await (await h.request("tools/list")).json()).result.tools.find((tool: any) => tool.name === "task_progress")
+  expect(listed.annotations.readOnlyHint).toBe(true)
+  expect(listed.description).toContain("how far along")
+  expect((await h.call("task_progress", { task_id: "ses_child" })).result.content[0].text).toBe("progress of ses_child")
+  expect((await h.call("task_progress", {})).result.content[0].text).toBe("progress of the only one")
+  expect(h.calls).toEqual(["progress:ses_child", "progress:undefined"])
+  expect((await h.call("task_progress", { sessionId: "x" })).error.code).toBe(-32602)
+  expect(threadInstructions({ engine: "claude", models: [] })).toContain("mcp__mendcode_threads__task_progress")
+})
+
 test("stateless MCP discovery and bounded thread verbs reuse ports, with no arbitrary command surface", async () => {
   const h = fixture()
   expect((await (await h.request("initialize", { protocolVersion: "2025-06-18" })).json()).result.protocolVersion).toBe("2025-06-18")
   const result = await (await h.request("tools/list")).json()
-  expect(result.result.tools.map((tool: any) => tool.name)).toEqual(["thread_list", "thread_create", "thread_message", "thread_wait", "thread_read", "thread_search", "thread_interrupt", "delegate_task", "orchestrator_capabilities"])
+  expect(result.result.tools.map((tool: any) => tool.name)).toEqual(["thread_list", "thread_create", "thread_message", "thread_wait", "thread_read", "thread_search", "thread_interrupt", "delegate_task", "task_progress", "orchestrator_capabilities"])
   expect((await h.call("thread_read", { sessionId: "local_thread" })).result.content[0].text).toContain("‹secret:1›")
   expect((await h.call("thread_read", { sessionId: "other_project" })).result.isError).toBe(true)
   for (const [name, args] of [["thread_create", { title: "check" }], ["thread_message", { sessionId: "local_thread", text: "hello" }], ["thread_wait", { sessionId: "local_thread", timeoutSeconds: 1 }], ["thread_search", { sessionId: "local_thread", query: "word" }], ["thread_interrupt", { sessionId: "local_thread" }], ["delegate_task", { description: "review", prompt: "review", engine: "claude", model: "claude-sonnet" }]] as const) expect((await h.call(name, args)).result.isError).toBe(false)

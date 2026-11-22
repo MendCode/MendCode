@@ -241,7 +241,7 @@ export const PLAN_TOOL = {
 export const TASK_TOOL = {
   name: "task",
   description:
-    "Delegate a self-contained subtask to a sub-agent with fresh context and the same tools (not main-agent controls or question): independent research or focused changes that would flood your context. Give a complete prompt; it cannot see this conversation. task_id continues a saved child with its history, and model moves it to another model. background returns at once; task_status inspects or waits.",
+    "Delegate a self-contained subtask to a sub-agent with fresh context and the same tools (not main-agent controls or question): independent research or focused changes that would flood your context. Give a complete prompt; it cannot see this conversation. task_id continues a saved child with its history, and model moves it to another model. background returns at once; task_status inspects, waits or summarizes progress.",
   args: z.object({
     description: z.string().min(1).max(80).describe("3-8 word label shown to the user"),
     prompt: z.string().min(1).max(20_000).describe("Full instructions and context for the sub-agent, including what to return"),
