@@ -14,7 +14,7 @@ const SCROLL_KEYS = new Set(["\x1b[5~", "\x1b[6~", "\x1b[H", "\x1bOH", "\x1b[1~"
 /** A second Esc inside this window (idle, empty prompt) opens the backtrack picker. */
 export const BACKTRACK_ESC_MS = 2_000
 /** What editing a steering message says once the engine holds it until its running tool ends. */
-export const STEER_TAKEN = "already handed to the model: it reads it when the running tool ends and it can no longer be edited · send a correction as a new message"
+export const STEER_TAKEN = "already handed to the model: it reads it when the running tool ends · send now stops that tool and sends it · Esc stops the turn and gives it back to edit or drop"
 
 /**
  * Getting text back into the prompt: a queued prompt pulled out of the queue, the queue after an interrupt, a search over

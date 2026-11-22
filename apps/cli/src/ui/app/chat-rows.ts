@@ -390,8 +390,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight + popup.length).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
     // message and the prompt; once it overflows the view follows the bottom. One with earlier history still to read is only the
-    // newest part of a longer chat: it sits at the bottom, over the prompt, while the pages above it come in.
-    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight && !state.paging?.more
+    // newest part of a longer chat: it sits at the bottom, over the prompt, while the pages above it come in. That history is the
+    // conversation's: a sub-agent's thread shown in its place starts at the top like any short chat.
+    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight && !(state.paging?.more && state.agentView === undefined)
     if (topAnchored && visible.length > 0 && body[0]?.some((span) => span.text.trim())) body.unshift([])
     const blankAbove = topAnchored ? body.length - visible.length : 0
     while (body.length < bodyHeight) home || cleared || topAnchored ? body.push([]) : body.unshift([])

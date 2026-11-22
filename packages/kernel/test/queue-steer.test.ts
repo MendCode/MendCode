@@ -487,6 +487,20 @@ test("a message taken while the tools run shows as steering until the model read
   expect(s.manual.turns).toHaveLength(1)
 })
 
+test("send now on a message the engine already took stops the running turn, and the message starts a turn of its own", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const queueId = s.queued(await s.submit("while the tool runs"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  expect(lastQueue(s)).toMatchObject([{ queueId, delivery: "steer" }])
+  expect(await s.command({ type: "queue.promote", queueId })).toEqual({ ok: true })
+  expect(input.signal.aborted).toBe(true)
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("while the tool runs")
+})
+
 test("a message taken while the tools run and not read before a cancel goes back to the queue, held, and goes with the next message", async () => {
   const s = setup({ mode: "after-tools" })
   await s.submit("first")
