@@ -80,6 +80,12 @@ export const labelString = (label: SessionLabel): string => (label.marker ? `${l
  */
 export const sessionActivityAt = (session: { updatedAt: number }): number => session.updatedAt
 
+/**
+ * Where a session stands in the left list: when a person last wrote in it, else when it was made. A reply, a tool, a sub-agent or
+ * a scheduled run never moves a row, so the list holds still while agents work; the age shown stays `sessionActivityAt`.
+ */
+export const sessionOrderAt = (session: { updatedAt: number; createdAt?: number | undefined; lastHumanAt?: number | undefined; orderAt?: number | undefined }): number => session.lastHumanAt ?? session.orderAt ?? session.createdAt ?? session.updatedAt
+
 /** A `session.activity` push says the draft appeared or changed (an object) or went (null); a push without the field leaves it as it was. */
 export function withPushedDraft(session: SessionSummary, pushed: SessionDraft | null | undefined): SessionSummary {
   if (pushed === undefined) return session

@@ -433,7 +433,7 @@ export type TuiProfile = {
   sidebarProjectsFrom: SidebarProjectsFrom
   /** Project folders hidden by hand (canonical, at most 200): never listed, the opened folder apart. Unhide in `/customize` › Hidden projects. */
   sidebarHiddenProjects: string[]
-  /** Sessions each project of that list shows before its `+ N more` row (1..50); the open one and the busy ones always show. */
+  /** Sessions each project and each bot of that list shows before its `+ N more` row (1..50), the same for every one; the open session takes the last place when it is further down. */
   sidebarPreviewCount: number
   /** Projects that list shows before its `+ N more projects` row (1..30); 0 fills the sidebar's height. The open one and the busy ones always show. */
   sidebarProjectCount: number
@@ -683,7 +683,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebarProjects: "auto",
   sidebarProjectsFrom: "you",
   sidebarHiddenProjects: [],
-  sidebarPreviewCount: 5,
+  sidebarPreviewCount: 3,
   sidebarProjectCount: 0,
   sidebarRecentDays: 7,
   sidebarLayout: "bots-first",

@@ -1516,6 +1516,8 @@ const botParts = lazyValue(() => {
     /** The session's own status (`running`, `waiting_for_input`, `failed`, `idle`, …), as `session.get` reports it. */
     status: z.string(),
     updatedAt: z.number().int().nonnegative(),
+    /** Where the chat stands in a list: when a person last wrote in it, else when it was made. A reply never changes it. */
+    orderAt: z.number().int().nonnegative().optional(),
   })
   /** One bot's sessions in one project directory. Several folders at once are several groups. */
   const project = z.strictObject({ directory: z.string().max(4096), state, sessions: z.array(session) })
@@ -1565,6 +1567,16 @@ const botParts = lazyValue(() => {
     projects: z.array(project).optional(),
     /** The state the app itself reported, before its MendCode chats are counted: it stands whenever those chats are all idle. */
     appState: state.optional(),
+    /** What the bot does in its own app right now: the sessions it has running there, newest first (at most 8). Read-only; they are not MendCode sessions. */
+    activity: z.array(z.strictObject({
+      /** The session's id in that app. */
+      id: z.string().min(1).max(200),
+      title: z.string().max(200).optional(),
+      /** What started it there (`cli`, `kanban`, `cron`, a chat platform…). */
+      source: z.string().max(64).optional(),
+      startedAt: z.number().int().nonnegative().optional(),
+      activeAt: z.number().int().nonnegative().optional(),
+    })).max(8).optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),
@@ -1668,3 +1680,20 @@ export const BotMemory = lazySchema(() => z.strictObject({
   directory: z.string().min(1).max(4096).optional(),
   text: z.string().trim().min(1).max(2_000).optional(),
 }))
+
+/**
+ * Read-only: the newest messages of a session a bot of another app has in that app (`external[].activity[].id`), read from the app
+ * through its connector when asked for and never stored. Ack: `BotActivityReport`. Local only.
+ */
+export const BotActivity = lazySchema(() => z.strictObject({
+  ...botBase,
+  type: z.literal("bot.activity"),
+  /** The connector's id (`external[].origin`). */
+  origin: z.string().min(1).max(64),
+  /** The bot's id in its app (`external[].id`). */
+  bot: z.string().min(1).max(200),
+  session: z.string().min(1).max(200),
+  limit: intIn(1, 100).optional(),
+}))
+/** The messages oldest first; `more` says older ones exist in the app. A `tool` message is a tool's name and the start of what it answered. */
+export type BotActivityReport = { messages: Array<{ role: "user" | "assistant" | "tool"; text: string; tool?: string; at?: number }>; more: boolean }

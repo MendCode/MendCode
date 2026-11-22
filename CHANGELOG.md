@@ -16,10 +16,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A game you are playing when compaction ends stays on screen with its score until you close it with Esc.
 - When a model greps for a function, class or symbol in a project that has a code graph, the search result now also says where it is declared and who calls it. It works for MendCode's own models and for Claude Code and its sub-agents.
 - Models are told to look a symbol up in the code graph first, and to check its callers before changing it.
+- The sessions list has a `+ New chat…` row and a `+` at the end of every project and bot: pick a folder (the open one first, type a name or a path) and start a chat there, with a bot too. `n` does it from the keyboard, `N` from any row.
+- A Hermes bot that is working shows the sessions it runs in Hermes under it; opening one shows its messages to read.
 
 ### Changed
 
 - Breakout's paddle moves faster, and Snake is drawn with square cells.
+- In the sessions list, Enter or a click on a project, a bot or its chats only folds and opens it; a chat starts from its `+` or `n`. Looking at a Hermes bot no longer makes an empty session.
+- Sessions and projects in the list are ordered by the last message you sent, so an agent that works or answers no longer moves rows.
+- Every project and bot shows the same number of sessions (`sidebarPreviewCount`, now fewer by default); the open session takes the last place and busy ones out of sight are counted in the header instead of adding rows.
+- The list holds still while the keyboard or the pointer is on it, and `r` brings it up to date. A click on a row that changed under the pointer an instant before is ignored.
 - `/today` is now one chat per day instead of a page with tabs. It opens with a short brief of what was done since yesterday per project, what waits for you and your pending memories as groups with counts, written by your main model, and then you talk to it.
 - In the Today chat you can accept or decline memories by group, project, kind or topic, and tell it to always accept or never keep a project's or a kind's memories from now on, so they stop piling up in Pending.
 - Anything you ask Today to do every day ("tell me how project X ended", "check that my server is up") is kept and carried out in every following Today, with your normal permissions; a check it could not run is reported as such.

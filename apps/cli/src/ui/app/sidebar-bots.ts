@@ -1,9 +1,10 @@
 import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "@mendcode/protocol"
-import { botChatsName, botKey, botMoreName, botName, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput } from "../../view/sidebar-multi"
+import { botChatsName, botKey, botMoreName, botName, externalActivityOf, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalActivityId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, isNewChatId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput, type SidebarHold } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
 import { markAnimates, restingWorkflow, sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
 import { botIndex, patchBotReport } from "../../view/bot-live"
 import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
+import { sessionOrderAt } from "../../view/session-label"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
 import { readFile, stat } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
@@ -42,6 +43,10 @@ const PUSHED_MAX = 500
 const CLASSIFIED_MAX = 2000
 /** How many sessions of every folder the all-projects list asks for. */
 const ALL_LIMIT = 200
+/** The list holds still this long after the pointer or the selection left it. */
+const HOLD_AFTER_MS = 2000
+/** A pointer resting on the list without a report for this long no longer holds it (a terminal that reports no motion never says it left). */
+const HOLD_IDLE_MS = 60_000
 
 /** The linked worktrees keep a `.git` file that points into the main repo's `.git/worktrees/<name>`. */
 const WORKTREE_MARKER = "/.git/worktrees/"
@@ -96,7 +101,61 @@ export function createSidebarBots(ctx: AppContext) {
   /** The folders that are projects, asked of the disk once each and off the render path; a remote terminal has no local disk to ask. */
   const probe = input.remote
     ? { isProject: (directory: string) => eligibleDirectory({ directory, home, tmpRoots }), eligible: (directory: string) => eligibleDirectory({ directory, home, tmpRoots }), canonical: (directory: string) => directory }
-    : createProjectProbe({ home, tmpRoots, inspect: input.inspectProject ?? inspectOnDisk, onChange: requestFrame })
+    : createProjectProbe({ home, tmpRoots, inspect: input.inspectProject ?? inspectOnDisk, onChange: () => { release(); requestFrame() } })
+
+  /**
+   * The list holds still (docs/sidebar.md "A list that holds still"): while the selection is in it, while the pointer is over it, and
+   * `HOLD_AFTER_MS` after either left, the rows drawn keep their places and no row joins or leaves. What each row shows still moves
+   * (its mark, title, age, counts). The user's own acts on the list (a fold, a more row, a new chat, `r`) take the list as it is now.
+   */
+  const hold: SidebarHold = {}
+  let pointerInside = false
+  let pointerAt = Number.NEGATIVE_INFINITY
+  let leftAt = Number.NEGATIVE_INFINITY
+  let wasFocused = false
+  let thawTimer: ReturnType<typeof setTimeout> | undefined
+  /** A mouse report: over the list or not. */
+  function pointer(inside: boolean) {
+    const at = now()
+    if (inside) { pointerInside = true; pointerAt = at }
+    else if (pointerInside) {
+      pointerInside = false
+      leftAt = Math.max(leftAt, at)
+      // No frame follows a pointer that only moved away: the timer that ends the hold is set from here.
+      if (hold.behind) armThaw()
+    }
+  }
+  /** Until when the list holds: forever while the selection is in it, undefined when nothing holds it. */
+  function heldUntil(): number | undefined {
+    const at = now()
+    const focused = state.sidebarFocus === true
+    if (wasFocused && !focused) leftAt = Math.max(leftAt, at)
+    wasFocused = focused
+    if (focused) return Number.POSITIVE_INFINITY
+    const until = Math.max(pointerInside ? pointerAt + HOLD_IDLE_MS : Number.NEGATIVE_INFINITY, leftAt + HOLD_AFTER_MS)
+    return until > at ? until : undefined
+  }
+  /** The next build takes the list as it is now (and holds that, if something still holds it). */
+  function release() {
+    hold.rows = undefined
+    hold.behind = false
+  }
+  /** `r` in the list: the list as it is now, and both lists asked again. */
+  function refresh() {
+    release()
+    stale = true
+    pump()
+    requestFrame()
+  }
+  /** One unreferenced timer, only while a held list is behind: it draws the list again when the hold ends. */
+  function armThaw() {
+    const until = heldUntil()
+    if (thawTimer !== undefined) clearTimeout(thawTimer)
+    thawTimer = undefined
+    if (!hold.behind || until === undefined || until === Number.POSITIVE_INFINITY) return
+    thawTimer = setTimeout(() => { thawTimer = undefined; requestFrame() }, Math.max(0, until - now()) + 1)
+    thawTimer.unref?.()
+  }
 
   /** The face modules, loaded by the first frame of a terminal that draws images, or by opening a bot's page; never otherwise. */
   let faceModule: typeof import("../../view/bot-face") | undefined
@@ -171,11 +230,11 @@ export function createSidebarBots(ctx: AppContext) {
     } finally { loadingOthers = false }
     requestFrame()
   }
-  /** Both lists whole; the slow safety refresh is pushed back from here. */
-  function loadAll() {
+  /** Both lists whole; the slow safety refresh is pushed back from here. A first or overdue load (`fresh`) is the list itself arriving, so a held list takes it; the slow refresh leaves a held list as it is. */
+  function loadAll(fresh = true) {
     stale = false
     safetyAt = now() + SAFETY_MS + ctx.random() * JITTER_MS
-    void Promise.all([botsOn() ? loadBots() : undefined, allProjects() ? loadOthers() : undefined]).catch(() => undefined)
+    void Promise.all([botsOn() ? loadBots() : undefined, allProjects() ? loadOthers() : undefined]).then(() => { if (fresh) { release(); requestFrame() } }).catch(() => undefined)
   }
 
   /** Whether the list is on screen now: in the chat, in a size that draws it. Hidden, nothing below does any work. */
@@ -193,7 +252,7 @@ export function createSidebarBots(ctx: AppContext) {
     if (!live() || !shown()) return stopTimer()
     const at = now()
     if (stale || (botsOn() && !botsLoaded && !loadingBots) || (allProjects() && !othersLoaded && !loadingOthers)) loadAll()
-    else if (safetyAt !== undefined && at >= safetyAt) loadAll()
+    else if (safetyAt !== undefined && at >= safetyAt) loadAll(false)
     else if (botsDueAt !== undefined && at >= botsDueAt && !loadingBots) void loadBots().catch(() => undefined)
     arm()
   }
@@ -275,7 +334,8 @@ export function createSidebarBots(ctx: AppContext) {
 
   /**
    * Chats this terminal started with a bot, by session id: the bot's name, or an external bot's row id. They sit under the bot from the
-   * first frame that lists them (never under Projects), before any pushed summary or bot list says so; the bot's chats open to show them.
+   * first frame that lists them (never under Projects), before any pushed summary or bot list says so. Starting one never opens a
+   * folded `chats` row: the row carries the open chat's bar instead.
    */
   const chatHosts = new Map<string, string>()
   /** The newest blank chat this terminal opened for a bot in a folder (by bot and folder), while it may still hold an unsent message. */
@@ -283,7 +343,6 @@ export function createSidebarBots(ctx: AppContext) {
   function noteChat(sessionId: string, host: string) {
     chatHosts.set(sessionId, host)
     if (chatHosts.size > CLASSIFIED_MAX) chatHosts.delete(chatHosts.keys().next().value!)
-    open.set(hostKey(host), true)
   }
 
   /** Whose chat a session is, with the look its bot carries (a MendCode bot's identity, or the generated one of an external bot); undefined for any other session. */
@@ -311,8 +370,12 @@ export function createSidebarBots(ctx: AppContext) {
     return visits
   }
 
+  /** What the held rows were built for: another profile, flag or shape of the list is another list, taken as it is. */
+  let heldFor: unknown[] = []
   function model(over: Partial<MultiInput> & { height: number; icons: boolean }): MultiInput {
+    if (heldUntil() === undefined) release()
     return {
+      ...(heldUntil() !== undefined ? { hold } : {}),
       sessions: sessions() as never,
       current: state.sessionId,
       directory: openedDirectory(),
@@ -337,15 +400,18 @@ export function createSidebarBots(ctx: AppContext) {
     }
   }
 
-  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean; scroll?: import("../../view/sidebar-window").SidebarScroll }): { lines: Line[]; hits: Array<{ row: number; id: string; fold?: { from: number; to: number } }>; images: ImagePlacement[] } {
+  function draw(options: { height: number; icons: boolean; unread: readonly string[]; spinner?: string; blink?: boolean; ascii: boolean; header: boolean; scroll?: import("../../view/sidebar-window").SidebarScroll }): { lines: Line[]; hits: Array<{ row: number; id: string; fold?: { from: number; to: number }; plus?: { from: number; to: number } }>; images: ImagePlacement[] } {
     iconsNow = options.icons
     lastFrame = { height: options.height, header: options.header }
+    const shape = [state.tuiProfile, botsOn(), options.icons, options.height, options.header, options.ascii]
+    if (shape.some((part, at) => part !== heldFor[at])) { heldFor = shape; release() }
     // First show, a show after pushes came while hidden, a flag turned on after this was made, the slow safety refresh: whatever is due.
     pump()
     // The bots' pictures: only with the flag on, bots listed and an image layer; the face modules load on that first frame, the glyphs hold until then.
     if (botsOn() && report?.bots.length && layerOn()) void loadFaces()
     const faces = botsOn() && !options.ascii ? iconFaces() : undefined
     const drawn = renderMultiSidebar(model({ ...options, ...(faces ? { faces } : {}) }))
+    armThaw()
     return { lines: drawn.rows, hits: drawn.hits, images: drawn.images }
   }
 
@@ -366,9 +432,10 @@ export function createSidebarBots(ctx: AppContext) {
   function pageMore({ bump, reset }: { bump(): void; reset(): void }) {
     const before = new Set(stops())
     bump()
+    release()
     const fresh = stops().find((id) => !before.has(id))
     if (fresh) state.sidebarSelected = fresh
-    else reset()
+    else { reset(); release() }
     requestFrame()
   }
   const pageOf = (key: string) => pageMore({ bump: () => revealed.set(key, (revealed.get(key) ?? 0) + REVEAL_PAGE), reset: () => revealed.delete(key) })
@@ -382,22 +449,103 @@ export function createSidebarBots(ctx: AppContext) {
     if (!current) return
     if (isGroupId(id)) open.set(groupDirectory(id), current !== "open")
     else open.set(isBotId(id) ? botKey(botName(id)) : isBotChatsId(id) ? hostKey(botChatsName(id)) : id, current !== "open")
+    release()
     requestFrame()
   }
   const toggleBotMore = (name: string) => pageOf(hostKey(name))
 
-  /** Enter or a click on a row's name: a project or a bot (or its chats row) starts a new chat, a more row reveals a page, a session opens. */
+  /**
+   * Enter or a click on a row: a header (a project, a bot, its chats row, another app's bots) folds or opens and starts nothing, a more
+   * row reveals a page, the `+ New chat…` row opens the folder picker, a row of what a bot does in its own app opens it to read, a
+   * session opens. A chat is started only by `newChat` (the `+` that ends a row, or `n`).
+   */
   async function activate(id: string, deps: SidebarDeps) {
-    if (isGroupId(id)) return startFolderChat(groupDirectory(id), deps)
+    if (isNewChatId(id)) return pickFolder(undefined, deps)
     if (isMoreProjectsId(id)) return pageMore({ bump: () => { projectsRevealed += REVEAL_PAGE }, reset: () => { projectsRevealed = 0 } })
     if (isMoreId(id)) return toggleMore(id)
-    if (isExternalGroupId(id)) return toggleFold(id)
-    if (isBotChatsId(id)) return isExternalBotId(botChatsName(id)) ? startExternalChat(botChatsName(id), deps) : startChat(botChatsName(id), deps)
     if (isBotMoreId(id)) return toggleBotMore(botMoreName(id))
-    if (isBotId(id)) return startChat(botName(id), deps)
-    if (isExternalBotId(id)) return startExternalChat(id, deps)
+    if (isGroupId(id) || isExternalGroupId(id) || isBotChatsId(id) || isBotId(id) || isExternalBotId(id)) return toggleFold(id)
+    if (isExternalActivityId(id)) return openActivity(id)
     state.sidebarFocus = false
     await deps.switchSession(id as SessionId)
+  }
+
+  /** The bot a row belongs to: a bot's own row, its chats row, or one of its chats. The name of a MendCode bot or the row id of another app's. */
+  function hostOfRow(id: string): string | undefined {
+    if (isBotId(id)) return botName(id)
+    if (isExternalBotId(id)) return id
+    if (isBotChatsId(id)) return botChatsName(id)
+    if (isBotMoreId(id)) return botMoreName(id)
+    if (isGroupId(id) || isMoreId(id) || isMoreProjectsId(id) || isNewChatId(id) || isExternalGroupId(id) || isExternalActivityId(id)) return undefined
+    const session = sessions().find((candidate) => candidate.sessionId === id)
+    const named = chatHosts.get(id) ?? botOfSession.get(id) ?? (session?.agent !== undefined && report?.bots.some((bot) => bot.name === session.agent) ? session.agent : undefined)
+    if (named !== undefined) return named
+    const external = report?.external.find((candidate) => (session?.model !== undefined && candidate.chat === session.model.model) || candidate.projects?.some((project) => project.sessions.some((member) => member.sessionId === id)))
+    return external ? externalBotId(external) : undefined
+  }
+
+  /**
+   * `n` on a row, or a click on the `+` that ends it: a new chat where the row says. A project (or one of its sessions) starts it in
+   * that folder at once; a bot (or one of its chats) asks for the folder first, the open one on top, so Enter twice is a chat with
+   * the bot right here; any other row asks for the folder of a plain chat.
+   */
+  async function newChat(id: string, deps: SidebarDeps) {
+    if (isGroupId(id)) return startFolderChat(groupDirectory(id), deps)
+    if (isMoreId(id)) return startFolderChat(moreDirectory(id), deps)
+    const host = hostOfRow(id)
+    if (host !== undefined) return pickFolder(host, deps)
+    const session = isNewChatId(id) || isMoreProjectsId(id) || isExternalGroupId(id) || isExternalActivityId(id) ? undefined : sessions().find((candidate) => candidate.sessionId === id)
+    if (session) return startFolderChat(session.directory, deps)
+    return pickFolder(undefined, deps)
+  }
+  const openedCanonical = () => probe.canonical(openedDirectory())
+
+  /** The folders a new chat can start in without typing: the open one, then every folder with a session, the one a person wrote in last first. */
+  function knownFolders(): string[] {
+    const latest = new Map<string, number>()
+    for (const session of sessions()) {
+      if (session.archivedAt !== undefined || !probe.eligible(session.directory)) continue
+      const directory = probe.canonical(session.directory)
+      if (hiddenSet().has(directory)) continue
+      latest.set(directory, Math.max(latest.get(directory) ?? 0, sessionOrderAt(session)))
+    }
+    const opened = openedDirectory()
+    const ranked = [...latest].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([directory]) => directory).filter((directory) => directory !== opened && directory !== openedCanonical())
+    return [...(opened ? [opened] : []), ...ranked]
+  }
+
+  /** The "New chat in…" picker over the list (ui/app/new-chat-picker.ts), loaded by its first use; `host` makes it "Chat with <bot> in…". */
+  async function pickFolder(host: string | undefined, deps: SidebarDeps) {
+    const external = host !== undefined && isExternalBotId(host) ? externalOf(host) : undefined
+    if (host !== undefined && isExternalBotId(host) && !external) return say("that bot is gone from the list · /bot list shows them", "warning")
+    if (external && !external.chat) return say(`${external.name} cannot be chatted with from here`, "warning")
+    state.sidebarPicker ??= (await import("./new-chat-picker")).createNewChatPicker(ctx)
+    state.sidebarPicker.show({
+      title: host === undefined ? "New chat in…" : `Chat with ${external?.name ?? host} in…`,
+      folders: knownFolders(),
+      base: openedDirectory() || home,
+      home,
+      remote: Boolean(input.remote),
+      async start(directory) {
+        release()
+        if (host === undefined) return startFolderChat(directory, deps)
+        state.sidebarFocus = false
+        const sessionId = external ? await createExternalSession(external, directory) : await createBotSession(host, directory)
+        if (!sessionId) return
+        await deps.switchSession(sessionId)
+        startNewChatPanel(ctx)
+      },
+    })
+    requestFrame()
+  }
+
+  /** A row of what a bot does in its own app: that session's messages, to read (ui/app/bot-activity.ts, loaded by the first one opened). */
+  async function openActivity(id: string) {
+    const named = externalActivityOf(id)
+    const bot = named ? report?.external.find((candidate) => candidate.origin === named.origin && candidate.id === named.bot) : undefined
+    if (!named || !bot) return say("that bot is gone from the list · /bot list shows them", "warning")
+    state.sidebarFocus = false
+    await (await import("./bot-activity")).openBotActivity(ctx, { bot, session: named.session, known: bot.activity?.find((running) => running.id === named.session) })
   }
 
   /** The profile's hidden folders as a set, rebuilt only when the list changes (a frame never builds it). */
@@ -432,27 +580,27 @@ export function createSidebarBots(ctx: AppContext) {
     return named ? report?.external.find((bot) => bot.origin === named.origin && bot.id === named.id) : undefined
   }
 
-  /** A blank chat in `directory` on the model that reaches the external bot (an ordinary session; the connector's engine carries the turns). */
+  /**
+   * A blank chat in `directory` on the model that reaches the external bot (an ordinary session; the connector's engine carries the turns).
+   * It is made as the blank chat of `/new` is (`reuseEmpty`), so one left without a message is never listed as an untitled session, and
+   * the blank one this terminal already made for the bot in that folder is opened again instead of making another.
+   */
   async function createExternalSession(bot: ExternalBotInfo, directory: string): Promise<SessionId | undefined> {
     if (!bot.chat) return void fail(`${bot.name} cannot be chatted with from here`)
-    const created = await input.send({ type: "session.create", directory, title: "", choice: { model: bot.chat } })
+    const key = `${externalBotId(bot)}\n${directory}`
+    const waiting = unsentBotChats.get(key)
+    const listed = waiting ? sessions().find((session) => session.sessionId === waiting) : undefined
+    if (waiting && (!listed || (!listed.title && listed.state === "idle" && listed.queued === 0))) {
+      const alive = await input.send({ type: "draft.get", sessionId: waiting })
+      if (alive.ok) { noteChat(waiting, externalBotId(bot)); return waiting }
+    }
+    const created = await input.send({ type: "session.create", directory, title: "", choice: { model: bot.chat }, reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
+    unsentBotChats.set(key, sessionId as SessionId)
+    if (unsentBotChats.size > CLASSIFIED_MAX) unsentBotChats.delete(unsentBotChats.keys().next().value!)
     noteChat(sessionId, externalBotId(bot))
     return sessionId as SessionId
-  }
-
-  /** Enter or a click on an external bot: a new chat with it in the folder MendCode is opened in. */
-  async function startExternalChat(id: string, deps: SidebarDeps) {
-    state.sidebarFocus = false
-    const bot = externalOf(id)
-    if (!bot) return say("that bot is gone from the list · /bot list shows them", "warning")
-    const directory = openedDirectory()
-    if (!directory) return say("no folder is open to start the chat in", "warning")
-    const sessionId = await createExternalSession(bot, directory)
-    if (!sessionId) return
-    await deps.switchSession(sessionId)
-    startNewChatPanel(ctx)
   }
 
   /** `o` on an external bot: its page (what it runs on, a new chat, and the app it lives in). */
@@ -550,26 +698,15 @@ export function createSidebarBots(ctx: AppContext) {
     requestFrame()
   }
 
-  /** Enter or a click on a project's name: a blank chat in that folder (the one `/new` opens, reused while empty); the folder is this terminal's from then on. */
+  /** A blank chat in that folder (the one `/new` opens, reused while empty); the folder is this terminal's from then on. A folded project stays folded. */
   async function startFolderChat(directory: string, deps: SidebarDeps) {
     state.sidebarFocus = false
-    open.set(directory, true)
+    release()
     const created = await input.send({ type: "session.create", directory, title: "", reuseEmpty: true })
     const sessionId = created.ok ? created.result?.sessionId : undefined
     if (typeof sessionId !== "string") return void fail(created.ok ? "the session was not created" : created.error.message)
     await releaseChat(sessionId as SessionId)
     await deps.switchSession(sessionId as SessionId)
-    startNewChatPanel(ctx)
-  }
-
-  /** Enter or a click on a bot: a new chat with it in the folder MendCode is opened in, shown right away. */
-  async function startChat(name: string, deps: SidebarDeps) {
-    state.sidebarFocus = false
-    const directory = openedDirectory()
-    if (!directory) return say("no folder is open to start the chat in", "warning")
-    const sessionId = await createBotSession(name, directory)
-    if (!sessionId) return
-    await deps.switchSession(sessionId)
     startNewChatPanel(ctx)
   }
 
@@ -631,5 +768,5 @@ export function createSidebarBots(ctx: AppContext) {
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
   // The report is kept current only while the list is on screen (hidden, a push sets a flag and patches nothing), so no one else reads it then.
-  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, newChat, newChatAnywhere: (deps: SidebarDeps) => pickFolder(undefined, deps), pointer, refresh, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, resync, noteActivity: () => wantBots(false) }
 }

@@ -156,15 +156,21 @@ describe("the list the sidebar draws", () => {
   const base: MultiInput = { sessions: sessions as never, current: "o1", directory: "/work/open", focused: false, height: 60, now: NOW, sections: ["projects"], scope: "all", icons: false, open: new Map(), glyphs: glyphSet("unicode"), previewCount: 5, projects: { isProject: () => true, count: 3 } }
   const text = (over: Partial<MultiInput> = {}) => renderMultiSidebar({ ...base, ...over }).rows.map(plain)
 
-  test("every shown group starts open; the opened project previews the setting, the others at most three", () => {
+  test("every shown group starts open and previews the setting, the opened project like the others", () => {
     const rows = text().join("\n")
     expect(rows).toContain("▾ open")
     expect(rows).toContain("▾ a")
     expect(rows).toContain("▾ b")
     expect(rows).toContain("Opened four")
-    expect(rows).toContain("a chat 3")
-    expect(rows).not.toContain("a chat 4")
-    expect(rows).toMatch(/\+ 2 more\s+│/)
+    expect(rows).toContain("a chat 5")
+    expect(rows).not.toMatch(/\+ \d more\s+│/)
+    const three = text({ previewCount: 3 }).join("\n")
+    expect(three).toContain("Opened three")
+    expect(three).not.toContain("Opened four")
+    expect(three).toContain("a chat 3")
+    expect(three).not.toContain("a chat 4")
+    expect(three).toMatch(/\+ 1 more\s+│/)
+    expect(three).toMatch(/\+ 2 more\s+│/)
   })
 
   test("the rest sit behind one row that expands the ranked list, and show fewer folds it", () => {

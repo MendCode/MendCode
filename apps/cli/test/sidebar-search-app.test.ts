@@ -149,12 +149,15 @@ describe("Enter on a match", () => {
     expect(h.app.sessionId).toBe(h.ids.created)
   })
 
-  test("a bot starts a chat with it", async () => {
+  test("a bot asks where to chat with it, the opened folder on top", async () => {
     const h = searchApp()
     await until(h, "scout")
     await search(h, "scout")
     await h.type("\r")
-    // The bot's own new chat: in the opened folder, as Enter on its row in the list does.
+    // The folder picker, as `n` on the bot's row in the list gives; Enter takes the opened folder.
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("Chat with scout in…"); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.sentOf("session.create")).toHaveLength(0)
+    await h.type("\r")
     expect(h.sentOf("session.create")).toHaveLength(1)
     expect(h.sentOf("session.create")[0]).toMatchObject({ directory: "/work/app" })
     expect(h.app.sessionId).toBe(h.ids.created)

@@ -51,10 +51,11 @@ describe("the bots section", () => {
   test("a row per bot: icon, name, origin, and the state as a symbol and a word", () => {
     const rows = text()
     const calm = rows.find((row) => row.includes("calm"))!
-    expect(calm).toMatch(/^ {3}● calm +mendcode +● working │$/)
-    expect(rows.find((row) => row.includes("scout"))).toMatch(/◌ idle │$/)
-    expect(rows.find((row) => row.includes("hermes-1"))).toMatch(/hermes +… waiting │$/)
-    expect(rows.find((row) => row.includes("oops"))).toMatch(/▲ oops +mendcode +! problem │$/)
+    // Every bot's row ends in the `+` that starts a chat with it.
+    expect(calm).toMatch(/^ {3}● calm +mendcode +● working \+ │$/)
+    expect(rows.find((row) => row.includes("scout"))).toMatch(/◌ idle \+ │$/)
+    expect(rows.find((row) => row.includes("hermes-1"))).toMatch(/hermes +… waiting \+ │$/)
+    expect(rows.find((row) => row.includes("oops"))).toMatch(/▲ oops +mendcode +! problem \+ │$/)
     for (const row of rows) expect(textWidth(row)).toBe(SIDEBAR_WIDTH)
   })
 
@@ -64,7 +65,7 @@ describe("the bots section", () => {
     expect(line.find((span) => span.text === "● working")?.fg ?? line.find((span) => span.text.includes("working"))?.fg).toBe("primary")
     const ascii = text({ ascii: true, glyphs: glyphSet("ascii") })
     const row = ascii.find((line) => line.includes("calm"))!
-    expect(row).toMatch(/\(\) calm +mendcode +\* working │$/)
+    expect(row).toMatch(/\(\) calm +mendcode +\* working \+ │$/)
     expect(ascii.find((line) => line.includes("hermes-1"))).toMatch(/\[\] hermes-1/)
     for (const line of ascii.filter((line) => /calm|scout|hermes|oops/.test(line))) expect(line).toMatch(/^[\x20-\x7e│]*$/)
   })
@@ -86,10 +87,10 @@ describe("projects", () => {
     const at = (needle: string) => rows.findIndex((row) => row.includes(needle))
     expect(at("▾ app")).toBeGreaterThan(-1)
     // Chrome is a chat of the bot calm: it lives under the bot, not in the group or its count.
-    expect(rows[at("▾ app")]).toMatch(/▾ app +1 │$/)
+    expect(rows[at("▾ app")]).toMatch(/▾ app +1 \+ │$/)
     expect(at("Client reconnect")).toBeGreaterThan(at("▾ app"))
-    expect(rows[at("▾ api")]).toMatch(/▾ api +2 │$/)
-    expect(rows[at("▾ site")]).toMatch(/▾ site +1 │$/)
+    expect(rows[at("▾ api")]).toMatch(/▾ api +2 \+ │$/)
+    expect(rows[at("▾ site")]).toMatch(/▾ site +1 \+ │$/)
     expect(at("Other project")).toBeGreaterThan(at("▾ api"))
     // app's own latest message is 10 minutes old (Chrome is the bot's), so app ranks after api and site.
     expect(at("▾ app")).toBeGreaterThan(at("▾ site"))
@@ -98,7 +99,7 @@ describe("projects", () => {
 
   test("a group folded by choice shows its active count, and opens again", () => {
     const rows = text({ open: new Map([["/other/api", false], ["/work/app", false]]) })
-    expect(rows.find((row) => row.includes("▸ api"))).toMatch(/▸ api +1 active │$/)
+    expect(rows.find((row) => row.includes("▸ api"))).toMatch(/▸ api +1 active 2 \+ │$/)
     expect(rows.some((row) => row.includes("Other project"))).toBe(false)
     expect(rows.some((row) => row.includes("▸ app"))).toBe(true)
     expect(rows.some((row) => row.includes("Client reconnect"))).toBe(false)
@@ -115,11 +116,11 @@ describe("projects", () => {
     const rows = text()
     const groups = rows.slice(rows.findIndex((row) => row.includes("▾ app")), rows.findIndex((row) => row.includes("calm")))
     expect(groups.some((row) => row.includes("Chrome"))).toBe(false)
-    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 │$/)
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 \+ │$/)
     expect(rows.find((row) => row.includes("Client reconnect"))).toMatch(/ {2}Client reconnect/)
     // A session whose own `agent` names a bot is left out the same way, even when the report does not list it yet.
     const named = text({ sessions: [...sessions, session("s6", "Agent named", "/work/app", { agent: "scout" })] as never, current: "s6" })
-    expect(named.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 │$/)
+    expect(named.find((row) => row.includes("▾ app"))).toMatch(/▾ app +1 \+ │$/)
     expect(named.some((row) => row.includes("Agent named"))).toBe(true)
   })
 
@@ -128,10 +129,11 @@ describe("projects", () => {
       { directory: "/work/app", state: "idle", sessions: [1, 2, 3].map((n) => ({ sessionId: `a${n}` as never, title: `App chat ${n}`, status: "idle", updatedAt: NOW - n * MINUTE })) },
       { directory: "/other/api", state: "idle", sessions: [4, 5].map((n) => ({ sessionId: `b${n}` as never, title: `Api chat ${n}`, status: "idle", updatedAt: NOW - n * MINUTE })) },
     ] }, ...bots.bots.slice(1)] }
-    const closed = text({ bots: many, current: "s2" })
+    const closed = text({ bots: many, current: "s2", open: new Map([["bot:calm", false]]) })
     expect(closed.find((row) => row.includes("chats"))).toMatch(/^ {3} {2}▸ chats +5 │$/)
     expect(closed.some((row) => row.includes("App chat"))).toBe(false)
-    const opened = text({ bots: many, current: "s2", open: new Map([["bot:calm", true]]) })
+    // A MendCode bot's chats start open, whichever chat is open.
+    const opened = text({ bots: many, current: "s2" })
     const chats = opened.filter((row) => /(App|Api) chat/.test(row)).map((row) => row.replace(/^ +· /, "").replace(/ +\d+m │$/, ""))
     expect(chats).toEqual(["App chat 1", "App chat 2", "App chat 3"])
     expect(opened.find((row) => row.includes("▾ chats"))).toBeDefined()
@@ -140,14 +142,24 @@ describe("projects", () => {
     const whole = text({ bots: many, current: "s2", open: new Map([["bot:calm", true]]), expanded: new Set(["bot:calm"]) })
     expect(whole.filter((row) => /(App|Api) chat/.test(row))).toHaveLength(5)
     expect(whole.some((row) => row.includes("show less"))).toBe(true)
-    // The chat that is open opens its bot's chats by default; a fold by hand wins.
-    expect(text({ bots: many, current: "a1" }).some((row) => row.includes("App chat 1"))).toBe(true)
-    expect(text({ bots: many, current: "a1", open: new Map([["bot:calm", false]]) }).some((row) => row.includes("App chat 1"))).toBe(false)
+    // Which chat is open never opens or folds the row: the list is as tall with any of them open, and a fold by hand holds.
+    const tall = (current: string, open = new Map<string, boolean>()) => text({ bots: many, current, open }).filter((row) => row.trim() !== "│").length
+    expect(tall("a1")).toBe(tall("s2"))
+    expect(tall("b5")).toBe(tall("s2"))
+    const folded = text({ bots: many, current: "a1", open: new Map([["bot:calm", false]]) })
+    expect(folded.some((row) => row.includes("App chat 1"))).toBe(false)
+    // The folded row carries the open chat's bar instead of opening.
+    expect(folded.find((row) => row.includes("▸ chats"))).toMatch(/^ ▌ /)
+    // An open chat past the preview takes its last place: no row is added for it.
+    const last = text({ bots: many, current: "b5" }).filter((row) => /(App|Api) chat/.test(row)).map((row) => row.replace(/^[ ▌]+· /, "").replace(/ +\d+m │$/, ""))
+    expect(last).toEqual(["App chat 1", "App chat 2", "Api chat 5"])
   })
 
-  test("a folded bot with a working chat says how many are active", () => {
+  test("a bot's working chat that has no row of its own is counted in the chats row, folded or past the preview", () => {
     const busy = { ...bots, bots: [{ ...bots.bots[0]!, projects: [{ directory: "/work/app", state: "working" as const, sessions: [{ sessionId: "s2" as never, title: "Client reconnect", status: "running", updatedAt: NOW }] }] }, ...bots.bots.slice(1)] }
-    expect(text({ bots: busy, current: "s5" }).find((row) => row.includes("chats"))).toMatch(/▸ chats +1 active │$/)
+    expect(text({ bots: busy, current: "s5", open: new Map([["bot:calm", false]]) }).find((row) => row.includes("chats"))).toMatch(/▸ chats +1 active 1 │$/)
+    // Open, the working chat has its row and the header only counts the chats.
+    expect(text({ bots: busy, current: "s5" }).find((row) => row.includes("chats"))).toMatch(/▾ chats +1 │$/)
   })
 
   test("sessions without a bot are their own section when projects is not shown", () => {
@@ -178,18 +190,18 @@ describe("a project previews a few sessions", () => {
   const tall = (over: Partial<MultiInput> = {}) => text({ sessions: many(75) as never, current: "m0", height: 40, sections: ["projects"], ...over })
   const taskRows = (rows: string[]) => rows.filter((row) => /Task \d+/.test(row))
 
-  test("75 sessions draw 5 and a row that counts the 70 hidden ones", () => {
+  test("75 sessions draw 3 and a row that counts the 72 hidden ones", () => {
     const rows = tall()
-    expect(taskRows(rows)).toHaveLength(5)
-    expect(rows.some((row) => /^ {3}\s+\+ 70 more\s*│$/.test(row))).toBe(true)
-    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/75 │$/)
+    expect(taskRows(rows)).toHaveLength(3)
+    expect(rows.some((row) => /^ {3}\s+\+ 72 more\s*│$/.test(row))).toBe(true)
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/75 \+ │$/)
     for (const row of rows) expect(textWidth(row)).toBe(SIDEBAR_WIDTH)
   })
 
   test("a project with no more than the limit has no extra row", () => {
-    const rows = tall({ sessions: many(5) as never })
-    expect(taskRows(rows)).toHaveLength(5)
-    expect(rows.some((row) => /more|show less/.test(row))).toBe(false)
+    const rows = tall({ sessions: many(3) as never })
+    expect(taskRows(rows)).toHaveLength(3)
+    expect(rows.some((row) => /\d more|show less/.test(row))).toBe(false)
   })
 
   test("the preview count is honored", () => {
@@ -198,61 +210,85 @@ describe("a project previews a few sessions", () => {
     expect(taskRows(tall({ previewCount: 20 }))).toHaveLength(20)
   })
 
-  test("the current session stays visible past the limit, once, in its place", () => {
+  test("the open session past the limit takes the preview's last place: the group is as tall whichever session is open", () => {
     const rows = tall({ current: "m40" })
     const tasks = taskRows(rows)
-    expect(tasks).toHaveLength(6)
+    expect(tasks).toHaveLength(3)
     expect(tasks.filter((row) => row.includes("Task 40 "))).toHaveLength(1)
     expect(tasks.at(-1)).toContain("Task 40")
-    expect(rows.some((row) => row.includes("+ 69 more"))).toBe(true)
-    // A current session already inside the preview is not drawn twice.
-    expect(taskRows(tall({ current: "m2" }))).toHaveLength(5)
+    expect(tasks[0]).toContain("Task 0 ")
+    expect(tasks[1]).toContain("Task 1 ")
+    expect(rows.some((row) => row.includes("+ 72 more"))).toBe(true)
+    // A current session already inside the preview is not drawn twice, and the same rows stand for any open session.
+    expect(taskRows(tall({ current: "m2" }))).toHaveLength(3)
+    expect(tall({ current: "m40" }).filter((row) => row.trim() !== "│")).toHaveLength(tall({ current: "m1" }).filter((row) => row.trim() !== "│").length)
   })
 
-  test("working and waiting sessions stay visible past the limit", () => {
+  test("working and waiting sessions past the limit add no row: the header counts them", () => {
     const rows = tall({ sessions: many(75, (index) => index === 30 ? { state: "generating" } : index === 50 ? { state: "waiting_approval" } : {}) as never })
     const tasks = taskRows(rows)
-    expect(tasks).toHaveLength(7)
-    expect(tasks.some((row) => row.includes("Task 30"))).toBe(true)
-    expect(tasks.some((row) => row.includes("Task 50"))).toBe(true)
-    expect(rows.some((row) => row.includes("+ 68 more"))).toBe(true)
+    expect(tasks).toHaveLength(3)
+    expect(tasks.some((row) => row.includes("Task 30") || row.includes("Task 50"))).toBe(false)
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/2 active 75 \+ │$/)
+    expect(rows.some((row) => row.includes("+ 72 more"))).toBe(true)
+    // One that works inside the preview has its own row and is not counted.
+    const near = tall({ sessions: many(75, (index) => index === 1 ? { state: "generating" } : {}) as never })
+    expect(near.find((row) => row.includes("▾ app"))).toMatch(/ 75 \+ │$/)
+    expect(near.find((row) => row.includes("▾ app"))).not.toContain("active")
   })
 
   test("the more row is a stop and a hit; expanding lists everything and the row becomes show less", () => {
     const input = { ...base, sessions: many(75) as never, current: "m0", height: 120, sections: ["projects"] as MultiInput["sections"] }
-    expect(multiStops(input)).toEqual(["group:/work/app", "m0", "m1", "m2", "m3", "m4", "more:/work/app"])
+    expect(multiStops(input)).toEqual(["new:", "group:/work/app", "m0", "m1", "m2", "more:/work/app"])
     const out = renderMultiSidebar(input)
     const hit = out.hits.find((candidate) => candidate.id === "more:/work/app")!
-    expect(plain(out.rows[hit.row]!)).toContain("+ 70 more")
+    expect(plain(out.rows[hit.row]!)).toContain("+ 72 more")
     const open = { ...input, expanded: new Set(["/work/app"]) }
-    expect(multiStops(open)).toHaveLength(77)
+    expect(multiStops(open)).toHaveLength(78)
     expect(multiStops(open).at(-1)).toBe("more:/work/app")
     const rows = renderMultiSidebar(open).rows.map(plain)
     expect(taskRows(rows)).toHaveLength(75)
     expect(rows.some((row) => row.includes("show less"))).toBe(true)
-    expect(rows.some((row) => row.includes("more"))).toBe(false)
+    expect(rows.some((row) => /\d more/.test(row))).toBe(false)
   })
 
   test("a short list that was expanded and shrank again shows no show less", () => {
     const rows = tall({ sessions: many(3) as never, expanded: new Set(["/work/app"]) })
-    expect(rows.some((row) => /more|show less/.test(row))).toBe(false)
+    expect(rows.some((row) => /\d more|show less/.test(row))).toBe(false)
   })
 
-  test("the order stays: pinned first, then the latest activity", () => {
+  test("the order: pinned first, then the one a person wrote in last, else the newest made; a reply never moves a row", () => {
     const rows = tall({ sessions: many(75, (index) => index === 60 ? { lifecycle: { pinnedAt: NOW } } : {}) as never })
     const tasks = taskRows(rows)
     expect(tasks[0]).toContain("Task 60")
     expect(tasks[1]).toContain("Task 0 ")
+    // Three sessions made in the order a, b, c; a person wrote in b last. An agent's reply in a (its `updatedAt` is now) changes nothing.
+    const made = (id: string, createdAt: number, over: Record<string, unknown> = {}) => session(id, `Chat ${id}`, "/work/app", { createdAt, updatedAt: createdAt, lastSeq: 9, ...over })
+    const order = (list: unknown[]) => text({ sessions: list as never, current: "none", height: 40, sections: ["projects"] }).filter((row) => /Chat [abc]/.test(row)).map((row) => /Chat ([abc])/.exec(row)![1])
+    const quiet = [made("a", NOW - 30 * MINUTE), made("b", NOW - 20 * MINUTE, { lastHumanAt: NOW - 5 * MINUTE }), made("c", NOW - 10 * MINUTE)]
+    expect(order(quiet)).toEqual(["b", "c", "a"])
+    const replying = [made("a", NOW - 30 * MINUTE, { updatedAt: NOW, state: "generating" }), quiet[1], quiet[2]]
+    expect(order(replying)).toEqual(["b", "c", "a"])
+    // Writing in a moves it up.
+    expect(order([made("a", NOW - 30 * MINUTE, { lastHumanAt: NOW }), quiet[1], quiet[2]])).toEqual(["a", "b", "c"])
   })
 
-  test("the opened project previews the setting, the others at most three, and a folded group stays folded", () => {
+  test("every project previews the same count, the opened one too, and a folded group stays folded", () => {
     const other = Array.from({ length: 9 }, (_, index) => session(`o${index}`, `Elsewhere ${index}`, "/other/api", { lastSeq: 9 }))
     const rows = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"] })
     expect(rows.filter((row) => /Elsewhere \d/.test(row))).toHaveLength(3)
-    expect(rows.filter((row) => row.includes("+ 4 more"))).toHaveLength(1)
-    expect(rows.filter((row) => row.includes("+ 6 more"))).toHaveLength(1)
+    expect(rows.filter((row) => /Task \d/.test(row))).toHaveLength(3)
+    expect(rows.filter((row) => row.includes("+ 6 more"))).toHaveLength(2)
+    // Opening a session of the other project changes which folder is the opened one, and no group's height.
+    const elsewhere = text({ sessions: [...many(9), ...other] as never, current: "o7", directory: "/other/api", height: 60, sections: ["projects"] })
+    expect(elsewhere.filter((row) => row.trim() !== "│")).toHaveLength(rows.filter((row) => row.trim() !== "│").length)
+    expect(elsewhere.filter((row) => /Elsewhere \d/.test(row))).toHaveLength(3)
     const folded = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"], open: new Map([["/other/api", false]]) })
     expect(folded.some((row) => /Elsewhere/.test(row))).toBe(false)
+    // A folded group that holds the open session carries its bar and stays folded.
+    const holding = text({ sessions: [...many(9), ...other] as never, current: "m0", height: 60, sections: ["projects"], open: new Map([["/work/app", false]]) })
+    expect(holding.find((row) => row.includes("▸ app"))).toMatch(/^ ▌ ▸ app/)
+    expect(holding.some((row) => /Task \d/.test(row))).toBe(false)
   })
 })
 
@@ -263,8 +299,8 @@ describe("sessions nobody used stay out of the sidebar", () => {
   test("an untitled session that never got past its first events is not listed or counted", () => {
     const out = rows([blank("e1"), blank("e2")])
     expect(out.some((row) => row.includes("Untitled session"))).toBe(false)
-    expect(out.find((row) => row.includes("▾ app"))).toMatch(/1 │$/)
-    expect(multiStops({ ...base, sessions: [session("t1", "Real work", "/work/app", { lastSeq: 14 }), blank("e1")] as never, current: "t1", sections: ["projects"] })).toEqual(["group:/work/app", "t1"])
+    expect(out.find((row) => row.includes("▾ app"))).toMatch(/1 \+ │$/)
+    expect(multiStops({ ...base, sessions: [session("t1", "Real work", "/work/app", { lastSeq: 14 }), blank("e1")] as never, current: "t1", sections: ["projects"] })).toEqual(["new:", "group:/work/app", "t1"])
   })
 
   test("the current one is kept even when it is empty", () => {
@@ -273,7 +309,7 @@ describe("sessions nobody used stay out of the sidebar", () => {
   })
 
   test("an untitled session that did something stays: it works, waits, has a draft or messages queued, or has more events", () => {
-    const out = rows([blank("w", { state: "generating" }), blank("q", { queued: 2 }), blank("d", { draft: { preview: "hello there", chars: 11, attachments: 0, images: 0, updatedAt: NOW } }), blank("u", { lastSeq: 23 })])
+    const out = rows([blank("w", { state: "generating" }), blank("q", { queued: 2 }), blank("d", { draft: { preview: "hello there", chars: 11, attachments: 0, images: 0, updatedAt: NOW } }), blank("u", { lastSeq: 23 })], { previewCount: 10 })
     expect(out.filter((row) => row.includes("Untitled session") || row.includes("hello there") || row.includes("Draft"))).toHaveLength(4)
   })
 
@@ -324,8 +360,49 @@ describe("the icon and one space", () => {
 
 describe("keyboard stops and mouse hits agree with what is drawn", () => {
   test("stops run in drawing order: bots, groups and their visible sessions, never a hidden one", () => {
-    expect(multiStops(base)).toEqual(["group:/other/api", "s3", "s4", "group:/work/site", "s5", "group:/work/app", "s2", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops"])
-    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops", "group:/other/api", "group:/work/site", "s5", "group:/work/app", "s2"])
+    expect(multiStops(base)).toEqual(["new:", "group:/other/api", "s3", "s4", "group:/work/site", "s5", "group:/work/app", "s2", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops"])
+    expect(multiStops({ ...base, sections: ["bots", "projects"], open: new Map([["/other/api", false]]) })).toEqual(["new:", "bot:calm", "botchats:calm", "s1", "bot:scout", "bot:hermes-1", "bot:oops", "group:/other/api", "group:/work/site", "s5", "group:/work/app", "s2"])
+  })
+
+  test("the first row starts a chat anywhere, and the rows a chat can be started from end in a `+` with its own hit zone", () => {
+    const out = draw()
+    expect(plain(out.rows[out.hits[0]!.row]!)).toMatch(/^ {3}\+ New chat… +│$/)
+    expect(out.hits[0]!.id).toBe("new:")
+    const zones = out.hits.filter((hit) => hit.plus)
+    expect(zones.map((hit) => hit.id)).toEqual(["group:/other/api", "group:/work/site", "group:/work/app", "bot:calm", "bot:scout", "bot:hermes-1", "bot:oops"])
+    for (const hit of zones) {
+      const row = plain(out.rows[hit.row]!)
+      // The zone is the blank before the sign, the sign and the blank before the rule; it never reaches the name or the fold glyph.
+      expect(row.slice(hit.plus!.from, hit.plus!.to)).toBe(" + ")
+      expect(hit.plus!.to).toBe(SIDEBAR_WIDTH - 1)
+      if (hit.fold) expect(hit.fold.to).toBeLessThan(hit.plus!.from)
+    }
+    // The icons column has neither.
+    expect(draw({ icons: true }).hits.some((hit) => hit.id === "new:" || hit.plus)).toBe(false)
+  })
+
+  test("a held list keeps its rows and their places: nothing joins, leaves or moves until the hold is cleared", () => {
+    const made = (id: string, createdAt: number, over: Record<string, unknown> = {}) => session(id, `Chat ${id}`, "/work/app", { createdAt, updatedAt: createdAt, lastSeq: 9, ...over })
+    const first = [made("a", NOW - 30 * MINUTE), made("b", NOW - 20 * MINUTE), made("c", NOW - 10 * MINUTE)]
+    const hold = {}
+    const input = (list: unknown[], over: Partial<MultiInput> = {}): MultiInput => ({ ...base, sessions: list as never, current: "none", height: 40, sections: ["projects"], hold, ...over })
+    expect(multiStops(input(first))).toEqual(["new:", "group:/work/app", "c", "b", "a"])
+    // A person writes in a from another terminal, a new session d appears, and c works: the rows stay as they were, c's mark moves.
+    const later = [made("a", NOW - 30 * MINUTE, { lastHumanAt: NOW }), first[1], made("c", NOW - 10 * MINUTE, { state: "generating" }), made("d", NOW)]
+    expect(multiStops(input(later))).toEqual(["new:", "group:/work/app", "c", "b", "a"])
+    expect((hold as { behind?: boolean }).behind).toBe(true)
+    const rows = renderMultiSidebar(input(later, { spinner: "⠋" })).rows.map(plain)
+    expect(rows.find((row) => row.includes("Chat c"))).toContain("⠋")
+    // What a held row shows is live: the header's count is the list's as it is now.
+    expect(rows.find((row) => row.includes("▾ app"))).toMatch(/ 4 \+ │$/)
+    // A held row whose session is gone keeps its place until the list is taken again.
+    expect(multiStops(input([first[1], first[2]]))).toEqual(["new:", "group:/work/app", "c", "b", "a"])
+    // Cleared (the hold ended, `r`, or the user's own act on the list): the list as it is now, held again from there.
+    ;(hold as { rows?: unknown }).rows = undefined
+    expect(multiStops(input(later))).toEqual(["new:", "group:/work/app", "a", "d", "c", "more:/work/app"])
+    expect((hold as { behind?: boolean }).behind).toBe(false)
+    // Without a hold nothing is kept.
+    expect(multiStops({ ...input(first), hold: undefined })).toEqual(["new:", "group:/work/app", "c", "b", "a"])
   })
 
   test("each hit names a stop on the row that draws it", () => {
