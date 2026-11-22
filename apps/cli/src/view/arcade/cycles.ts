@@ -14,26 +14,44 @@ const THEIRS = 2
 /** Tiles the computer counts ahead before choosing a way; enough to see a closing pocket, small enough for one frame. */
 const LOOKAHEAD = 160
 
+const STEPS = Object.values(STEP)
+/** The search's buffers, kept between calls: a mark per tile (the search that last saw it) and the queue. */
+let marks = new Uint32Array(0)
+let queue = new Int32Array(0)
+let search = 0
+
 /** Free tiles reachable from (x, y), counted up to `limit`. */
 export function reach(grid: readonly number[], width: number, height: number, x: number, y: number, limit: number): number {
   if (x < 0 || y < 0 || x >= width || y >= height || grid[y * width + x] !== EMPTY) return 0
-  const seen = new Set([y * width + x])
-  const queue = [y * width + x]
-  while (queue.length && seen.size < limit) {
-    const at = queue.shift()!
+  const tiles = width * height
+  if (marks.length < tiles) {
+    marks = new Uint32Array(tiles)
+    queue = new Int32Array(tiles)
+    search = 0
+  }
+  if (++search === 0xffffffff) {
+    marks.fill(0)
+    search = 1
+  }
+  let head = 0
+  let size = 1
+  queue[0] = y * width + x
+  marks[y * width + x] = search
+  while (head < size && size < limit) {
+    const at = queue[head++]!
     const ax = at % width
-    const ay = Math.floor(at / width)
-    for (const step of Object.values(STEP)) {
+    const ay = (at - ax) / width
+    for (const step of STEPS) {
       const nx = ax + step.x
       const ny = ay + step.y
       const index = ny * width + nx
-      if (nx >= 0 && ny >= 0 && nx < width && ny < height && grid[index] === EMPTY && !seen.has(index)) {
-        seen.add(index)
-        queue.push(index)
+      if (nx >= 0 && ny >= 0 && nx < width && ny < height && grid[index] === EMPTY && marks[index] !== search) {
+        marks[index] = search
+        queue[size++] = index
       }
     }
   }
-  return seen.size
+  return size
 }
 
 /**
@@ -100,6 +118,9 @@ export const cycles: ArcadeDefinition = {
       },
       get best() {
         return record
+      },
+      get moving() {
+        return !waiting && !over()
       },
       tick() {
         if (waiting || over()) return

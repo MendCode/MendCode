@@ -6,6 +6,8 @@ type Raider = Point & { tone: ColorName; alive: boolean }
 
 const TONES: readonly ColorName[] = ["error", "warning", "accent"]
 const LIVES = 3
+/** Rows a shot climbs each frame; every row it crosses is checked, so it never skips over a raider. */
+const SHOT_SPEED = 2
 
 /**
  * Stars: a formation of raiders marches side to side and closer each time it meets an edge. Left and right move
@@ -19,25 +21,42 @@ export const stars: ArcadeDefinition = {
   start({ cols, rows, random, best }) {
     const next = seeded(Math.floor(random() * 0xffffffff))
     const ship = rows - 1
+    /** Which raider stands on each cell (index + 1), 0 for none: one lookup for hits and drawing. */
+    const board = new Int16Array(cols * rows)
     let raiders: Raider[] = []
+    let standing = 0
     let heading: 1 | -1 = 1
     let shot: Point | undefined
     let bombs: Point[] = []
     let x = 0
     let frames = 0
+    let marchIn = 0
     let wave = 1
     let lives = LIVES
     let score = 0
     let started = false
     let record = best
 
+    function place() {
+      board.fill(0)
+      raiders.forEach((raider, index) => {
+        if (raider.alive && raider.y >= 0 && raider.y < rows) board[raider.y * cols + raider.x] = index + 1
+      })
+    }
+    const raiderAt = (cx: number, cy: number) => (cx < 0 || cy < 0 || cx >= cols || cy >= rows ? undefined : raiders[board[cy * cols + cx]! - 1])
+    /** Frames between two marching steps: fewer as the formation thins and with every wave. */
+    const pace = () => Math.max(1, Math.ceil((6 * standing) / Math.max(1, raiders.length)) + 3 - wave)
+
     function form() {
       const lines = Math.min(3, Math.floor(rows / 3))
       raiders = []
       for (let line = 0; line < lines; line++) for (let column = 1; column < cols - 3; column += 2) raiders.push({ x: column, y: line + 1, tone: TONES[line]!, alive: true })
+      standing = raiders.length
       heading = 1
       shot = undefined
       bombs = []
+      marchIn = pace()
+      place()
     }
     function reset() {
       x = Math.floor(cols / 2)
@@ -50,32 +69,45 @@ export const stars: ArcadeDefinition = {
     }
     reset()
 
-    const standing = () => raiders.filter((raider) => raider.alive)
-    const over = () => lives <= 0 || standing().some((raider) => raider.y >= ship)
-    /** Frames between two marching steps: fewer as the formation thins and with every wave. */
-    const pace = () => Math.max(1, Math.ceil((6 * standing().length) / Math.max(1, raiders.length)) + 3 - wave)
+    const overrun = () => raiders.some((raider) => raider.alive && raider.y >= ship)
+    const over = () => lives <= 0 || overrun()
 
-    function march() {
-      const alive = standing()
-      if (alive.some((raider) => raider.x + heading < 0 || raider.x + heading >= cols)) {
-        for (const raider of alive) raider.y++
-        heading = heading === 1 ? -1 : 1
-      } else for (const raider of alive) raider.x += heading
+    /** The shot meets whatever raider stands on its cell: both go, and a cleared formation brings the next wave. */
+    function strike(): boolean {
+      if (!shot) return false
+      const hit = raiderAt(shot.x, shot.y)
+      if (!hit) return false
+      hit.alive = false
+      board[hit.y * cols + hit.x] = 0
+      standing--
+      shot = undefined
+      score += 10 * wave
+      record = Math.max(record, score)
+      if (!standing) {
+        wave++
+        form()
+      }
+      return true
     }
     function fly() {
-      if (!shot) return
-      shot = { x: shot.x, y: shot.y - 1 }
-      const hit = standing().find((raider) => raider.x === shot!.x && raider.y === shot!.y)
-      if (hit) {
-        hit.alive = false
-        shot = undefined
-        score += 10 * wave
-        record = Math.max(record, score)
-        if (!standing().length) {
-          wave++
-          form()
-        }
-      } else if (shot.y < 0) shot = undefined
+      for (let step = 0; shot && step < SHOT_SPEED; step++) {
+        shot.y--
+        if (shot.y < 0) shot = undefined
+        else if (strike()) return
+      }
+    }
+    function march() {
+      let edge = false
+      for (const raider of raiders) if (raider.alive && (raider.x + heading < 0 || raider.x + heading >= cols)) edge = true
+      for (const raider of raiders) {
+        if (!raider.alive) continue
+        if (edge) raider.y++
+        else raider.x += heading
+      }
+      if (edge) heading = heading === 1 ? -1 : 1
+      place()
+      // A raider that steps onto the shot's cell is hit there, as if the shot had flown into it.
+      strike()
     }
 
     return {
@@ -85,19 +117,30 @@ export const stars: ArcadeDefinition = {
       get best() {
         return record
       },
+      get moving() {
+        return started && !over()
+      },
       tick() {
         if (!started || over()) return
         frames++
         fly()
-        if (frames % pace() === 0) march()
+        if (--marchIn <= 0) {
+          march()
+          marchIn = pace()
+        }
         // The lowest raider of a random column drops a bomb now and then; bombs fall every other frame.
-        if (next() < 0.06 + wave * 0.02) {
-          const alive = standing()
-          const pick = alive[Math.floor(next() * alive.length)]
-          const lowest = pick && alive.filter((raider) => raider.x === pick.x).reduce((low, raider) => (raider.y > low.y ? raider : low), pick)
+        if (standing && next() < 0.06 + wave * 0.02) {
+          const pick = Math.floor(next() * standing)
+          let seen = 0
+          const chosen = raiders.find((raider) => raider.alive && seen++ === pick)
+          let lowest = chosen
+          if (chosen) for (const raider of raiders) if (raider.alive && raider.x === chosen.x && raider.y > lowest!.y) lowest = raider
           if (lowest) bombs.push({ x: lowest.x, y: lowest.y + 1 })
         }
-        if (frames % 2 === 0) bombs = bombs.map((bomb) => ({ x: bomb.x, y: bomb.y + 1 })).filter((bomb) => bomb.y < rows)
+        if (frames % 2 === 0) {
+          for (const bomb of bombs) bomb.y++
+          bombs = bombs.filter((bomb) => bomb.y < rows)
+        }
         if (bombs.some((bomb) => bomb.x === x && bomb.y === ship)) {
           lives--
           bombs = []
@@ -111,18 +154,21 @@ export const stars: ArcadeDefinition = {
           started = true
         } else if (key === "space") {
           started = true
-          if (!shot) shot = { x, y: ship - 1 }
+          if (!shot) {
+            shot = { x, y: ship - 1 }
+            strike()
+          }
         }
       },
       view({ focused }) {
-        const alive = standing()
+        const lost = over()
         const lines: Line[] = []
         for (let y = 0; y < rows; y++) {
           const spans: Span[] = []
           for (let cx = 0; cx < cols; cx++) {
-            const raider = alive.find((each) => each.x === cx && each.y === y)
+            const raider = raiderAt(cx, y)
             if (raider) spans.push({ text: "◥◤", fg: raider.tone, dim: !focused })
-            else if (y === ship && cx === x) spans.push({ text: "◢◣", fg: over() ? "error" : "primary", bold: true })
+            else if (y === ship && cx === x) spans.push({ text: "◢◣", fg: lost ? "error" : "primary", bold: true })
             else if (shot && shot.x === cx && shot.y === y) spans.push({ text: "▕▏", fg: "text" })
             else if (bombs.some((bomb) => bomb.x === cx && bomb.y === y)) spans.push({ text: "▝▘", fg: "error" })
             else spans.push({ text: (cx * 7 + y * 13) % 29 === 0 ? " ·" : "  ", fg: "border" })
@@ -132,7 +178,7 @@ export const stars: ArcadeDefinition = {
         const ships = "◢".repeat(Math.max(0, lives))
         return {
           title: `Stars · ${score} · ${ships || "no ships"} · best ${record}`,
-          status: over() ? "Overrun. r restarts" : !started ? "Space fires, arrows move" : `Wave ${wave}`,
+          status: lost ? "Overrun. r restarts" : !started ? "Space fires, arrows move" : `Wave ${wave}`,
           rows: lines,
           width: cols * 2,
           controls: "space fire",

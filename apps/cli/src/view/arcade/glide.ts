@@ -9,6 +9,8 @@ const GATE_EVERY = 14
 const GRAVITY = 0.45
 const FLAP = -1.7
 const FALL_LIMIT = 2
+/** Steps after a crash during which a flap does not fly again, so a held flap key cannot skip the crash. */
+export const CRASH_GRACE = 5
 
 /** Whether a bird whose top-left pixel is (x, y) overlaps `gate`, whose opening starts at `gap` and is `size` tall. */
 export function hitsGate(x: number, y: number, gate: { x: number; gap: number }, size: number): boolean {
@@ -36,6 +38,7 @@ export const glide: ArcadeDefinition = {
     let gates: Gate[] = []
     let flying = false
     let crashed = false
+    let grace = 0
     let score = 0
     let record = best
 
@@ -46,6 +49,7 @@ export const glide: ArcadeDefinition = {
       gates = [{ x: width + 2, gap: gap(), passed: false }]
       flying = false
       crashed = false
+      grace = 0
       score = 0
     }
     reset()
@@ -58,12 +62,16 @@ export const glide: ArcadeDefinition = {
       get best() {
         return record
       },
+      get moving() {
+        return crashed ? grace > 0 : flying
+      },
       tick() {
+        if (crashed && grace > 0) grace--
         if (!flying || crashed) return
         speed = Math.min(FALL_LIMIT, speed + GRAVITY)
         y += speed
         for (const gate of gates) gate.x--
-        gates = gates.filter((gate) => gate.x + GATE_WIDTH > 0)
+        if (gates[0] && gates[0].x + GATE_WIDTH <= 0) gates.shift()
         const last = gates.at(-1)
         if (!last || last.x <= width - GATE_EVERY) gates.push({ x: width, gap: gap(), passed: false })
         for (const gate of gates) {
@@ -73,12 +81,15 @@ export const glide: ArcadeDefinition = {
             record = Math.max(record, score)
           }
         }
-        if (top() < 0 || top() + BIRD > height || gates.some((gate) => hitsGate(birdX, top(), gate, size))) crashed = true
+        if (top() < 0 || top() + BIRD > height || gates.some((gate) => hitsGate(birdX, top(), gate, size))) {
+          crashed = true
+          grace = CRASH_GRACE
+        }
       },
       key(key: ArcadeKey) {
         if (key === "restart") return reset()
         if (key !== "space" && key !== "up") return
-        if (crashed) return reset()
+        if (crashed) return grace > 0 ? undefined : reset()
         flying = true
         speed = FLAP
       },
