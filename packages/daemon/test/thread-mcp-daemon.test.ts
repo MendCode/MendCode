@@ -7,12 +7,13 @@ import { createIdFactory, type SessionId } from "@mendcode/protocol"
 import type { TaskPort, TurnInput, TurnOutcome } from "@mendcode/kernel"
 import { createAcpEngine } from "@mendcode/engine-acp"
 import { startDaemon } from "../src"
+import { PROGRESS_LIMITS } from "../src/agent-progress"
 import { remoteTokens } from "../src/remote"
 import { until } from "./native-harness"
 
 const cleanups: Array<() => void | Promise<void>> = []
 afterEach(async () => { for (const close of cleanups.splice(0).reverse()) await close() })
-async function boot(fakeAcp = false) {
+async function boot(fakeAcp = false, extra: Partial<Parameters<typeof startDaemon>[0]> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "thread-bridge-daemon-"))
   const project = path.join(dir, "project")
   mkdirSync(project)
@@ -67,6 +68,7 @@ async function boot(fakeAcp = false) {
       { id: "acp:demo", name: "ACP", efforts: [] },
       { id: "pi:configured", name: "pi", engine: "pi", efforts: [] },
     ] },
+    ...extra,
     threadMcpListener: (fetch) => { handler = fetch; opened++; return { url: "http://127.0.0.1:12345/mcp", stop: () => { stopped++ } } },
     engine: (ports) => { tasks = ports.tasks; return { needsCompaction: () => false, compact: async () => ({ status: "ok" }), runTurn: async (turn) => {
       seen.push(turn)
@@ -216,14 +218,12 @@ test("daemon bridge creates project children and delegates across configured eng
     }
     return { status: "ok" }
   })
-  const completed = h.say(parent)
-  await until(() => h.daemon.store.pendingRequestsOf(parent).length === 1)
-  const request = h.daemon.store.pendingRequestsOf(parent)[0]!
-  expect(request).toMatchObject({ kind: "approval", title: "thread_read", detail: expect.stringContaining(other) })
-  expect((await h.client.send({ type: "request.resolve", sessionId: parent, requestId: request.requestId, decision: { kind: "approve", scope: "once" } })).ok).toBe(true)
-  await completed
+  // Full access no longer asks before a thread call; a session of another project is still not read by its bare id.
+  await h.say(parent)
+  expect(h.daemon.store.pendingRequestsOf(parent)).toHaveLength(0)
   expect(results[0].result.content[0].text).toContain("state=idle")
   expect(results[1].result.isError).toBe(true)
+  expect(results[1].result.content[0].text).toContain("no session")
   for (const result of results.slice(2)) expect(result.result.content[0].text).toContain("state: completed")
   const tasks = h.daemon.store.tasks.list().filter((task) => task.parentId === parent)
   expect(tasks).toHaveLength(5)
@@ -258,6 +258,25 @@ test("a Claude Code session's bridge names MendCode's other models by engine, an
   expect(results[0].result.content[0].text).toContain("state: completed")
   const task = h.daemon.store.tasks.list().find((entry) => entry.parentId === parent)!
   expect(h.daemon.store.sessionModel(task.taskId)?.model).toBe("configured-native")
+})
+
+test("delegate_task takes effort as the child's variant in the same call; a clash or an unknown effort is refused naming the valid ones", async () => {
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
+  const parent = await h.create()
+  const results: any[] = []
+  h.run(async (turn) => {
+    results.push(await h.invoke(turn, "delegate_task", { description: "clash", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "medium", variant: "low", background: false }))
+    results.push(await h.invoke(turn, "delegate_task", { description: "bad", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "nope", background: false }))
+    results.push(await h.invoke(turn, "delegate_task", { description: "ok", prompt: "check", engine: "claude", model: "claude-sonnet", effort: "low", background: false }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(results[0].result.content[0].text).toContain("effort medium and variant low differ")
+  expect(results[1].result.content[0].text).toContain("unknown variant nope for claude-sonnet; use low")
+  expect(h.daemon.store.tasks.list()).toHaveLength(1)
+  const task = h.daemon.store.tasks.list()[0]!
+  expect(h.daemon.store.sessionModel(task.taskId)).toMatchObject({ model: "claude-sonnet", variant: "low" })
 })
 
 test("a delegation that fails says why to the engine that called, and names the engine's models when one is missing", async () => {
@@ -358,4 +377,67 @@ test("an external peer turn without the bridge retains its local-data restrictio
   await h.remote({ type: "user.submit", sessionId: parent, text: "bridge", attachments: [] })
   await until(() => h.daemon.store.turns.list(parent).at(-1)?.status === "completed")
   expect(h.daemon.store.meta.get(`session.local-tools.restricted:${parent}`)).toBe("true")
+})
+
+test("task_progress on a Claude Code session reads its sub-agent's thread and asks the Claude Haiku or Sonnet tier, counted as an auxiliary call", async () => {
+  const asked: Array<{ model: string; prompt: string }> = []
+  const h = await boot(false, {
+    claudeComplete: async (request) => { asked.push({ model: request.model.model, prompt: request.prompt }); return { text: "Done: searched exports.\nNow: reading the diff.\nLeft: the report.\nEstimate: cannot estimate.", usage: { provider: "claude", model: request.model.model, input: 900, output: 60 } } },
+    complete: async () => { throw new Error("a Claude Code session does not use the native provider here") },
+  })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true } } })
+  const parent = await h.create()
+  const results: any[] = []
+  h.run(async (turn) => {
+    const call = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent review the API", subagent: true, background: true } })
+    const prompt = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: prompt, kind: "user_message", meta: { agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: prompt, status: "ok", text: "Review the public API for breaking changes.", meta: { agentParent: call } })
+    const step = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: step, kind: "tool_call", meta: { tool: "Grep: export", agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: step, status: "ok", text: "found", meta: { agentParent: call } })
+    await until(() => (h.daemon.store.lastSeq(parent) ?? 0) >= 8)
+    results.push(await h.invoke(turn, "task_progress", {}))
+    results.push(await h.invoke(turn, "task_progress", { task_id: "ses_nope" }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(results[0].result.isError).toBe(false)
+  expect(results[0].result.content[0].text).toContain("Estimate: cannot estimate.")
+  expect(asked).toHaveLength(1)
+  expect(asked[0]!.model).toBe("claude-sonnet")
+  expect(asked[0]!.prompt).toContain("Review the public API for breaking changes.")
+  expect(asked[0]!.prompt).toContain("tool: Grep: export")
+  expect(results[1].result.content[0].text).toContain("Unknown sub-agent ses_nope")
+  const day = new Date().toISOString().slice(0, 10)
+  const rows = h.daemon.store.usageAuxiliary.report({ from: day, to: day })
+  expect(rows.filter((row) => row.role === "summary").map((row) => [row.role, row.model, row.input, row.output, row.calls])).toEqual([["summary", "claude-sonnet", 900, 60, 1]])
+})
+
+test("task_progress reads the newest events by count: a long streamed answer after the sub-agent's work does not hide it", async () => {
+  const asked: string[] = []
+  const h = await boot(false, {
+    claudeComplete: async (request) => { asked.push(request.prompt); return { text: "Done: searched.\nNow: writing.\nLeft: nothing.\nEstimate: cannot estimate.", usage: { provider: "claude", model: request.model.model, input: 10, output: 10 } } },
+    complete: async () => { throw new Error("a Claude Code session does not use the native provider here") },
+  })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true } } })
+  const parent = await h.create()
+  h.run(async (turn) => {
+    const call = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent review the API", subagent: true, background: true } })
+    const step = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: step, kind: "tool_call", meta: { tool: "Grep: export", agentParent: call } })
+    turn.emit({ type: "item.completed", itemId: step, status: "ok", text: "found", meta: { agentParent: call } })
+    const streamed = turn.newItemId()
+    turn.emit({ type: "item.started", itemId: streamed, kind: "agent_message" })
+    for (let index = 0; index < PROGRESS_LIMITS.tailEvents * 2 + 100; index++) turn.emit({ type: "item.delta", itemId: streamed, text: "x" })
+    turn.emit({ type: "item.completed", itemId: streamed, status: "ok", text: "long answer" })
+    await until(() => (h.daemon.store.lastSeq(parent) ?? 0) > PROGRESS_LIMITS.tailEvents * 2 + 100)
+    await h.invoke(turn, "task_progress", {})
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  expect(asked).toHaveLength(1)
+  expect(asked[0]).toContain("tool: Grep: export")
 })

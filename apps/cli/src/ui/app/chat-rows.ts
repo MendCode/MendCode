@@ -13,6 +13,7 @@ import { renderHeaderSlot } from "../../view/topbar"
 import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
 import { agentThreadHeader, threadState } from "../../view/agent-thread-header"
 import { parentTitle, viewedAgent } from "./agent-cue"
+import { botAccent } from "./bot-accent"
 import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
@@ -26,7 +27,7 @@ import { limitBarVisible, limitChips, limitLine } from "../../view/usage-limit"
 import { renderShortcutOverlay, shortcutEntries } from "../../view/shortcut-overlay"
 import { voiceRow } from "../../view/voice-row"
 import { paintMatches } from "../../view/find"
-import { activityPartsOf, phaseOf, renderWorkingReplacement, renderWorkingRow, quietTurn } from "../../view/working-row"
+import { activityPartsOf, phaseOf, renderWorkingReplacement, renderWorkingRow, quietTurn, stepPhase } from "../../view/working-row"
 import type { ActivityPart } from "@mendcode/protocol/wire"
 import { ACTIVITY_MIN_CELLS, insideRoom, placeInside } from "../../view/activity-status"
 import { jumpFrom, jumpPill, jumpText, offsetForThumb, overlayAt, scrollbarGlyphs, scrollbarShown, scrollThumb, SCROLLBAR_LINGER_MS, withScrollbar } from "../../view/scroll-chrome"
@@ -37,7 +38,7 @@ import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
 import { backgroundRows, backgroundName } from "../../view/background-row"
 import { linkRows } from "../../view/links"
-import { homeLook, renderWelcomeReplacement } from "../../view/home"
+import { homeLook, renderWelcomeReplacement, type HomeBots } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
 import { createHomeMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
@@ -85,6 +86,10 @@ export function createChatRows(ctx: AppContext, actions: {
   transcriptWidth: () => number
   promptStatusLine: (room: number, activity?: Line) => Line | undefined
   loadEarlier(): Promise<void>
+  /** With a sub-agent's thread open: the session's earlier pages until the thread's start is loaded. */
+  loadThreadStart(): Promise<void>
+  /** Back at the bottom: the history far above is let go (paging.ts). */
+  releaseFar(): void
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
   const { input, state, now, editor, view, glyphs: g, homeTipText, leader } = ctx
@@ -125,7 +130,8 @@ export function createChatRows(ctx: AppContext, actions: {
     const editorLines = editor.lines()
     // Balanced and full draw v1's prompt: straight rules with a 2-cell margin, a `❭` lead, v1's row under it. Minimal keeps bare rules and nothing below.
     const rich = state.mode !== "minimal"
-    const home = state.transcript.blocks().length === 0 && !(state.paging?.loading || state.paging?.more)
+    // A sub-agent's thread that has no step yet is still that thread, never the start screen.
+    const home = state.agentView === undefined && state.transcript.blocks().length === 0 && !(state.paging?.loading || state.paging?.more)
     // The /customize preset frames the prompt (top-bottom, the default, is the rules above); every preset leaves the footer outside it.
     const customChrome = state.ext?.promptChrome()
     const preset = customChrome?.preset ?? state.tuiProfile.promptChrome
@@ -133,7 +139,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const plainFrame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
     // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
     const viewed = inlineView || home ? undefined : viewedAgent(state)
-    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : plainFrame
+    // A chat with a bot wears the bot's colour, subtly: the rules and the lead glyph, nothing else (a sub-agent's own colour wins).
+    const accent = inlineView || viewed || !rich ? undefined : botAccent(state, () => ctx.requestFrame())
+    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : accent ? tintFrame(plainFrame, accent.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
     const statusRoom = width - PROMPT_MARGIN * 2 - 6
     const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined
@@ -194,7 +202,7 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Rows the question card takes in the prompt's place, besides the one prompt row the room sums below already count. */
     const cardRows = asking ? Math.max(0, request!.rows.length - 1) : 0
     const shellQueued = new Set(state.transcript.queue.flatMap((entry, index) => (state.turnState.isShellQueued(entry.queueId) ? [index] : [])))
-    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (internalQueued(entry) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
+    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), ...(state.transcript.lastStopBy !== undefined ? { heldBySession: state.transcript.lastStopBy } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (internalQueued(entry) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
     const sendHit = queueDrawn.hits.find((hit) => hit.action === "send")
     const queue = { rows: queueDrawn.lines, sendChip: sendHit ? { row: sendHit.row, from: sendHit.from, to: sendHit.to } : undefined }
     // A turn paused by the provider's usage limit: the bar offers Resume at reset and Snooze until reset (docs/usage-limit.md).
@@ -352,9 +360,23 @@ export function createChatRows(ctx: AppContext, actions: {
     const pet = pill && petShown && jumpHint === "right" ? petCells(bodyHeight) : undefined
     const pillFrom = pill && jumpHint !== "off" ? jumpFrom({ position: jumpHint, width: tw, labelWidth: pillWidth, gutter: pet ? Math.max(0, pet.cols + 1 - gutter) : 0 }) : 0
     const lastRow = visible[visible.length - 1]
-    const pillOwnRow = !!pill && bodyHeight > STICKY_MIN_BODY && visible.length >= bodyHeight && !!lastRow && textWidth(lastRow.spans.map((span) => span.text).join("").trimEnd()) > pillFrom
+    // Whether the transcript fills the body is asked of the whole transcript, not of the rows on screen: at the very top a body one row
+    // taller shows one row fewer, so asking the screen took the row back, the farthest scroll moved down a row with it and the next
+    // step up bounced, never reaching the first row (a sub-agent's brief lost its opening line).
+    const pillOwnRow = !!pill && bodyHeight > STICKY_MIN_BODY && state.transcript.totalLines(tw) >= bodyHeight && !!lastRow && textWidth(lastRow.spans.map((span) => span.text).join("").trimEnd()) > pillFrom
     if (pillOwnRow) {
       bodyHeight -= 1
+      visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
+    }
+    // The scroll is kept as rows above the bottom: a history that now lays out in fewer rows (a wider terminal, groups folded once more
+    // of it loaded, a thread shorter than the chat) would leave it pointing above the first row and draw an empty screen. It stops at
+    // the first row instead. A reader at the top stays at the top when the body changes height (the jump pill takes or gives back its
+    // row as the last line changes): the top was reckoned with the last frame's height, and the history's first row went out of reach.
+    const total = state.transcript.totalLines(tw)
+    const farthest = Math.max(0, total - bodyHeight)
+    const atTop = localState.offset > 0 && localState.offset >= Math.max(0, total - state.lastBodyHeight)
+    if (!home && !cleared && !inlineBody && (localState.offset > farthest || atTop && localState.offset !== farthest)) {
+      localState.offset = farthest
       visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
     }
     state.lastBodyHeight = Math.max(1, bodyHeight)
@@ -368,8 +390,10 @@ export function createChatRows(ctx: AppContext, actions: {
     // The home is laid out as if the slash menu were closed and cut at the bottom, so the logo keeps its size and place while one types.
     const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight + popup.length).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
-    // message and the prompt; once it overflows the view follows the bottom.
-    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight
+    // message and the prompt; once it overflows the view follows the bottom. One with earlier history still to read is only the
+    // newest part of a longer chat: it sits at the bottom, over the prompt, while the pages above it come in. That history is the
+    // conversation's: a sub-agent's thread shown in its place starts at the top like any short chat.
+    const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight && !(state.paging?.more && state.agentView === undefined)
     if (topAnchored && visible.length > 0 && body[0]?.some((span) => span.text.trim())) body.unshift([])
     const blankAbove = topAnchored ? body.length - visible.length : 0
     while (body.length < bodyHeight) home || cleared || topAnchored ? body.push([]) : body.unshift([])
@@ -400,7 +424,9 @@ export function createChatRows(ctx: AppContext, actions: {
     // At the top of the laid-out window with older blocks waiting: scrolling up lays out the next slice of them.
     const topBefore = body[0]
     if (!inlineBody && !home && state.transcript.olderBlocks > 0 && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) body[0] = withRightLabel(body[0] ?? [], tw, `↑ ${state.transcript.olderBlocks} earlier · scroll up`)
-    else if (!inlineBody && !home && state.paging && !localState.follow && state.transcript.totalLines(tw) > bodyHeight && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) {
+    // A sub-agent's thread whose start is loaded has nothing earlier: the session's paging is not about it, and its label would
+    // cover the right end of the thread's first row (the message the sub-agent was sent).
+    else if (!inlineBody && !home && state.paging && !(state.agentView !== undefined && state.agentRoot?.agentThreadLoaded(state.agentView)) && !localState.follow && state.transcript.totalLines(tw) > bodyHeight && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) {
       const label = state.paging.loading ? "loading earlier…" : !state.paging.ready ? "history unavailable" : state.paging.more ? "↑ earlier · scroll up" : state.paging.loadedEarlier ? "start of session" : ""
       if (label) body[0] = withRightLabel(body[0] ?? [], tw, label)
     }
@@ -517,6 +543,13 @@ export function createChatRows(ctx: AppContext, actions: {
     // A pet mascot belongs to the pet companion (full tier): below it, and wherever its picture cannot go, the home keeps the ASCII Mend.
     const mascot = homeMascot.art()
     const profile = state.tuiProfile
+    // Experimental bots: those at work, waiting or in trouble under the Agent View; the module loads here, on the first home frame with the flag on.
+    let botHits: typeof homeHits = []
+    let bots: HomeBots | undefined
+    if (state.settingsNow.experimental?.bots === true && !input.remote && profile.homeRightPanel === "agentManager") {
+      if (state.homeBots) bots = state.homeBots.view({ ascii: asciiGlyphs(), placed: (hits) => { botHits = hits.map((hit) => ({ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.id })) } })
+      else void import("./home-bots").then((loaded) => { state.homeBots ??= loaded.createHomeBots(ctx); ctx.requestFrame() }).catch(() => undefined)
+    }
     const drawn = ctx.views.draw("home", {
       screenHeight: input.screen.size.height,
       root,
@@ -528,8 +561,8 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
-    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}) } })
-    homeHits = drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : []))
+    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}), ...(bots ? { bots } : {}) } })
+    homeHits = [...drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : [])), ...botHits]
     return drawn.lines
   }
 
@@ -773,7 +806,9 @@ export function createChatRows(ctx: AppContext, actions: {
         ...activityLook(),
         ...(overlay ? { separator: g.sep } : {}),
         spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-        phase: thread.last ? `${truncateEnd(thread.last, 60)}...` : "Working...",
+        // What it does now, by kind, as the main row says it; its last call's title is already on its card in the thread.
+        phase: stepPhase(thread.current, thread.steps),
+        ...(thread.stepAt !== undefined ? { step: { number: thread.steps + 1, ms: now() - thread.stepAt } } : {}),
         ...(state.tuiProfile.showElapsed && !state.accessible && thread.startedAt !== undefined ? { elapsedMs: now() - thread.startedAt } : {}),
         now: now(),
         interruptHint: false,
@@ -822,7 +857,10 @@ export function createChatRows(ctx: AppContext, actions: {
     // harness itself, the silence is not called a stall.
     const external = Boolean(modelInfo?.engine)
     const stalledMs = state.tuiProfile.showStalled && !awaited && !external ? silentMs : undefined
-    const elapsedMs = state.turnState.startedAt !== undefined ? now() - state.turnState.startedAt : undefined
+    // A turn that started before this terminal joined it, or longer ago than the loaded events reach, still has its start: the
+    // session's live state carries it.
+    const turnStart = state.turnState.startedAt ?? state.sessions.find((session) => session.sessionId === state.sessionId && session.state !== "idle")?.since
+    const elapsedMs = turnStart !== undefined ? now() - turnStart : undefined
     return renderWorkingRow({
       width,
       margin,
@@ -833,9 +871,10 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.transcript.queue.length ? { queued: state.transcript.queue.length } : {}),
       ...(elapsedMs !== undefined && elapsedMs >= 2_000 && state.turnState.outputLive > 0 ? { tokensPerSecond: Math.round(state.turnState.outputLive / (elapsedMs / 1000)) } : {}),
       spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-      phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}) })),
+      phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}), steps: state.turnState.steps })),
+      ...(state.turnState.stepAt !== undefined && !retry ? { step: { number: state.turnState.steps + 1, ms: now() - state.turnState.stepAt } } : {}),
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
-      ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
+      ...(state.tuiProfile.showElapsed && !state.accessible && elapsedMs !== undefined ? { elapsedMs } : {}),
       ...(retry ? { retry } : {}),
       ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive, ...(state.turnState.liveEstimated ? { estimated: true } : {}) } } : {}),
       now: now(),
@@ -862,14 +901,19 @@ export function createChatRows(ctx: AppContext, actions: {
   function scrollTranscript(lines: number) {
     noteScrolled()
     state.clearFrom = undefined
-    const pastTop = lines > 0 && view.get(state.sessionId).offset + lines > maxScroll()
-    // Up from the top of the laid-out window lays out the next slice of older blocks (all of them for Home).
+    // Within a screen of the top, what is above is made ready before the reader gets there (as Codex pages when one viewport from its
+    // first row): the next slice of laid-out blocks, else the session's older page. Reaching the top then shows more history, not a
+    // "loading" line over an empty top.
+    const nearTop = lines > 0 && view.get(state.sessionId).offset + lines > maxScroll() - Math.max(1, state.lastBodyHeight)
+    // Up near the top of the laid-out window lays out the next slice of older blocks (all of them for Home).
     if (lines > 0 && state.transcript.olderBlocks > 0) {
       if (lines === Number.MAX_SAFE_INTEGER) while (state.transcript.olderBlocks > 0) state.transcript.loadOlder()
-      else if (view.get(state.sessionId).offset >= maxScroll()) state.transcript.loadOlder()
+      else if (nearTop) state.transcript.loadOlder()
     }
     view.scroll(state.sessionId, lines, maxScroll())
-    if (pastTop && state.transcript.olderBlocks === 0) void actions.loadEarlier()
+    // A sub-agent's thread pages the session back only until its own start is there; past that its top is the top.
+    if (nearTop && state.transcript.olderBlocks === 0) void (state.agentView !== undefined ? actions.loadThreadStart() : actions.loadEarlier())
+    if (lines < 0) actions.releaseFar()
   }
 
   return { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript }

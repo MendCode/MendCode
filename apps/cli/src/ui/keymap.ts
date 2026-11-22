@@ -18,6 +18,8 @@ export type KeyAction =
   | "edit.undo" | "edit.redo" | "stash.push" | "stash.pop" | "editor.open" | "message.copy" | "drafts.restore"
   // Session history (docs/sessions.md) and the layout: undo/redo of a whole message, the timeline, export, the sidebar and the dock's note.
   | "message.undo" | "message.redo" | "session.timeline" | "session.export" | "sidebar.toggle" | "panel.toggle" | "scratch.edit"
+  // The left list's search (`/` in the focused list): sessions, projects and bots by name.
+  | "sidebar.search"
   // The last mermaid diagram of the session, full screen (/diagram).
   | "diagram.open" | "messages.open"
   | "session.history" | "variant.list" | "extensions.open" | "scroll.line-up" | "scroll.line-down" | "scroll.half-up" | "scroll.half-down" | "message.next" | "message.previous" | "message.last-user" | "messages.conceal"
@@ -48,7 +50,7 @@ export const KEY_ACTIONS: readonly KeyAction[] = [
   "new", "sessions", "model", "theme", "compact", "quit", "agents", "help", "usage", "changes", "dock", "model.next", "effort.next",
   "palette", "tools.expand", "permission.next", "view.next", "queue.send", "queue.drop", "queue.flip", "image.paste", "scroll.top", "scroll.bottom", "scroll.up", "scroll.down",
   "edit.undo", "edit.redo", "stash.push", "stash.pop", "editor.open", "message.copy", "drafts.restore",
-  "message.undo", "message.redo", "session.timeline", "session.export", "sidebar.toggle", "panel.toggle", "scratch.edit", "diagram.open", "messages.open",
+  "message.undo", "message.redo", "session.timeline", "session.export", "sidebar.toggle", "sidebar.search", "panel.toggle", "scratch.edit", "diagram.open", "messages.open",
   "session.history", "variant.list", "extensions.open", "scroll.line-up", "scroll.line-down", "scroll.half-up", "scroll.half-down", "message.next", "message.previous", "message.last-user", "messages.conceal",
   "session.child.first", "session.child.next", "session.child.previous", "session.parent", "transcript.find", "voice.toggle", "details.toggle", "block.copy",
   "effort.previous", "history.search", "queue.edit", "shortcuts.toggle", "backtrack.open", "history.previous", "history.next",
@@ -88,6 +90,8 @@ export const LEADER_CHORDS: Readonly<Record<string, KeyAction>> = {
   h: "tips.toggle",
   x: "session.export",
   b: "sidebar.toggle",
+  // The left list's search (`<`, toward the list; every letter is taken).
+  "<": "sidebar.search",
   B: "panel.toggle",
   s: "scratch.edit",
   // The last diagram of the session, full screen.
@@ -315,6 +319,7 @@ export const ACTION_LABEL: Readonly<Record<KeyAction, string>> = {
   "session.timeline": "timeline",
   "session.export": "export the session",
   "sidebar.toggle": "toggle the sidebar",
+  "sidebar.search": "search the session list (sessions, projects, bots)",
   "panel.toggle": "toggle the right panel",
   "scratch.edit": "edit the scratch note",
   "diagram.open": "open the last diagram full screen",

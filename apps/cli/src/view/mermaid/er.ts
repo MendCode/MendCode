@@ -6,19 +6,42 @@ import type { ConnectorDirection } from "./legacy-shared"
 
 type ErRelation = { from: string; to: string; relation: string; label: string; dotted: boolean }
 
+/** An entity name: letters of any script, digits, `_`, `.` and `-`, or any text between quotes. */
+const ER_ENTITY = String.raw`(?:"[^"]+"|[\p{L}_][\p{L}\p{N}_.-]*)`
+/** The worded form of a cardinality: `CUSTOMER one to zero or more ORDER`. */
+const ER_COUNT = String.raw`(?:one\s+or\s+zero|zero\s+or\s+one|one\s+or\s+more|one\s+or\s+many|many\(1\)|1\+|zero\s+or\s+more|zero\s+or\s+many|many\(0\)|0\+|only\s+one|one|many|1)`
+
+const ER_BLOCK = new RegExp(String.raw`^(${ER_ENTITY})(?:\s*\[\s*"?([^"\]]+)"?\s*\])?\s*\{(\s*\})?$`, "u")
+const ER_WORDED = new RegExp(String.raw`^(${ER_ENTITY})\s+(${ER_COUNT})\s+(optionally\s+to|to)\s+(${ER_COUNT})\s+(${ER_ENTITY})(?:\s*:\s*(.+))?$`, "iu")
+const ER_RELATION = new RegExp(String.raw`^(${ER_ENTITY})\s*([|o}{]{1,2}(?:--|\.\.)[|o}{]{1,2})\s*(${ER_ENTITY})(?:\s*:\s*(.+))?$`, "u")
+const ER_ALONE = new RegExp(String.raw`^(${ER_ENTITY})(?:\s*\[\s*"?([^"\]]+)"?\s*\])?$`, "u")
+
+/** The crow's-foot marks of a worded cardinality, as the symbol form writes them on that side of the line. */
+function erMarks(words: string, side: "left" | "right") {
+  const text = words.toLowerCase().replace(/\s+/g, " ")
+  const kind = /^(?:one or zero|zero or one)$/.test(text) ? "optional" : /^(?:one or more|one or many|many\(1\)|1\+)$/.test(text) ? "some" : /^(?:zero or more|zero or many|many\(0\)|0\+|many)$/.test(text) ? "any" : "one"
+  const marks = { optional: ["|o", "o|"], some: ["}|", "|{"], any: ["}o", "o{"], one: ["||", "||"] }[kind]
+  return side === "left" ? marks[0]! : marks[1]!
+}
+
 export function renderErDiagram(input: string, width: number): string | undefined {
   const lines = preparedMermaidLines(input)
   if (lines[0]!?.toLowerCase() !== "erdiagram") return undefined
 
   const relationDefinitions: ErRelation[] = []
   const attributes = new Map<string, string[]>()
+  /** `p[Person]`: the name drawn for an entity written with a short id. */
+  const aliases = new Map<string, string>()
   let currentEntity: string | undefined
+  const named = (raw: string) => raw.replace(/^"|"$/g, "")
 
   for (const line of lines.slice(1)) {
-    const entity = /^([A-Za-z_][\w.-]*)\s*\{$/.exec(line)
+    const entity = ER_BLOCK.exec(line)
     if (entity) {
-      currentEntity = entity[1]!
-      attributes.set(currentEntity, [])
+      const id = named(entity[1]!)
+      if (entity[2]) aliases.set(id, entity[2].trim())
+      if (!attributes.has(id)) attributes.set(id, [])
+      currentEntity = entity[3] ? undefined : id
       continue
     }
 
@@ -32,23 +55,49 @@ export function renderErDiagram(input: string, width: number): string | undefine
       continue
     }
 
-    const relation = /^([A-Za-z_][\w.-]*)\s+([|o}{]{1,2}(?:--|\.\.)[|o}{]{1,2})\s+([A-Za-z_][\w.-]*)\s*:\s*(.+)$/.exec(
-      line,
-    )
+    const worded = ER_WORDED.exec(line)
+    const relation = worded
+      ? [worded[0], worded[1]!, `${erMarks(worded[2]!, "left")}${/optionally/i.test(worded[3]!) ? ".." : "--"}${erMarks(worded[4]!, "right")}`, worded[5]!, worded[6]]
+      : ER_RELATION.exec(line)
     if (!relation) {
-      if (/^(?:direction|classDef|class|style)\b/.test(line)) continue
+      const alone = ER_ALONE.exec(line)
+      if (/^(?:direction|classDef|class|style|title|accTitle|accDescr)\b/.test(line)) continue
+      if (alone) {
+        const id = named(alone[1]!)
+        if (alone[2]) aliases.set(id, alone[2].trim())
+        if (!attributes.has(id)) attributes.set(id, [])
+        continue
+      }
       return undefined
     }
     relationDefinitions.push({
-      from: relation[1]!,
-      to: relation[3]!,
+      from: named(relation[1]!),
+      to: named(relation[3]!),
       relation: relation[2]!,
-      label: cleanMermaidLabel(relation[4]!),
+      label: cleanMermaidLabel(relation[4] ?? ""),
       dotted: relation[2]!.includes(".."),
     })
   }
 
   if (currentEntity || (relationDefinitions.length === 0 && attributes.size === 0)) return undefined
+  // An alias replaces its id everywhere, unless two entities would end up with one name.
+  const taken = new Set([...attributes.keys(), ...relationDefinitions.flatMap((relation) => [relation.from, relation.to])].filter((id) => !aliases.has(id)))
+  const display = new Map<string, string>()
+  for (const [id, alias] of aliases) {
+    if (taken.has(alias)) continue
+    taken.add(alias)
+    display.set(id, alias)
+  }
+  if (display.size) {
+    // Names come from the original ids in one pass: renaming in place would chain a→b→c and merge distinct entities.
+    for (const relation of relationDefinitions) {
+      relation.from = display.get(relation.from) ?? relation.from
+      relation.to = display.get(relation.to) ?? relation.to
+    }
+    const renamed = [...attributes].map(([key, fields]) => [display.get(key) ?? key, fields] as const)
+    attributes.clear()
+    for (const [key, fields] of renamed) attributes.set(key, fields)
+  }
   if (relationDefinitions.length > 0) {
     const entityOrder = [...new Set([
       ...relationDefinitions.flatMap((relation) => [relation.from, relation.to]),

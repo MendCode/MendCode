@@ -1,7 +1,7 @@
 ---
 summary: what changed in a version and which changes fit you
 docs: whats-new, release, tiers, today
-aliases: whatsnew, changelog, release-notes, new-version, what-changed, update-notes
+aliases: whatsnew, changelog, release-notes, new-version, what-changed, update-notes, today, daily-brief
 ---
 For: "MendCode vX.Y.Z is installed ... tell me which of these changes I should use" (the prompt on every release page), "what is new in MendCode", "what changed in this version".
 
@@ -16,4 +16,4 @@ What /whatsnew sends: this project's saved memories, the settings in effect with
 
 Not possible: a changelog of a version newer than the running build (it is packed into the build), applying a pick without its preview and confirmation, or changing settings from the pasted prompt alone.
 
-Coming back after time away: /today (the user types it) is one read-only page of what waits for them (approvals, PR reviews, workflows, contradicting memories), sessions worth picking up and Dream's pending memory proposals; Enter jumps to a row.
+Starting the day or coming back after time away: /today (the user types it) opens one chat per day with a brief of what was done since yesterday per project, what waits for them and pending memories as groups. In that chat they ask to accept or decline memories, to decide a project's or a kind's memories from now on, and to report or check something in every Today; only that chat has the today tool that does it, and those requests are kept in today.json of the data directory. Local terminals only; the brief runs on the main model.

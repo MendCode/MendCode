@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { ancestorLayers, defaultLayers, emptyDiagnostics, foreignLayers, withForeignLayers } from "@mendcode/packages"
 import { parseFrontmatter } from "@mendcode/packages"
-import { commandArguments, expandCommand, expandCommandTemplate, loadCustomCommands } from "../src/custom-commands"
+import { ambiguousCommand, commandArguments, expandCommand, expandCommandTemplate, loadCustomCommands } from "../src/custom-commands"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -198,4 +198,58 @@ describe("custom commands", () => {
     expect(ancestorLayers({ directory: path.join(outside, "loose", "x"), home: user })).toEqual([])
     expect(ancestorLayers({ directory: web, home: path.join(repo, "apps") })).toEqual([])
   })
+})
+
+describe("one command name in several packages", () => {
+  const pack = (root: string, pkg: string, body: string) => {
+    const dir = path.join(root, "packages", pkg)
+    mkdirSync(path.join(dir, "commands"), { recursive: true })
+    writeFileSync(path.join(dir, "commands", "mend-setup.md"), `---\ndescription: setup for ${pkg}\n---\n${body}`)
+    return { dir, source: "user" as const, pkg }
+  }
+
+  test("each runs as /<package>:<name>, and the bare name lists them and runs none", async () => {
+    const root = tmp()
+    const layers = [{ dir: root, source: "user" as const }, pack(root, "mend-autopilot-claude", "Claude setup"), pack(root, "mend-autopilot-codex", "Codex setup")]
+    const report = emptyDiagnostics()
+    const commands = await loadCustomCommands({ directory: root, userDir: root, layers, report })
+    expect(commands.find((c) => c.name === "mend-autopilot-claude:mend-setup")).toMatchObject({ body: "Claude setup", pkg: "mend-autopilot-claude", description: "setup for mend-autopilot-claude" })
+    expect(commands.find((c) => c.name === "mend-autopilot-codex:mend-setup")).toMatchObject({ body: "Codex setup", pkg: "mend-autopilot-codex" })
+    const bare = commands.find((c) => c.name === "mend-setup")!
+    expect(bare.body).toBe("")
+    expect(bare.choices).toEqual(["mend-autopilot-claude:mend-setup", "mend-autopilot-codex:mend-setup"])
+    expect(bare.description).toBe("in 2 packages: /mend-autopilot-claude:mend-setup, /mend-autopilot-codex:mend-setup")
+    expect(ambiguousCommand(bare)).toBe("/mend-setup is in 2 packages; run one of /mend-autopilot-claude:mend-setup, /mend-autopilot-codex:mend-setup")
+    expect(ambiguousCommand(commands.find((c) => c.name === "mend-autopilot-claude:mend-setup")!)).toBeUndefined()
+  })
+
+  test("a command only one package has keeps its plain name, and the user's own command of a shared name stays theirs", async () => {
+    const root = tmp()
+    const project = path.join(root, "project", ".mendcode")
+    mkdirSync(path.join(project, "commands"), { recursive: true })
+    writeFileSync(path.join(project, "commands", "mend-setup.md"), "Mine")
+    const only = pack(root, "solo", "Solo setup")
+    const single = await loadCustomCommands({ directory: root, userDir: root, layers: [{ dir: root, source: "user" }, only] })
+    expect(single.find((c) => c.name === "mend-setup")).toMatchObject({ body: "Solo setup" })
+    expect(single.find((c) => c.name === "mend-setup")?.choices).toBeUndefined()
+    expect(single.some((c) => c.name.includes(":"))).toBe(false)
+    const shadowed = await loadCustomCommands({ directory: root, userDir: root, layers: [{ dir: root, source: "user" }, pack(root, "a-kit", "A"), pack(root, "b-kit", "B"), { dir: project, source: "project" }] })
+    expect(shadowed.find((c) => c.name === "mend-setup")).toMatchObject({ body: "Mine" })
+    expect(shadowed.find((c) => c.name === "mend-setup")?.choices).toBeUndefined()
+    expect(shadowed.map((c) => c.name)).toEqual(expect.arrayContaining(["a-kit:mend-setup", "b-kit:mend-setup"]))
+  })
+})
+
+test("a description over the menu's 120 characters is cut with a note; the command still loads", async () => {
+  const root = tmp()
+  mkdirSync(path.join(root, "commands"), { recursive: true })
+  const long = `Check that mend-autopilot can run here on a Claude subscription and print the steps the user applies (recipe, skills, guard hook). Changes nothing.`
+  writeFileSync(path.join(root, "commands", "mend-setup.md"), `---\ndescription: ${long}\n---\nRun it.`)
+  const report = emptyDiagnostics()
+  const command = (await loadCustomCommands({ directory: root, userDir: root, layers: [{ dir: root, source: "user" }], report })).find((c) => c.name === "mend-setup")
+  expect(command).toMatchObject({ body: "Run it." })
+  expect(command!.description).toHaveLength(120)
+  expect(command!.description.endsWith("…")).toBe(true)
+  expect(report.problems).toEqual([])
+  expect(report.notes).toMatchObject([{ kind: "command", name: "mend-setup", note: "description is longer than 120 characters; the menu shows it cut" }])
 })

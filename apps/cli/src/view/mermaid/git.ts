@@ -19,18 +19,23 @@ export function renderGitGraph(input: string, width = 1600): string | undefined 
   let timeline = 0
   const branchFor = (name: string) => branches.find((branch) => branch.name === name)
   for (const line of lines.slice(1)) {
-    const commit = /^commit(?:\s+id:\s*"?([^"]+)"?)?/i.exec(line)
+    const commit = /^(commit|cherry-pick)\b(.*)$/i.exec(line)
     if (commit) {
       timeline++
       const branch = branchFor(currentBranch)
       if (!branch) continue
       branch.last = timeline
-      commits.push({ branch: currentBranch, column: timeline, label: cleanLabel(commit[1]!) || "commit" })
+      // The id names a commit; without one its tag does. A cherry-pick says which commit it copies.
+      const id = /\bid:\s*(?:"([^"]*)"|(\S+))/i.exec(commit[2]!)
+      const tag = /\btag:\s*(?:"([^"]*)"|(\S+))/i.exec(commit[2]!)
+      const named = cleanLabel(id?.[1] ?? id?.[2] ?? tag?.[1] ?? tag?.[2] ?? "")
+      const picked = commit[1]!.toLowerCase() === "cherry-pick"
+      commits.push({ branch: currentBranch, column: timeline, label: picked ? `pick ${named}`.trim() : named || "commit" })
       continue
     }
     const branch = /^branch\s+(.+)$/i.exec(line)
     if (branch) {
-      const name = cleanLabel(branch[1]!)
+      const name = cleanLabel(branch[1]!.replace(/\s+order:\s*\d+\s*$/i, ""))
       const source = branchFor(currentBranch)
       if (name && !branchFor(name)) branches.push({ name, start: source?.last ?? timeline, last: source?.last ?? timeline })
       if (name) currentBranch = name

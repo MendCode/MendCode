@@ -9,8 +9,9 @@ class NativeRejected extends Error {}
 class PermissionMissing extends NotDelivered {}
 const Reply = z.discriminatedUnion("ok", [z.strictObject({ ok: z.literal(true), value: z.unknown() }), z.strictObject({ ok: z.literal(false), error: z.string().max(4096), delivery: z.enum(["not_delivered", "unknown"]).optional(), code: z.string().max(32).optional() })])
 const Outcome = z.strictObject({ index: z.number().int().min(0).max(15), outcome: z.enum(["dispatched", "failed", "unknown"]), error: z.string().max(4096).optional() })
-const App = z.strictObject({ bundleID: z.string().min(1).max(256), appName: z.string().max(256), pid: z.number().int().positive() })
-const Window = z.strictObject({ id: z.string().min(1).max(128), name: z.string().max(256), bounds: ComputerNode.shape.bounds })
+const App = z.strictObject({ bundleID: z.string().min(1).max(256), appName: z.string().max(256), pid: z.number().int().positive(), windows: z.number().int().nonnegative().optional(), menuBar: z.literal(true).optional(), active: z.literal(true).optional() })
+const Window = z.strictObject({ id: z.string().min(1).max(128), name: z.string().max(256), bounds: ComputerNode.shape.bounds, minimized: z.literal(true).optional(), focused: z.literal(true).optional() })
+const Selected = z.strictObject({ target: ComputerTarget, focused: z.boolean(), restored: z.boolean(), minimized: z.boolean() })
 
 export type NativeOptions = {
   /** An existing helper executable (tests): the app is not built. */
@@ -132,9 +133,13 @@ export function createNativeComputer(dir: string, options: NativeOptions = {}): 
     },
     async activate(target, signal) { return ComputerTarget.parse(await request("activate", { target }, signal)) },
     async windows(target, signal): Promise<ComputerWindow[]> { return z.array(Window).max(64).parse(await request("windows", { target }, signal)) },
-    async selectWindow(target, windowID, signal) { return ComputerTarget.parse(await request("selectWindow", { target, windowID }, signal)) },
+    async selectWindow(target, window, signal) {
+      const selected = Selected.parse(await request("selectWindow", { target, ...(typeof window === "string" ? { windowID: window } : window) }, signal))
+      return { ...selected.target, report: { focused: selected.focused, restored: selected.restored, minimized: selected.minimized } }
+    },
+    async reopen(target, signal) { return z.strictObject({ target: ComputerTarget, opened: z.boolean() }).parse(await request("reopen", { target }, signal)) },
     async observe(target, signal) {
-      return z.strictObject({ nodes: z.array(ComputerNode).max(500), truncated: z.boolean() }).parse(await request("observe", { target }, signal))
+      return z.strictObject({ nodes: z.array(ComputerNode).max(500), truncated: z.boolean(), scope: z.enum(["app", "window"]).optional() }).parse(await request("observe", { target }, signal))
     },
     async action(target, input, signal) { await request("action", { target, input }, signal) },
     async batch(target, steps, signal) { return z.array(Outcome).max(16).parse(await request("batch", { target, steps }, signal)) },

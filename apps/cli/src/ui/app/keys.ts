@@ -9,18 +9,21 @@ import { sideChat, sideChatKeptKey, type createAside } from "./aside"
 import type { createModel } from "./model"
 import type { createAgents } from "./agents"
 import { noteRecent } from "../../view/model-prefs"
-import type { PermissionMode, ModelsReport } from "@mendcode/protocol"
+import type { PermissionMode, ModelsReport, SessionId } from "@mendcode/protocol"
+import { workflowOf } from "../../view/session-label"
 import { COMMENT_KEY, LEADER_TIMEOUT_MS, resolveKey, type BindingAction } from "../keymap"
 import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarStops } from "../../view/sidebar"
+import { projectSessions, SETTLED_MORE, SETTLED_ROW, SIDEBAR_GAP, sidebarStops } from "../../view/sidebar"
+import { autoSettled, SETTLED_FIRST, SETTLED_PAGE } from "../../view/sidebar-marks"
+import { scrollSidebarWindow, sidebarClickAllowed } from "../../view/sidebar-window"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
 import type { AgentsReport } from "@mendcode/protocol"
-import { homeVisibleSessions, type HomeSession } from "../../view/home"
+import { HOME_BOT_PREFIX, homeVisibleSessions, type HomeSession } from "../../view/home"
 import { PERMISSION_MODES, MOUSE_SGR } from "./constants"
 import { rightBarCells } from "../../view/right-bar"
 import { rightClick } from "../selection"
@@ -32,6 +35,9 @@ import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
 import { queuePolicy, userQueue } from "./queue-policy"
 import { fastStep, wheelStep } from "./page-wheel"
+
+/** The arrows of a terminal in application-cursor mode, as the list reads them. */
+const APPLICATION_ARROWS: Record<string, string> = { "\x1bOA": "\x1b[A", "\x1bOB": "\x1b[B", "\x1bOC": "\x1b[C", "\x1bOD": "\x1b[D" }
 
 export function createKeys(ctx: AppContext, actions: {
   slashMenu: ReturnType<typeof import("./slash-menu").createSlashMenu>
@@ -68,6 +74,8 @@ export function createKeys(ctx: AppContext, actions: {
   suggestionPool: ReturnType<typeof createPrompt>["suggestionPool"]
   runSlash: (text: string) => Promise<boolean>
   chatWidth: () => number
+  /** Whether the left list shows at this width (the search draws in it). */
+  sidebarShown: (width: number) => boolean
   /** The columns the transcript's text is laid out in (the chat column less the scrollbar's). */
   transcriptWidth: () => number
   pickApproval: (index: number) => Promise<void>
@@ -119,6 +127,10 @@ export function createKeys(ctx: AppContext, actions: {
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]
+  /** A workflow run's own session opens /workflows on that run; false when it is no run's. */
+  openWorkflowOf(sessionId: SessionId): Promise<boolean>
+  /** Saves a profile change (`x` on a project row hides the project). */
+  changeProfile: (patch: Partial<import("../../view/tui-profile").TuiProfile>) => void
   homeSessions: () => HomeSession[]
   navigateMessage(kind: "next" | "previous" | "last-user"): Promise<void>
   /** `file.open`: the first file path of the selection or the item in view (a list when there are several). */
@@ -133,9 +145,20 @@ export function createKeys(ctx: AppContext, actions: {
   const mouseSelection = createMouseSelection(ctx, { by: (rows) => actions.scrollTranscript(rows), width: () => actions.transcriptWidth(), offset: () => ctx.view.get(state.sessionId).offset, fold: details.click, card: (itemId) => actions.openAgentCard(itemId), openPath: (text, at) => actions.fileOpen.clickPath(text, at), openUrl: (url) => void input.send({ type: "url.open", url }).then((reply) => { if (!reply.ok) fail(`not opened: ${reply.error.message}`) }), openImage: (path, reveal) => void input.send({ type: "image.open", path, ...(reveal ? { reveal: true } : {}) }).then((reply) => { if (!reply.ok) fail(`not opened: ${reply.error.message.replace(/^\[[A-Z]+\]: /, "")}`) }) })
   const vim = ctx.vim
   const optionKeys = createOptionKeys(ctx)
+  /** A session row of the list opens its chat; a workflow's run opens on /workflows, where its tasks are. */
+  async function openRow(id: SessionId) {
+    const summary = (state.sidebarBots?.sessions() ?? state.sessions).find((session) => session.sessionId === id)
+    if (summary && workflowOf(summary)?.root && (await actions.openWorkflowOf(id))) {
+      state.sidebarFocus = false
+      return
+    }
+    await actions.switchSession(id)
+  }
+  const rowActions = { ...actions, switchSession: openRow }
   /** Vim mode applies to the prompt while the setting is on; switching it off drops back to plain insert. */
   function vimOn() {
     if (!state.tuiProfile.vimMode && vim.mode !== "insert") vim.reset()
+    if (state.tuiProfile.vimMode) void vim.load()
     return state.tuiProfile.vimMode
   }
   const vimLive = () => vimOn() && !actions.pendingPanelRequest()
@@ -155,6 +178,29 @@ export function createKeys(ctx: AppContext, actions: {
     const button = Number(match[1]) & ~(4 | 8 | 16)
     return button === 64 ? -1 : button === 65 ? 1 : undefined
   }
+
+  /** A mouse report's button and 0-based screen position; undefined for any other key. */
+  function pointerOf(key: string): { button: number; col: number; row: number } | undefined {
+    const match = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(key)
+    return match ? { button: Number(match[1]), col: Number(match[2]) - 1, row: Number(match[3]) - 1 } : undefined
+  }
+
+  /**
+   * Where the left list sits on the chat page: its columns (0 while it does not show), the side, and how far the chat is shifted by it.
+   * The same width the layout gives the right bar (a set `sidebarWidth`, the hysteresis), or the mouse offsets drift from what is drawn.
+   */
+  function sidebarGeometry() {
+    const { width } = input.screen.size
+    const rightWanted = panelWanted(state) || fileInSlot(state)
+    const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
+    const rightWidth = rightCells ? rightCells + 1 : 0
+    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
+    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
+    return { width, rightWidth, sideWidth, onRight, offset: onRight ? 0 : sideWidth }
+  }
+
+  /** The pointer is over the left list's columns. */
+  const overSidebar = (col: number, geometry: ReturnType<typeof sidebarGeometry>) => geometry.sideWidth > 0 && (geometry.onRight ? col >= geometry.width - geometry.sideWidth : col < geometry.sideWidth)
 
   /** A plain prompt: not an edit card (scratch, goal, memory, plan), a question or a menu. Only its text counts as a draft. */
   const plainPrompt = () => state.page === "chat" && !state.palette && !state.promptSearch && !state.editingScratch && !state.editingGoal && !state.editingMemory && !state.planDraft && !actions.pendingPanelRequest()
@@ -223,6 +269,10 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.page === "chat" && state.find && await actions.findKey(key)) return
     // The prompt-history search bar takes the keyboard the same way (the wheel and paging keys still scroll).
     if (state.page === "chat" && state.promptSearch && await actions.composer.searchKey(key)) return requestFrame()
+    // The left list's search takes every key but the mouse while it is open (ui/app/sidebar-search.ts).
+    if (state.page === "chat" && state.sidebarSearch?.isOpen() && await state.sidebarSearch.key(key, actions)) return requestFrame()
+    // The "New chat in…" folder picker does the same (ui/app/new-chat-picker.ts).
+    if (state.page === "chat" && state.sidebarPicker?.isOpen() && await state.sidebarPicker.key(key)) return requestFrame()
     if (state.page === "compaction" && state.compactionView?.editing) return pageKey(key)
     const { width, height } = input.screen.size
     // The keymap editor waiting for a key takes ctrl+c too (it is reserved, and says so) instead of quitting.
@@ -277,7 +327,20 @@ export function createKeys(ctx: AppContext, actions: {
     if (state.palette) return paletteInput(key)
     if (state.page === "chat" && await actions.compactionLive.enterKey(key)) return requestFrame()
     if (state.bindings.inline.get(key) === "palette" && state.page === "chat" && !state.transcript.pendingRequests.some((request) => request.kind === "approval")) return openPalette()
+    const pointer = state.page === "chat" ? pointerOf(key) : undefined
+    // A sideways wheel (66, 67) does nothing on the chat page: the left list opens and closes with /sidebar.
+    if (pointer && (pointer.button & ~(4 | 8 | 16)) >= 66 && (pointer.button & ~(4 | 8 | 16)) <= 67) return
     const wheel = wheelOf(key)
+    // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
+    // Every mouse report says whether the pointer is over the list: the list holds still while it is (ui/app/sidebar-bots.ts).
+    if (pointer) state.sidebarBots?.pointer(overSidebar(pointer.col, sidebarGeometry()))
+    if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {
+      state.selection = undefined
+      // The rows the wheel moves are the user's own doing: the click guard lets the next click through.
+      state.sidebarInputAt = now()
+      if (!state.sidebarSearch?.isOpen() && !state.sidebarPicker?.isOpen() && scrollSidebarWindow(state.sidebarScroll, wheel * state.tuiProfile.wheelLines)) requestFrame()
+      return
+    }
     if (wheel !== undefined) {
       const notch = state.tuiProfile.wheelLines
       // A transcript selection stays on its text while the wheel moves it, so a drag can reach past one screen.
@@ -339,13 +402,7 @@ export function createKeys(ctx: AppContext, actions: {
     const mouse = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(key)
     // A right click pastes the clipboard into the prompt when `rightClickPaste` is on (the daemon reads it; never for a remote client).
     if (state.page === "chat" && state.tuiProfile.rightClickPaste && rightClick(key) && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !state.editingMemory) return pasteClipboardImage()
-    const rightWanted = panelWanted(state) || fileInSlot(state)
-    // The same width the layout gives the bar (a set `sidebarWidth`, the hysteresis), or the mouse offsets drift from what is drawn.
-    const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
-    const rightWidth = rightCells ? rightCells + 1 : 0
-    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
-    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
-    const offset = onRight ? 0 : sideWidth
+    const { sideWidth, onRight, offset } = sidebarGeometry()
     if (mouse && state.page === "chat" && mouseSelection.onMouse(key, offset)) return
     if (mouse && state.page === "chat") {
       const col = Number(mouse[2]) - 1 - offset
@@ -373,9 +430,20 @@ export function createKeys(ctx: AppContext, actions: {
     }
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
-      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < SIDEBAR_WIDTH) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
+      const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
+      // A line whose row changed a moment ago without the user's doing: the click was aimed at the row that was there, so it is dropped.
+      if (hit && !sidebarClickAllowed(state.sidebarGuard, screenClick.row, now())) return requestFrame()
+      state.sidebarInputAt = now()
+      const sideCol = onRight ? screenClick.col - (width - sideWidth) : screenClick.col
       if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
-      else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
+      else if (hit?.sessionId === SETTLED_MORE) state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+      else if (hit && state.sidebarPicker?.isOpen()) await state.sidebarPicker.activate(hit.sessionId)
+      else if (hit && state.sidebarSearch?.isOpen()) await state.sidebarSearch.activate(hit.sessionId, actions)
+      // The `+` that ends a project's or a bot's row starts a chat there; the rest of the row does what Enter does (a header folds).
+      else if (hit?.plus && state.sidebarBots?.live() && sideCol >= hit.plus.from && sideCol < hit.plus.to) await state.sidebarBots.newChat(hit.sessionId, rowActions)
+      else if (hit?.fold && state.sidebarBots?.live() && sideCol >= hit.fold.from && sideCol < hit.fold.to) state.sidebarBots.toggleFold(hit.sessionId)
+      else if (hit && state.sidebarBots?.live()) await state.sidebarBots.activate(hit.sessionId, rowActions)
+      else if (hit) await openRow(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     const click = screenClick ? { ...screenClick, col: screenClick.col - offset } : undefined
@@ -390,12 +458,15 @@ export function createKeys(ctx: AppContext, actions: {
     if (home) {
       state.homeSelected = undefined
       state.homeHover = undefined
-      await actions.switchSession(home.sessionId as typeof state.sessionId)
+      if (home.sessionId.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(home.sessionId, actions)
+      else await actions.switchSession(home.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     if (click && state.page === "chat" && click.row === 0 && state.contextArea && click.col >= state.contextArea.from && click.col < state.contextArea.to) return requestFrame()
-    if (state.page === "chat" && leader.armedAt === undefined && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
-      const sessions = homeVisibleSessions(actions.homeSessions()).filter((session) => session.id)
+    if (state.page === "chat" && leader.armedAt === undefined && !state.sidebarFocus && state.tuiProfile.homeRightPanel === "agentManager" && state.transcript.blocks().length === 0 && !state.paging?.more && !state.paging?.loading && !pendingPanelRequest() && editor.isEmpty()) {
+      // The sessions the Agent View lists, then the bots drawn under it (experimental bots), in the order they are on screen.
+      const botStops = (state.homeArea?.hits ?? []).filter((hit) => hit.sessionId.startsWith(HOME_BOT_PREFIX)).toSorted((a, b) => a.row - b.row || a.from - b.from).map((hit) => ({ id: hit.sessionId }))
+      const sessions = [...homeVisibleSessions(actions.homeSessions()).filter((session) => session.id).map((session) => ({ id: session.id! })), ...botStops]
       const selected = sessions.findIndex((session) => session.id === state.homeSelected)
       // Down enters the list; up stays the prompt's history until a row is selected.
       if (sessions.length && (key === "\x1b[B" || (key === "\x1b[A" && selected >= 0))) {
@@ -409,28 +480,63 @@ export function createKeys(ctx: AppContext, actions: {
       }
       if (key === "\r" && selected >= 0) {
         state.homeSelected = undefined
-        await actions.switchSession(sessions[selected]!.id as typeof state.sessionId)
+        const chosen = sessions[selected]!.id
+        if (chosen.startsWith(HOME_BOT_PREFIX)) await state.homeBots?.open(chosen, actions)
+        else await actions.switchSession(chosen as typeof state.sessionId)
         return requestFrame()
       }
     }
     if (state.page === "chat" && sideWidth > 0 && !pendingPanelRequest() && !state.editingScratch && !state.editingGoal && !suggestions.length && !mentionActive) {
-      const sessions = projectSessions(state.sessions, input.directory ?? "")
-      if (!state.sidebarFocus && (onRight ? key === "\x1b[C" : key === "\x1b[D") && editor.isEmpty()) {
+      const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId)
+      const multi =state.sidebarBots?.live() ? state.sidebarBots : undefined
+      // Terminals in application-cursor mode send ESC O A..D for the arrows; the list takes both forms.
+      const arrow = multi ? APPLICATION_ARROWS[key] ?? key : key
+      // The key that enters the list. In the multi-project list a session with sub-agents working keeps the plain arrows for them
+      // (session.child.next/previous, and the list shows the hint), and Alt+arrow enters the list instead.
+      // A sub-agent's thread open in the chat holds them too, in either list: the arrows change sibling there.
+      const entering = state.agentView !== undefined || multi?.holdsArrows() ? (onRight ? key === "\x1b[1;3C" || key === "\x1bf" : key === "\x1b[1;3D" || key === "\x1bb") : arrow === (onRight ? "\x1b[C" : "\x1b[D")
+      if (!state.sidebarFocus && entering && editor.isEmpty()) {
         state.sidebarFocus = true
         state.sidebarSelected = state.sessionId
         return requestFrame()
       }
       if (state.sidebarFocus && !mouse) {
         // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
-        const stops = sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const stops = multi ? multi.stops() : sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown ?? SETTLED_FIRST)
         const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
-        const onSettled = stops[index] === SETTLED_ROW
-        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
-        else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        const onSettled = !multi && stops[index] === SETTLED_ROW
+        state.sidebarInputAt = now()
+        // Up from the first row wraps to the last and down from the last to the first.
+        if (key === "/") await openSidebarSearch()
+        // `n` starts a chat where the row says (its project at once, its bot after a folder is picked); `N` always asks for the folder; `r` takes the list as it is now.
+        else if (multi && key === "n" && stops[index]) await multi.newChat(stops[index]!, rowActions)
+        else if (multi && key === "N") await multi.newChatAnywhere(rowActions)
+        else if (multi && key === "r") multi.refresh()
+        else if (arrow === "\x1b[A" || arrow === "\x1b[B") state.sidebarSelected = stops[(index + (arrow === "\x1b[B" ? 1 : -1) + stops.length) % stops.length]
+        else if (multi && (key === "\t" || key === "\x1b[Z")) {
+          // Tab and Shift+Tab land on the first row of the next and the previous section, wrapping; a Shift+Tab inside a section goes to its own first row first.
+          const starts = multi.sectionStarts().map((id) => stops.indexOf(id)).filter((at) => at >= 0)
+          const next = key === "\t" ? starts.find((at) => at > index) ?? starts[0] : starts.findLast((at) => at < index) ?? starts.at(-1)
+          if (next !== undefined) state.sidebarSelected = stops[next]
+        } else if (multi && key === "b") {
+          const bot = multi.firstBot()
+          if (bot) state.sidebarSelected = bot
+        } else if (multi && key === "o" && stops[index] && multi.isBot(stops[index]!)) await multi.openPage(stops[index]!, actions)
+        else if (multi && key === "x" && stops[index]) multi.hideProject(stops[index]!, actions)
+        // Space folds or opens any header; the arrow toward the list's edge folds an open one and the other opens a folded one (otherwise it returns to the prompt, as before).
+        else if (multi && key === " " && stops[index]) multi.toggleFold(stops[index]!)
+        else if (multi && stops[index] && !multi.isBot(stops[index]!) && ((arrow === (onRight ? "\x1b[C" : "\x1b[D") && multi.foldState(stops[index]!) === "open") || (arrow === (onRight ? "\x1b[D" : "\x1b[C") && multi.foldState(stops[index]!) === "folded"))) multi.toggleFold(stops[index]!)
+        else if (!multi && stops[index] === SETTLED_MORE && key === "\r") {
+          state.sidebarSettledShown = (state.sidebarSettledShown ?? SETTLED_FIRST) + SETTLED_PAGE
+          // The last page takes the more row away: the selection moves to the first session it revealed, which now stands where the row stood.
+          const next = sidebarStops(sessions, state.sidebarSettledOpen === true, state.sidebarSettledShown)
+          if (!next.includes(SETTLED_MORE)) state.sidebarSelected = next[index]
+        } else if (onSettled && (key === "\r" || key === " " || (onRight ? arrow === "\x1b[C" : arrow === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (key === "\r" && stops[index] && multi) await multi.activate(stops[index]!, rowActions)
         else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
-          await actions.switchSession(stops[index]! as typeof state.sessionId)
-        } else if (key === "\x1b" || (onRight ? key === "\x1b[D" : key === "\x1b[C")) state.sidebarFocus = false
+          await openRow(stops[index]! as typeof state.sessionId)
+        } else if (key === "\x1b" || (onRight ? arrow === "\x1b[D" : arrow === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }
     } else state.sidebarFocus = false
@@ -661,8 +767,16 @@ export function createKeys(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** `/` in the focused list or `sidebar.search` from the chat: the list's search, loaded by its first use. */
+  async function openSidebarSearch() {
+    if (state.page !== "chat" || !actions.sidebarShown(input.screen.size.width)) return say("the session list is not shown here · /sidebar or a wider terminal shows it", "info")
+    state.sidebarSearch ??= (await import("./sidebar-search")).createSidebarSearch(ctx)
+    state.sidebarSearch.show()
+  }
+
   /** A keymap action, through the same handlers as the slash commands; a draft in the prompt survives it. */
   async function runKeyAction(action: BindingAction, key?: string) {
+    if (action === "sidebar.search") { await openSidebarSearch(); return requestFrame() }
     if (action === "selection.quote") { mouseSelection.quote(); return requestFrame() }
     // The comment key: with comments off (or `commentKey` set to quote) it keeps its old job of quoting the selection into the prompt.
     // ctrl+g never had that job: it always comments.
@@ -819,7 +933,8 @@ export function createKeys(ctx: AppContext, actions: {
       return
     }
     const reply = await input.send({ type: "queue.promote", sessionId: state.sessionId, queueId: first.queueId })
-    if (!reply.ok) fail(reply.error.message)
+    // The daemon took the message first (it started or was steered): the send already happened, nothing to report.
+    if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
     requestFrame()
   }
 

@@ -121,6 +121,14 @@ describe("chats other programs keep for the project", () => {
     expect(out(await port.read({ sessionId: `codex:${ELSEWHERE}` }))).toContain("no chat")
   })
 
+  test("an offset is refused for another program's chat, which is read in clipped pages, instead of repeating the same prefix", async () => {
+    const { port } = world()
+    const refused = await port.read({ sessionId: `codex:${CODEX}`, limit: 1, offset: 1_500 })
+    expect(refused.ok).toBe(false)
+    expect(out(refused)).toContain("offset reads a message of a session of this project")
+    expect(out(await port.read({ sessionId: `codex:${CODEX}`, limit: 1, offset: 0 }))).toContain("[assistant] Two files.")
+  })
+
   test("another program's chat always asks before it is read and cannot be messaged, waited on or interrupted", async () => {
     const { port } = world()
     const context = { threads: port } as never
@@ -130,4 +138,11 @@ describe("chats other programs keep for the project", () => {
     expect(out(await port.message({ sessionId: `codex:${CODEX}`, text: "hi" }))).toContain("no session")
     expect(out(await port.interrupt({ sessionId: "v1:ses_old_app" }))).toContain("no session")
   })
+})
+
+test("full access opens a session in another project and messages one there without asking; other modes ask", () => {
+  const context = { threads: { projectOf: () => "/other" } } as never
+  const ask = (mode: string) => [threadsTool.approvalFor!({ action: "start", directory: "/other", text: "x" }, { ...(context as object), mode } as never), threadsTool.approvalFor!({ action: "message", sessionId: "ses_x", text: "x" }, { ...(context as object), mode } as never)]
+  expect(ask("full")).toEqual([false, false])
+  expect(ask("edits")).toEqual([true, true])
 })

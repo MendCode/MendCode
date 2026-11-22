@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { computerSessionCard } from "../src/view/computer-session-card"
+import { computerFact, computerSessionCard } from "../src/view/computer-session-card"
 import { textWidth } from "../src/view/wrap"
 import { b80Harness, B80_SCENES } from "./b80-harness"
 import { cleanTemps } from "./session-ui-harness"
@@ -26,6 +26,16 @@ for (const [width, height] of [[60, 20], [100, 30], [160, 45], [180, 50], [220, 
     }
   })
 }
+
+test("an observation's card reads its text tree, and its closed fact says when nothing changed or no window has focus", () => {
+  const base = { revision: 3, target: { pid: 42, bundleID: "local.tray", appName: "Tray" }, truncated: false, observedAt: 1_800_000_000_000, nodeCount: 7 }
+  const open = computerSessionCard({ name: "computer_observe", text: JSON.stringify({ ...base, scope: "app", tree: '0.1 Application "Tray" [key]\n  0.2 Window "Settings" {minimized}' }), width: 120, expanded: true, failed: false })!.map((line) => line.map((span) => span.text).join("")).join("\n")
+  expect(open).toContain('0.2 Window "Settings" {minimized}')
+  expect(open).toContain("app · no window")
+  expect(computerFact("computer_observe", JSON.stringify({ ...base, unchanged: true }))).toBe("Tray · 7 nodes · unchanged")
+  expect(computerFact("computer_observe", JSON.stringify({ ...base, scope: "app", tree: "" }))).toBe("Tray · 7 nodes · no window")
+  expect(computerFact("computer_observe", JSON.stringify({ ...base, nodes: [{}, {}] }))).toBe("Tray · 2 nodes")
+})
 
 test("semantic cards use the panel grid and reject malformed data without importing schemas", () => {
   expect(computerSessionCard({ name: "computer_observe", text: "{}", width: 100, expanded: true, failed: false })).toBeUndefined()

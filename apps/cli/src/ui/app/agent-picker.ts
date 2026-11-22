@@ -8,6 +8,7 @@ export function createAgentPicker(ctx: AppContext) {
 
   async function chooseAgent(name: string) {
     const sessionId = state.sessionId
+    if (state.pendingBot?.sessionId === sessionId) state.pendingBot = undefined
     const reply = await input.send({ type: "session.agent.set", sessionId, agent: name })
     if (state.sessionId !== sessionId) return
     if (!reply.ok) return fail(reply.error.code === "target_mismatch" && /^\[DAEMON\]: unknown agent\b/.test(reply.error.message) ? `unknown agent: ${name}` : reply.error.message)

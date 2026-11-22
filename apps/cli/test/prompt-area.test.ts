@@ -126,8 +126,23 @@ describe("working row", () => {
       "Waiting for answer...",
     ])
     expect(toolPhase("mcp__x__do")).toBe("Running command...")
-    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "bun test apps/cli\nsecond line" } })).toBe("Running bun test apps/cli...")
-    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "x".repeat(80) } })).toBe(`Running ${"x".repeat(47)}…...`)
+    // A shell call says what it does, never its command line, which its card in the chat already shows.
+    const shell = (detail: string) => phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail } })
+    expect(shell("bun test apps/cli\nsecond line")).toBe("Running tests...")
+    expect(shell("cd /repo/lane && node --test core/checks/decide.test.mjs")).toBe("Running tests...")
+    expect(shell("cd /repo/lane && node build.mjs claude && node build.mjs claude --check && git add -A && git commit -m x")).toBe("Building...")
+    expect(shell("cd /repo && git add -A && git commit -m 'x'")).toBe("Committing...")
+    expect(shell("git push origin HEAD:main")).toBe("Pushing...")
+    expect(shell("bun run typecheck")).toBe("Checking...")
+    expect(shell("rg -n foo src")).toBe("Searching...")
+    expect(shell("git diff --stat")).toBe("Checking git...")
+    expect(shell("FOO=1 /usr/local/bin/mendcode daemon status")).toBe("Running mendcode...")
+    expect(shell("x".repeat(80))).toBe(`Running ${"x".repeat(23)}…...`)
+    expect(toolPhase("mendcode_threads · delegate_task")).toBe("Waiting for subagents...")
+    expect(toolPhase("mendcode_threads · thread_read")).toBe("Checking sessions...")
+    // Between steps the model is thinking; a message being written says so.
+    expect(phaseOf({ state: "generating", steps: 3 })).toBe("Thinking...")
+    expect(phaseOf({ state: "generating", current: { kind: "agent_message" }, steps: 3 })).toBe("Writing...")
   })
 
   test("an advisor consultation reads as consulting, whatever words its question holds", () => {
@@ -273,11 +288,16 @@ describe("prompt area in the app", () => {
     expect(working).toBeGreaterThan(-1)
     expect(rows[working + 1]!.trimEnd()).toBe(`  ${"─".repeat(96)}`)
     now += 3_000
-    ev({ type: "item.completed", itemId: item, status: "ok", text: "" })
-    ev({ type: "item.started", turnId, itemId: ids("item"), kind: "reasoning" })
+    ev({ type: "item.completed", itemId: item, status: "ok", text: "" }, now)
+    ev({ type: "item.started", turnId, itemId: ids("item"), kind: "reasoning" }, now)
     app.render()
     rows = text()
-    expect(rows.some((row) => /Thinking… \(1m 8s\)$/.test(row))).toBe(true)
+    // The second step: its number goes with the turn's time.
+    expect(rows.some((row) => /Thinking… \(step 2 · 1m 8s\)$/.test(row))).toBe(true)
+    // A step that goes on shows its own time after the verb.
+    now += 12_000
+    app.render()
+    expect(text().some((row) => /Thinking… 12s \(step 2 · 1m 20s\)$/.test(row))).toBe(true)
     ev({ type: "turn.completed", turnId })
     ev({ type: "foreground.state", state: "idle" })
     app.render()
@@ -438,6 +458,28 @@ describe("prompt area in the app", () => {
       expect(rig.sent.some((command) => command.type === "turn.cancel")).toBe(true)
       expect(rig.sent.some((command) => command.type === "session.undo")).toBe(false)
       expect(rig.text().some((row) => row.includes("already answered · esc esc to edit"))).toBe(true)
+    })
+
+    test("past four steps (tool calls, thoughts, short notes) Esc Esc only stops the turn; four still take the message back", async () => {
+      const steps = (rig: ReturnType<typeof sentMessage>, count: number) => {
+        for (let step = 0; step < count; step++) {
+          const itemId = ids("item")
+          const kind = (["tool_call", "reasoning", "agent_message"] as const)[step % 3]!
+          rig.ev({ type: "item.started", turnId: rig.turnId, itemId, kind, ...(kind === "tool_call" ? { title: "read a.ts" } : {}) })
+          rig.ev({ type: "item.delta", itemId, text: "ok" })
+        }
+      }
+      const busy = sentMessage()
+      steps(busy, 5)
+      await busy.app.onKey("\x1b")
+      await busy.app.onKey("\x1b")
+      expect(busy.sent.some((command) => command.type === "turn.cancel")).toBe(true)
+      expect(busy.sent.some((command) => command.type === "session.undo")).toBe(false)
+      const early = sentMessage()
+      steps(early, 4)
+      await early.app.onKey("\x1b")
+      await early.app.onKey("\x1b")
+      expect(early.app.editor.text).toBe(sentText)
     })
   })
 

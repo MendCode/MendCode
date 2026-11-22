@@ -115,7 +115,9 @@ export function horizontalScene(nodes: SceneNode[], edges: SceneEdge[], width: n
   const groups = new Map<string, SceneNode[]>()
   for (const node of ordered) groups.set(node.group ?? "", [...(groups.get(node.group ?? "") ?? []), node])
   const inner = Math.min(24, Math.floor((width - groups.size * 4) / Math.max(1, nodes.length)) - 6)
-  if (inner < 4) return { note: MERMAID_NOTES.tooWide }
+  // A box narrower than its longest word breaks the word across rows; past a few cells of that the row no longer reads.
+  const longestWord = Math.max(0, ...nodes.flatMap((node) => [node.label, ...(node.fields ?? [])]).flatMap((text) => text.split(/\s+/)).map(textWidth))
+  if (inner < Math.min(12, longestWord)) return { note: MERMAID_NOTES.tooWide }
   const content = ordered.map((node) => ({ node, lines: [node.label, ...(node.fields ?? [])].flatMap((text) => wrap(text, inner)) }))
   const nodeHeight = Math.max(3, ...content.map((node) => node.lines.length + 2))
   const positions = new Map<string, { x: number; y: number }>()

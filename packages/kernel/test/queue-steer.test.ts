@@ -487,6 +487,108 @@ test("a message taken while the tools run shows as steering until the model read
   expect(s.manual.turns).toHaveLength(1)
 })
 
+test("send now on a message the engine already took stops the running turn, and the message starts a turn of its own", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const queueId = s.queued(await s.submit("while the tool runs"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  expect(lastQueue(s)).toMatchObject([{ queueId, delivery: "steer" }])
+  expect(await s.command({ type: "queue.promote", queueId })).toEqual({ ok: true })
+  expect(input.signal.aborted).toBe(true)
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("while the tool runs")
+})
+
+test("send now on a taken message while paused leaves the running turn alone", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const queueId = s.queued(await s.submit("while the tool runs"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  await s.actor.pause(true)
+  expect(await s.command({ type: "queue.promote", queueId })).toEqual({ ok: true })
+  await flush()
+  expect(input.signal.aborted).toBe(false)
+  expect(s.manual.turns).toHaveLength(1)
+})
+
+test("send now on the second of two taken messages puts it ahead of the first", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  await s.submit("taken a")
+  const b = s.queued(await s.submit("taken b"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "taken a" })
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "taken b" })
+  await s.command({ type: "queue.promote", queueId: b })
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("taken b")
+  expect(lastQueue(s)).toMatchObject([{ preview: "taken a" }])
+})
+
+test("a message taken while the tools run and not read before a cancel goes back to the queue, held, and goes with the next message", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const toolId = input.newItemId()
+  input.emit({ type: "item.started", sessionId: input.sessionId, turnId: input.turnId, itemId: toolId, kind: "tool_call" } as never)
+  await flush()
+  await s.submit("sent before the cancel")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "sent before the cancel" })
+  // Claude Code was written the message but is interrupted before it starts it: it never reports it read.
+  await s.command({ type: "turn.cancel", turnId: s.actor.snapshot().turnId })
+  await flush()
+  const shown = s.h.events.filter((event) => event.type === "item.completed" && "text" in event && event.text === "sent before the cancel")
+  expect(shown).toHaveLength(0)
+  expect(s.actor.snapshot()).toMatchObject({ foreground: "queued", held: true })
+  expect(lastQueue(s)).toMatchObject([{ preview: "sent before the cancel" }])
+  expect(s.manual.turns).toHaveLength(1)
+  await s.submit("hazlo")
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toContain("sent before the cancel")
+  expect(s.manual.last().input.text.indexOf("sent before the cancel")).toBeLessThan(s.manual.last().input.text.indexOf("hazlo"))
+  expect(lastQueue(s)).toEqual([])
+})
+
+test("a send-now that cancels the turn keeps its message first; the unread one taken before follows in a turn of its own", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const toolId = input.newItemId()
+  input.emit({ type: "item.started", sessionId: input.sessionId, turnId: input.turnId, itemId: toolId, kind: "tool_call" } as never)
+  await flush()
+  await s.submit("taken mid-tool")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "taken mid-tool" })
+  const urgent = s.queued(await s.submit("urgent", { delivery: "queue" }))
+  await s.command({ type: "queue.promote", queueId: urgent })
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("urgent")
+  expect(lastQueue(s)).toMatchObject([{ preview: "taken mid-tool" }])
+  s.manual.last().finish()
+  await flush()
+  expect(s.manual.last().input.text).toBe("taken mid-tool")
+})
+
+test("a message taken while the tools run and not read before the turn fails starts the next turn instead of being lost", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const toolId = input.newItemId()
+  input.emit({ type: "item.started", sessionId: input.sessionId, turnId: input.turnId, itemId: toolId, kind: "tool_call" } as never)
+  await flush()
+  await s.submit("sent before the failure")
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "sent before the failure" })
+  s.manual.last().finish({ status: "error", code: "engine_exit", message: "Claude Code exited" })
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("sent before the failure")
+})
+
 test("a message queued while an approval waits is offered to the engine once the approval is answered", async () => {
   const s = setup({ mode: "after-tools" })
   await s.submit("first")

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { PrReviewDashboard, type PrFinding } from "@mendcode/protocol"
-import { buildDashboard, DASHBOARD_MAX_JOBS, findingCounts, jobSummary, newestJobs } from "../src/pr-review/dashboard"
+import { buildDashboard, DASHBOARD_MAX_BYTES, DASHBOARD_MAX_JOBS, findingCounts, fitDashboard, jobSummary, newestJobs } from "../src/pr-review/dashboard"
 import type { ReviewJob } from "../src/pr-review/contracts"
 
 const NOW = Date.UTC(2026, 9, 30, 12, 0, 0)
@@ -127,5 +127,46 @@ describe("newestJobs", () => {
     const recentDone = job({ state: "done", updatedAt: NOW })
     const recentRun = job({ state: "running", updatedAt: NOW - HOUR })
     expect(newestJobs([old, recentDone, recentRun]).map((entry) => entry.id)).toEqual([recentRun.id, old.id, recentDone.id])
+  })
+})
+
+describe("fitDashboard", () => {
+  test("a ledger too big for one reply leaves out its oldest finished jobs, never a live one, and fits the frame", () => {
+    // Finished reviews with their findings, as a repository with a hundred reviewed pull requests holds them.
+    const finished = Array.from({ length: 200 }, (_, n) => job({ state: "done", updatedAt: NOW - n * HOUR, checkpoint: { completedPhases: ["discovery", "analysis"], candidates: [], verified: Array.from({ length: 6 }, (_, k) => finding(n * 10 + k)), rounds: [], decisions: Array.from({ length: 4 }, (_, k) => ({ phase: "analysis", action: "kept" as const, reason: `round ${k}: ${"the change keeps the old contract. ".repeat(8)}` })) } }))
+    const live = job({ state: "running", updatedAt: NOW - 300 * HOUR })
+    const whole = buildDashboard({ jobs: [...finished, live], watches, reviewers, now: NOW, concurrency: 2 })
+    expect(Buffer.byteLength(JSON.stringify(whole))).toBeGreaterThan(DASHBOARD_MAX_BYTES)
+    const { dashboard, dropped } = fitDashboard(whole)
+    expect(Buffer.byteLength(JSON.stringify(dashboard))).toBeLessThanOrEqual(DASHBOARD_MAX_BYTES)
+    expect(dropped).toBeGreaterThan(0)
+    expect(dashboard.jobs.length + dropped).toBe(whole.jobs.length)
+    expect(dashboard.jobs[0]!.id).toBe(live.id)
+    // What stays is the newest: the list is the same one, cut at its end.
+    expect(dashboard.jobs.map((entry) => entry.id)).toEqual(whole.jobs.slice(0, dashboard.jobs.length).map((entry) => entry.id))
+    expect(PrReviewDashboard.parse(dashboard)).toEqual(dashboard)
+  })
+
+  test("a dashboard that fits is returned as it is", () => {
+    const small = buildDashboard({ jobs: [job({ state: "done" })], watches, reviewers, now: NOW, concurrency: 1 })
+    expect(fitDashboard(small)).toEqual({ dashboard: small, dropped: 0, thinned: 0, droppedLive: 0 })
+  })
+
+  test("live jobs whose summaries alone are too big lose their decision logs, not their place in the list", () => {
+    const decisions = Array.from({ length: 20 }, (_, k) => ({ phase: `phase-${k}`, action: "kept" as const, reason: "x".repeat(600) }))
+    const live = Array.from({ length: 40 }, (_, n) => job({ state: n % 2 ? "running" : "waiting", updatedAt: NOW - n * HOUR, checkpoint: { completedPhases: ["discovery"], candidates: [], verified: [], rounds: [], decisions } }))
+    const done = job({ state: "done", updatedAt: NOW - 500 * HOUR })
+    const whole = buildDashboard({ jobs: [...live, done], watches, reviewers, now: NOW, concurrency: 2 })
+    expect(Buffer.byteLength(JSON.stringify(whole))).toBeGreaterThan(DASHBOARD_MAX_BYTES)
+    const fitted = fitDashboard(whole)
+    expect(Buffer.byteLength(JSON.stringify(fitted.dashboard))).toBeLessThanOrEqual(DASHBOARD_MAX_BYTES)
+    expect(fitted.droppedLive).toBe(0)
+    expect(fitted.dropped).toBe(1)
+    expect(fitted.thinned).toBeGreaterThan(0)
+    // Every live job is still listed, in the same order; the thinned ones are the oldest at the end.
+    expect(fitted.dashboard.jobs.map((entry) => entry.id)).toEqual(whole.jobs.slice(0, 40).map((entry) => entry.id))
+    expect(fitted.dashboard.jobs[0]!.decisions).toBeDefined()
+    expect(fitted.dashboard.jobs.at(-1)!.decisions).toBeUndefined()
+    expect(PrReviewDashboard.parse(fitted.dashboard)).toEqual(fitted.dashboard)
   })
 })

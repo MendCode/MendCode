@@ -30,6 +30,8 @@ export const LoopTrigger = lazySchema(() => z.discriminatedUnion("kind", [
     kind: z.literal("daily"),
     at: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
     timezone: z.string().min(1).max(64).refine(isTimeZone, { message: "unknown time zone (use an IANA name such as Europe/Madrid)" }).optional(),
+    /** Weekdays it wakes on (0 Sunday … 6 Saturday); absent means every day. */
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional(),
   }),
   z
     .strictObject({
@@ -234,6 +236,8 @@ export const Loop = lazySchema(() => z.strictObject({
   workspace: z.enum(["in-place", "worktree"]).optional(),
   /** The session that created the loop (a `/loop` command or the `loop` tool); its reads are inherited and it gets a notice per run. */
   creatorSessionId: SessionId.optional(),
+  /** The bot (experimental bots) that owns this loop: its session runs as that bot, so the bot's memory and digest apply. */
+  agent: z.string().min(1).max(64).optional(),
   /** Where a run's short notice goes: the creator session (default when it is known) or nowhere. */
   notify: z.enum(["creator", "none"]).optional(),
   /** The permission mode the loop's sessions start in, inherited from the creator at creation (never above it); absent = the user's default. Report-only runs are always plan mode. */

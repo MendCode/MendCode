@@ -1,8 +1,9 @@
 // Ported from MendCode v1 markdown-render.ts; pure terminal layout.
 import { assertCanvas } from "./core"
+import { wrap } from "../wrap"
 import { preparedMermaidSourceLines, cleanMermaidLabel, splitMermaidTopLevel, renderCompactBox, blankRow, renderBox, writeVisual } from "./legacy-shared"
 
-export function renderTimelineDiagram(input: string): string | undefined {
+export function renderTimelineDiagram(input: string, width = 1600): string | undefined {
   const lines = preparedMermaidSourceLines(input)
   const head = /^(timeline)(?:\s+(LR|TD))?$/i.exec(lines[0]!?.trim() ?? "")
   if (!head) return undefined
@@ -25,15 +26,36 @@ export function renderTimelineDiagram(input: string): string | undefined {
       continue
     }
     const parts = splitMermaidTopLevel(line, ":").map(cleanMermaidLabel)
-    if (parts.length < 2) continue
-    if (parts[0]!) period = parts.shift() ?? period
+    // `: another event` on its own line continues the period above it.
+    if (!line.startsWith(":")) {
+      if (parts.length < 2) continue
+      period = parts.shift() ?? period
+    }
     for (const event of parts.filter(Boolean)) events.push({ section, period, event })
   }
   if (events.length === 0) return undefined
   const boxes = events.map((event) => renderCompactBox(`${event.event} · ${event.section}`, 16))
   const boxWidth = Math.max(...boxes.flatMap((box) => box.map((line) => Bun.stringWidth(line))), 16)
-  if (head[2]!?.toUpperCase() === "TD") {
-    const gap = 8
+  const gap = 8
+  // A timeline longer than the room runs down the page; one whose boxes do not fit either side of the axis becomes a list on it.
+  const sideways = head[2]!?.toUpperCase() !== "TD" && events.length * (boxWidth + 6) <= width
+  if (!sideways && boxWidth * 2 + gap * 2 + 1 > width) {
+    const room = Math.max(8, width - 4)
+    const output = [title]
+    let shown = ""
+    for (const event of events) {
+      const heading = [event.period, event.section === "Timeline" ? "" : event.section].filter(Boolean).join(" · ")
+      if (heading !== shown) {
+        if (output.length > 1) output.push("│")
+        output.push(...wrap(heading || "·", room).map((part, at) => `${at === 0 ? "●" : "│"} ${part}`))
+        shown = heading
+      }
+      output.push(...wrap(event.event, room - 2).map((part, at) => `│ ${at === 0 ? "─ " : "  "}${part}`))
+    }
+    output.push("▼")
+    return output.join("\n")
+  }
+  if (!sideways) {
     const axisColumn = boxWidth + gap
     const canvasWidth = boxWidth * 2 + gap * 2 + 1
     const canvasHeight = events.length * 5

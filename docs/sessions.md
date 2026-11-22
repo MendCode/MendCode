@@ -71,6 +71,19 @@ Peer model turns exclude `threads` and retain that restriction through automatic
 
 Queue inspection, editing, reordering and steering are local-only; explicit `@thread` snapshots remain local-only.
 
+## Where a session and its messages come from
+
+The daemon records who created each session and who sent each message, from the connection and never from what the client says (a client cannot choose it: `user.submit` and `session.create` have no origin field). `session.created` and `queue.added` carry `origin`, the `sessions` table keeps `origin` (its creator) and `last_human_at` (the latest message with origin `tui`), and `session.list`, `session.get` and the other summaries expose them as `origin` and `lastHumanAt`. The cost is one short field per write and one small update per typed message. A session made before this was recorded has no `origin` and no `lastHumanAt`; a notice or a compaction in the queue is the daemon's own and carries none.
+
+| Origin | What it is | How the daemon decides |
+|---|---|---|
+| `tui` | Typed by a person in the terminal UI, or in an interactive remote client | The connection is the user's own local terminal (it declared `extension-dialogs`, is not started by a session's shell, and is neither remote nor a peer), or it is a token-holding remote or peer client (the web UI) |
+| `cli` | A command-line subcommand: `mendcode session send`, `mendcode run`, `acp`, the app server and any other local client | A local connection that is neither of the others |
+| `agent` | Another agent or a bridge | The connection is agent-origin (read from the socket's process, [permissions.md](permissions.md)); or a local client that names itself `*-bridge` or sends the `caller:agent` capability (the CLI sends it inside Claude Code or Codex: `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CODEX_THREAD_ID`, `AI_AGENT`); also a session a model opens with the session tool |
+| `auto` | The daemon's own work | Loops, workflows, the PR reviewer, dream, sub-agent tasks, the extension `sendUserMessage`, a continuation after compaction, notices |
+
+What a client says can only move a local `cli` client to `agent`; nothing makes a script look like a person. An editor over ACP counts as `cli` and so does a message sent from a script with a remote-less local client, so only the terminal UI and the web UI count as a person typing. The all-projects sidebar uses this ([sidebar.md](sidebar.md)).
+
 ## Empty chats
 
 A terminal's new chat sends `session.create` with `reuseEmpty: true`. This applies at start-up without a session, through `/new`, `ctrl+x n`, the palette, and `tui` control `session.new`.
@@ -411,7 +424,7 @@ A cancel ends the turn at once on every engine (`turn.cancelled`, then idle) whi
 
 Restart also restores the queue held: no prompt runs until an explicit send or new submission, except behind a turn the restart resumes (`resumeAfterRestart`, [automation](automation.md#background-sessions-b17)): the messages that waited behind it follow the resumed turn.
 
-The panel says why it is held: `Held since your cancel`, `Held since the restart` or `Held since the interruption`.
+The panel says why it is held: `Held since your cancel` (`Held since the cancel by session <title>` when another session interrupted this one with `threads`), `Held since the restart` or `Held since the interruption`.
 
 Settings changes are pushed live; changing the policy alone never releases a held queue.
 
@@ -563,7 +576,7 @@ A fork does not copy this history: it points at its parent's rows up to the cut 
 
 Engines that keep their history elsewhere (Claude Code, Codex) have no `engine_messages`: undo and fork still work on the transcript and files.
 
-Claude Code's conversation is cut too: each turn's message carries a uuid derived from its turn id, and an undo of a message asks Claude Code to `rewind_conversation` before it (right away, or before the next message when no Claude Code process runs), so the report says `history.tracked: true`.
+Claude Code's conversation is cut too: each turn's message carries a uuid derived from its turn id, and an undo of a message asks Claude Code to `rewind_conversation` before it (right away, or before the next message when no Claude Code process runs), so the report says `history.tracked: true`. A message Claude Code never received (its turn stopped or failed before the message was written) has nothing to cut: Claude Code answers `target_not_found` and the undo counts as made, so the next message goes. A turn cancelled while its Claude Code process still starts ends at once instead of after the start, and the process stays for the next message.
 
 Codex still remembers the turn (`history.tracked: false`).
 
@@ -1178,7 +1191,7 @@ Plan mode can approve these reads individually.
 
 Explicit deny rules always win.
 
-Other projects (`list scope=all` or `directory`, `message` and `wait` by full id, and `start` to open a session in another folder) follow the always-ask, never-above-the-sender rules of [peers](peers.md#other-projects).
+Other projects (`list scope=all` or `directory`, `message` and `wait` by full id, and `start` to open a session in another folder) follow the ask-outside-full-access, never-above-the-sender rules of [peers](peers.md#other-projects).
 
 ### Read chats from other programs
 

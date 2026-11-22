@@ -10,12 +10,14 @@ export type BatchOutcome = { index: number; outcome: "dispatched" | "failed" | "
  * Any other failure of an action may have reached the app, and is never repeated blindly.
  */
 export class NotDelivered extends Error {}
+export type SelectReport = { focused: boolean; restored: boolean; minimized: boolean }
 
 export type ComputerAccessibility = {
   foreground(signal: AbortSignal): Promise<ComputerTarget>
   /** The live identity of an approved target, wherever it is on screen: undefined when its process ended or its bundle ID differs. Never activates it. */
   identify(target: ComputerTarget, signal: AbortSignal): Promise<ComputerTarget | undefined>
-  observe(target: ComputerTarget, signal: AbortSignal): Promise<Pick<ComputerObservation, "nodes" | "truncated">>
+  /** `scope: "app"` when no window of the app has focus: the nodes are the application, its windows, menu bar and status items. */
+  observe(target: ComputerTarget, signal: AbortSignal): Promise<Pick<ComputerObservation, "nodes" | "truncated"> & { scope?: "app" | "window" | undefined }>
   action(target: ComputerTarget, input: SemanticAction, signal: AbortSignal): Promise<void>
   /** Several actions on one observation in one native request, stopping at the first that fails; without it they run one by one. */
   batch?(target: ComputerTarget, steps: SemanticAction[], signal: AbortSignal): Promise<BatchOutcome[]>
@@ -27,7 +29,13 @@ export type ComputerAccessibility = {
   /** Identifies a running target, or launches a missing one in the background; never brings it to the front. */
   activate?(target: ComputerTarget, signal: AbortSignal): Promise<ComputerTarget>
   windows?(target: ComputerTarget, signal: AbortSignal): Promise<ComputerWindow[]>
-  selectWindow?(target: ComputerTarget, windowID: string, signal: AbortSignal): Promise<ComputerTarget>
+  /**
+   * Makes a window of the app its main window: a handle from `windows`, or a window node of the current observation. A minimized one
+   * is restored; it is raised only while the app is in front. `report` says whether the window took the app's focus.
+   */
+  selectWindow?(target: ComputerTarget, window: string | { nodeID: string }, signal: AbortSignal): Promise<ComputerTarget & { report?: SelectReport }>
+  /** Asks the running app to reopen, as a click on its Dock icon does, without activating it; `opened` when a window appeared. */
+  reopen?(target: ComputerTarget, signal: AbortSignal): Promise<{ target: ComputerTarget; opened: boolean }>
   release?(target: ComputerTarget): void
   stop?(): void
 }

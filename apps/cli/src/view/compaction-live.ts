@@ -25,7 +25,8 @@ export type LiveInput = {
   now: number
   /** The loading glyph; empty when the activity line above the prompt already shows one, so there is a single indicator. */
   spinner: string
-  arcade?: { view: ArcadeView; focused: boolean; fieldRows: number }
+  /** `done`: the compaction is over and the game stays until it is closed. */
+  arcade?: { view: ArcadeView; focused: boolean; fieldRows: number; done?: boolean }
   scratch?: { text: string; editing: boolean; editor?: ReturnType<typeof import("./editor").createEditor>; readOnly: boolean }
 }
 
@@ -222,27 +223,33 @@ const ARCADE_INFO_WIDTH = 30
 function arcadeRows(input: LiveInput): Line[] {
   const { width, facts, arcade } = input
   if (!arcade) return panelRows(input)
-  const { view, focused } = arcade
+  const { view, focused, done } = arcade
   const elapsed = elapsedText(input)
+  const controls = view.controls ?? "space       start · pause"
   const keys: Line[] = focused
-    ? [[{ text: "←↑↓→ / wasd  move", fg: "text" }], [{ text: "space       start · pause", fg: "text" }], [{ text: "r restart · n next game", fg: "muted" }], [{ text: "esc / q     leave the game", fg: "muted" }]]
+    ? [[{ text: "←↑↓→ / wasd  move", fg: "text" }], [{ text: controls, fg: "text" }], [{ text: "r restart · n next game", fg: "muted" }], [{ text: done ? "esc / q     close the game" : "esc / q     leave the game", fg: "muted" }]]
     : [[{ text: "tab · click  play", fg: "primary", bold: true }], [{ text: "the game only runs while", fg: "muted" }], [{ text: "you have it focused", fg: "muted" }]]
   if (width < LIVE_COMPACT_WIDTH || width - 4 < view.width + ARCADE_INFO_WIDTH) {
     const pad = Math.max(0, Math.floor((width - view.width) / 2))
     return [
-      fit([{ text: lead(input), fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
+      fit(done
+        ? [{ text: "✓ ", fg: "success" }, { text: view.title, fg: "text", bold: true }, { text: " · compaction done", fg: "success" }, { text: ` · ${view.status}`, fg: "muted" }]
+        : [{ text: lead(input), fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
       ...view.rows.map((row) => fit([{ text: " ".repeat(pad) }, ...row], width)),
-      fit(focused ? [{ text: "arrows move · space · r · n · esc leaves", fg: "muted" }] : [{ text: "tab plays", fg: "primary" }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
+      fit(focused ? [{ text: `arrows move · ${view.controls ?? "space"} · r · n · esc ${done ? "closes" : "leaves"}`, fg: "muted" }] : [{ text: "tab plays", fg: "primary" }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
     ]
   }
-  const info: Line[] = [
-    [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
-    [{ text: `step ${stepOf(facts)} of ${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }],
-    [{ text: view.status, fg: "warning" }],
-    ...keys,
-  ]
+  const info: Line[] = done
+    ? [[{ text: "✓ ", fg: "success" }, { text: "Compaction done", fg: "text", bold: true }], [{ text: "the game stays until closed", fg: "muted" }], [{ text: view.status, fg: "warning" }], ...keys]
+    : [
+        [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
+        [{ text: `step ${stepOf(facts)} of ${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }],
+        [{ text: view.status, fg: "warning" }],
+        ...keys,
+      ]
   const rows = view.rows.map((row, index): Line => [{ text: " " }, ...row, { text: "   " }, ...(info[index] ?? [])])
-  return boxed({ title: `Arcade · ${view.title}`, ...(elapsed ? { right: elapsed } : {}), rows, width, tone: focused ? "borderActive" : "border" })
+  const right = done ? "compaction done · esc to close" : elapsed
+  return boxed({ title: `Arcade · ${view.title}`, ...(right ? { right } : {}), rows, width, tone: focused ? "borderActive" : "border" })
 }
 
 function scratchRows(input: LiveInput): { rows: Line[]; scratch?: NonNullable<LiveOutput["scratch"]> } {
@@ -294,7 +301,8 @@ export function liveRowsNeeded(mode: LiveMode, width: number, field = 0): number
  * project note, `quiet` is one line. A mode that does not fit `maxRows` gives way to a smaller one.
  */
 export function renderLiveCompaction(input: LiveInput): LiveOutput {
-  const fits = (mode: LiveMode) => liveRowsNeeded(mode, input.width, input.arcade?.fieldRows ?? 0) <= input.maxRows
+  // A game started on a wider terminal is never drawn cut: until there is room again the panel shows instead.
+  const fits = (mode: LiveMode) => liveRowsNeeded(mode, input.width, input.arcade?.fieldRows ?? 0) <= input.maxRows && (mode !== "arcade" || (input.arcade?.view.width ?? 0) <= input.width)
   const order: LiveMode[] = input.mode === "arcade" || input.mode === "stats" || input.mode === "scratchpad" ? [input.mode, "panel", "quiet"] : input.mode === "panel" ? ["panel", "quiet"] : ["quiet"]
   const mode = order.find(fits) ?? "quiet"
   const sized = { ...input, mode }

@@ -19,6 +19,8 @@ export const ComputerNode = lazySchema(() => z.strictObject({
   states: z.array(z.string().max(64)).max(16),
   actions: z.array(z.enum(["press", "setValue", "click", "typeText", "key", "scroll", "drag"])).max(7),
   bounds: z.strictObject({ x: z.number().finite(), y: z.number().finite(), width: z.number().nonnegative(), height: z.number().nonnegative() }).optional(),
+  /** Levels below the observation's root, for the text tree. */
+  depth: z.number().int().min(0).max(64).optional(),
 }))
 export type ComputerNode = z.infer<typeof ComputerNode>
 
@@ -28,7 +30,7 @@ export const ComputerSessionInput = lazySchema(() => z.discriminatedUnion("actio
   z.strictObject({ action: z.literal("apps") }),
 ]))
 export type ComputerSessionInput = z.infer<typeof ComputerSessionInput>
-export const ComputerObserveInput = lazySchema(() => z.strictObject({ computerSessionID: z.string().uuid(), screenshot: z.boolean().optional() }))
+export const ComputerObserveInput = lazySchema(() => z.strictObject({ computerSessionID: z.string().uuid(), screenshot: z.boolean().optional(), full: z.boolean().optional() }))
 export type ComputerObserveInput = z.infer<typeof ComputerObserveInput>
 export const ComputerCodeInput = lazySchema(() => z.strictObject({ computerSessionID: z.string().uuid(), code: z.string().min(1).max(32768).refine((code) => Buffer.byteLength(code, "utf8") <= 32768, "Computer code exceeds 32 KiB") }))
 export type ComputerCodeInput = z.infer<typeof ComputerCodeInput>
@@ -46,8 +48,9 @@ export const ComputerActionInput = lazySchema(() => z.strictObject({
   toNodeID: ComputerNode.shape.id.optional(),
 }))
 export type ComputerActionInput = z.infer<typeof ComputerActionInput>
-export type ComputerWindow = { id: string; name: string; bounds?: ComputerNode["bounds"] }
-export type ComputerApp = { bundleID: string; appName: string; pid?: number }
+export type ComputerWindow = { id: string; name: string; bounds?: ComputerNode["bounds"]; minimized?: true | undefined; focused?: true | undefined }
+/** `windows` counts its windows on screen; `menuBar` marks an app without a Dock icon (it lives in the menu bar); `active` the app in front. */
+export type ComputerApp = { bundleID: string; appName: string; pid?: number; windows?: number | undefined; menuBar?: true | undefined; active?: true | undefined }
 
 export type ComputerSessionReport = {
   computerSessionID: string
@@ -58,5 +61,11 @@ export type ComputerSessionReport = {
   idleExpirySeconds?: number
   apps?: ComputerApp[]
 }
-export type ComputerObservation = { revision: number; target: ComputerTarget; nodes: ComputerNode[]; truncated: boolean; observedAt: number; screenshotFallback?: string }
+/** `scope: "app"`: no window has focus, so the root is the application with its windows, menu bar and status items. */
+export type ComputerObservation = { revision: number; target: ComputerTarget; nodes: ComputerNode[]; truncated: boolean; observedAt: number; scope?: "app"; screenshotFallback?: string }
+/**
+ * What computer_observe shows the model: the tree as text, one node per line, or only what changed since the last observation it
+ * saw (`unchanged`, or `changes`). Node IDs stay the same while their element does.
+ */
+export type ComputerObserveReport = { revision: number; target: ComputerTarget; scope?: "app"; truncated: boolean; observedAt: number; nodeCount: number; tree?: string; changes?: string; unchanged?: true; hint?: string; screenshot?: unknown; screenshotFallback?: string }
 export type ComputerCodeReport = { ok: boolean; value?: unknown; error?: { kind: string; message: string }; toolCalls: { name: string }[]; logs?: string[]; truncated?: boolean }

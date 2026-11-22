@@ -43,7 +43,8 @@ function scriptedAdvisor(answers: string[], options: { enabled?: boolean; limits
   const consultations: Array<{ trigger: AdvisorTrigger; brief: string }> = []
   const port: AdvisorPort = {
     enabled: () => options.enabled ?? true,
-    limits: () => advisorLimits(options.limits),
+    // Every checkpoint on unless a test sets its own: none runs by default.
+    limits: () => advisorLimits({ checkpoints: ["plan", "repeat_error", "completion"], ...options.limits }),
     consult: async (request) => {
       consultations.push({ trigger: request.trigger, brief: request.brief })
       return { verdict: parseAdvisorVerdict(answers.shift() ?? '{"verdict":"proceed","summary":"fine"}'), model: "gpt-6.1-sol", usage: { provider: "openai", model: "gpt-6.1-sol", input: 1200, output: 80 } }
@@ -161,7 +162,7 @@ describe("advisor checkpoints", () => {
     const seen: Array<{ images: number; brief: string }> = []
     const port: AdvisorPort = {
       enabled: () => true,
-      limits: () => advisorLimits(undefined),
+      limits: () => advisorLimits({ checkpoints: ["plan", "repeat_error", "completion"] }),
       acceptsImages: () => true,
       consult: async (request) => (seen.push({ images: request.images?.length ?? 0, brief: request.brief }), { verdict: parseAdvisorVerdict('{"verdict":"proceed","summary":"matches the screenshot"}') }),
     }

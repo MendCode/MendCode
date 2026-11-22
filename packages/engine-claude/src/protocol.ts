@@ -327,7 +327,12 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined } }) {
+/** Claude Code's notice that a sub-agent started or ended. */
+function isTaskNotice(message: ClaudeMessage): boolean {
+  return message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification")
+}
+
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined }; /** Facts about one tool call learned outside the stream (a hook: `graphHint`), added to its result's `meta`; asked once per result. */ resultMeta?(toolUseId: string): Record<string, number> | undefined }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   /** A tool result's pictures kept in the blob store, for its card; none without a store or when one cannot be kept. */
   const resultPictures = (part: any): BlobRef[] => {
@@ -351,6 +356,19 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const lateAgentMeta = new Map<ItemId, { subagent: true; agent: string; model?: string; background: boolean; tool: string }>()
   /** Background agents of this turn still running, by tool-use id: they report after the turn ends. */
   const backgroundAgents = new Set<string>()
+  /** Agents that reported their end, by tool-use id: a message sent to one starts it again, and it runs in the background until it ends again. */
+  const endedAgents = new Set<string>()
+  /** This turn's agents by the id `SendMessage` names them with (Claude Code's `agentId`, also the task id of its notices). */
+  const agentIds = new Map<string, ItemId>()
+  /** `SendMessage` calls already shown in their agent's thread: a message record can come more than once. */
+  const sentShown = new Set<string>()
+  /** The last message sent to each agent's thread: Claude Code's notice that the message started it again repeats it as its prompt. */
+  const sentText = new Map<ItemId, string>()
+  /**
+   * Each agent's call (its key in `agents`) by Claude Code's agent id (`task_id` on notices, `agent_id` on its records). A run started
+   * again by `SendMessage` is announced under the message's call while its records still name the first call, so the id joins them.
+   */
+  const agentCalls = new Map<string, string>()
   /** Agent calls whose agent was stopped by an interrupt, by item: Claude Code's own notice of that end comes too late or not at all. */
   const stopped = new Set<ItemId>()
   /** Tools a sub-agent called, by tool-use id. */
@@ -545,6 +563,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       const agentLate = lateAgentMeta.get(itemId)
       lateAgentMeta.delete(itemId)
       if (launched && !part.is_error && agents.has(String(part.tool_use_id))) backgroundAgents.add(String(part.tool_use_id))
+      const launchedAs = agents.has(String(part.tool_use_id)) ? /agentId: ([\w-]+)/.exec(toolResultText(part.content))?.[1] : undefined
+      if (launchedAs) agentIds.set(launchedAs, itemId)
       const late = agentLate && backgroundAgents.has(String(part.tool_use_id)) ? { ...agentLate, background: true } : agentLate
       // A background agent's result is Claude Code's note to its model (ids and how to message it), not something to show.
       const text = !part.is_error && backgroundAgents.has(String(part.tool_use_id)) ? "running in the background" : !part.is_error && patch ? patch : toolResultText(part.content)
@@ -559,7 +579,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       const written = writeInputs.get(String(part.tool_use_id))
       writeInputs.delete(String(part.tool_use_id))
       const pictures = resultPictures(part)
-      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(pictures.length ? { attachments: pictures } : {}), ...(late ? { meta: late } : {}) })
+      const hinted = input.resultMeta?.(String(part.tool_use_id))
+      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(pictures.length ? { attachments: pictures } : {}), ...(late || hinted ? { meta: { ...late, ...hinted } } : {}) })
     }
   }
 
@@ -595,23 +616,36 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         const todos = agentTodos.get(String(part.tool_use_id))
         agentTodos.delete(String(part.tool_use_id))
         const pictures = resultPictures(part)
-        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), ...(pictures.length ? { attachments: pictures } : {}), meta: { agentParent: parent } })
+        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), ...(pictures.length ? { attachments: pictures } : {}), meta: { agentParent: parent, ...input.resultMeta?.(String(part.tool_use_id)) } })
       }
     }
   }
 
+  /** The key in `agents` of the agent a sub-agent record or start/end notice belongs to, whichever run of the agent it comes from. */
+  function agentCall(message: ClaudeMessage): string | undefined {
+    const named = message.parent_tool_use_id ? String(message.parent_tool_use_id) : isTaskNotice(message) ? String(message.tool_use_id) : undefined
+    if (named && agents.has(named)) return named
+    const agentId = message.parent_tool_use_id ? message.agent_id : isTaskNotice(message) ? message.task_id : undefined
+    return typeof agentId === "string" ? agentCalls.get(agentId) : undefined
+  }
+
   /** Claude Code's notices about a sub-agent: it started (with the prompt it was given) and it ended (with its report and totals). */
-  function onTaskNotice(message: ClaudeMessage) {
-    const parent = agents.get(String(message.tool_use_id))
-    if (!parent) return
-    if (message.subtype === "task_started" && typeof message.prompt === "string") {
+  function onTaskNotice(message: ClaudeMessage, call: string | undefined) {
+    const parent = call ? agents.get(call) : undefined
+    if (!call || !parent) return
+    if (typeof message.task_id === "string") agentIds.set(message.task_id, parent)
+    // A run started by a message already shown in the thread (`sentToAgent`) does not show it twice.
+    const shown = message.subtype === "task_started" && typeof message.prompt === "string" && sentText.get(parent) === message.prompt
+    if (shown) sentText.delete(parent)
+    if (message.subtype === "task_started" && typeof message.prompt === "string" && !shown) {
       const itemId = input.newItemId()
       input.emit({ type: "item.started", itemId, kind: "user_message", meta: { agentParent: parent } })
       input.emit({ type: "item.completed", itemId, status: "ok", text: clip(message.prompt), meta: { agentParent: parent } })
     } else if (message.subtype === "task_notification") {
       // An agent whose stop was already reported (`stopBackground`) is not ended twice.
       if (stopped.has(parent)) return
-      backgroundAgents.delete(String(message.tool_use_id))
+      backgroundAgents.delete(call)
+      endedAgents.add(call)
       const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
       const status = message.status === "completed" ? "ok" : message.status === "killed" || message.status === "stopped" ? "cancelled" : "error"
       const itemId = input.newItemId()
@@ -705,16 +739,52 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     /** True while an agent this turn started in the background still runs. */
     hasBackgroundAgents: () => backgroundAgents.size > 0,
     stopBackground,
+    /**
+     * A message the main agent sent to one of this turn's agents (`SendMessage`, its `toolUseId`): it shows in that agent's thread,
+     * which reads it at its next step. False when the agent is not one of this turn's.
+     */
+    /**
+     * An agent this process runs that no turn of it started: one launched before the process was replaced (a daemon restart) and
+     * started again by a message. It gets a background call in this turn, so its work fills a thread instead of being dropped.
+     */
+    /** A tool call this turn already showed: its own Agent call, not a sub-agent to adopt. */
+    knowsToolUse: (toolUseId: string) => tools.has(toolUseId) || agents.has(toolUseId),
+    /** True for one of this turn's own Agent calls. */
+    isAgentCall: (toolUseId: string) => agents.has(toolUseId),
+    adoptAgent(agent: { toolUseId: string; taskId?: string; description: string; agent?: string }) {
+      if (agents.has(agent.toolUseId)) return
+      const itemId = input.newItemId()
+      agents.set(agent.toolUseId, itemId)
+      if (agent.taskId) agentCalls.set(agent.taskId, agent.toolUseId)
+      backgroundAgents.add(agent.toolUseId)
+      input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: `agent ${agent.description}`.slice(0, 200), subagent: true, agent: agent.agent ?? "agent", background: true } })
+      input.emit({ type: "item.completed", itemId, status: "ok", text: "running in the background", meta: { subagent: true, background: true } })
+    },
+    sentToAgent(sent: { toolUseId: string; to: string; text: string }): boolean {
+      const parent = agentIds.get(sent.to)
+      if (!parent) return false
+      if (sentShown.has(sent.toolUseId)) return true
+      sentShown.add(sent.toolUseId)
+      sentText.set(parent, sent.text)
+      const itemId = input.newItemId()
+      input.emit({ type: "item.started", itemId, kind: "user_message", meta: { agentParent: parent } })
+      input.emit({ type: "item.completed", itemId, status: "ok", text: clip(sent.text), meta: { agentParent: parent, sentToAgent: true } })
+      return true
+    },
     /** True for a record of one of this turn's agents: something it did, or Claude Code's notice that it started or ended. */
     owns(message: ClaudeMessage): boolean {
-      if (message.parent_tool_use_id) return agents.has(String(message.parent_tool_use_id))
-      return message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification") && agents.has(String(message.tool_use_id))
+      return (message.parent_tool_use_id || isTaskNotice(message)) && agentCall(message) !== undefined
     },
     /** Feeds one message; returns the `result` message when the turn ended. */
     accept(message: ClaudeMessage): ClaudeMessage | undefined {
-      if (message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification")) return void onTaskNotice(message)
+      const call = message.parent_tool_use_id || isTaskNotice(message) ? agentCall(message) : undefined
+      const agentId = isTaskNotice(message) ? message.task_id : message.parent_tool_use_id ? message.agent_id : undefined
+      if (call && typeof agentId === "string" && agentId) agentCalls.set(agentId, call)
+      const resumed = message.parent_tool_use_id || (message.type === "system" && message.subtype === "task_started") ? call : undefined
+      if (resumed && endedAgents.delete(resumed)) backgroundAgents.add(resumed)
+      if (isTaskNotice(message)) return void onTaskNotice(message, call)
       if (message.parent_tool_use_id) {
-        const parent = agents.get(String(message.parent_tool_use_id))
+        const parent = call ? agents.get(call) : undefined
         if (parent) onAgentMessage(message, parent)
         return undefined
       }

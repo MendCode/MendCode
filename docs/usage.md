@@ -149,7 +149,7 @@ unknown), under the session or directory it was made for:
 | `setup` | the setup helper's answers | `setup.ask` |
 | `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
 | `whatsNew` | `/whatsnew` picking the changes that fit you ([what's new](whats-new.md)) | `whatsnew.ask` |
-| `todayTriage` | `/today`'s `t`, grouping the page's rows ([today](today.md#triage)) | `today.triage` |
+| `todayTriage` | past calls of the old `/today` page's triage; nothing records it any more ([today](today.md) is a chat, its turns are counted as the session's) | none |
 | `prReview` | the PR reviewer's own turns (review, verify, fix children), one row per day, model and directory | `pr-review/service.ts` |
 
 ### Calls already in the totals
@@ -239,6 +239,18 @@ Claude Code and Codex report no cost, so their rows are unknown unless `budgets.
 A call's harness is read when the page asks: Claude Code and Codex use their own provider ids, an ACP agent uses `acp`, and a session bound to pi counts as pi.
 
 Nothing new is stored and nothing runs at start-up; the breakdown loads with the first `usage.query`. `mendcode usage` and `mendcode stats` print the same totals and a "By Harness" panel.
+
+`mendcode usage` also ends with two blocks, the same figures `--json` holds:
+
+- `by day:` one row per day with calls (the last 14): input, output, cache read, cache write and calls. A range of one day has no such block.
+- `by engine:` one row per harness: tokens, cached tokens, calls and, when it ran any, its sub-agents: how many, their calls and their tokens. A sub-agent is a child session MendCode started; Claude Code's own internal agents are part of their parent's calls.
+
+```text
+by day:           input   output  cache read  cache write   calls
+  2026-11-13       2.8M     927K        153M         4.5M     592
+by engine:
+  native             3.1M tokens (+7.7M cached) · 581 calls · 106 sub-agents (542 calls, 8.7M tokens)
+```
 
 ## Waste
 

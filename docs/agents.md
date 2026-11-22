@@ -157,7 +157,7 @@ Trusted custom subagents can replace these profiles.
 
 ### Start or resume a task
 
-`task { description, prompt, agent?, subagent_type?, task_id?, model?, variant?, background?, isolation?, fork? }` runs in the foreground by default.
+`task { description, prompt, agent?, subagent_type?, task_id?, model?, variant? (or effort?), background?, isolation?, fork? }` runs in the foreground by default.
 
 `subagent_type` aliases `agent`.
 
@@ -176,6 +176,8 @@ Use `task_id` to continue the same saved conversation after completion, cancella
 An active child cannot be resumed, and another parent cannot resume it.
 
 `model` may use `model#variant`; a conflicting explicit variant is refused.
+
+To set a child's reasoning effort, pass `variant` (alias `effort`), e.g. `model: "gpt-6.2-astra", effort: "xhigh"`; `mendcode models <provider> --verbose` lists a model's efforts, and an unknown one is refused naming the valid ones.
 
 An explicit model starts a fresh model choice; resuming without an override keeps the child's choice.
 
@@ -333,11 +335,19 @@ The opt-in [thread MCP bridge](thread-mcp.md) offers `delegate_task` inside Clau
 
 Ctrl+X Down opens the first child (or first sibling from a child).
 
+### Esc and sub-agents
+
+Esc Esc stops only the parent's turn. Its sub-agents keep running: a foreground child goes on in the background and wakes the parent when it ends, as `b` would. When any still run, the notice reads `interrupted · sub-agents keep running · esc stops them`.
+
+A third Esc within 5 seconds stops every running sub-agent of the session: its children and, on Claude Code, its background agents. Background shell commands keep running; `/ps` stops those.
+
+`turn.cancel` carries this as `spareAgents: true`; without it (a workflow, a loop, an older terminal) the turn's foreground children stop with it. A child detached with `b` is never stopped by its parent's cancel.
+
 In a child with an empty prompt, Right/Left cycles siblings in v1 ID order and Up returns to the parent; a nonempty draft keeps normal cursor/history keys.
 
 ### Live task tree
 
-While the open session has sub-agents, the chat shows them live as a tree hanging from the working line: one row each with what it was asked, `await` (the session waits for it) or `bg` (background), what it is doing now (the tool in flight, `thinking`, `needs you: …`, `queued`, `paused`) and how long it has run.
+While the open session has sub-agents, the chat shows them live as a tree hanging from the working line: one row each with what it was asked, `await` (the session waits for it) or `async` (it runs on its own while the session goes on; not a background command), what it is doing now (the tool in flight, `thinking`, `needs you: …`, `queued`, `paused`) and how long it has run.
 
 The agent's name is a column only when the rows differ in it.
 
@@ -347,7 +357,7 @@ While the session rests and its sub-agents still work, a head line takes the wor
 
 One that ends stays 8 seconds with its outcome (`done`, `failed`, `cancelled`, `interrupted`) and the time it took.
 
-Four rows at most, then `+N more · /tasks`; under 60 columns the mode is dropped.
+Sub-agents and background commands share seven rows, then `+N more · /tasks` (or `/ps` when commands are left out). When both lists are long, sub-agents keep four rows and commands three; a short list gives its rows to the other. The sub-agent open in the chat always keeps its row. Under 60 columns the mode is dropped.
 
 The tree is drawn by the terminal from `task.list` (asked again on each `task.changed` of the session) and the `session.activity` push, which carries a sub-agent's session from the moment it waits on you until it ends (that is the `needs you` the row shows); a view can restyle it as the `bar` slot's `agents` variant.
 
@@ -490,6 +500,7 @@ Commands also accept JSON templates and agent/model/subtask attributes. `/init` 
 - `action: list` lists this parent's children; `get` returns one child's state and result.
 - `wait` waits once, default 30 seconds, capped at 300 seconds; it reports `wait_timed_out`.
 - `cancel` cancels the exact child. A foreground parent cancellation also cancels its child; background children continue independently.
+- `progress` answers "how far along is this sub-agent?" only when the model asks (the user asked); `task_id` may be omitted while one sub-agent runs. It reads the sub-agent's recorded thread, a MendCode child session or an engine's own sub-agent such as Claude Code's, and sends a bounded digest (its prompt, elapsed time, tool count, the last 15 steps, its todo list) to a cheap model, which answers in 3 to 5 lines: what it did, what it does now, what seems left and an estimate labelled as such (or "cannot estimate"). The model is the `summary` role's, then `small`, then the cheaper peer of the session's model; a Claude Code session with neither set uses Claude Haiku or Sonnet on the user's Claude login. The call is counted under `summary` in `/usage`. A finished or unknown sub-agent is answered from its record with no model call; with no helper model the recorded steps are shown. There is no timer and nothing is stored. Claude Code reaches it through `task_status` (`harness_tools`) or the thread bridge's `task_progress`.
 - Existing `id` routes to shell tasks (`bg_…`) or workflow receipts. With neither id nor action, the tool includes children alongside shell/workflow status.
 
 Protocol: `task.run`, `task.list`, `task.status` (`get`, `wait`, `cancel`, `detach`) and `session.detach`. Client `tasks(sessionId)` lists typed child records.
@@ -618,6 +629,101 @@ are local only and never read-only remote commands.
 `--dir` / `--data-dir` selects daemon storage.
 
 Frames: `bun scripts/render-frames.ts .agents-frames/B66 --b66 100x30 180x50`.
+
+## Bots (experimental)
+
+A bot is an agent with an identity: a name, a shape and color, its own memory, and a place you send it to work. It is off until you run `/experimental bots on`; with the flag off nothing about it loads, `/bot` is not in the menu and its commands answer `forbidden`.
+
+A bot is the same file as any agent, with a `bot:` block, and it lives in your own `~/.mendcode/agents/` (a bot is global, so a project's `.mendcode/agents/` file keeps working as an agent and its block is ignored, with a note under `problems`):
+
+```markdown
+---
+description: A calm reviewer
+mode: primary
+permission: smart         # a new bot starts at smart: it edits inside the project, and asks before deleting, secrets, sudo
+bot:
+  shape: circle           # circle | square | diamond | triangle | hexagon (absent: made from the name)
+  color: success          # a theme role: primary | secondary | accent | success | warning | error | info (not hex; absent: made from the name)
+  avatar: calm.png        # optional .png or .webp (at most 1 MiB, 512 px) in ~/.mendcode/bots/<name>/ or the data dir; shown where the terminal draws images
+  origin: mendcode        # mendcode (the default) or the id of the connector that owns the bot
+---
+You review gently…
+```
+
+| command | does |
+|---|---|
+| `/bot` or `/bot list` | the bots, their state (working, waiting for you, idle, problem) and the folders they work in |
+| `/bot new [name]` | opens the bot form with the name filled in; nothing is written until Create |
+| `/bot new <name> <description>` or `/bot new -d <description>` | the model drafts the name (when you gave none), the when-to-use text and the personality, and the words "green", "red", "square"… pick the color and shape; the draft opens in the same form to confirm, and nothing is written until Create |
+| `/bot open [name]` | opens the bot's page (its chats by folder, new chat in a folder, edit, memory, delete); without a name, the bot of the open chat. Enter or a click on a bot in the sidebar starts a new chat with it in the opened folder instead, and `o` on the bot row opens the page |
+| `/bot edit <name>` | opens the form on the bot; the name stays, a save that would break the file is refused and nothing is written |
+| `/bot delete <name>` | asks first (lowercase `y` confirms, Enter does not; `m` also removes its memory folder, kept by default; Esc cancels), then removes the agent file. Its sessions and conversations are never deleted: they stay in `/sessions` as normal sessions |
+| `/bot duplicate <name> <new>` | copies the file under a new name (the memory is not copied) |
+| `/bot memory <name> [add\|clear] [--project] [text]` | shows, adds to or clears what the bot remembers |
+
+All of them end in the same file, so writing it by hand is the same bot.
+
+From a shell, `mendcode bot list` prints every bot (yours and an app's, such as Hermes) with its state, how many chats it has and
+in how many folders, how many are running or waiting for you, when the last one moved, its model and its schedules.
+`mendcode bot show <name>` (any case) prints one bot's chats by folder, newest first, each with its status, age, session id (for
+`mendcode attach`) and title, then its schedules. Both are read only, answer from `bot.list`, take `--json`, and fail with the
+daemon's reason while bots are off.
+
+### The bot form
+
+`/bot new`, `/bot edit` and Edit (`e`) on a bot's page open one form: name (checked like an agent name; fixed when editing), color and shape (`auto` takes them from the name), face (generated, or the path of a `.png` or `.webp` checked by the avatar rules above), personality (the body of the file; with `$VISUAL` or `$EDITOR` set an "open in $EDITOR" row also edits it there), model (the catalog, or the session's own) and permission (`plan`, `ask`, `smart` by default, `edits`, `full`). A live face above the rows follows the name, shape and color: the generated picture (or the bot's own image) where the terminal draws images, else a small pixel-art face of half blocks (plain ASCII with the ASCII glyph setting). Tab or ↑↓ move between rows, ←→ change a choice, Enter on a button presses it, Esc discards. A problem shows under its row; nothing is written while one is open. The bot's page also has Delete (`d`) and the form has a Delete button; both ask first as `/bot delete` does.
+
+The form saves with `bot.save` (`create` makes the file and refuses a taken name; otherwise it rewrites that bot, keeping every frontmatter key the form has no row for, and refuses a result that would not parse as this bot). `bot.draft` answers what the model would write for a description without writing it. `bot.delete` removes the agent file in your own `agents/` folder (and with `memory` its `bots/<name>/` folder), refuses anything that is not a bot, and answers how many sessions it left alone. Run a bot in a folder with `/agent <name>` in a session of that folder: it is an ordinary session, so several folders at once are several sessions.
+
+### What `bot.list` answers
+
+`bot.list` (owner only, local) answers `{ bots, external, problems }`. Each bot carries its identity, model, permission cap, file, a `state` and its sessions grouped by project directory (`projects`: `{ directory, state, sessions }`). A state comes from the sessions' own status, the same one `session.get` reports: `waiting` while any session waits on an approval or a question, else `working` while one runs, else `problem` while a session's last turn failed in the last 10 minutes and none of the bot's chats has had newer activity that did not fail, else `idle`. A failure is news, not a permanent mark: a later good turn clears it at once, and after 10 minutes the bot shows `idle` even though the failed chat keeps its own `failed` status (a chat's `updatedAt` is its last conversation event, so for a failed chat it is the failure time). The terminal applies the same rule to the bot's live updates and re-reads it with each bot list. `external` is the slot for bots that live in another app: a connector (`DaemonOptions.botConnectors`, each `{ id, list() }`) fills it, and a connector that fails is reported under `problems`. The Hermes connector is the first ([Hermes bots](#hermes-bots-experimental)); with none found the list is empty.
+
+### Hermes bots (experimental)
+
+The home screen shows the bots that are not idle under its Agent View (see Agent View in [customize](customize.md)): a row for the bots working, one for those waiting for you and one for those in trouble.
+
+With bots on and a [Hermes Agent](https://github.com/NousResearch/hermes-agent) on this machine, each of its profiles is a bot in the sidebar's Bots section (and in `/bot list`) from `hermes`, with its model and a working mark while one of its chats is active in Hermes. Enter or a click on one only folds and opens its chats, so looking at a bot never makes an empty MendCode session; `n` on it, or a click on the `+` that ends its row, asks for the folder of a new chat with it ([sidebar](sidebar.md#new-chat)), and the blank chat it opens is reused until you write in it. `o` opens its page (what it runs on, a new chat in another folder, and Open in the desktop app it lives in, when one started it). Edit, memory and delete stay in Hermes.
+
+While a profile works, the sessions it has running in Hermes list under it, newest first, three at most: the title (or what started it, `telegram session`) and how long ago it last moved. These rows are read-only and are not MendCode sessions. Enter or a click on one opens a page with what is known of that session and its newest messages as Hermes gives them (what it was asked, what it answered, the tools it ran, 40 at most), read when you open it and never stored; `Esc` goes back. When Hermes does not give the messages the page keeps what the list knew and says `Messages not read` with the reason. `bot.list` carries these in each external bot's `activity` (`id`, `title`, `source`, `startedAt`, `activeAt`, 8 at most), and `bot.activity` (`origin`, `bot`, `session`, `limit` up to 100; owner only, local) reads one session's messages through the connector, secrets redacted; nothing is written to Hermes.
+
+The bots of one app (any connector, not only Hermes) list under one foldable row, `▸ hermes · 23`: folded unless a bot works or has a chat from the last day, and those show under it; Space, Enter or a click on the row opens all of them (kept in memory only). A chat is an ordinary MendCode session on the model `acp:hermes-<profile>`, run by the [ACP engine](acp-engine.md) as `hermes -p <profile> acp`, so the profile keeps its own memory, skills and history and its replies appear in the app too. `bot.list` groups the MendCode sessions on a bot's chat model under it in `projects`, with the same state rule as a MendCode bot's (a recent failure counts for ten minutes), and the sidebar and the bot's page list them like a MendCode bot's chats; the app's own server-side history is read only for the rows above. A chat started from the sidebar sits under its bot at once; the bot's chats stay folded or open as you left them. The permission mode and approvals are MendCode's, as for any ACP agent. The models appear in `/model` once the bots have been listed with the flag on, never before.
+
+Where Hermes is, in this order: `MENDCODE_HERMES_URL` (with `MENDCODE_HERMES_TOKEN` for its session token, `MENDCODE_HERMES_COMMAND` and `MENDCODE_HERMES_HOME` for the program and home that serve a chat), else the headless `hermes serve` an app runs on this machine, found in the process list. That server keeps its token only in its own environment; MendCode reads it for each look and never stores or logs it. If Hermes refuses the token (the app restarted) or does not answer, `bot.list` reports it under `problems` as `connector:hermes` with what to do. Nothing of this loads with the flag off or without a Hermes.
+
+### Bot memory
+
+While the flag is on, a bot's turn builds its agent prompt in this order: one line saying who it is (`You are <name>, a MendCode bot.` and its description), the personality, its skills index (a name and one line per skill the bot saved, at most 1,200 characters; see [Learning](#learning)), the memory notes, what it has been doing in the last day, the workspace overview (the sessions running or waiting right now in every folder, at most 600 characters), and last a hint saying where to look deeper and how to learn (`bot_note`, `bot_skill`, `bot_schedule`). A session on a bot runs, is routed and shows the model the bot's file names (when the catalog lists it), like any agent with a `model`. A bot has one memory for everywhere and one per project directory. They are plain text files under `<data dir>/bots/<name>/` (`memory.md` and `projects/<hash>.md`, at most 24,000 and 16,000 bytes, secrets redacted when added). While the flag is on, a turn of that bot (and only that bot) adds both to its system prompt under `# Bot memory`, marked as notes it kept rather than instructions. The files are read at each turn, so `/bot memory <name> add` applies to the next one.
+
+Every chat with a bot shares that memory, and a new chat starts small: after the notes, a bot's turn carries one block, "What you have been doing", built from the bot's own sessions of the last 24 hours in every folder (the running chat left out), newest first, one line each: folder, title, status, age, the last 8 characters of the id and a one-line gist. The gist is the session's saved summary (the one `session.inspect` and the session list already keep); a finished session without a fresh one gets it written once in the background with the summary model the daemon already uses, so the next turn has it and the turn that found it never waits (retried at most every 10 minutes, at most 3 per turn, never for a running or waiting session). The block is capped at 4,500 characters (about 1,100 tokens); sessions past the cap are counted ("and N more"). A last line says where to look deeper. Plain chats get none of this, and with the flag off nothing is read, listed or asked for.
+
+Going deeper is on purpose, with the `threads` tool, which a bot's turn is offered even when `experimental.thread_tools` is off (it then gets only the actions below):
+
+| action | does |
+|---|---|
+| `list mine=true` | the bot's own chats in every folder, newest first, with their full ids (`query` narrows by title); `list scope=all` lists every session |
+| `read`, `search` | any session of the daemon, in any folder, without the `@thread` consent prompt: an owner-chosen capability of bots only ([permissions](permissions.md#cross-session-history-consent)); a plain session keeps the consent rule |
+| `notes` | the bot's saved notes of every project and everywhere that mention `text` (its newest notes without it), each marked with its folder |
+
+The memory grows by itself. Memory review (docs/memory.md: every N turns, when idle, before compaction; the same daily cap and model call) is the only extractor: after it reviews a session that ran as a bot, the notes it found are also appended to the bot's files, the user scope everywhere and the project scope to that project, at most 6 per scope per review, secrets redacted, a note that restates one already there (ignoring case and punctuation, or contained in it) skipped. The files hold up to 24,000 bytes everywhere and 16,000 per project; when full, the oldest notes go (a note added by hand with `/bot memory` is refused instead). The prompt carries only the newest 2,500 characters of each; the rest is reached with `notes`. Reviews need memory generation on (`memoryGenerate`, on in the balanced and full tiers); with it off the bot still keeps what you add by hand. A project file starts with a `# <folder>` line so a search can say where a note belongs. The notes are also proposed to `/memory` as for any session; the bot's copy does not wait for that review.
+
+### Learning
+
+A bot can learn on its own, in the open: three tools offered to a bot's turn only (never to a plain session, and not at all with the flag off), each shown in the transcript as a short card of its own.
+
+| tool | does | card |
+|---|---|---|
+| `bot_note` | keeps a one-line note in the bot's memory, for this project (default) or everywhere; secrets redacted, a repeat is skipped | "Learned" with the scope and the note |
+| `bot_skill` | `create`, `update`, `list` and `read` skills: a reusable procedure the bot saves after a task that worked and is likely to repeat | "New skill" or "Skill updated" with its name and description; the steps open under it |
+| `bot_schedule` | `create`, `list` and `cancel` the bot's own schedules | "Scheduled" with the trigger |
+
+**Skills.** A bot's skill is a normal skill folder, `<data dir>/bots/<name>/skills/<skill>/SKILL.md` (`name` and `description` in the frontmatter, the procedure as the body, at most 12,000 characters, at most 40 per bot). The general skill loader never reads that folder, so no other bot and no plain session sees them: the bot's own prompt carries the index and `bot_skill read` returns one in full. Saving a skill asks you the first time per skill (the approval shows the name, when to use it and the steps); later updates of a skill you approved do not ask again. Secrets in a skill are redacted.
+
+**Schedules.** Tell a bot "do X every day at 9" or "every Monday" and it creates a schedule. A schedule is a [loop](loops.md) the bot owns (`Loop.agent`), so the machinery is the loops one: the triggers `daily 09:00 [zone]`, `weekly mon[,thu] 09:00 [zone]` (the daily trigger on those weekdays), `every 30m`, `adaptive 30m` and `external` (fired from outside with `mendcode loop fire <id>`, the way to say "when Y happens"). Creating one always asks you, in every permission mode, showing the trigger, the folder and what a run may do. Each run is a message in a chat with that bot in the folder it was asked for (the folder of the chat that created it by default), with the bot's memory, skills and digest; runs only read and report unless the bot was asked to edit and you approved a schedule that does. `bot.list` carries each bot's `schedules` (`loopId`, `name`, `trigger`, `directory`, `state`, `nextWakeAt`, `runs`) for its page; `bot_schedule list` and `cancel` work on the bot's own only. A bot keeps at most 20.
+
+A bot also sees every session of the daemon, not only its own: see [permissions](permissions.md#cross-session-history-consent).
+
+Gap: the daemon's memory store (`/memory`, Dream, extraction, the graph) knows three scopes, user, project and session, and the user scope only separates areas. A bot's own scope there would need an owner column, scope filters in every listing and search, and a decision for Dream. That is a larger change, so the bot's notes are plain files beside it: they have no pending review, no graph and no Dream consolidation, and search is a text match, not ranked.
 
 ## Implementation
 

@@ -236,7 +236,8 @@ describe.skipIf(process.platform === "win32")("a forced restart waits for runnin
 
   test("after the restart every queue the wait held goes on in order; a queue the user paused stays held", async () => {
     const h = await boot()
-    expect((await h.submit(h.first.terminal, "/tool 600")).ok).toBe(true)
+    // Long enough that a loaded machine still sends both messages during the wait: once the tool ends the daemon stops and refuses them.
+    expect((await h.submit(h.first.terminal, "/tool 5000")).ok).toBe(true)
     await h.toolStarted(h.first.terminal)
     const other = await h.first.terminal.send({ type: "session.create", directory: h.first.daemon.store.sessionDirectory(h.sessionId)!, title: "mine" })
     const mine = other.ok ? other.result!.sessionId as SessionId : h.sessionId
@@ -270,6 +271,11 @@ describe.skipIf(process.platform === "win32")("a forced restart waits for runnin
     await stoppedItself(h)
     const second = await h.open()
     await h.until(() => !second.daemon.store.meta.get("restart.held") || undefined)
+    // Right after the restart no actor exists yet: the stored queue already reads held, not running.
+    const inspected = await second.terminal.send({ type: "session.inspect", sessionId: h.sessionId, limit: 1 })
+    expect(inspected).toMatchObject({ ok: true, result: { state: "held", session: { status: "held", queued: 1 } } })
+    const listed = await second.terminal.send({ type: "session.list", state: "held" })
+    expect(listed.ok && JSON.stringify(listed.result)).toContain(h.sessionId)
     const queue = await second.terminal.send({ type: "queue.list", sessionId: h.sessionId })
     expect(queue.ok && queue.result).toMatchObject({ held: true, entries: [{ text: "must wait" }] })
     expect((await h.log(second.terminal)).some((event) => event.type === "turn.started")).toBe(false)

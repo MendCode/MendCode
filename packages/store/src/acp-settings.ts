@@ -46,9 +46,10 @@ export function createAcpSettings(dir: string) {
       return structuredClone(view.agents)
     },
     prepare(patch: unknown) {
-      if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("acpAgents must be an agent patch")
-      const raw = read()
-      for (const [name, value] of Object.entries(patch)) {
+      // null resets the key like any other setting: no agents. One agent goes with `{ "<name>": null }`.
+      if (patch !== null && (!patch || typeof patch !== "object" || Array.isArray(patch))) throw new Error("acpAgents must be an agent patch: { \"<name>\": { command, args?, envKeys? } } adds or replaces one, { \"<name>\": null } removes one, null removes them all")
+      const raw: Record<string, unknown> = patch === null ? {} : read()
+      for (const [name, value] of Object.entries(patch ?? {})) {
         AcpAgentName.parse(name)
         if (value === null) { delete raw[name]; continue }
         const config = AcpAgentSettings.parse(value)

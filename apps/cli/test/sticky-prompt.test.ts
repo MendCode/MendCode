@@ -75,7 +75,8 @@ describe("pinned latest prompt", () => {
     expect(mentions(h.text())).toBe(1)
     await h.type("\x1b[H")
     expect(mentions(h.text())).toBe(1)
-    expect(h.text().findIndex((row) => row.includes("pin me please"))).toBe(2)
+    // At the top the history's first row (the prompt) sits right under the top bar, with no empty row above it.
+    expect(h.text().findIndex((row) => row.includes("pin me please"))).toBe(1)
     await h.type("\x1b[F")
     expect(mentions(h.text())).toBe(1)
     await h.type("/sticky-prompt\r")

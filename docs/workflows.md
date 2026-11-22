@@ -95,21 +95,40 @@ A headless run targeting a session with an earlier pending approval exits instea
 
 ### Page keys
 
-The page opens with workflows from all projects. Press Tab to limit it to the current project.
-After opening a task session from the list, press ↑ at an empty prompt to return to the list.
+The page opens with workflows from all projects; tab, `1` and `2` switch between this project and all. Its keys sit on the
+title row and change with what the cursor is on; `?` lists them all.
+
+The list groups runs by the work item they are about (a script's `item`, `subject` or `target` argument), else by the chat that
+started them. A group with a live run comes first and is open; finished groups stay closed until `space`. Runs of one name
+started together, such as a council's reviewers, show as one row `mend-council ×3`; repeated instant runs with the same outcome
+fold the same way. Each row leads with a mark (`●` working, `?` waiting for you, `✓` done, `◈` ended as a draft, `✗` failed or
+blocked, `·` paused, stopped or queued), then where the run is (`Build 2/7`) or how it ended (`merge-ready`, `draft`,
+`1 of 3 failed`), then its time.
+
+`enter` opens a run. Its header names the run, its item, its state and time, with one line under it: what waits for you, where it
+stopped, its outcome or its objective. Then its phases in one row (`✓ Plan ── ● Build ── ◇ Review`), how far it got
+(`phase 2 of 7 · 2 of 16 agents · 14 checks passed`), and a timeline: each phase with its time, and under it each step with its
+model, engine and effort, its tokens and time, what it is doing now, and why it failed. Checks are folded into their phase's
+count; `space` on the phase lists them. `i` shows the run's identity and limits instead. Below 110 columns the list and the run
+take the page in turn; from 110 the run sits beside the list; from 170 a third column shows its folder, limits, models and log.
+After opening a step's session, press ↑ at an empty prompt to return to the page.
 
 | Key in `/workflows` | Does |
 |---|---|
-| `↑↓` | Select run |
-| `←→` | Select task |
-| `enter` | Open the task's session |
+| `↑↓` | Select a row; in a run, a phase or step |
+| `enter` `→` | Open the run; in a run, the step's session (on a phase, its checks) |
+| `space` | Open or close a group; in a run, a phase's checks |
+| `←` `esc` | Back to the list; `esc` on the list closes the page |
+| `i` | The run's identity and limits |
 | `p` | Pause/resume |
 | `x` | Stop |
-| `t` | Retry |
+| `t` | Retry the failed step |
+| `y` `n` | Approve or reject the step that waits for you |
 | `v` | Verify |
 | `a` | Accept |
+| `b` | Evidence ledger |
 | `d` | Delete |
-| `tab` | This project / all |
+| `tab` `1` `2` | This project / all |
 
 ### Evidence ledger
 
@@ -221,7 +240,7 @@ Waiting follows pushed events, with the same completion/failure/input/timeout ex
 
 Resume/retry approval shows every frozen check command. Smart permissions always ask for autonomous controls. All model access stays in the current project.
 
-Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity, tasks and verification in the shared bordered panel grid, with header hints and one column below 70 cells.
+Event/artifact ledgers and phase retry remain separate audit batches. The `/workflows` page shows frozen revision identity under `i`, the tasks as a timeline and the verification, with its keys on the title row and one pane below 110 cells.
 
 ### Protocol and client helpers
 
@@ -386,7 +405,7 @@ Queued time does not consume runtime budgets. Pause/resume cannot bypass the que
 
 Policies use existing approved workflow commands and authenticated local transport. No listener, network service, read-only remote command or dependency is added.
 
-The bordered `/workflows` page shows phase progress/barriers, map child counts, output kinds and queue status, retaining header hints and compact single-column layout.
+The `/workflows` page shows phase progress, map child counts and queue status, with tasks under their phase; `i` names the barrier of the phase under the cursor.
 
 ## Script workflows
 
@@ -420,7 +439,7 @@ Three complete examples live in [`examples/workflows/`](../examples/workflows): 
 | | `/workflows new <name>` writes a commented starter to `workflows/<name>.js` in the data folder; `/workflows convert <plan.json>` writes the script of a JSON plan next to it |
 | | `/workflows budget <id> agents=60 usd=5`, `/workflows update <id> <file.js>`, `/workflows resume <id>` |
 | CLI | `workflow run <file.js\|name> [key=value ... \| --args JSON] [--yes] [--wait]`, `workflow new <name>`, `workflow convert <plan.json>`, `workflow budget <id> --agents N`, `workflow update <id> <file.js>`, `workflow resume <id>` (`--wait` exits 4 when a run pauses at a cap) |
-| Model | the `workflow_script` tool, found with `tool_search`; every call that starts a script asks, in every permission mode, and shows the meta, caps, source hash and the source. `workflow_script` with `help: true` returns the API reference without asking |
+| Model | the `workflow_script` tool, found with `tool_search`; outside full access every call that starts a script asks, whatever the allow rules or saved grants say, and shows the meta, caps, source hash and the source; in full access a script starts like any other tool, written by the model or saved by `name` (it still runs isolated, within its caps and the project's trust). `workflow_script` with `help: true` returns the API reference without asking |
 
 Saved scripts are `workflows/<name>.js` in the extension layers, next to the JSON plans. Layers are user folder, user packages, project, project packages; a later layer wins a name.
 
@@ -473,6 +492,7 @@ Calls, template substitutions and spreads in `meta` are refused with a line numb
 | `schema` | JSON Schema subset; validates the answer, gives one automatic repair turn in the same session, then rejects |
 | `mode` | `read` is default and cannot change anything; `work` edits, one work agent at a time per directory |
 | `worktree: true` | Isolated checkout per run; not held by the single-writer rule, so work agents can run in parallel |
+| `cwd: "/abs/path"` | The agent works in an existing linked git worktree of the run's repository (one the script made with `git worktree add`, for example): its session, permissions and sandbox belong to that directory. Like `worktree: true` it never edits the run's directory, so it is not held by the single-writer rule, and a run made only of such agents does not keep another run out of the directory. Work agents given the same `cwd` take turns, in this run and across runs. The main checkout, the run's own directory, another repository or a missing path fails the call. Not with `worktree: true`. |
 | `model` | Catalog model id |
 | `effort` | Needs `model`; checked against its efforts |
 | `engine` | Engine, described below |

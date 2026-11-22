@@ -36,3 +36,22 @@ test("an external engine's turn shows its output tokens on the activity line whi
   push(0)
   expect(activity(h)).toContain("↓ 1,470 tokens")
 })
+
+test("a turn that started before this terminal joined it shows how long it has run and its live tokens, from the session's live state", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, sidebar: "hidden" })
+  const h = appHarness({ dataDir, directory: tempDir(), width: 100, height: 30, mode: "full", now: () => TURN_AT + 5 * 60_000 })
+  h.app.applySettings({ onboarded: true })
+  await Bun.sleep(10)
+  const turnId = ids("turn")
+  // No turn.started: it is older than the events this terminal loaded.
+  h.app.onEvent({ type: "foreground.state", sessionId: h.sessionId, seq: 901, at: TURN_AT + 60_000, state: "generating", turnId } as never)
+  h.app.onGlobal({ type: "session.activity", gseq: 0, at: TURN_AT + 60_000, sessionId: h.sessionId, directory: "/d", title: "Long one", state: "generating", updatedAt: TURN_AT + 60_000, since: TURN_AT } as never)
+  expect(activity(h)).toContain("5m")
+  h.app.onGlobal({ type: "turn.tokens", gseq: 0, at: TURN_AT + 4 * 60_000, sessionId: h.sessionId, turnId, output: 2_000 } as never)
+  expect(activity(h)).toContain("↓ 2,000 tokens")
+  // The turn ends: the next turn's figures start from nothing.
+  h.app.onEvent({ type: "turn.completed", sessionId: h.sessionId, seq: 902, at: TURN_AT + 5 * 60_000, turnId } as never)
+  h.app.onGlobal({ type: "turn.tokens", gseq: 0, at: TURN_AT + 5 * 60_000, sessionId: h.sessionId, turnId, output: 3_000 } as never)
+  expect(rows(h).join("\n")).not.toContain("3,000")
+})

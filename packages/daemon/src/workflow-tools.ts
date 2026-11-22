@@ -42,15 +42,15 @@ export const workflowStartTool = defineTool({
 
 /**
  * Script workflows (a second kind of plan on the same engine). Not a primary tool: its schema reaches the model only after
- * `tool_search` finds it, so it costs no context until it is used. Every call that starts a script asks the user, showing the
- * meta, the declared caps, the source hash and the source, in every permission mode.
+ * `tool_search` finds it, so it costs no context until it is used. A call that starts a script asks the user, showing the meta, the
+ * declared caps, the source hash and the source, in every permission mode but full access, where it starts like any other tool.
  */
 export const workflowScriptTool = defineTool({
   name: "workflow_script",
   description: [
     "Start a dynamic script workflow: a JavaScript program that orchestrates sub-agents deterministically with agent(), parallel(), pipeline(), check() and ask(), with hard budget caps and a journal that resumes after a restart.",
     "Use it when the fan-out depends on earlier results (review each finding, migrate each directory, research then synthesize) or needs loops and branching that a fixed workflow_start plan cannot express.",
-    "Call with help true first for the exact API. Pass script (the source, starting with a literal export const meta) or name (a saved workflows/<name>.js). The user approves every script you write.",
+    "Call with help true first for the exact API. Pass script (the source, starting with a literal export const meta) or name (a saved workflows/<name>.js). Outside full access the user approves every script; in full access it starts at once.",
     "After it starts, do not poll: tell the user it runs in /workflows.",
   ].join(" "),
   permission: "execute",
@@ -62,7 +62,10 @@ export const workflowScriptTool = defineTool({
     args: z.record(z.string(), z.unknown()).optional().describe("Arguments the script reads as `args`"),
   }).refine((value) => value.help === true || (value.script !== undefined) !== (value.name !== undefined), { message: "give exactly one of script or name (or help true)" }),
   permissionFor: (args) => (args.help === true ? "read" : "execute"),
-  approvalFor: (args) => args.help !== true,
+  // Outside full access every script asks and shows its source, whatever the allow rules or saved grants say. In full access (the user
+  // chose to run unattended, and the shell already runs without asking) a script starts like any other tool: it runs isolated, within
+  // its caps and the project's trust, and its agents get no more than the session's permission.
+  approvalFor: (args, context) => args.help !== true && context?.mode !== "full",
   async preview(args, context) {
     if (args.help === true || !context.workflows) return undefined
     const checked = await context.workflows.preview(scriptInput(args)).catch(() => undefined)

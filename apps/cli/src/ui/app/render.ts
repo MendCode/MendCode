@@ -30,7 +30,7 @@ import { goalPromptCard } from "../../view/goal"
 import { returnPromptCard } from "../../view/return-card"
 import { fit } from "../../view/deck"
 import { paneChildren } from "./session-children"
-import { attachSidebar, SIDEBAR_WIDTH } from "../../view/sidebar"
+import { attachSidebar, SIDEBAR_GAP } from "../../view/sidebar"
 import { renderAcpPage, renderAgentPicker, renderThemePicker, themeEntries, filterPalette, composeOverlay, renderToolsPage, renderChangesPage, renderContextPage, renderLoopsPage, renderMcpsPage, renderTasksPage, renderMemoryPage, renderMemoryAssistant, memoryAssistantCursor, renderPalette, renderModelQuick, renderSetupPage, renderStoragePage, renderUsagePage, renderAgentsPage, renderPackagesPage, renderPetPicker, renderWorkflowsPage, renderCustomizePage, renderSettingsPage, renderExtensionsPage, renderHooksPage, renderConnectPage, renderProvidersPage, renderSecretsPage, renderPermissionsPage, reviewerStatus, renderDiagramView, renderSidebarEditor } from "../lazy-pages"
 import type { Settings } from "@mendcode/protocol"
 import { activeTheme, themeList, themeModeState, themeSelection } from "../theme"
@@ -71,7 +71,6 @@ export function createRender(ctx: AppContext, actions: {
   agentMetadata: ReturnType<typeof createAgents>["agentMetadata"]
   peerCommandRows: (width: number, height: number) => Line[]
   reviewsRows: (width: number, height: number) => Line[]
-  todayRows: (width: number, height: number) => Line[]
   dropRevealedSecret: ReturnType<typeof createSecrets>["dropRevealedSecret"]
   syncPulse: () => void
   syncCompactionLive: () => void
@@ -86,6 +85,8 @@ export function createRender(ctx: AppContext, actions: {
   fileOpen: ReturnType<typeof import("./file-open").createFileOpen>
   rightRows: (width: number, height: number) => Line[]
   sidebarShown: (width: number) => boolean
+  /** Columns the left list takes (without the gap); 0 when it does not show. */
+  sidebarCells: (width: number) => number
   chatRows: (width: number, height: number, inlineView?: { tail: Line[] }, bottomPanel?: (room: number) => Line[], toastRow?: Line) => { rows: Line[]; placements: ImagePlacement[]; cursor: { row: number; col: number; }; panel?: { top: number; height: number } | undefined; promptFirst?: number; body: { top: number; end: number } }
   sidebarRows: (height: number) => Line[]
   memoryDirectory: ReturnType<typeof createMemory>["memoryDirectory"]
@@ -116,7 +117,7 @@ export function createRender(ctx: AppContext, actions: {
   planReviewFrame: (width: number, height: number) => { rows: Line[]; cursor?: { row: number; col: number } } | undefined
 }) {
   const { input, state, now, localDay, glyphs: g, homeTipText, toasts, stash } = ctx
-  const { dropRevealedSecret, syncPulse, syncLoopsTick, syncWorkflowsTick, syncUsageTick, syncTopbarTick, sessionTitle, paletteItems, sidebarShown, chatRows, sidebarRows, memoryPageData, memoryDirectory, agentSubtasks, diagramLayout, setupValues, setupChecks, homeRoot, homeSessions, settingsValues, statusInput, terminalExtensions, otherExtensionProblems, helpExtensions, extensionPageRows, footer } = actions
+  const { dropRevealedSecret, syncPulse, syncLoopsTick, syncWorkflowsTick, syncUsageTick, syncTopbarTick, sessionTitle, paletteItems, sidebarShown, sidebarCells, chatRows, sidebarRows, memoryPageData, memoryDirectory, agentSubtasks, diagramLayout, setupValues, setupChecks, homeRoot, homeSessions, settingsValues, statusInput, terminalExtensions, otherExtensionProblems, helpExtensions, extensionPageRows, footer } = actions
 
   function render() {
     state.frameScheduled = false
@@ -138,6 +139,8 @@ export function createRender(ctx: AppContext, actions: {
     input.screen.setCursorShape?.(state.tuiProfile.vimMode && state.page === "chat" ? ctx.vim.cursorShape : "default")
     // Inline mode keeps the plain chat in the terminal's own screen; every page and overlay borrows the alternate screen.
     const plan = actions.planReviewFrame(width, height)
+    // A bot's face moves only while its page is the one drawn (the visibility signal pets use).
+    state.botCard?.setVisible(state.page === "bot" && !plan?.rows.length)
     const inlineLive = !plan?.rows.length && actions.inline.live()
     if (input.screen.inline === true) input.screen.fullscreen(!inlineLive)
     if (plan?.rows.length) { state.pet?.setVisible(false); input.screen.draw(plan.rows, plan.cursor); return }
@@ -167,7 +170,7 @@ export function createRender(ctx: AppContext, actions: {
     const layered = (rows: Line[]) => (paint ? composeOverlay(rows, paint, width) : modal ? overlayLines(rows, modal.rows, { row: modal.top, col: modal.left }, width) : rows)
     // A toast floats over everything, the palette included (v1: z 4000 over the dialogs' 3000).
     const right = state.page === "chat" ? actions.rightLayout(width) : { right: 0, bottom: false }
-    const leftWidth = state.page === "chat" && sidebarShown(width) ? 39 : 0
+    const leftWidth = state.page === "chat" && sidebarShown(width) ? sidebarCells(width) + SIDEBAR_GAP : 0
     const chatCols = width - leftWidth - (right.right ? right.right + 1 : 0)
     const sessionsSide = right.right ? "left" : state.tuiProfile.sidebarSide
     const chatOffset = sessionsSide === "left" ? leftWidth : 0
@@ -217,15 +220,15 @@ export function createRender(ctx: AppContext, actions: {
       const quick = quickView ? { ...quickView, rows: card("Model", quickView)!.rows } : undefined
       const withQuick = quick ? overlayLines(withPs, quick.rows, { row: quick.top, col: quick.left }, chatCols) : withPs
       const withRight = rightRows ? withQuick.map((row, i) => [...fit(row, chatCols), { text: " " }, ...fit(rightRows[i] ?? [], right.right)]) : withQuick
-      const withSidebar = sidebarOn ? attachSidebar(withRight, sidebarRows(height), width - leftWidth, sessionsSide) : withRight
+      const withSidebar = sidebarOn ? attachSidebar(withRight, sidebarRows(height), width - leftWidth, sessionsSide, sidebarCells(width)) : withRight
       // An image under the palette, a card or a toast would cover them: it shows only on a clear prompt.
       if (state.scratchArea) state.scratchArea.left += chatOffset
       const shiftedCursor = state.sidebarFocus && sidebarOn
-        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 3 : width - SIDEBAR_WIDTH + 3 }
+        ? { row: state.sidebarHits?.find((hit) => hit.sessionId === (state.sidebarSelected ?? state.sessionId))?.row ?? 0, col: sessionsSide === "left" ? 3 : width - sidebarCells(width) + 3 }
         : { ...cursor, col: cursor.col + chatOffset }
       const sideCursor = chat.open && chat.focused && (right.right || panel) ? { row: right.right ? ((state.rightChatArea?.top ?? 0) + (state.rightChatArea?.height ?? height) - 2) : panel!.top + panel!.height - 2, col: (right.right ? chatOffset + chatCols + 5 : chatOffset + 4) + sideInput(chat, right.right || chatCols).cursor } : shiftedCursor
 
-      input.screen.draw(withToast(layered(withSidebar)), paint ? paint.cursor : modal ? undefined : quick ? { row: quick.cursor.row, col: quick.cursor.col + chatOffset } : sideCursor, paint || modal || quick || asideCard || rewind || goalView || returnView ? [] : placements.map((placement) => ({ ...placement, col: placement.col + chatOffset })))
+      input.screen.draw(withToast(layered(withSidebar)), paint ? paint.cursor : modal ? undefined : quick ? { row: quick.cursor.row, col: quick.cursor.col + chatOffset } : sideCursor, paint || modal || quick || asideCard || rewind || goalView || returnView ? [] : [...placements.map((placement) => ({ ...placement, col: placement.col + chatOffset })), ...(sidebarOn ? (state.sidebarImages ?? []).map((placement) => ({ ...placement, col: placement.col + (sessionsSide === "left" ? 0 : width - sidebarCells(width)) })) : [])])
     } else {
       if (state.rightTick) {
         clearInterval(state.rightTick)
@@ -357,6 +360,8 @@ export function createRender(ctx: AppContext, actions: {
         ? renderSecretsPage({ secrets: state.secretsList, state: state.secretsState, width, height: bodyHeight, now: now(), glyphs: g })
         : [[{ text: state.secretsError || "loading secrets…", fg: state.secretsError ? "warning" : "muted" }], [], [{ text: "esc back", fg: "muted", dim: true }]]
     else if (state.page === "tree") body = renderTreePage({ model: state.tree?.model, error: state.tree?.error ?? "", state: state.treeState, stats: state.tree?.stats ?? new Map(), width, height: bodyHeight, now: now(), pick: state.tree?.pick ?? false, glyphs: g, label: (id) => modelLabel(id, state.modelReport) })
+    else if (state.page === "bot" && state.botCard) body = state.botCard.render({ width, height: bodyHeight, now: now(), ascii: state.glyphMode === "ascii", theme: activeTheme(), placements })
+    else if (state.page === "bot-form" && state.botForm) body = state.botForm.render({ width, height: bodyHeight, ascii: state.glyphMode === "ascii", placements })
     else if (state.page === "text" && state.textPage) {
       state.pageBodyHeight = bodyHeight
       body = renderTextPage({ state: state.textPage, width, height: bodyHeight, minimal: state.mode === "minimal" })
@@ -398,7 +403,7 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "diagram") body = renderDiagramView({ layout: diagramLayout(), state: state.diagramView, count: state.diagramSources.length, width, height: bodyHeight })
     else if (state.page === "workflows")
       body = state.workflowsLoaded
-        ? renderWorkflowsPage({ runs: state.workflows, state: state.workflowsState, width, height: bodyHeight, now: now(), glyphs: g })
+        ? renderWorkflowsPage({ runs: state.workflows, state: state.workflowsState, width, height: bodyHeight, now: now(), glyphs: g, ...(input.directory ? { directory: input.directory } : {}) })
         : [[{ text: state.workflowsError || "loading workflows…", fg: state.workflowsError ? "warning" : "muted" }], [], [{ text: "esc back", fg: "muted", dim: true }]]
     else if (state.page === "theme") body = renderThemePicker({ state: state.themePicker, entries: themeEntries({ themes: themeList(), query: state.themePicker.query, mode: themeModeState() }), current: state.themeRestore ?? themeSelection(), mode: themeModeState(), width, height: bodyHeight, glyphs: g })
     else if (state.page === "agent") body = renderAgentPicker({ report: state.agentReport, error: state.agentError, state: state.agentPicker, width, height: bodyHeight, glyphs: g })
@@ -427,7 +432,7 @@ export function createRender(ctx: AppContext, actions: {
         graphIndex: state.settingsNow.codegraph_index ?? "auto",
         replyLanguage: state.settingsNow.language ?? "auto",
         preview,
-        facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}) },
+        facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}), ...(state.settingsNow.experimental?.bots === true ? { bots: true } : {}) },
         // The home's pet picture, placed over the preview's blank cells where the terminal draws pictures.
         mascotAt: (origin) => placements.push(...actions.homeMascot().placement(origin.row).map((placement) => ({ ...placement, col: placement.col + origin.col }))),
         width,
@@ -451,7 +456,6 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "tutorial" && state.tutorialState) body = renderTutorialPage({ view: state.tutorialState.view(), bindings: state.bindings, sandbox: (w, h) => state.tutorialState!.sandbox.rows(w, h), width, height: bodyHeight, glyphs: ctx.glyphs, accessible: state.accessible })
     else if (state.page === "mflow" && state.mflow) body = renderMflowPage({ state: state.mflow, width, height: bodyHeight, now: now() })
     else if (state.page === "reviews") body = actions.reviewsRows(width, bodyHeight)
-    else if (state.page === "today") body = actions.todayRows(width, bodyHeight)
     else if ((state.page === "worktrees" || state.page === "warp") && state.worktrees) {
       const framed = actions.git.framed()
       body = renderWorktreesPage({ state: state.worktrees, width, height: framed ? bodyHeight - 1 : bodyHeight })

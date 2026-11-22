@@ -151,7 +151,7 @@ The working row still says `Thinking...` while such a block is open. The transcr
 Claude Code's own sub-agents (its Agent tool) show like MendCode's. Each working agent gets a row in the Agents strip above the prompt:
 
 - what it was asked and its agent type;
-- `await` or `bg`;
+- `await` or `async`;
 - the tool it is running and how many it has run.
 
 In the `full` tier, the row also names its model. It starts with the requested one (`model: "haiku"` reads `Haiku`), then uses the version named by its first message (`Haiku 5.5`).
@@ -164,7 +164,7 @@ A call naming no model shows none until that message, never the session's own. U
 2. Use `←` `→` to change sibling.
 3. Press `↑` or `ctrl+x ↑` to return to the conversation at the row you left.
 
-The header shows its name in its colour, `2 of 4 · ←→ · ↑ back`, type, `bg` or `await`, activity, tools and time. The thread contains its prompt, each tool call and its report.
+The header shows its name in its colour, `2 of 4 · ←→ · ↑ back`, type, `async` or `await`, activity, tools and time. The thread contains its prompt, each tool call and its report.
 
 A full border in the agent's colour distinguishes the thread from the conversation: `╭─ sub-agent ─╮` over its header, `│` down both sides, `╰─╯` under its view.
 
@@ -181,6 +181,12 @@ The thread has its own prompt. The conversation's draft waits until you return. 
 A background sub-agent (`run_in_background`) keeps filling its thread after the starting turn ends and during later turns. Each tool and report arrives under that turn's call as it happens; up to 8 earlier turns are followed per Claude Code process.
 
 Its call says `running in the background` instead of Claude Code's note to its model. It stays in the Agents strip, including during later turns, while Claude Code still runs it.
+
+A sub-agent launched before the daemon restarted, and started again later by a message, gets a new thread in the turn that woke it, named by the agent's description, and its work shows there as it runs.
+
+A message the main agent sends to a sub-agent (`SendMessage`) shows in that sub-agent's thread as soon as it is sent. A running agent reads it at its next step; Claude Code does not cut a step short, so during a long step (such as the agent summarizing its own history) the message waits.
+
+A message sent to an agent that already ended starts it again. Its new work fills the same thread, whose header goes from `done` back to what it is doing, until it reports its next end.
 
 A sub-agent's work never stands for the main agent:
 
@@ -245,6 +251,8 @@ Claude Code lists MCP tools through its own tool search, so their schemas cost n
 #### Sub-agent instructions
 
 Claude Code's sub-agents (Explore, general-purpose, yours) have their own system prompts without server instructions. MendCode registers a `SubagentStart` hook at `initialize` and supplies the same instructions as `additionalContext`.
+
+A `PostToolUse` hook on `Grep` and `Bash` adds the code graph's answer to a search for identifiers, for the main agent and its sub-agents: see [Graph answers in a text search](code-graph.md#graph-answers-in-a-text-search).
 
 They therefore reach for the code graph before `grep`/`sed`. Nothing is added when the feature is off or the session has no MendCode tools.
 
@@ -328,9 +336,11 @@ The mapping follows mode changes between turns. Bypass mode still lets Claude Co
 In `full` access MendCode allows those unattended. With `engineSafetyPrompts` set to `true`, they reach you as an approval with Claude's reason: allow once or reject ([permissions](permissions.md#commands-the-engine-flags-in-full-access)).
 ### Stop or send now
 
-Esc interrupts the Claude turn. Claude Code also stops the session's background agents and will not resume them: `SendMessage` answers that the agent "was stopped by the user and won't be resumed".
+Esc Esc interrupts the Claude turn and leaves the session's background agents running: MendCode asks Claude Code to spare them, and they keep reporting in the Agents strip. A foreground agent ends with the turn.
 
-Each stays in the Agents strip as `stopped by you · /relaunch` until a turn begun after the stop ends.
+A third Esc right after (within 5 seconds) stops those background agents too. A Claude Code older than this option, or a stop that does not spare them (a workflow or loop stopping its turn), stops every background agent of the session for good: `SendMessage` answers that the agent "was stopped by the user and won't be resumed".
+
+Each stopped agent stays in the Agents strip as `stopped by you · /relaunch` until a turn begun after the stop ends.
 
 Use `/relaunch`, or `/relaunch <words of its description>`, to ask Claude to start it again as a new agent with the same type and prompt. The message includes how far it got: tool count and last tool.
 
@@ -472,7 +482,10 @@ Bridge instructions name those models because Claude Code's Agent tool lists onl
 
 ### Messages, silence and attachments
 
-A message sent during a turn reaches Claude Code while the step's tools run, as typing in Claude Code does, so Claude reads it with those tools' results; until Claude Code takes it in, it stays in the queue marked as steering (it can no longer be edited or removed there), and it joins the conversation where Claude read it. One sent while Claude writes goes at the next tool result, and one taken only after the turn's answer is done is answered in the same turn. An approval waiting keeps it in the queue until it is answered.
+A message sent during a turn reaches Claude Code while the step's tools run, as typing in Claude Code does, so Claude reads it with those tools' results; until Claude Code takes it in, it stays in the queue marked as steering (it can no longer be edited or removed there), and it joins the conversation where Claude read it. One sent while Claude writes goes at the next tool result, and one taken only after the turn's answer is done is answered in the same turn. An approval waiting keeps it in the queue until it is answered. When the turn is cancelled
+(`Esc`), interrupted or fails before Claude Code takes it in, it is not lost: it goes back to the queue, first, held like the rest
+of the queue after a cancel, and goes with your next message (or starts the next turn after a failure). Send now keeps its own
+message first.
 
 A saved `/queue` policy wins.
 

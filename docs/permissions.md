@@ -32,6 +32,12 @@ Cross-session history is an exception. `threads` read/search/wait/merge_back and
 
 This applies in every mode but `full`. Full access reads them unattended, as its shell could already run `mendcode export`.
 
+One exception, an owner-chosen capability for experimental bots (`/experimental bots on`): a bot sees every session of the daemon. A turn of a bot lists (`threads` `list scope=all`, `list mine=true` for its own chats), reads and searches (`read`, `search`) any session in any folder without a prompt, whatever agent ran it, plain sessions and other bots' sessions included, and searches its own saved notes (`notes`). The bot's prompt also carries a short "Workspace now" block naming the sessions running or waiting right now in every folder (folder, title, state; at most 600 characters). The reason is the point of a bot: knowing what is going on across all your work. What it does not widen: a plain session keeps the consent above for every target, including when it reads a bot's session; Codex, Claude Code and previous MendCode chats still ask; and `message`, `interrupt`, `merge_back` and `start` keep their own rules (and, with `wait`, are not offered to a bot at all unless `experimental.thread_tools` is on; with it on, `wait` on any session needs no prompt either). Secrets stay markers and reasoning is never shown, as for any `threads` read. With the flag off nothing of this applies.
+
+A bot's own learning tools ask less than a write tool: `bot_note` keeps a note in the bot's memory without asking, `bot_skill` asks the first time per skill (creating one, or updating one you never approved) and then saves into the bot's own folder only, and `bot_schedule` asks every time before it creates a schedule, in every permission mode, showing the trigger, the folder and what a run may do. Listing and cancelling the bot's own schedules asks nothing. A scheduled run has no more than the permission of the session that created it, and a report-only run (the default) cannot edit.
+
+The [Today](today.md) chat's `today` tool reads the brief and keeps or removes your standing instructions without asking; accepting or declining memories and setting a memory rule are writes and follow the chat's permission mode. Only a Today chat is offered the tool.
+
 Allow rules, automatic reviewers and session grants cannot substitute for that consent. Explicit deny rules still win; individually approved reads are permitted in plan mode.
 
 ## Smart mode

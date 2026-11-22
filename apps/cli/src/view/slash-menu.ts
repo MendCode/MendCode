@@ -2,7 +2,7 @@ import { featureOn, SLASH_GROUPS, type TierSettings } from "@mendcode/protocol/w
 import type { SlashMenuContext, SlashMenuItem } from "@mendcode/extension-api"
 import type { Line, Span } from "../ui/theme"
 import type { TuiProfile } from "./tui-profile"
-import { gatedMatches, slashCatalog, slashSuggestions, tierListed, type SlashCommand } from "./commands"
+import { commandOffered, gatedMatches, slashCatalog, slashSuggestions, tierListed, type SlashCommand } from "./commands"
 import { userAliases } from "./slash-aliases"
 import { slashMatch } from "./slash-match"
 import type { SlashRecent } from "./slash-recents"
@@ -40,7 +40,7 @@ export type MenuModel = SlashMenuContext & { catalog: SlashCommand[]; items: Arr
 
 export function menuCatalog(custom: SlashCommand[], profile: TuiProfile, settings: TierSettings): SlashCommand[] {
   const mine = userAliases(profile.slashCommands, custom)
-  return slashCatalog(custom).filter((command) => (!command.feature || featureOn(settings, command.feature)) && (!command.mcp || featureOn(settings, "mcp")) && tierListed(command, settings, profile.slashCommands)).map((command) => {
+  return slashCatalog(custom).filter((command) => commandOffered(command, settings) && (!command.mcp || featureOn(settings, "mcp")) && tierListed(command, settings, profile.slashCommands)).map((command) => {
     const pref = profile.slashCommands.find((entry) => entry.name === command.name)
     const aliases = [...mine].filter(([, target]) => target === command.name).map(([alias]) => alias)
     return { ...command, group: pref?.group ?? command.group, ...(aliases.length ? { aliases: [...command.aliases, ...aliases] } : {}) }
@@ -73,7 +73,7 @@ export function slashMenuModel(input: { text: string; /** The session directory 
   const commandItem = (command: SlashCommand): MenuModel["items"][number] => ({ kind: "command", label: `/${command.name}`, group: command.group, command })
   let items: MenuModel["items"]
   if (argumentWords) {
-    items = slashSuggestions(input.text, input.custom, catalog, input.recents, input.directory).filter((command) => !command.feature || featureOn(input.settings, command.feature)).map(commandItem)
+    items = slashSuggestions(input.text, input.custom, catalog, input.recents, input.directory).filter((command) => commandOffered(command, input.settings)).map(commandItem)
     if (!items.length) return undefined
   }
   else if (query) items = [...slashSuggestions(input.text, input.custom, catalog, input.recents).map(commandItem), ...gatedMatches(query, input.settings, input.custom).map(({ command, hint }) => ({ ...commandItem({ ...command, summary: hint }), gated: hint }))]

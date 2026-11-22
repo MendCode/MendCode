@@ -8,7 +8,7 @@ import { appHarness, cleanTemps, ids, NOW, tempDir } from "./session-ui-harness"
 
 afterEach(cleanTemps)
 
-const DIRS = ["/Users/dev/Code/MendCodeV2", "/Users/dev/Code/kontrolog", "/Users/dev/Notes/Obsidian", "/Users/dev/Code/solar-hmi"]
+const DIRS = ["/Users/dev/Code/MendCodeV2", "/Users/dev/Code/sensor-hub", "/Users/dev/Notes/Obsidian", "/Users/dev/Code/solar-hmi"]
 const make = (over: Partial<SessionSummary> = {}): SessionSummary => ({ sessionId: ids("session"), title: "task", directory: DIRS[0]!, createdAt: NOW, updatedAt: NOW, lastSeq: 1, state: "idle", queued: 0, ...over })
 const many = Array.from({ length: 60 }, (_, i) => make({ title: `session number ${i}`, directory: DIRS[i % DIRS.length]!, updatedAt: NOW - i * 60_000 }))
 const plain = (lines: Line[]) => lines.map((line) => line.map((span) => span.text).join(""))
@@ -44,7 +44,7 @@ describe("/sessions header and search row", () => {
     expect(rows).toContain("/ glass▏")
     expect(rows).not.toContain("/ /")
     // A pasted "/path" loses only the leading slash; a slash inside a path is kept.
-    expect(press(createSessionListState(), ["/Code/kontrolog"]).filter).toBe("Code/kontrolog")
+    expect(press(createSessionListState(), ["/Code/sensor-hub"]).filter).toBe("Code/sensor-hub")
   })
 
   test("? types into a query that has started, and esc clears the query before it closes", () => {
@@ -143,15 +143,15 @@ describe("/sessions folder picker", () => {
     const picker = draw(opened.state).join("\n")
     expect(picker).toContain("Pick a folder")
     expect(picker).toContain("All folders")
-    expect(picker).toContain("~/Code/kontrolog")
-    const typed = press(opened.state, [..."kontro"])
+    expect(picker).toContain("~/Code/sensor-hub")
+    const typed = press(opened.state, [..."sensor"])
     expect(folderEntries(many, typed).map((entry) => entry.directory)).toEqual([DIRS[1]])
     const picked = sessionListKey(typed, "\r", many)
     expect(picked.action).toEqual({ type: "reload" })
     expect(picked.state).toMatchObject({ scope: "project", directory: DIRS[1] })
     expect(picked.state.folders).toBeUndefined()
     const rows = draw(picked.state)
-    expect(rows[1]).toMatch(/^● ~\/Code\/kontrolog/)
+    expect(rows[1]).toMatch(/^● ~\/Code\/sensor-hub/)
     expect(rows.join("\n")).not.toContain("~/Code/solar-hmi (")
   })
 

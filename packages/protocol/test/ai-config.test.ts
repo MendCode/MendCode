@@ -30,5 +30,5 @@ test("the advisor role and its caps are settings; out-of-range caps and unknown 
   expect(Settings.safeParse({ models: { advisor: { model: "gpt-6.1-sol" } } }).success).toBe(true)
   for (const advisor of [{ maxCallsPerTurn: 0 }, { maxCallsPerTurn: 11 }, { maxCallsPerSession: 201 }, { maxBriefTokens: 3_999 }, { checkpoints: ["always"] }, { budget: 1 }])
     expect(Settings.safeParse({ advisor }).success).toBe(false)
-  expect(ADVISOR_DEFAULTS).toEqual({ checkpoints: ["plan", "repeat_error", "completion"], maxCallsPerTurn: 3, maxCallsPerSession: 20, maxBriefTokens: 24_000 })
+  expect(ADVISOR_DEFAULTS).toEqual({ checkpoints: [],maxCallsPerTurn: 3, maxCallsPerSession: 20, maxBriefTokens: 24_000 })
 })

@@ -140,6 +140,32 @@ describe("script runs", () => {
     expect(running).toHaveLength(3)
   })
 
+  test("work agents given their own cwd are isolated and run together; a bad cwd is refused at the call", async () => {
+    const h = scriptHarness({ responder: () => "HOLD" })
+    const run = h.start(wf(`
+      const problems = []
+      for (const opts of [{ cwd: "relative/path" }, { cwd: "/r/.mend/worktrees/a", worktree: true }]) {
+        try { await agent("bad", { mode: "work", ...opts }) } catch (error) { problems.push(error.message) }
+      }
+      await parallel([() => agent("w1", { mode: "work", cwd: "/r/.mend/worktrees/a" }), () => agent("w2", { mode: "work", cwd: "/r/.mend/worktrees/b" }), () => agent("w3", { mode: "work" })])
+      return problems
+    `))
+    await settle(20)
+    const tasks = h.get(run).tasks
+    const running = tasks.filter((task) => task.state === "running")
+    expect(running.filter((task) => task.isolated).map((task) => task.title).sort()).toEqual(["w1", "w2"])
+    expect(running).toHaveLength(3)
+    expect(tasks.some((task) => task.title === "bad")).toBe(false)
+  })
+
+  test("work agents given the same cwd take turns; different cwds, and a work agent in the run's directory, still run together", async () => {
+    const h = scriptHarness({ responder: () => "HOLD" })
+    const run = h.start(wf(`await parallel([() => agent("w1", { mode: "work", cwd: "/r/.mend/worktrees/a" }), () => agent("w2", { mode: "work", cwd: "/r/.mend/worktrees/a/" }), () => agent("w3", { mode: "work", cwd: "/r/.mend/worktrees/b" }), () => agent("w4", { mode: "work" })])`))
+    await settle(20)
+    const running = h.get(run).tasks.filter((task) => task.state === "running").map((task) => task.title).sort()
+    expect(running).toEqual(["w1", "w3", "w4"])
+  })
+
   test("check() returns ok and detail for a passing and a failing command, without failing the run", async () => {
     const h = scriptHarness({ responder: () => "x", checkExit: (argv) => (argv.includes("bad") ? 1 : 0) })
     const run = h.start(wf(`
@@ -610,11 +636,25 @@ describe("contract and views", () => {
     await settle(60)
     const summary = summarizeWorkflow(h.get(run))
     expect(summary.script).toMatchObject({ host: "done", calls: 2, phase: "Check", budget: { agents: 30 }, logs: ["hi"], counts: { done: 2, pending: 0, running: 0, failed: 0 } })
-    expect(summary.script!.phases).toEqual([
-      { title: "Find", detail: "look", state: "done", completed: 1, total: 1 },
-      { title: "Check", state: "done", completed: 1, total: 1 },
+    expect(summary.script!.phases).toMatchObject([
+      { title: "Find", detail: "look", state: "done", completed: 1, total: 1, agents: 1, checks: 0, checksFailed: 0 },
+      { title: "Check", state: "done", completed: 1, total: 1, agents: 1, checks: 0, checksFailed: 0 },
     ])
+    // Each phase spans its tasks: it starts with its first and ends with its last.
+    for (const phase of summary.script!.phases) expect(phase.endedAt!).toBeGreaterThanOrEqual(phase.startedAt!)
+    expect(summary.script!.outcome).toBeUndefined()
+    expect(summary.subject).toBeUndefined()
     expect(WorkflowSummary.safeParse(summary).success).toBe(true)
     expect(WorkflowRun.safeParse(h.get(run)).success).toBe(true)
+  })
+
+  test("the summary names the work item from the arguments and reads an object result with a state as the outcome", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`await agent("a"); return { state: "draft", reason: "audit unsure", card: {} }`), { item: ".mend/items/cu-vault-probe.json" })
+    await settle(60)
+    const summary = summarizeWorkflow(h.get(run))
+    expect(summary.subject).toBe("cu-vault-probe")
+    expect(summary.script!.outcome).toEqual({ state: "draft", reason: "audit unsure" })
+    expect(WorkflowSummary.safeParse(summary).success).toBe(true)
   })
 })

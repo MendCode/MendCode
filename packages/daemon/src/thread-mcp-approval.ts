@@ -15,7 +15,8 @@ export function bridgeAuthorizer(input: {
   const approved = new Set<string>()
   return async (name: string, args: Record<string, unknown>, read: boolean) => {
     const family = name === "delegate_task" ? "task" : "threads"
-    const individual = !read && ["thread_read", "thread_search", "thread_wait"].includes(name)
+    // Reading another session asks once per call, except in full access: the user chose to run unattended, threads included.
+    const individual = !read && input.turn.permissionMode() !== "full" && ["thread_read", "thread_search", "thread_wait"].includes(name)
     const key = `${name}:${JSON.stringify(args)}`
     const decision = () => {
       const profile = input.profile()

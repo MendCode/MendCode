@@ -1,4 +1,4 @@
-import type { ComputerSessionReport, ComputerObservation, ComputerCodeReport } from "@mendcode/protocol/wire"
+import type { ComputerSessionReport, ComputerObservation, ComputerObserveReport, ComputerCodeReport } from "@mendcode/protocol/wire"
 import type { Line } from "../ui/theme"
 import { panelGrid, type GridPanel } from "./deck"
 import { wrapSpans } from "./markdown"
@@ -10,7 +10,7 @@ export function computerSessionCard(input: { name: string; text: string; width: 
   if (!title) return
   const grid = (panels: GridPanel[]) => panelGrid({ width: input.width, padding: true, compact: input.width < 67, maxColumns: input.width < 106 ? 1 : 2, rows: [panels] })
   const row = (label: string, value: string, width: number) => wrapSpans([{ text: `${label} `, fg: "primary" }, { text: value, fg: "text" }], width)
-  let data: ComputerSessionReport | ComputerObservation | ComputerCodeReport
+  let data: ComputerSessionReport | ComputerObservation | ComputerObserveReport | ComputerCodeReport
   try { data = JSON.parse(input.text) } catch {
     return input.failed ? grid([{ title, body: (width) => wrapSpans([{ text: input.text, fg: "error" }], width) }]) : undefined
   }
@@ -18,12 +18,25 @@ export function computerSessionCard(input: { name: string; text: string; width: 
   if (input.name === "computer_session") {
     const session = data as ComputerSessionReport
     if (typeof session.computerSessionID !== "string" || typeof session.stopped !== "boolean") return
-    if (Array.isArray(session.apps)) return grid([{ title: "Computer applications", body: (width) => session.apps!.slice(0, input.expanded ? 128 : 8).flatMap((app) => row(app.appName, `${app.bundleID}${app.pid ? ` · PID ${app.pid}` : ""}`, width)) }])
+    if (Array.isArray(session.apps)) return grid([{ title: "Computer applications", body: (width) => session.apps!.slice(0, input.expanded ? 128 : 8).flatMap((app) => row(app.appName, `${app.bundleID}${app.pid ? ` · PID ${app.pid}` : ""}${app.menuBar ? " · menu bar" : ""}${app.windows === 0 ? " · no window" : ""}`, width)) }])
     if (session.stopped) return grid([{ title, body: (width) => row("Session", "stopped", width) }])
     if (!session.target || typeof session.target.appName !== "string" || !["observe", "control"].includes(session.mode ?? "") || !Number.isFinite(session.expiresAt)) return
     return grid([
       { title, body: (width) => [...row("Target", session.target!.appName, width), ...row("Mode", session.mode!, width), ...row("Bundle", session.target!.bundleID, width), ...row("PID", String(session.target!.pid), width)] },
       { title: "Session", body: (width) => [...row("ID", session.computerSessionID, width), ...row("Expires", new Date(session.expiresAt!).toISOString(), width), ...row("Idle", `${session.idleExpirySeconds}s`, width)] },
+    ])
+  }
+  if (input.name === "computer_observe" && !Array.isArray((data as ComputerObservation).nodes)) {
+    // The text tree (or what changed since the last look), one node per line.
+    const report = data as ComputerObserveReport
+    if (!Number.isSafeInteger(report.revision) || !report.target || typeof report.target.appName !== "string" || !Number.isSafeInteger(report.nodeCount)) return
+    const text = report.unchanged ? "" : typeof report.tree === "string" ? report.tree : typeof report.changes === "string" ? report.changes : undefined
+    if (text === undefined) return
+    const lines = text ? text.split("\n") : [], shown = lines.slice(0, input.expanded ? 12 : 5)
+    const kind = report.unchanged ? "unchanged" : report.changes !== undefined ? "changes" : report.scope === "app" ? "app · no window" : "window"
+    return grid([
+      { title, weight: 1, body: (width) => [...row("Target", report.target.appName, width), ...row("Revision", String(report.revision), width), ...row("Nodes", `${report.nodeCount}${report.truncated ? " · truncated" : ""} · ${kind}`, width), ...(input.expanded ? row("Observed", new Date(report.observedAt).toISOString(), width) : []), ...(report.screenshotFallback ? wrapSpans([{ text: report.screenshotFallback, fg: "muted" }], width) : [])] },
+      { title: "Accessibility", weight: 2, body: (width) => [...(shown.length ? shown.flatMap((line) => wrapSpans([{ text: line.trim().slice(0, 200), fg: "text" }], width)) : wrapSpans([{ text: "Same as the last observation", fg: "muted" }], width)), ...(lines.length > shown.length ? row("More", String(lines.length - shown.length), width) : [])] },
     ])
   }
   if (input.name === "computer_observe") {
@@ -61,7 +74,11 @@ export function computerFact(name: string, text: string): string | undefined {
     if (data.stopped === true) return "stopped"
     return typeof data.target?.appName === "string" ? `${data.target.appName} · ${data.mode ?? "observe"}` : undefined
   }
-  if (name === "computer_observe") return Array.isArray(data.nodes) ? `${data.target?.appName ? `${data.target.appName} · ` : ""}${data.nodes.length} nodes${data.truncated ? "+" : ""}` : undefined
+  if (name === "computer_observe") {
+    const count = Array.isArray(data.nodes) ? data.nodes.length : Number.isSafeInteger(data.nodeCount) ? data.nodeCount : undefined
+    if (count === undefined) return
+    return `${data.target?.appName ? `${data.target.appName} · ` : ""}${count} nodes${data.truncated ? "+" : ""}${data.unchanged ? " · unchanged" : data.changes !== undefined ? " · changes" : data.scope === "app" ? " · no window" : ""}`
+  }
   if (name === "computer_code") {
     if (typeof data.ok !== "boolean" || !Array.isArray(data.toolCalls)) return
     const steps = data.toolCalls.map((call: { name?: unknown }) => String(call?.name ?? "")).filter(Boolean)

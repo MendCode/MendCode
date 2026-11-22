@@ -111,21 +111,6 @@ export function cheapSubagentModel(main: ModelChoice, catalog: ModelCatalog): Mo
 }
 
 /**
- * A one-off helper call that must stay cheap (`/today`'s triage): the memory or `small` role the user set, else the main model's
- * cheaper peer (Luna for Sol), else the main model only when it is not a large one. Undefined when only a large model, or a model
- * of an external engine, would answer.
- */
-export function cheapAuxiliaryModel(input: { roles: ModelRoles; catalog: ModelCatalog }): ModelChoice | undefined {
-  const { roles, catalog } = input
-  const chosen = roles.memoryAssistant || roles.memoryExtractor || roles.small
-  const main = usableEffort(roles.main ?? catalog.defaults, catalog)
-  const picked = chosen ? resolveModel({ role: "memoryAssistant", roles, catalog }) : cheapSubagentModel(main, catalog) ?? main
-  if (modelEngine(picked, catalog) || picked.model.startsWith("acp:")) return undefined
-  if (!chosen && LARGE_MODEL.test(catalogModel(catalog, picked.model)?.id ?? picked.model)) return undefined
-  return picked
-}
-
-/**
  * A choice whose effort the model does not support falls back to the model's default (or none); a model the catalog does not know is kept as asked.
  * A model named by its `mendcode models` reference (`claude/claude-opus`) comes back as its catalog id, the one engines and providers take.
  */
@@ -212,7 +197,10 @@ export function invalidChoice(choice: ModelChoice, catalog: ModelCatalog, role: 
     // Claude Code has no provider variants; a variant naming one of its efforts means that effort.
     if (choice.parameters) return `${choice.model} does not support provider variants`
     if (choice.variant && !info.efforts.includes(choice.variant as never)) return info.efforts.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${info.efforts.join(", ")}` : `${choice.model} does not support provider variants`
-  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) return `unknown variant ${choice.variant} for ${choice.model}`
+  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) {
+    const valid = Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name)
+    return valid.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${valid.join(", ")}` : `unknown variant ${choice.variant} for ${choice.model}`
+  }
   // A sub-agent on an engine model goes through task's `engine`; the refusal says how, so a model does not fall back to another provider's copy.
   // The advisor may name a Claude Code model: Claude Code sessions pass it to `--advisor`, native sessions consult it through the CLI (docs/advisor.md).
   if (info.engine && role !== "main" && role !== "subagent" && role !== "advisor") return `${choice.model} runs whole sessions through Claude Code; use it for main`

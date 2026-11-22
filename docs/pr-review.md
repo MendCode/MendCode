@@ -771,7 +771,7 @@ While a review runs (balanced and full tiers, where the reviewer is), the sessio
 at work, in one live line: the activity status `Reviewing #25 · analysis · 112 files · incremental… (1m 20s)`, with the PR, the
 phase, the running step's detail and the time. Finished steps are not drawn; when the run ends the line goes and the session's
 final note stays. Any other session, and the watching session while its own turn holds the activity status, names it in the
-footer's agents segment (`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
+footer's agents segment (`reviewing shop-api#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
 the spinner and the time move with the activity status's own clock, which stops with the run. `showActivity` and
 `activityPlacement off` hide the status as they do for a turn.
 

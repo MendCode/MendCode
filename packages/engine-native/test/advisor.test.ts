@@ -7,7 +7,8 @@ import { ADVISOR_EVIDENCE_LIMITS, COMPLETION_MIN_CHANGE, advisorLimits, advisorR
 
 const session = "ses_advisor" as SessionId
 const mask = (text: string) => redactSecrets(text).text
-const limits = advisorLimits(undefined)
+/** Every checkpoint turned on, as `advisor.checkpoints` does: none runs by default. */
+const limits = advisorLimits({ checkpoints: ["plan", "repeat_error", "completion"] })
 
 describe("parseAdvisorVerdict", () => {
   test("reads a fenced verdict with nested findings", () => {
@@ -61,6 +62,14 @@ describe("buildAdvisorBrief", () => {
     expect(buildAdvisorBrief({ messages: long, question: "q", trigger: "tool", maxTokens: 4_000, mask }).length).toBeLessThanOrEqual(16_000)
     expect(() => buildAdvisorBrief({ messages: long, question: "q", trigger: "tool", maxTokens: 500, mask })).toThrow(RangeError)
   })
+})
+
+test("by default no checkpoint runs: the advisor is consulted only when asked", () => {
+  const tracker = createAdvisorTracker()
+  tracker.noteEdit({ paths: ["a.ts", "b.ts"], lines: 40 })
+  expect(advisorLimits(undefined).checkpoints).toEqual([])
+  expect(tracker.admit("completion", advisorLimits(undefined))).toBe(false)
+  expect(tracker.admit("plan", advisorLimits(undefined))).toBe(false)
 })
 
 describe("createAdvisorTracker", () => {

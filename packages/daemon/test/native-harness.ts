@@ -74,7 +74,7 @@ export function jumpClock(): Clock & { jump(ms: number): void } {
   }
 }
 
-export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; dreamEligible?: (directory: string) => boolean; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[] } = {}) {
+export async function boot(options: { memoryTools?: boolean; shell?: boolean; extraTools?: Tool[]; sandbox?: import("@mendcode/tools").SandboxPolicy; steps?: Step[]; dir?: string; project?: string; cancelGraceMs?: number; clock?: Clock;complete?: import("../src/daemon").DaemonOptions["complete"]; setupComplete?: import("../src/daemon").DaemonOptions["setupComplete"]; extractMemory?: import("../src/daemon").DaemonOptions["extractMemory"]; dreamEligible?: (directory: string) => boolean; mcp?: import("../src/daemon").McpControl; provider?: Partial<ModelProvider>; http?: boolean; extraModels?: ModelInfo[]; botConnectors?: import("../src/daemon").DaemonOptions["botConnectors"] } = {}) {
   const cleanups: Array<() => Promise<void> | void> = []
   const temp = (prefix: string) => {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix)))
@@ -103,6 +103,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
     socketPath: path.join(dir, "mendd.sock"),
     log: () => {},
     info: { engine: "native", model: "script-1" },
+    ...(options.botConnectors ? { botConnectors: options.botConnectors } : {}),
     ...(options.http ? { http: { enabled: true }, httpListen: false, defaultDirectory: project } : {}),
     ...(options.mcp ? { mcp: options.mcp } : {}),
     ...(options.extractMemory ? { extractMemory: options.extractMemory } : {}),
@@ -112,7 +113,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
     models: { selectable: true, defaults: { model: "script-1" }, list: () => [...["script-1", "gpt-6-luna", "gpt-6-sol"].map((id): ModelInfo => ({ id, name: id, efforts: ["low", "medium", "high"], variants: { high: { effort: "high" } } })), ...(options.extraModels ?? [])] },
     ...(options.cancelGraceMs ? { cancelGraceMs: options.cancelGraceMs } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
-    engine: ({ trace, store: s, secrets, background, tasks, agents, plans, extensions, goals, memory, emitGlobal, inlineShell, runLimits }) => {
+    engine: ({ trace, store: s, secrets, background, tasks, agents, threads, bot, today, plans, extensions, goals, memory, emitGlobal, inlineShell, runLimits }) => {
       store = s
       if (options.memoryTools) tools.push(createMemoryGraphTool(memory), createMemoryTool(memory), createRememberTool(memory.propose, memory))
       const catalog = filteredCatalog({ selectable: true, defaults: { model: "script-1" }, list: () => [...["script-1", "gpt-6-luna", "gpt-6-sol"].map((id): ModelInfo => ({ id, name: id, efforts: ["low", "medium", "high"], variants: { high: { effort: "high", parameters: { temperature: 0.8 } } } })), ...(options.extraModels ?? [])] }, () => s.settings.get())
@@ -146,6 +147,9 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
         subagents: true,
         tasks,
         agents,
+        ...(options.extraTools?.some((tool) => tool.name === "threads") ? { threads } : {}),
+        ...(options.extraTools?.some((tool) => tool.name.startsWith("bot_")) ? { bot } : {}),
+        ...(options.extraTools?.some((tool) => tool.name === "today") ? { today } : {}),
         permissionPolicy: () => s.settings.get(),
         memoryAlways: () => emitGlobal({ type: "settings.changed", settings: s.settings.set({ memoryRequireApproval: false }) }),
         plans,

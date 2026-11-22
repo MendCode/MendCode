@@ -40,6 +40,18 @@ test("native task tool forwards an explicit configured engine/model to the child
   expect(h.requests[1]!.model).toBe("gpt-6-sol")
 })
 
+test("the task tool's effort starts the child with that effort; a differing variant or an unknown effort is refused naming the valid ones", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Check", prompt: "check", model: "gpt-6-sol", effort: "high" }), stop("child done"), callTool("task", { description: "Clash", prompt: "check", model: "gpt-6-sol", effort: "high", variant: "low" }), callTool("task", { description: "Bad", prompt: "check", model: "gpt-6-sol", effort: "nope" }), stop("parent done")] })
+  const parent = await openSession(h)
+  await say(h, parent, "delegate")
+  const [child] = list(h, parent)
+  expect(h.store.sessionModel(child!.taskId)).toMatchObject({ model: "gpt-6-sol", variant: "high" })
+  expect(list(h, parent)).toHaveLength(1)
+  const outputs = JSON.stringify(h.requests.at(-1)!.messages)
+  expect(outputs).toContain("effort high and variant low differ")
+  expect(outputs).toContain("unknown variant nope for gpt-6-sol; use ")
+})
+
 test("a model that writes Claude Code's subagent_type general-purpose gets the general sub-agent, not an unknown-agent error", async () => {
   const h = await start({ steps: [callTool("task", { description: "Check", prompt: "check", subagent_type: "general-purpose" }), stop("child done"), stop("parent done")] })
   const parent = await openSession(h)
@@ -182,6 +194,34 @@ test("cancelling a foreground parent task also cancels its running child", async
   expect(h.store.turns.list(child.taskId)[0]?.status).toBe("cancelled")
 })
 
+test("a cancel that spares the agents stops the parent's turn and leaves its foreground child running in the background", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Foreground", prompt: "Wait" }), hang] })
+  const parent = await openSession(h)
+  await h.client.send({ type: "user.submit", sessionId: parent, text: "Delegate", attachments: [] })
+  await until(() => h.requests.length === 2)
+  const turnId = h.store.turns.list(parent)[0]!.turnId as TurnId
+  expect((await h.client.send({ type: "turn.cancel", sessionId: parent, turnId, spareAgents: true })).ok).toBe(true)
+  await until(() => h.store.turns.list(parent)[0]?.status === "cancelled")
+  await until(() => list(h, parent)[0]?.background === true)
+  const child = list(h, parent)[0]!
+  expect(child.state).toBe("running")
+  expect(h.store.turns.list(child.taskId)[0]?.status).not.toBe("cancelled")
+})
+
+test("a child detached from /tasks survives its parent's plain cancel", async () => {
+  const h = await start({ steps: [callTool("task", { description: "Foreground", prompt: "Wait" }), hang] })
+  const parent = await openSession(h)
+  await h.client.send({ type: "user.submit", sessionId: parent, text: "Delegate", attachments: [] })
+  await until(() => h.requests.length === 2)
+  const child = list(h, parent)[0]!
+  expect((await h.client.send({ type: "task.status", sessionId: parent, taskId: child.taskId, action: "detach" })).ok).toBe(true)
+  const turnId = h.store.turns.list(parent)[0]!.turnId as TurnId
+  await h.client.send({ type: "turn.cancel", sessionId: parent, turnId })
+  await until(() => h.store.turns.list(parent)[0]?.status === "cancelled")
+  await Bun.sleep(50)
+  expect(list(h, parent)[0]?.state).toBe("running")
+})
+
 test("a child's record keeps what it spent and the files it wrote, summed over its generations", async () => {
   const h = await start({ steps: [callTool("write", { path: "notes.txt", content: "a\n" }), answer("wrote it", { input: 1200, output: 80 }), answer("again", { input: 300, output: 20 })] })
   const parent = await openSession(h)
@@ -202,4 +242,24 @@ test("a child resumed with task_id and another model goes on with its own histor
   expect((await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Check", prompt: "third prompt", task_id: task.taskId } })).ok).toBe(true)
   expect(h.requests[2]!.model).toBe("gpt-6-luna")
   expect(h.store.sessionModel(task.taskId)).toMatchObject({ model: "gpt-6-luna" })
+})
+
+test("a streamed answer reads the task table no more than a one-word answer: no whole-table read per event", async () => {
+  // Every event of every session is shown to the task registry. With one read of all the tasks the data directory ever held per
+  // event, twenty children streaming at once kept the daemon from answering a terminal that opened their parent.
+  const reads = async (deltas: number) => {
+    const words = Array.from({ length: deltas }, (_, index) => ({ type: "text" as const, delta: `word${index} ` }))
+    const h = await start({ steps: [[...words, { type: "finish", reason: "stop" }], [...words, { type: "finish", reason: "stop" }]] })
+    const parent = await openSession(h)
+    let count = 0
+    const whole = h.store.tasks.list
+    h.store.tasks.list = () => { count++; return whole() }
+    const child = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Stream", prompt: "go" } }))
+    expect(child.state).toBe("completed")
+    // A session that is no one's child streams too, and is not looked up in the whole table either.
+    await say(h, parent, "and you")
+    return count
+  }
+  // The whole table is not read per delta: 300 deltas cost about what one does (a slow machine may add a read or two).
+  expect(await reads(300)).toBeLessThanOrEqual(await reads(1) + 2)
 })

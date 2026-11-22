@@ -18,7 +18,7 @@ import { remoteTokens } from "../src/remote"
 import { until } from "./native-harness"
 
 test("peer turns cannot call thread or PR tools, even in full mode with forged tool calls", async () => {
-  for (const name of ["threads", "pr_watch", "graph_map", "graph_impact", "webfetch", "memory", "memory_graph", "remember", "workflow_script"]) {
+  for (const name of ["threads", "pr_watch", "graph_map", "graph_impact", "webfetch", "memory", "memory_graph", "remember", "workflow_script", "today"]) {
     let touched = false
     const tool = name === "threads" ? threadsTool : name === "pr_watch" ? prWatchTool : defineTool({ name, description: name, permission: "execute", args: z.object({}), execute: async () => { throw new Error("must not execute") } })
     const { provider, requests } = scriptedProvider([callTool(name, { action: "list" }), stop("done")])
@@ -34,7 +34,7 @@ test("peer turns cannot call thread or PR tools, even in full mode with forged t
     expect(touched).toBe(false)
     expect(requests[0]!.tools.some((tool) => tool.name === name)).toBe(false)
   }
-  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script", "today"] })
 })
 
 test("peer turns cannot reach the profiles tool through tool discovery or a forged call, in any permission mode", async () => {
@@ -61,8 +61,8 @@ test("peer turns cannot reach the profiles tool through tool discovery or a forg
 })
 
 test("automatic continuations retain the paused peer turn's local tool restrictions", () => {
-  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
-  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script", "today"] })
+  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script", "today"] })
   expect(continuationTurnOptions(undefined, false)).toBeUndefined()
 })
 

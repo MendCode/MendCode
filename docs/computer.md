@@ -114,7 +114,8 @@ the PNG, without opening any window.
 ## Choose a target
 
 `computer_session { action: "apps" }` lists running GUI applications without activating
-one. Start with exactly one selector:
+one, each with its number of windows on screen. Apps that live in the menu bar (no Dock icon) are listed too, marked
+`menuBar`; the app in front is marked `active`. Start with exactly one selector:
 
 ```json
 { "action": "start", "mode": "control", "bundleID": "com.apple.Safari" }
@@ -171,10 +172,13 @@ taking their focus, and its window may be behind others. Every operation reaches
 | How it reaches the app (never activates or raises the app, never moves the user's pointer or focus) | Operations |
 | --- | --- |
 | Read from the app's accessibility tree | `computer_observe`, `observe`, `waitFor`, `windows` |
-| Performed on the element itself | `press` (AXPress), `setValue` (AXSetValue; the caret is not moved) |
+| Performed on the element itself | `press` (AXPress), `setValue` (AXSetValue; the caret is not moved), `selectWindow` (restores a minimized window and makes it the app's main window) |
 | Events posted to the app's own process at the node, naming the app's window under the point | `click`, `typeText`, `key`, `scroll`, `drag` |
+| Asked of the app through LaunchServices, without activating it | `reopen` (what a click on the app's Dock icon does) |
 
-Only `selectWindow` (it raises the window) and the legacy `computer_key` need the app in front. The approved process, bundle ID and window are checked on every call.
+Only the legacy `computer_key` needs the app in front. `selectWindow` raises the window only while the app is in front. The approved process, bundle ID and window are checked on every call.
+
+Actions go to the element first (AXPress, AXSetValue), then as events to the app's process, never as global events, so the user's own pointer and focus never move.
 
 ### Hit-testing and focus
 
@@ -185,28 +189,69 @@ Only `selectWindow` (it raises the window) and the legacy `computer_key` need th
 
 Keyboard input first moves the app's own accessibility focus to the node, inside the app only.
 
-The model is told never to ask you to bring the app forward except for `selectWindow`. The virtual cursor still travels to the node while you work.
+The model is told never to ask you to bring the app forward. The virtual cursor still travels to the node while you work.
 
 ## Observe, act, verify
 
 ### Observe the selected window
 
-`computer_observe { computerSessionID, screenshot?: boolean }` returns a revisioned snapshot of the selected/focused window.
+`computer_observe { computerSessionID, screenshot?: boolean, full?: boolean }` returns a revisioned snapshot of the selected/focused window.
 
 | Snapshot limit | Value |
 |---|---|
 | Nodes | Up to 500 |
 | Depth | 32 |
 | Size | 64 KiB |
+| Time | 2 seconds of accessibility reads; what was read by then comes back marked `truncated` |
 | Name or value | One line, at most 256 UTF-16 units |
 
 A browser page starts about ten levels below its window, and its links and tabs ten to twenty below that.
 
 Each node has an opaque `id`, role, name, optional value/bounds and advertised `actions`. Secure fields and descendants are redacted and cannot be controlled.
 
-Names and values replace line breaks with spaces, so multi-line text reads back joined. Node IDs are new in every observation.
+Names and values replace line breaks with spaces, so multi-line text reads back joined.
 
-A screenshot request returns guidance to `computer_capture`: the main display, or a region such as the window node's bounds. No implicit screenshot is taken.
+#### Text first, and only what changed
+
+The model reads the tree as text, the way Cua Driver and Peekaboo hand it over: one node per line, indented under its parent.
+
+```text
+0.417001 Window "Untitled" @120,80 900x640
+  0.417004 Button "Save" [press,ptr]
+  0.417007 TextField "Title" ="Draft" [setValue,typeText,ptr] {focused}
+```
+
+- `[ptr]` stands for `click`, `key`, `scroll` and `drag` at the node; `{…}` lists states such as `focused`, `disabled` or `minimized`.
+- Unnamed groups and layout elements with nothing to act on, menu separators and disabled menu items are left out; their children move up a level.
+- The first line ends with the window's `@x,y width×height`.
+
+A node keeps its ID for as long as its element exists, so later observations answer with less:
+
+| The window since the model's last look | `computer_observe` returns |
+|---|---|
+| Nothing changed | `unchanged: true`, with the new revision |
+| A few nodes changed | `changes`: `+` new, `~` changed, `-` gone |
+| Most of it changed | The whole `tree` again |
+
+`full: true` always returns the whole tree. In `computer_code`, `observe` still returns every node as an object.
+
+#### No focused window
+
+An app can run with no window in focus: a menu-bar app, or one whose windows are closed or minimized. Observing it no longer fails. It returns `scope: "app"`: the application itself, its windows (listed with `minimized` where they are, not walked), its menu bar with one level of each menu, and its status items.
+
+| To | In `computer_code` |
+|---|---|
+| Restore a minimized window and work in it | `tools.selectWindow({ nodeID })` with the window's node |
+| Ask the app to show its window | `tools.reopen({})`, as a click on its Dock icon does, without activating it |
+| Open a status item's menu | `press` the status item, then observe again: the open menu is listed under it |
+| Use a menu command | `press` the menu item, such as File > New Window |
+| Send a key to the app itself | `key` on the application node |
+
+When the session's own window closes, the session follows the app to the window that has focus next, or to the application scope. Another open window taking the focus still stops the session, so a new dialog is never missed.
+
+#### Screenshots
+
+A screenshot is taken only when asked for. `screenshot: true` attaches a capture of just the observed window, at most 1280 pixels on its long edge. A tree that stays poor (a webview or custom-drawn content) brings that window capture by itself, but only after a capture has already worked in the session, so no permission is ever asked for unasked.
 
 ### Observation performance
 
@@ -219,9 +264,18 @@ Measured read-only on this Mac with the same nodes and actions as before:
 | Ghostty | 239 | 465–528 ms | 61–73 ms |
 | WhatsApp | 235 | 157–179 ms | 26–40 ms |
 
-An app's first observation after a pause can still take seconds while the app itself builds its tree.
+An app's first observation after a pause can still take seconds while the app itself builds its tree; the walk stops at 2 seconds.
 
-When the session's window closes or another window of the app takes focus (a dialog that becomes a document, for example), observation fails with "Selected window changed".
+Visited elements are kept in a hash set, so a walk costs one lookup per node. Measured read-only on this Mac, the median of five observations after the first, against the previous helper:
+
+| App and state | Before | Now |
+|---|---|---|
+| Finder, no window open | Failed: "No focused accessible window" | 162 nodes in 18 ms; 2.7 K characters for the model, 129 once unchanged |
+| Activity Monitor, no window in focus | Failed: "No focused accessible window" | 94 nodes in 41–48 ms; 2.4 K characters, 149 once unchanged |
+| Raycast, menu bar only | Not listed by `apps` | 61 nodes in 7–8 ms; 1.3 K characters |
+| Ghostty window | 15 nodes in 3–7 ms; 2.9 K characters every time | 15 nodes in 3 ms; 0.9 K characters, 135–149 once unchanged |
+
+When another window of the app takes focus while the session's window is still open (a dialog that becomes a document, for example), observation fails with "Selected window changed".
 
 Call `windows` and `selectWindow` in `computer_code`, or start a new session.
 
@@ -257,8 +311,9 @@ Binding the app (`computer_session start`) shows its own card in the modes that 
 | `scroll` | `{revision,nodeID,direction:"up"\|"down"\|"left"\|"right",amount?:300}` — 1–1000 pixels |
 | `drag` | `{revision,nodeID,toNodeID}` — between two observed nodes |
 | `batch` | `{revision,steps:[{action,nodeID,...}]}` — 1–16 of the actions above on one observation, one call |
-| `windows` | `{}` — opaque handles and titles, only this app |
-| `selectWindow` | `{windowID}` — control mode; observe afterwards |
+| `windows` | `{}` — opaque handles, titles, `minimized` and `focused`, only this app |
+| `selectWindow` | `{windowID}` or `{nodeID}` of a window node — control mode; restores a minimized window; reports `focused`, `restored`, `verified`; observe afterwards |
+| `reopen` | `{}` — control mode; asks the app to show its window without activating it; reports `opened` |
 | `waitFor` | `{name?,role?,value?,timeoutMs?:3000}` — exact non-secure match, maximum 10 seconds |
 | `status` | `{}` — target, mode, revision, expiry and bounded value-free action audit |
 
@@ -323,8 +378,9 @@ Capture and input cannot overlap in the daemon. This lock does not prevent the r
 
 Every mutation consumes the observation **before** native awaits, even on failure. Observe again afterwards.
 
-Action results say `outcome: "dispatched", delivery: "delivered_unverified", retry: "unsafe",
-verified: false`: input delivery does not prove the application performed the intended effect.
+Action results say `outcome: "dispatched", delivery: "delivered_unverified", retry: "unsafe"`: input delivery does not prove the application performed the intended effect.
+
+In `computer_code`, every action and batch that went through is followed by a fresh read of the app (see the settled result below). The result says `verified: true` only when that read shows a change (`after.effect: "changed"`, with the nodes that changed). With no visible change it says `verified: false`, `after.effect: "none_seen"` and asks the model to check before repeating, because the action may have done nothing or changed something outside the window.
 
 Every failed action says whether its input can have reached the app, in agent-desktop's terms:
 
@@ -420,7 +476,7 @@ Window IDs here are **positive macOS numeric window IDs**, not the semantic brok
 | Capture constraint | Limit |
 |---|---|
 | Crops | Integer screen points and positive dimensions up to 16384 |
-| Private PNG preview | 1600 pixels and 5 MiB |
+| Private PNG preview | 1280 pixels on the long edge and 5 MiB, downscaled by `sips` in its own process |
 
 Results include `filePath`, dimensions, `captureID`, `sha256`, `capturedAt`, `resized`, `keyboardControlAvailable` and `computerSessionBootstrapAvailable`.
 
@@ -436,7 +492,7 @@ The native backend also checks non-secure keyboard focus and uses the exclusive 
 
 **Warning:** Captures are sensitive, **not redacted**, and owned by the chat.
 
-Files use 0600 permissions under a 0700 directory at `<dir>/computer/<sessionId>/`. Each chat has a persistent cap of 64 capture artifacts; archive these manually when the cap is reached.
+Files use 0600 permissions under a 0700 directory at `<dir>/computer/<sessionId>/`. Each chat keeps its 32 most recent captures: before a new one is written, the oldest are deleted, with any key or session-start authority they still carried. A long task never stops at a cap.
 
 Hash lineage and keyboard observations are bounded and memory-only.
 
@@ -456,6 +512,6 @@ Direct local-owner clients must obtain target/mode consent before invoking start
 
 There is no arbitrary-coordinate API, shell access through the helper, unrestricted REPL, hidden screenshots, automated OS consent, CAPTCHA bypass or Windows/Linux driver.
 
-Applications can refuse operation when they have incomplete accessibility trees, canvas controls, menus outside the selected window or unsupported focus semantics.
+Applications can refuse operation when they have incomplete accessibility trees, canvas controls, context menus outside the selected window or unsupported focus semantics. A menu bar and status items are read only while no window of the app has focus.
 
 This is not a claim of universal Codex parity or measured speed superiority. Native Swift compilation and confined/fake-OS regressions are separate from live Safari acceptance.

@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS sessions (
   archived_at INTEGER,
   pinned_at INTEGER,
   lifecycle TEXT,
-  fanout TEXT
+  fanout TEXT,
+  origin TEXT,
+  last_human_at INTEGER
 ) WITHOUT ROWID;
 
 CREATE TABLE IF NOT EXISTS events (

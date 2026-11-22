@@ -60,6 +60,8 @@ export type CreateLoopInput = {
   permission?: PermissionMode
   /** Paths outside the project the runs will read. */
   reads?: string[]
+  /** The bot the loop belongs to (experimental bots): its sessions run as that bot. */
+  agent?: string
 }
 
 export type UpdateLoopInput = { [K in keyof Omit<CreateLoopInput, "directory">]?: CreateLoopInput[K] | undefined }
@@ -112,7 +114,7 @@ export function createLoopService(options: {
   clock: Clock
   ids: IdFactory
   /** `readOnly` sessions start in plan mode (the auditor's). */
-  createSession(input: { directory: string; title: string; readOnly?: boolean; permission?: PermissionMode }): SessionId
+  createSession(input: { directory: string; title: string; readOnly?: boolean; permission?: PermissionMode; /** The bot the session runs as (experimental bots). */ agent?: string }): SessionId
   /** A run ended: tell the creator session (the host masks secrets and queues the notice). Absent = no notices. */
   notify?(input: { loop: Loop; run: LoopRun }): void
   /** How long a run may wait for an approval before it ends with a clear message (default 15 minutes). */
@@ -232,7 +234,7 @@ export function createLoopService(options: {
         return
       }
       worktree = { path: made.path, branch: made.branch, base: made.base, state: "active" }
-      sessionId = options.createSession({ directory: made.path, title: `loop · ${loop.name} · run ${running.runs}`, ...(loop.reportOnly ? { readOnly: true } : {}), ...(loop.permission ? { permission: loop.permission } : {}) })
+      sessionId = options.createSession({ directory: made.path, title: `loop · ${loop.name} · run ${running.runs}`, ...(loop.reportOnly ? { readOnly: true } : {}), ...(loop.permission ? { permission: loop.permission } : {}), ...(loop.agent ? { agent: loop.agent } : {}) })
       patchRun(loop.loopId, running.runs, { sessionId, worktree })
     }
     const live: Live = { loopId: loop.loopId, run: running.runs, lastAnswer: "", answerItems: new Set(), started: new Map(), ...(reportOnly ? { reportOnly: true } : {}) }
@@ -492,7 +494,7 @@ export function createLoopService(options: {
       if (problem) throw new Error(`[LOOP]: ${problem}`)
       const { template, objective, trigger, budget, criteria, reportOnly } = resolveCreateInput(input)
       const now = clock.now()
-      const sessionId = options.createSession({ directory: input.directory, title: `loop · ${input.name}`, ...(reportOnly ? { readOnly: true } : {}), ...(input.permission ? { permission: input.permission } : {}) })
+      const sessionId = options.createSession({ directory: input.directory, title: `loop · ${input.name}`, ...(reportOnly ? { readOnly: true } : {}), ...(input.permission ? { permission: input.permission } : {}), ...(input.agent ? { agent: input.agent } : {}) })
       const wake = input.draft ? undefined : input.runNow ? now : nextWake(trigger, now)
       const loop: Loop = {
         loopId: ids("loop"),
@@ -512,6 +514,7 @@ export function createLoopService(options: {
         ...(input.workspace === "worktree" ? { workspace: "worktree" as const } : {}),
         ...(input.creatorSessionId ? { creatorSessionId: input.creatorSessionId, notify: input.notify ?? "creator" } : input.notify ? { notify: input.notify } : {}),
         ...(input.permission ? { permission: input.permission } : {}),
+        ...(input.agent ? { agent: input.agent } : {}),
         ...(input.reads?.length ? { reads: input.reads } : {}),
         state: input.draft ? "paused" : "active",
         ...(input.draft ? { draft: true, reason: "Draft; activate to schedule runs" } : {}),

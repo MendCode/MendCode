@@ -83,7 +83,7 @@ type SpecEntry = { spec: WorkflowTaskSpec; key: string; cwd?: string; stdinBytes
 export const MAX_SCRIPT_TASKS = 250
 const TEXT_LIMIT = 32_000
 const MEMO_LIMIT = 16 * 1024
-const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "model", "effort", "engine", "agent", "retry", "timeoutMinutes", "budget", "detail", "allowedTools"])
+const AGENT_KEYS = new Set(["label", "phase", "schema", "mode", "worktree", "model", "effort", "engine", "agent", "retry", "timeoutMinutes", "budget", "detail", "allowedTools", "cwd"])
 const CHECK_KEYS = new Set(["label", "phase", "timeoutSeconds", "in", "stdin"])
 /** The most text `check(command, { stdin })` writes to the command (UTF-8 bytes). */
 export const CHECK_STDIN_LIMIT = 1_048_576
@@ -126,7 +126,7 @@ export function answerText(answer: string): string {
   return answer.replace(/```(?:TASK_RESULT|WORKFLOW_OUTPUT)\b[\s\S]*?```/g, "").trim()
 }
 
-type AgentCall = { identity: unknown; build(id: string): unknown; mode: "read" | "work"; label: string; title: string; phase?: string; isolated: boolean; detail: boolean }
+type AgentCall = { identity: unknown; build(id: string): unknown; mode: "read" | "work"; label: string; title: string; phase?: string; isolated: boolean; lane?: string; detail: boolean }
 
 function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: string } {
   if (typeof prompt !== "string" || !prompt.trim() || prompt.length > 8_000) return { error: "agent(prompt): the prompt must be 1 to 8000 characters" }
@@ -149,7 +149,11 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
   }
   const retry = options.retry === undefined ? undefined : typeof options.retry === "number" ? { maxAttempts: options.retry, backoffMs: 0, retryOn: ["transient", "environment", "quality"] } : options.retry
   const worktree = options.worktree === true
-  const identity = { kind: "agent", prompt, schema: options.schema, mode, worktree, model: options.model, effort: options.effort, engine: options.engine, agent: options.agent, allowedTools: options.allowedTools, budget: options.budget }
+  if (options.cwd !== undefined && (typeof options.cwd !== "string" || !options.cwd.startsWith("/") || options.cwd.length > 1024)) return { error: "cwd must be an absolute path (an existing git worktree of this repository)" }
+  if (options.cwd !== undefined && worktree) return { error: "cwd and worktree: true cannot be combined: worktree creates its own checkout" }
+  const cwd = options.cwd as string | undefined
+  // `cwd` is left out of the identity when unset, so the calls of scripts that never use it keep their keys.
+  const identity = { kind: "agent", prompt, schema: options.schema, mode, worktree, model: options.model, effort: options.effort, engine: options.engine, agent: options.agent, allowedTools: options.allowedTools, budget: options.budget, ...(cwd ? { cwd } : {}) }
   const title = clip(label ?? firstLine(prompt), 80)
   return {
     identity,
@@ -157,7 +161,8 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
     label: label ?? title,
     title,
     ...(phase ? { phase } : {}),
-    isolated: worktree,
+    isolated: worktree || cwd !== undefined,
+    ...(cwd ? { lane: cwd.replace(/\/+$/, "") || "/" } : {}),
     detail: options.detail === true,
     build: (id: string) => ({
       kind: "agent",
@@ -174,6 +179,7 @@ function normalizeAgent(prompt: unknown, opts: unknown): AgentCall | { error: st
       ...(options.agent !== undefined ? { agent: options.agent } : {}),
       ...(options.allowedTools !== undefined ? { allowedTools: options.allowedTools } : {}),
       ...(worktree ? { workspace: { mode: "per-run-worktree" } } : {}),
+      ...(cwd ? { cwd } : {}),
       ...(record(options.budget) ? { budget: { ...(options.budget.tokens !== undefined ? { maxTokens: options.budget.tokens } : {}), ...(options.budget.usd !== undefined ? { maxCost: options.budget.usd } : {}) } } : {}),
     }),
   }
@@ -328,13 +334,13 @@ export function createScriptEngine(ctx: Context) {
     })
   }
 
-  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; cwd?: string; stdinBytes?: number }) {
+  function createTask(workflowId: WorkflowId, spec: WorkflowTaskSpec, key: string, extra: { mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; lane?: string; cwd?: string; stdinBytes?: number }) {
     const routed = spec.kind === "agent" ? { ...(spec.engine ? { engine: spec.engine } : {}), ...(spec.model ? { modelId: spec.model.model } : {}) } : {}
     const entry: SpecEntry = { spec, key, ...(extra.cwd ? { cwd: extra.cwd } : {}), ...(extra.stdinBytes !== undefined ? { stdinBytes: extra.stdinBytes } : {}) }
     write(workflowId, `spec:${spec.id}`, entry)
     specs.set(`${workflowId}/${spec.id}`, entry)
     scriptSpecRegistry.set(workflowId, spec)
-    ctx.update(workflowId, (run) => addScriptTask(run, { id: spec.id, title: spec.title, kind: spec.kind, ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.label ? { label: extra.label } : {}), ...(extra.phase ? { phase: extra.phase } : {}), ...(extra.isolated ? { isolated: true } : {}), ...routed }, ctx.clock.now()))
+    ctx.update(workflowId, (run) => addScriptTask(run, { id: spec.id, title: spec.title, kind: spec.kind, ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.label ? { label: extra.label } : {}), ...(extra.phase ? { phase: extra.phase } : {}), ...(extra.isolated ? { isolated: true } : {}), ...(extra.lane ? { lane: extra.lane } : {}), ...routed }, ctx.clock.now()))
   }
 
   function agentCall(workflowId: WorkflowId, runtime: HostRuntime, id: number, message: Record<string, unknown>) {
@@ -358,7 +364,7 @@ export function createScriptEngine(ctx: Context) {
         runtime.waiters.delete(id)
         return pauseForCap(workflowId, reason)
       }
-      createTask(workflowId, spec.data, key, { mode: normalized.mode, label: normalized.label, ...(normalized.phase ? { phase: normalized.phase } : {}), isolated: normalized.isolated })
+      createTask(workflowId, spec.data, key, { mode: normalized.mode, label: normalized.label, ...(normalized.phase ? { phase: normalized.phase } : {}), isolated: normalized.isolated, ...(normalized.lane ? { lane: normalized.lane } : {}) })
     }
     deliver(workflowId)
   }

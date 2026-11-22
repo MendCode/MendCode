@@ -9,7 +9,7 @@ import { IMAGE_MODES, type ImageMode } from "../pets/detect"
 import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
-import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
+import { SIDEBAR_SECTION_IDS, unknownSidebarSections, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
 import { DEFAULT_TOOL_DESIGN_NAME, parseMarkdownColors, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
@@ -37,6 +37,39 @@ export const LOGO_SIZES = ["small", "medium", "large"] as const
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
 export type SidebarMode = (typeof SIDEBAR_MODES)[number]
+/** Whose sessions the left sidebar lists: `auto` is all projects while experimental bots are on and the opened folder otherwise; `folder` and `all` always mean what they say. */
+export const SIDEBAR_PROJECTS = ["auto", "folder", "all"] as const
+export type SidebarProjects = (typeof SIDEBAR_PROJECTS)[number]
+/** Whose projects the all-projects list shows: the ones you typed in, or every one. */
+export const SIDEBAR_PROJECTS_FROM = ["you", "all"] as const
+export type { SidebarProjectsFrom } from "./sidebar-projects"
+import type { SidebarProjectsFrom } from "./sidebar-projects"
+export const MAX_HIDDEN_PROJECTS = 200
+/** Whether the left sidebar lists every project as folding groups for this setting and bots flag. */
+export const sidebarListsAll = (projects: SidebarProjects, botsOn: boolean) => projects === "all" || (projects === "auto" && botsOn)
+/** Experimental bots: the starting layouts of the left sidebar. `icons-only` is a narrow column; `scratch` shows no section until the user adds them. */
+export const SIDEBAR_LAYOUTS = ["projects-first", "bots-first", "icons-only", "scratch"] as const
+export type SidebarLayout = (typeof SIDEBAR_LAYOUTS)[number]
+export type SidebarSection = (typeof SIDEBAR_SECTION_IDS)[number]
+const LAYOUT_SECTIONS: Record<SidebarLayout, readonly SidebarSection[]> = {
+  "projects-first": ["projects", "bots", "sessions"],
+  "bots-first": ["bots", "projects", "sessions"],
+  "icons-only": ["bots", "projects", "sessions"],
+  scratch: [],
+}
+
+/** A comma list of sidebar sections, once each in the order given; `none` is kept, and anything unusable is empty (the layout's own). */
+export function normalizeSidebarSections(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length > 64 || unknownSidebarSections(raw).length) return ""
+  if (raw.trim() === "none") return "none"
+  return raw.split(",").map((name) => name.trim()).filter((name, index, all) => name && all.indexOf(name) === index).join(",")
+}
+
+/** The sections the sidebar shows, in order: the explicit list when set, else the layout's. */
+export function sidebarSectionsOf(profile: Pick<TuiProfile, "sidebarLayout" | "sidebarSections">): SidebarSection[] {
+  if (profile.sidebarSections === "none") return []
+  return profile.sidebarSections ? profile.sidebarSections.split(",") as SidebarSection[] : [...LAYOUT_SECTIONS[profile.sidebarLayout]]
+}
 
 export const LOGO_KINDS = ["wordmark", "mascot", "both", "custom", "none"] as const
 /** How large a pet mascot is drawn on the home (`pets/home-pet.ts`): 12, 16 or 22 rows; a screen too small for one gets the next smaller. */
@@ -319,6 +352,8 @@ export type TuiProfile = {
   sidebarSide: "left" | "right"
   /** Under 110 columns the right panel hides (`hide`) or becomes a sheet above the prompt (`sheet`). */
   panelNarrow: "hide" | "sheet"
+  /** How a new terminal and a new chat start the right panel: as `rightSidebar` says (`remember`, the default), always `shown` (when the panel has cards), or always `hidden`. `/panel` still toggles in the chat. */
+  panelStart: "remember" | "shown" | "hidden"
   /** The right panel's first row (its preset, `/panel`, the focus key); off gives that row to the cards. */
   panelHeader: boolean
   activityMascot: boolean
@@ -381,17 +416,33 @@ export type TuiProfile = {
   activitySound: "off" | "pulse" | "hum"
   sidebarWidgets: SidebarWidget[]
   rightSidebar: boolean
-  /** Epoch ms of the last visit to /today, the "since" of its summary; 0 when it was never opened (docs/today.md). Not a look setting. */
+  /** Legacy: the old /today page's last visit. /today is a chat now (docs/today.md); the key is kept so old files still read. */
   todayLastVisit: number
-  /** Rows pinned with `m` on /today, for one local day (`YYYY-MM-DD`); another day reads as none. At most 50 ids. */
+  /** Legacy: the old /today page's pins; kept so old files still read. */
   todayMarks: { day: string; ids: string[] }
-  /** Rows dismissed with `x` on /today (`tab:id` → the row's time when dismissed); a row with something newer comes back. At most 300. */
+  /** Legacy: the old /today page's dismissed rows; kept so old files still read. */
   todayDismissed: Record<string, number>
   /** Cells the right bar takes; 0 keeps the automatic 48 (56 from 150 columns). */
   sidebarWidth: number
   /** `border` draws `READY › model › effort › repo › branch › ctx` in the prompt's top rule and leaves the row under it telemetry only. */
   promptStatus: "off" | "border"
   sidebar: SidebarMode
+  /** Whose sessions the left sidebar lists: the opened folder's (today's), or every project's as folding groups. */
+  sidebarProjects: SidebarProjects
+  /** Which projects that list shows: `you` (default) the ones where a person typed or that work now, `all` every one; the rest sit behind `+ N more projects`. */
+  sidebarProjectsFrom: SidebarProjectsFrom
+  /** Project folders hidden by hand (canonical, at most 200): never listed, the opened folder apart. Unhide in `/customize` › Hidden projects. */
+  sidebarHiddenProjects: string[]
+  /** Sessions each project and each bot of that list shows before its `+ N more` row (1..50), the same for every one; the open session takes the last place when it is further down. */
+  sidebarPreviewCount: number
+  /** Projects that list shows before its `+ N more projects` row (1..30); 0 fills the sidebar's height. The open one and the busy ones always show. */
+  sidebarProjectCount: number
+  /** Days of activity a project's session list reaches back (0..365); older sessions wait behind `+ N older`. 0 lists every age. */
+  sidebarRecentDays: number
+  /** Experimental bots: the starting layout of the left sidebar; its sections come from `sidebarSections` when that is set. */
+  sidebarLayout: SidebarLayout
+  /** Experimental bots: the sections shown, in order, as a comma list of projects, bots, sessions; `none` shows nothing, empty takes the layout's own. */
+  sidebarSections: string
   images: ImageMode
   /** Images the session produced or received (read image, screenshot, generated, pasted) are drawn in the transcript when `images` finds a protocol. */
   transcriptImages: boolean
@@ -581,6 +632,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sessionAccent: false,
   sidebarSide: "left",
   panelNarrow: "hide",
+  panelStart: "remember",
   panelHeader: true,
   activityMascot: false,
   showActivity: true,
@@ -628,6 +680,14 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   sidebarWidth: 0,
   promptStatus: "off",
   sidebar: "auto",
+  sidebarProjects: "auto",
+  sidebarProjectsFrom: "you",
+  sidebarHiddenProjects: [],
+  sidebarPreviewCount: 3,
+  sidebarProjectCount: 0,
+  sidebarRecentDays: 7,
+  sidebarLayout: "bots-first",
+  sidebarSections: "",
   images: "auto",
   transcriptImages: true,
   hyperlinks: true,
@@ -914,6 +974,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     titleTemplate: oneLine(source.titleTemplate, 180) || DEFAULT_TUI_PROFILE.titleTemplate,
     sidebarSide: oneOf(["left", "right"] as const, source.sidebarSide) ?? "left",
     panelNarrow: oneOf(["hide", "sheet"] as const, source.panelNarrow) ?? "hide",
+    panelStart: oneOf(["remember", "shown", "hidden"] as const, source.panelStart) ?? "remember",
     panelHeader: bool("panelHeader"),
     showAgent: bool("showAgent"),
     showEffort: bool("showEffort"),
@@ -1003,6 +1064,14 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     sidebarWidth: typeof source.sidebarWidth === "number" && Number.isInteger(source.sidebarWidth) && source.sidebarWidth >= 32 && source.sidebarWidth <= 80 ? source.sidebarWidth : 0,
     promptStatus: oneOf(["off", "border"] as const, source.promptStatus) ?? "off",
     sidebar: oneOf(SIDEBAR_MODES, source.sidebar) ?? DEFAULT_TUI_PROFILE.sidebar,
+    sidebarProjects: oneOf(SIDEBAR_PROJECTS, source.sidebarProjects) ?? DEFAULT_TUI_PROFILE.sidebarProjects,
+    sidebarProjectsFrom: oneOf(SIDEBAR_PROJECTS_FROM, source.sidebarProjectsFrom) ?? DEFAULT_TUI_PROFILE.sidebarProjectsFrom,
+    sidebarHiddenProjects: Array.isArray(source.sidebarHiddenProjects) ? [...new Set(source.sidebarHiddenProjects.filter((name): name is string => typeof name === "string" && name.length > 0 && name.length <= 4096))].slice(0, MAX_HIDDEN_PROJECTS) : [],
+    sidebarPreviewCount: typeof source.sidebarPreviewCount === "number" && Number.isFinite(source.sidebarPreviewCount) ? Math.max(1, Math.min(50, Math.floor(source.sidebarPreviewCount))) : DEFAULT_TUI_PROFILE.sidebarPreviewCount,
+    sidebarProjectCount: typeof source.sidebarProjectCount === "number" && Number.isFinite(source.sidebarProjectCount) ? Math.max(0, Math.min(30, Math.floor(source.sidebarProjectCount))) : DEFAULT_TUI_PROFILE.sidebarProjectCount,
+    sidebarRecentDays: typeof source.sidebarRecentDays === "number" && Number.isFinite(source.sidebarRecentDays) ? Math.max(0, Math.min(365, Math.floor(source.sidebarRecentDays))) : DEFAULT_TUI_PROFILE.sidebarRecentDays,
+    sidebarLayout: oneOf(SIDEBAR_LAYOUTS, source.sidebarLayout) ?? DEFAULT_TUI_PROFILE.sidebarLayout,
+    sidebarSections: normalizeSidebarSections(source.sidebarSections),
     images: oneOf(IMAGE_MODES, source.images) ?? DEFAULT_TUI_PROFILE.images,
     transcriptImages: bool("transcriptImages"),
     hyperlinks: bool("hyperlinks"),
@@ -1043,6 +1112,16 @@ function imageWaitKeys(source: Record<string, unknown>): Pick<TuiProfile, "image
 /** The footer names the model in use (a `model` segment in the rows, or the single row's model label), so a change needs no notice of its own. */
 export const footerShowsModel = (profile: Pick<TuiProfile, "showStatus" | "showModel" | "footerRows">) =>
   profile.showStatus && (profile.footerRows.length ? profile.footerRows.some((row) => row.includes("model")) : profile.showModel)
+
+/**
+ * The profile as a new terminal or a new chat opens it: `panelStart` `hidden` starts without the right panel, `shown` with it when it has
+ * cards (the panel draws only when it has some), `remember` as `rightSidebar` was saved. In memory only: the saved `rightSidebar` is never rewritten by this.
+ */
+export function panelStarted<T extends Pick<TuiProfile, "panelStart" | "rightSidebar">>(profile: T): T {
+  if (profile.panelStart === "remember") return profile
+  const visible = profile.panelStart === "shown"
+  return visible === profile.rightSidebar ? profile : { ...profile, rightSidebar: visible }
+}
 
 /** The saved profile; the defaults when the file is missing, unreadable or not JSON. */
 export function readTuiProfile(dataDir: string): TuiProfile {

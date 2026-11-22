@@ -33,10 +33,12 @@ export function nextWake(trigger: LoopTrigger, from: number, pace?: { adaptiveMs
   if (trigger.kind === "interval") return from + trigger.everyMs
   if (trigger.kind === "adaptive") return from + adaptiveInterval(trigger, pace?.adaptiveMs)
   const [hours, minutes] = trigger.at.split(":").map(Number) as [number, number]
-  if (trigger.timezone) return nextDailyInZone({ hours, minutes, timeZone: trigger.timezone, from })
+  if (trigger.timezone) return nextDailyInZone({ hours, minutes, timeZone: trigger.timezone, from, days: trigger.days })
   const candidate = new Date(from)
   candidate.setHours(hours, minutes, 0, 0)
   if (candidate.getTime() <= from) candidate.setDate(candidate.getDate() + 1)
+  // A weekly trigger skips to its next weekday (at most 7 days on).
+  for (let skipped = 0; trigger.days && !trigger.days.includes(candidate.getDay()) && skipped < 7; skipped++) candidate.setDate(candidate.getDate() + 1)
   return candidate.getTime()
 }
 
@@ -77,17 +79,21 @@ function instantOf(timeZone: string, wall: Wall): number {
   return valid.length > 0 ? Math.min(...valid) : naive - before
 }
 
-function nextDailyInZone(input: { hours: number; minutes: number; timeZone: string; from: number }): number {
-  const { hours, minutes, timeZone, from } = input
+function nextDailyInZone(input: { hours: number; minutes: number; timeZone: string; from: number; days?: readonly number[] | undefined }): number {
+  const { hours, minutes, timeZone, from, days } = input
   const today = wallIn(timeZone, from)
-  for (let ahead = 0; ahead <= 2; ahead++) {
+  for (let ahead = 0; ahead <= (days ? 8 : 2); ahead++) {
     // Calendar arithmetic on the date alone (UTC is only a calendar here), so a day is never 23 or 25 hours long.
     const date = new Date(Date.UTC(today.year, today.month - 1, today.day + ahead))
+    if (days && !days.includes(date.getUTCDay())) continue
     const instant = instantOf(timeZone, { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate(), hour: hours, minute: minutes })
     if (instant > from) return instant
   }
   return from + DAY_MS
 }
+
+/** Weekday names of the text form, indexed like `Date.getDay()`. */
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"]
 
 function unitMs(unit: string) {
   return unit === "h" ? 3_600_000 : unit === "d" ? DAY_MS : 60_000
@@ -113,6 +119,14 @@ export function parseTrigger(text: string): LoopTrigger | undefined {
     if (timezone && !isTimeZone(timezone)) return undefined
     return { kind: "daily", at: `${daily[1]}:${daily[2]}`, ...(timezone ? { timezone } : {}) }
   }
+  // "weekly mon 09:00", "weekly mon,thu 09:00 Europe/Madrid": the daily trigger on those weekdays only.
+  const weekly = /^weekly\s+([a-z]{3}(?:\s*,\s*[a-z]{3})*)\s+([01]\d|2[0-3]):([0-5]\d)(?:\s+(\S+))?$/i.exec(value)
+  if (weekly) {
+    const days = weekly[1]!.toLowerCase().split(/\s*,\s*/).map((day) => WEEKDAYS.indexOf(day))
+    const timezone = weekly[4]
+    if (days.some((day) => day < 0) || timezone && !isTimeZone(timezone)) return undefined
+    return { kind: "daily", at: `${weekly[2]}:${weekly[3]}`, days: [...new Set(days)].sort(), ...(timezone ? { timezone } : {}) }
+  }
   const adaptive = /^adaptive\s+(\d+)\s*(m|min|h|d)(?:\s+(\d+)\s*(m|min|h|d)\s*\.\.\s*(\d+)\s*(m|min|h|d))?$/.exec(lower)
   if (adaptive) {
     const everyMs = Number(adaptive[1]) * unitMs(adaptive[2]!)
@@ -130,7 +144,7 @@ function describeSpan(ms: number) {
 
 export function describeTrigger(trigger: LoopTrigger) {
   if (trigger.kind === "manual" || trigger.kind === "external") return trigger.kind
-  if (trigger.kind === "daily") return `daily ${trigger.at}${trigger.timezone ? ` ${trigger.timezone}` : ""}`
+  if (trigger.kind === "daily") return `${trigger.days ? `weekly ${trigger.days.map((day) => WEEKDAYS[day]).join(",")}` : "daily"} ${trigger.at}${trigger.timezone ? ` ${trigger.timezone}` : ""}`
   if (trigger.kind === "adaptive") {
     const { minMs, maxMs } = adaptiveBounds(trigger)
     return `adaptive ${describeSpan(trigger.everyMs)} (${describeSpan(minMs)}..${describeSpan(maxMs)})`

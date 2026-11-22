@@ -33,11 +33,11 @@ async function boot(extra: Partial<DaemonOptions> = {}) {
   }
   const of = (sessionId: SessionId) => events.filter((event) => event.sessionId === sessionId)
   const completed = (sessionId: SessionId) => of(sessionId).filter((event) => event.type === "turn.completed").length
-  const say = async (sessionId: SessionId, text: string) => {
+  const say = async (sessionId: SessionId, text: string, ms?: number) => {
     const before = completed(sessionId)
     const sent = await client.send({ type: "user.submit", sessionId, text, attachments: [] })
     if (!sent.ok) throw new Error(sent.error.message)
-    await until(() => completed(sessionId) === before + 1)
+    await until(() => completed(sessionId) === before + 1, ms)
   }
   return { dir, daemon, client, create, of, say, port: (sessionId: SessionId) => portFor!(sessionId) }
 }
@@ -73,6 +73,33 @@ describe("threads port", () => {
     expect(text(await port(a).read({ sessionId: a }))).toContain("this session")
     expect(text(await port(a).read({ sessionId: b, before: "item_00000000000000000000000000" }))).toContain("unknown cursor")
   })
+
+  test("a long message is cut in a page, and limit=1 reads it whole, in parts with offset when it is longer still", async () => {
+    const { create, say, port } = await boot()
+    const a = await create("/work/app", "api")
+    const b = await create("/work/app", "ui")
+    const report = `${"finding ".repeat(1_000)}END-OF-REPORT`
+    await say(b, report)
+    const page = text(await port(a).read({ sessionId: b }))
+    expect(page).not.toContain("END-OF-REPORT")
+    expect(page).toContain("cut: whole with limit=1")
+    const whole = text(await port(a).read({ sessionId: b, limit: 1 }))
+    expect(whole).toContain("END-OF-REPORT")
+    expect(whole).not.toContain("cut at")
+    const huge = "x".repeat(30_000)
+    // The scripted engine streams a 30 KB answer for a few seconds, longer on a busy machine.
+    await say(b, `${huge}TAIL`, 30_000)
+    const first = text(await port(a).read({ sessionId: b, limit: 1 }))
+    const cut = /the rest: limit=1 before=(\S+) offset=24000/.exec(first)
+    expect(cut).not.toBeNull()
+    expect(first).not.toContain("TAIL")
+    // Another message completes before the rest is asked for: the continuation is still the message it started in.
+    await say(b, "one more thing")
+    const rest = text(await port(a).read({ sessionId: b, limit: 1, before: cut![1], offset: 24_000 }))
+    expect(rest).toContain("xTAIL")
+    expect(rest).not.toContain("cut at")
+    expect(rest).not.toContain("one more thing")
+  }, 60_000)
 
   test("the end of an id names a session, and an ambiguous or unknown end names none", async () => {
     const { create, say, port } = await boot()
@@ -119,6 +146,50 @@ describe("threads port", () => {
     expect(text(stopped)).toContain("Interrupted")
     await until(() => of(b).some((event) => event.type === "turn.cancelled" || event.type === "turn.interrupted"))
     await say(b, "after")
+  })
+
+  test("interrupting a session with messages queued says they are held, the cancel names its author and inspect reads held, not running", async () => {
+    const { create, of, client, port } = await boot()
+    const a = await create("/work/app", "api")
+    const b = await create("/work/app", "ui")
+    await client.send({ type: "user.submit", sessionId: b, text: "/tool 400", attachments: [] })
+    await until(() => of(b).some((event) => event.type === "turn.started"))
+    expect(text(await port(a).message({ sessionId: b, text: "what port?" }))).toContain("busy")
+    const stopped = text(await port(a).interrupt({ sessionId: b }))
+    expect(stopped).toContain(`Interrupted the running turn of ${b}`)
+    expect(stopped).toContain("Its queue is held: 1 message waits and does not start by itself; the user must release it in that session.")
+    expect(stopped).not.toContain("queue and history are untouched")
+    await until(() => of(b).some((event) => event.type === "turn.cancelled"))
+    const cancelled = of(b).find((event) => event.type === "turn.cancelled")
+    expect(cancelled).toMatchObject({ by: "user", cancelledBy: { sessionId: a, title: "api" } })
+    // The queue stays held: nothing starts by itself, and the session does not read as running.
+    await until(() => of(b).some((event) => event.type === "foreground.state" && event.state === "queued"))
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    expect(of(b).filter((event) => event.type === "turn.started")).toHaveLength(1)
+    const inspected = await client.send({ type: "session.inspect", sessionId: b, limit: 1 })
+    expect(inspected).toMatchObject({ ok: true, result: { state: "held", session: { status: "held", state: "queued", queued: 1 } } })
+    // Releasing it is the user's: the queue goes on and the session ends like any other.
+    const queued = await client.send({ type: "queue.list", sessionId: b })
+    const first = (queued.ok ? (queued.result as { entries: Array<{ queueId: string }> }).entries[0]?.queueId : undefined)!
+    expect((await client.send({ type: "queue.promote", sessionId: b, queueId: first as never })).ok).toBe(true)
+    await until(() => of(b).filter((event) => event.type === "turn.started").length === 2)
+    await until(() => of(b).some((event) => event.type === "turn.completed"))
+    expect(await client.send({ type: "session.inspect", sessionId: b, limit: 1 })).toMatchObject({ ok: true, result: { state: "completed" } })
+  })
+
+  test("an interrupt with nothing queued says so and a user's own cancel carries no author", async () => {
+    const { create, of, client, port } = await boot()
+    const a = await create("/work/app", "api")
+    const b = await create("/work/app", "ui")
+    await client.send({ type: "user.submit", sessionId: b, text: "/tool 400", attachments: [] })
+    await until(() => of(b).some((event) => event.type === "turn.started"))
+    expect(text(await port(a).interrupt({ sessionId: b }))).toBe(`Interrupted the running turn of ${b}. Nothing was queued; its history is untouched.`)
+    await client.send({ type: "user.submit", sessionId: a, text: "/tool 400", attachments: [] })
+    await until(() => of(a).some((event) => event.type === "turn.started"))
+    const turnId = of(a).find((event) => event.type === "turn.started")!.turnId
+    expect((await client.send({ type: "turn.cancel", sessionId: a, turnId })).ok).toBe(true)
+    await until(() => of(a).some((event) => event.type === "turn.cancelled"))
+    expect(of(a).find((event) => event.type === "turn.cancelled")).not.toHaveProperty("cancelledBy")
   })
 
   test("merge_back brings a fork of this very session into it, and nothing else", async () => {

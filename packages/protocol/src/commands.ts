@@ -28,7 +28,7 @@ import { GoalObjective, GoalTokenBudget } from "./goals"
 import { UsageLimitAction } from "./usage-limit"
 import { LoopBudget, LoopTrigger, LoopCostBudget, LoopRubric, LoopApprovalPolicy, LoopApprovalAction } from "./loops"
 import { ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule } from "./providers"
-import { MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
+import { BotActivity, BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
 import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelivery, ResourceMode, TurnOptions } from "./states"
 import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
@@ -293,6 +293,8 @@ export const TurnCancel = lazySchema(() => z.strictObject({
   type: z.literal("turn.cancel"),
   sessionId: SessionId,
   turnId: TurnId,
+  /** Only the turn stops: sub-agents it started keep running (a foreground one goes on in the background and reports when it ends). */
+  spareAgents: z.literal(true).optional(),
 }))
 
 export const RequestResolve = lazySchema(() => z.strictObject({
@@ -1456,17 +1458,13 @@ export const LoopUpdate = lazySchema(() => z.strictObject({
  */
 export const LoopInterpret = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.interpret"), text: z.string().min(1).max(2_000), directory: z.string().min(1).max(4096).optional() }))
 
-/** One row `/today` shows, as the triage model reads it: the page's own id, its tab and kind, and the row's text. */
-export const TodayTriageItem = lazySchema(() => z.strictObject({ id: z.string().min(1).max(200), tab: z.enum(["attention", "pickup", "memory"]), kind: z.string().min(1).max(40), title: z.string().max(120), why: z.string().max(200) }))
-export type TodayTriageItem = z.infer<typeof TodayTriageItem>
-/** What accepting a group does on `/today`: walk through the rows, pin them for today, review them in `/memory`, or nothing now. */
-export type TodayTriageAction = "review" | "mark" | "memory" | "wait"
-export type TodayTriageGroup = { title: string; reason: string; example: string; action: TodayTriageAction; ids: string[] }
 /**
- * `/today`'s `t` (docs/today.md): one tool-less call of a cheap model (the `small` role, else the main model's cheaper peer, never a
- * large model) that groups the rows and proposes one action per group. Runs nothing. Ack: `{ model, groups: TodayTriageGroup[] }`.
+ * `/today` (docs/today.md): the Today chat of this day, made in `directory` (the daemon's default folder without one) when none was
+ * opened yet today. It is a plain session on the default model of a new session; the daemon gives its turns Today's instructions
+ * and tool. Local only. Ack: `{ sessionId, fresh, kickoff? }`: `kickoff` is the first message a client submits (`user.submit`) for a
+ * chat with no turn yet, so the session's own model writes the brief.
  */
-export const TodayTriage = lazySchema(() => z.strictObject({ ...base, type: z.literal("today.triage"), directory: z.string().min(1).max(4096).optional(), items: z.array(TodayTriageItem).min(1).max(60) }))
+export const TodayOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("today.open"), directory: z.string().min(1).max(4096).optional() }))
 
 /** Read-only. Ack: `{ templates: LoopTemplateInfo[] }`. */
 export const LoopTemplates = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.templates") }))
@@ -1987,6 +1985,8 @@ export const IdeOpen = lazySchema(() => z.strictObject({ ...base, type: z.litera
 export const UrlOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("url.open"), url: z.string().max(2048).regex(/^https?:\/\/[\x21-\x7e]+$/i) }))
 /** A generated image's buttons: opens the image (an absolute path to a PNG, JPEG, WebP or GIF file) in the system's viewer, or, with `reveal`, shows it in its folder. Local clients only. */
 export const ImageOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("image.open"), path: z.string().min(2).max(4096).startsWith("/"), reveal: z.boolean().optional() }))
+/** A bot card's "Open in <app>": opens the desktop app the bot's connector named (macOS `open -a`). The name is one plain app name, never a path or an option. Local clients only. */
+export const AppOpen = lazySchema(() => z.strictObject({ ...base, type: z.literal("app.open"), app: z.string().min(1).max(200).regex(/^[^\x00-\x1f\x7f/-][^\x00-\x1f\x7f/]*$/) }))
 export const ComputerCapture = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.capture"), sessionId: SessionId, input: ComputerCaptureInput }))
 export const ComputerKey = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.key"), sessionId: SessionId, input: ComputerKeyInput }))
 export const ComputerSession = lazySchema(() => z.strictObject({ ...base, type: z.literal("computer.session"), sessionId: SessionId, input: ComputerSessionInput }))
@@ -2069,7 +2069,7 @@ export const COMMAND_SCHEMAS = {
   "loop.fire": LoopFire,
   "loop.templates": LoopTemplates,
   "loop.interpret": LoopInterpret,
-  "today.triage": TodayTriage,
+  "today.open": TodayOpen,
   "workflow.start": WorkflowStart,
   "workflow.list": WorkflowList,
   "workflow.get": WorkflowGet,
@@ -2272,6 +2272,15 @@ export const COMMAND_SCHEMAS = {
   "theme.select": ThemeSelect,
   "agent.create": AgentCreate,
   "agent.debug": AgentDebug,
+  "bot.list": BotList,
+  "bot.create": BotCreate,
+  "bot.duplicate": BotDuplicate,
+  "bot.file": BotFile,
+  "bot.save": BotSave,
+  "bot.draft": BotDraft,
+  "bot.delete": BotDelete,
+  "bot.memory": BotMemory,
+  "bot.activity": BotActivity,
   "loop.draft": LoopDraft,
   "loop.snapshot": LoopSnapshotQuery,
   "loop.activate": LoopActivate,
@@ -2417,6 +2426,7 @@ export const COMMAND_SCHEMAS = {
   "ide.open": IdeOpen,
   "url.open": UrlOpen,
   "image.open": ImageOpen,
+  "app.open": AppOpen,
   "computer.capture": ComputerCapture,
   "computer.key": ComputerKey,
   "computer.session": ComputerSession,

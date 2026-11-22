@@ -14,7 +14,7 @@ type CapsRule = { keep?: string; typing?: (state: State) => boolean }
  */
 export const CAPS_PAGES: Readonly<Record<string, CapsRule>> = {
   tools: {}, mcps: {}, context: {}, storage: {}, agent: {}, secrets: {}, extensions: {}, status: {}, hooks: {}, providers: {}, packages: {}, pet: {}, model: {},
-  agents: {}, workflows: {}, today: { keep: "X" }, tasks: {}, help: {}, diagnostics: {}, compound: {}, "ai-config": {}, "release-channel": {}, tsm: {}, ide: {}, tree: {},
+  agents: {}, workflows: {}, tasks: {}, help: {}, diagnostics: {}, compound: {}, "ai-config": {}, "release-channel": {}, tsm: {}, ide: {}, tree: {},
   text: { keep: "G" }, permissions: { keep: "R" }, messages: { keep: "Q" }, export: { keep: "Q" },
   history: { keep: "G", typing: (state) => state.historyState.editing },
   queue: { keep: "JK", typing: (state) => state.queueState?.edit !== undefined },
@@ -23,6 +23,7 @@ export const CAPS_PAGES: Readonly<Record<string, CapsRule>> = {
   loops: { typing: (state) => state.loopsState.form !== undefined },
   acp: { typing: (state) => state.acpState.form !== undefined },
   whatsnew: { keep: "G", typing: (state) => state.whatsNew?.search.open === true },
+  bot: {},
 }
 
 /** Caps Lock makes `q` arrive as `Q`, in the legacy encoding and in kitty's text field alike, so a capital is not told from shift+letter: on a listed page it reads as the letter, except where the page gives the capital a meaning. */

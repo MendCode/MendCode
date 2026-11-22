@@ -13,6 +13,8 @@ const PRINTABLE = /^[^\x00-\x1f\x7f\x1b]+$/
 const SCROLL_KEYS = new Set(["\x1b[5~", "\x1b[6~", "\x1b[H", "\x1bOH", "\x1b[1~", "\x1b[F", "\x1bOF", "\x1b[4~"])
 /** A second Esc inside this window (idle, empty prompt) opens the backtrack picker. */
 export const BACKTRACK_ESC_MS = 2_000
+/** What editing a steering message says once the engine holds it until its running tool ends. */
+export const STEER_TAKEN = "already handed to the model: it reads it when the running tool ends · send now stops that tool and sends it · Esc stops the turn and gives it back to edit or drop"
 
 /**
  * Getting text back into the prompt: a queued prompt pulled out of the queue, the queue after an interrupt, a search over
@@ -20,6 +22,8 @@ export const BACKTRACK_ESC_MS = 2_000
  * existing `queue.remove` and `prompt.history`.
  */
 export function createComposerRecovery(ctx: AppContext, actions: {
+  chipped(text: string): string
+  composedAttachments(text: string): typeof ctx.state.attachments | undefined
   attachmentsOf(images: BlobRef[]): typeof ctx.state.attachments
   syncMentions(): void
   syncDraft(): void
@@ -28,6 +32,8 @@ export function createComposerRecovery(ctx: AppContext, actions: {
   keepDiscarded(options: { text?: string; track?: boolean }): Promise<void>
 }) {
   const { input, state, editor, requestFrame, say, fail, now } = ctx
+  /** The prompt's attachments while the search bar is open: no match puts them back. */
+  const held: { attachments: typeof state.attachments } = { attachments: [] }
 
   /** What the prompt changed to: popups and the draft follow the text. */
   function refresh() {
@@ -61,7 +67,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
       comments.push(...parsed.comments)
       return parsed.text
     })
-    if (comments.length) ctx.comments.restore(comments, false)
+    if (comments.length) ctx.comments.restore(comments, false, "queue")
     return texts.filter((text, index) => text || entries[index]!.kind !== "message")
   }
 
@@ -70,7 +76,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const shell = entries.find((entry) => entry.kind === "shell")
     if (shell) state.shellMode = true
     const typed = editor.text
-    editor.replaceAll([...composed(entries), ...(typed ? [typed] : [])].join("\n"))
+    editor.replaceAll([...composed(entries).map(actions.chipped), ...(typed ? [typed] : [])].join("\n"))
     state.attachments = [...entries.flatMap((entry) => actions.attachmentsOf(entry.attachments)), ...state.attachments]
     refresh()
   }
@@ -112,7 +118,8 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const refused = refusal(entry)
     if (refused) return say(refused, "warning")
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
-    if (!reply.ok) return reply.error.code === "target_mismatch" ? say("that message already started", "warning") : fail(reply.error.message)
+    // A steering message the engine already took waits for the running tool inside the engine: it cannot be taken back, only answered.
+    if (!reply.ok) return reply.error.code === "target_mismatch" ? say(last.delivery === "steer" ? STEER_TAKEN : "that message already started", "warning") : fail(reply.error.message)
     place([entry!])
     say("queued prompt back in the editor", "success", { quiet: true })
   }
@@ -160,7 +167,14 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     const search = state.promptSearch
     if (!search) return
     const index = search.matches[search.at]
-    editor.replaceAll(index === undefined ? search.draft : search.prompts[index]!)
+    const shown = index === undefined ? undefined : search.prompts[index]!
+    if (shown === undefined) {
+      editor.replaceAll(search.draft)
+      state.attachments = held.attachments
+    } else {
+      editor.replaceAll(actions.chipped(shown))
+      state.attachments = actions.composedAttachments(shown) ?? []
+    }
     state.shellMode = index === undefined ? search.shell ?? false : search.kinds?.[index] === "shell"
     requestFrame()
   }
@@ -187,6 +201,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     if (!entries.length) return say("no earlier prompts in this project")
     const text = query.slice(0, PROMPT_SEARCH_MAX_QUERY)
     const prompts = entries.map((entry) => entry.text)
+    held.attachments = state.attachments
     state.promptSearch = { query: text, prompts, kinds: entries.map((entry) => entry.kind), ids: entries.map((entry) => entry.id), matches: searchPrompts(prompts, text), at: 0, draft: editor.text, shell: state.shellMode }
     state.shortcuts = false
     show()
@@ -223,6 +238,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     state.promptSearch = undefined
     if (!keep) {
       editor.replaceAll(search.draft)
+      state.attachments = held.attachments
       state.shellMode = search.shell ?? false
     } else if (editor.text !== search.draft) {
       // The match replaces what was typed before the search: that text stays reachable as a draft.

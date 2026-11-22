@@ -115,7 +115,7 @@ function withTask(run: WorkflowRun, taskId: string, change: (task: WorkflowTask)
  * Tasks that may start now, in plan order: pending with every need done, while the run is running, under the
  * concurrency cap, and at most one `work` task editing the directory (`directoryBusy`: another live workflow's).
  */
-export function readyTasks(run: WorkflowRun, directoryBusy = false, now?: number): string[] {
+export function readyTasks(run: WorkflowRun, directoryBusy = false, now?: number, busyLanes: ReadonlySet<string> = new Set()): string[] {
   if (run.state !== "running" && run.state !== "needs_input") return []
   const cap = run.plan.maxConcurrent ?? DEFAULT_MAX_CONCURRENT
   // Map parents and human tasks hold no session or process, so they never use a slot.
@@ -124,12 +124,17 @@ export function readyTasks(run: WorkflowRun, directoryBusy = false, now?: number
   let slots = cap - active.length
   // A task in its own worktree does not edit the directory, so it neither takes nor waits for the single-writer slot.
   let workBusy = directoryBusy || active.some((task) => task.mode === "work" && !task.isolated)
+  // A worktree a script named (`cwd`) is shared by whoever names it: its work tasks take turns, here and in other runs (`busyLanes`).
+  const lanes = new Set([...busyLanes, ...active.flatMap((task) => (task.mode === "work" && task.lane ? [task.lane] : []))])
   const ready: string[] = []
   for (const task of run.tasks) {
     if (slots <= 0 && !slotless(task)) continue
     if (task.state !== "pending" || !needsDone(run, task) || !phaseReady(run, task)) continue
     if (now !== undefined && task.retryAt !== undefined && task.retryAt > now) continue
-    if (task.mode === "work" && !task.isolated) {
+    if (task.mode === "work" && task.lane) {
+      if (lanes.has(task.lane)) continue
+      lanes.add(task.lane)
+    } else if (task.mode === "work" && !task.isolated) {
       if (workBusy) continue
       workBusy = true
     }
@@ -436,10 +441,10 @@ const SCRIPT_RESULT_CLIP = 120
 const SCRIPT_LOG_TAIL = 10
 
 /** A new script task: pending, no dependencies, ready for the scheduler. The spec itself lives in the journal. */
-export function addScriptTask(run: WorkflowRun, task: { id: string; title: string; kind: WorkflowTask["kind"]; mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; engine?: string; modelId?: string }, at: number): WorkflowRun {
+export function addScriptTask(run: WorkflowRun, task: { id: string; title: string; kind: WorkflowTask["kind"]; mode?: "read" | "work"; label?: string; phase?: string; isolated?: boolean; lane?: string; engine?: string; modelId?: string }, at: number): WorkflowRun {
   if (!run.script) throw new RangeError("[WORKFLOWS]: not a script run")
   if (run.tasks.some((existing) => existing.id === task.id)) return run
-  const added: WorkflowTask = { id: task.id, title: clip(task.title, 80), kind: task.kind, ...(task.mode ? { mode: task.mode } : {}), needs: [], state: "pending", attempt: 0, ...(task.label ? { label: clip(task.label, 80) } : {}), ...(task.phase ? { phase: clip(task.phase, 80) } : {}), ...(task.isolated ? { isolated: true } : {}), ...(task.engine ? { engine: task.engine } : {}), ...(task.modelId ? { modelId: clip(task.modelId, 100) } : {}) } as WorkflowTask
+  const added: WorkflowTask = { id: task.id, title: clip(task.title, 80), kind: task.kind, ...(task.mode ? { mode: task.mode } : {}), needs: [], state: "pending", attempt: 0, ...(task.label ? { label: clip(task.label, 80) } : {}), ...(task.phase ? { phase: clip(task.phase, 80) } : {}), ...(task.isolated ? { isolated: true } : {}), ...(task.lane ? { lane: task.lane } : {}), ...(task.engine ? { engine: task.engine } : {}), ...(task.modelId ? { modelId: clip(task.modelId, 100) } : {}) } as WorkflowTask
   return settle({ ...run, tasks: [...run.tasks, added], script: { ...run.script, calls: run.script.calls + (task.kind === "agent" ? 1 : 0) } }, at)
 }
 

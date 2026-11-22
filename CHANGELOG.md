@@ -9,6 +9,293 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.19 - 2026-11-21
+
+Everything since v0.0.17 comes to stable, v0.0.18 included. Bots (`experimental.bots`) with a face, a page, memory, skills and schedules, Hermes Agent bots, and a model you pick in a bot's chat that runs there. The sessions list starts a chat in any folder with `+`, orders by what you sent and holds still under the pointer. `/today` is one chat per day that sorts memories with you. Long chats scroll and switch faster with less memory. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when started again. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, and the compaction arcade has more games.
+
+### Upgrade notes
+
+- Same code as v0.0.19-beta.3.
+
+## v0.0.19-beta.3 - 2026-11-21
+
+The sessions list starts a chat in any folder with `+` or `n`, orders by what you sent and holds still under the pointer, and a working Hermes bot shows what it runs. `/today` is one chat per day on the main model that sorts memories with you and learns what you want in it. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when a message starts them again; a session with many of them opens at once. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, a model picked in a bot's chat runs there, and the compaction arcade has seven more games that stay when compaction ends.
+
+### New
+
+- Ask the main agent how far along a running sub-agent is and it now answers: a short summary of what the sub-agent has done, what it is doing and what seems left, with an estimate labelled as such or "cannot estimate". It is written by a cheap model only when you ask, from the sub-agent's recorded work, for MendCode's sub-agents and for Claude Code's own.
+- The compaction arcade has new games: Blocks, Mines, Pong and Cycles against the computer, Glide, Stars and Crossing.
+- A game you are playing when compaction ends stays on screen with its score until you close it with Esc.
+- When a model greps for a function, class or symbol in a project that has a code graph, the search result now also says where it is declared and who calls it. It works for MendCode's own models and for Claude Code and its sub-agents.
+- Models are told to look a symbol up in the code graph first, and to check its callers before changing it.
+- The sessions list has a `+ New chat…` row and a `+` at the end of every project and bot: pick a folder (the open one first, type a name or a path) and start a chat there, with a bot too. `n` does it from the keyboard, `N` from any row.
+- A Hermes bot that is working shows the sessions it runs in Hermes under it; opening one shows its messages to read.
+
+### Changed
+
+- Comments on the answer that are sent, or that come back as chips, leave one line without their text in `logs/comments.log`, so a comment that returns after it was sent can be traced.
+- Breakout's paddle moves faster, and Snake is drawn with square cells.
+- In the sessions list, Enter or a click on a project, a bot or its chats only folds and opens it; a chat starts from its `+` or `n`. Looking at a Hermes bot no longer makes an empty session.
+- Sessions and projects in the list are ordered by the last message you sent, so an agent that works or answers no longer moves rows.
+- Every project and bot shows the same number of sessions (`sidebarPreviewCount`, now fewer by default); the open session takes the last place and busy ones out of sight are counted in the header instead of adding rows.
+- The list holds still while the keyboard or the pointer is on it, and `r` brings it up to date. A click on a row that changed under the pointer an instant before is ignored.
+- `/today` is now one chat per day instead of a page with tabs. It opens with a short brief of what was done since yesterday per project, what waits for you and your pending memories as groups with counts, written by your main model, and then you talk to it.
+- In the Today chat you can accept or decline memories by group, project, kind or topic, and tell it to always accept or never keep a project's or a kind's memories from now on, so they stop piling up in Pending.
+- Anything you ask Today to do every day ("tell me how project X ended", "check that my server is up") is kept and carried out in every following Today, with your normal permissions; a check it could not run is reported as such.
+- The first Todays ask how you want yours and propose a shape from what you actually did that week.
+- The old `/today` page is gone: its tabs, pins, dismissed rows and triage key. Today is local only.
+
+### Fixed
+
+- A finished sub-agent's report now reaches the model whole: the completion notice carries it, and reading the child's thread with `limit=1` returns its last message in full instead of cut off.
+- Compacting a bot chat that runs on Claude Code now goes to Claude Code instead of answering "Nothing to compact".
+- Launching a sub-agent with a given model and reasoning effort is now one call: the `task` tool and the `delegate_task` bridge tool take `effort` (or `variant`) next to `model`, so no agent file is needed, and an effort the model does not have is refused naming the valid ones.
+- Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
+- Interrupting another session with `threads` now says when that session's queue was left held and that the user must release it; before, the answer said the queue was untouched and the calling session waited for work that did not start. The held queue of the interrupted session names the session that cancelled it instead of saying "your cancel".
+- `mendcode session inspect`, `status` and `list` now show a session with no turn and a held queue as `held`, with how many messages wait, instead of `running`.
+- A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
+- A mermaid block in an answer is now drawn whatever the model wrote: every link and node form of a flowchart, names in any language, and diagrams too wide or too large for the chat (wrapped, stacked, cut at the edge with `/diagram` to see them whole, or listed); only text that is not a diagram shows as source, with the line that was not understood instead of "unsupported diagram".
+- Clicking elsewhere or scrolling no longer pauses the arcade game or moves the keys to the prompt; Esc, q or Tab leave it.
+- In Stars, a shot always takes down a raider it meets, also one that marches into it; shots also fly faster.
+- In Breakout, the ball no longer slips between two bricks that touch at a corner, and the ends of the paddle catch it.
+- In Pong, the computer no longer misses serve after serve in a row, and on small fields a paddle that never moves no longer wins: shots off the ends of a paddle are steeper and the computer's returns vary.
+- In Glide, holding the flap key through a crash no longer starts a new flight before you see the crash.
+- An arcade game is no longer drawn cut off when the terminal gets narrower than its field: the compaction panel shows until it fits again, and the game waits where it was.
+- Arcade games keep an even pace even when frames come late, and a game that is paused, over or waiting for its first move no longer keeps the screen redrawing; Snake now says Paused when you pause it.
+- When Claude Code or pi compacts the context on its own in the middle of a turn, the session now shows it as compacting (with the compaction panel), notes the tokens before and after, and counts it in usage; before, the context shrank without a sign.
+- Send now works on a steering message the model already took while a tool runs: it stops that tool and sends the message; Esc gives it back to edit or drop, as the notice now says.
+- A model you pick in a bot's chat now runs there instead of the bot's own model; picking the default again goes back to the bot's.
+- A sub-agent that has just started (no step yet) opens on its empty thread, which fills as it works, instead of saying it is no longer running.
+- A sub-agent's thread that is still short starts at the top of its frame, with no empty band above it, in a chat with long history.
+- An unsent draft is no longer lost when you switch to a chat and leave it again before it finished opening.
+- The start screen's title under a pet fades from white to grey in the MendCode theme, with no light blue.
+
+## v0.0.19-beta.2 - 2026-11-21
+
+Long chats scroll, page and switch faster and hold less memory: older history loads before you reach the top without redrawing what is already drawn, a chat read to its start lets the far history go once you are back at the bottom, and going back to one of your last chats is instant. New ChatGPT subscription models appear on their own. Pasted text and images come back as chips when a message returns to the prompt, a bot's unsent chat is kept, workflows leave the left list, sessions talk to each other in full access, and the activity line says what the model is doing.
+
+### New
+
+- `mendcode bot list` and `mendcode bot show <name>` show the bots from a shell: their state, chats by folder, what is running or waiting for you, and their schedules.
+
+### Changed
+
+- `/workflows` follows the page standard, keys on the title row. Runs about the same item are one group, a council's reviewers one row, and each row says where the run is or how it ended. A run reads as a timeline: its phases in a row, then each step with its model, engine, time and what it does now; checks fold into their phase.
+- In full access, sessions talk to each other without asking: Claude Code and Codex reading, searching or waiting on another session, and any session messaging or opening one in another project. The other modes still ask.
+- The activity status says what the model does now instead of repeating the chat: `Thinking…` between steps, `Writing…` while it writes, a command by what it does (`Running tests…`, `Building…`, `Committing…`) rather than its command line, the step in progress (`step 24`) and how long a long step has taken.
+- An open sub-agent's thread shows that agent's step and what it does now, no longer the title of its last call while it thinks or writes its answer.
+- `/workflows` is easier to read: no boxes, each run led by its state mark, the selected run with a progress bar and its tasks under their phase or step, and only the keys that apply listed at the bottom.
+- Esc Esc only stops a turn that has taken more than four steps (tool calls, thinking or text); it no longer takes that message back.
+- The left list shows how many sub-agents a session (or a bot's chat) has working, `↳2`, and keeps it spinning while they work after its own turn ended; a session compacting says `compacting` where its time was.
+- While only other sessions work, their symbols in the left list and the home screen turn more slowly, so a chat at rest uses less CPU.
+- Opening a chat from the left list no longer waits for the previous chat to be released first.
+- In full access a script workflow starts at once, like any other tool; other permission modes still show its source and ask first.
+- Computer Use reads an app as a compact text tree and, after the first look, sends only what changed; actions say whether a change was seen afterwards, and a window can be restored, reopened or selected while the app stays in the background.
+
+### Fixed
+
+- A chat whose latest turns are mostly sub-agent work no longer opens at the top over an empty band: it sits at the bottom over the prompt and older history is read until the screen is full.
+- New ChatGPT subscription models appear in the native harness by themselves: the list is asked as the latest Codex release, checked once a day, so a model OpenAI adds needs no MendCode update.
+- A pasted block or multi-line message that mentions a command such as `/mend-decide` is sent as your message instead of running that command with the whole text as its arguments and showing it as a notice.
+- A message brought back into the prompt (↑ history, a queued message taken back, Esc Esc, a stash or a draft) shows its large pastes and images as the same chips it was written with, and a message sent after a draft is left and reopened keeps its paste. A bot's unsent new chat is the one you return to from its row.
+- Workflow runs no longer appear in the sessions sidebar, even while they work; they live on the Workflows page.
+- The Workflows page agrees with itself across "This project" and "All projects": a folder written with a trailing slash counts as the same project, "All projects" no longer shrinks to the current folder when the sidebar refreshes, and its title no longer names the current project.
+- A long chat read back to its start no longer keeps all of it in memory: once you are back at the bottom the far older history is let go, and scrolling up loads it again.
+- Clicking a background sub-agent of a Claude chat opens its thread even in a long session, and the Background card lines its rows up in one column.
+- Going back to one of the last chats you left is instant: it shows where you were reading and only what came in meanwhile is fetched, instead of the whole chat being loaded and laid out again.
+- Each older page of a long chat joins without reading the rest of the loaded chat again, and a sub-agent's step cut by a page ends with its output instead of staying open and empty.
+- Scrolling up a long chat keeps the messages it already drew instead of drawing all of them again for each older page: reaching the top of a very long session costs a fraction of what it did and no page takes longer than the last.
+- Older history is asked for a screen before the top, so scrolling up shows more history instead of a "loading earlier" line.
+- A chat scrolled to the top never shows an empty screen when it lays out in fewer rows (a wider terminal, folded groups), and its first line stays in reach when the jump pill takes or gives back its row.
+- Send now on a queued message that the daemon had already taken no longer leaves a "queued message not found" notice stuck on the prompt.
+- The sessions list no longer reorders as you move between chats: a half-typed prompt saved when you leave a chat, or typed in the one you just opened, does not lift it to the top; only conversation moves a chat up.
+- While a turn runs with the galaxy in the panel, the terminal draws less than half as many frames: the galaxy moves on the spinner's frames instead of its own.
+- Switching to another chat of the same folder asks the daemon less: no second read of the session list, and one read of the chat's details instead of two; a bot's chat in another folder opens without a lookup first.
+- The activity line shows how long a turn has run and its tokens also when the turn started before the terminal opened it or longer ago than the loaded history reaches.
+- A bot on the balanced or full tier can message, wait on and interrupt other sessions like the main agent, instead of being limited to reading them.
+- Another session's work no longer redraws the terminal and asks the daemon for its background work several times a second; only a change you can see does.
+- Scrolling to the top of a chat or a sub-agent's thread reaches its first line and stays there, instead of bouncing a row short and hiding the start of the message sent to the sub-agent.
+- An open sub-agent's thread stops loading the session's older history once its own start is shown, and no longer draws "earlier · scroll up" over its first line.
+- The right panel's galaxy and clocks stop redrawing the screen while an open file or another view hides them.
+- A sub-agent's call in the chat shows what it was asked in bright text, like a command, instead of all dim.
+- In a sub-agent's own session, the Agents list keeps the parent's Claude Code background agents instead of dropping them; selecting one opens it in the parent.
+- A working session of another project, or a bot's chat with sub-agents at work, keeps its spinner in the left list after you open another chat, instead of a still mark.
+- When several packages bring a command of the same name, each runs as `/<package>:<name>` and the menu lists all of them; the bare name says which ones exist instead of running one of them.
+- A command whose description is longer than 120 characters loads with the description cut, instead of being left out.
+- A message sent while a tool runs is no longer lost when you cancel the turn before the model reads it: it waits in the queue and goes with your next message.
+- Esc Esc puts the undone message and its images back in the prompt at once, and in a Claude Code session the next message goes through after an undo instead of failing with "did not apply the earlier undo".
+- Computer Use keeps working on an app with no open or focused window (a menu-bar app, or one whose windows were closed): it lists the app's windows, menu bar and status items instead of failing, and menu-bar apps appear in the app list.
+- A long Computer Use task no longer stops at a screenshot limit: older cached captures are removed as new ones arrive.
+- With a sub-agent's thread open, ← and → change sub-agent even while the left list shows; Alt+← enters the list there.
+- The Bots section of the left list appears as fast as the ordinary chats: the list of other apps' bots (Hermes) no longer holds it back, and the home screen no longer asks for the bots a second time.
+- A pull request review warning (GitHub refusing the commit status) no longer prints over the chat input when the terminal runs the daemon itself; it goes to the daemon's log.
+- A crash screen raised while the chat is closing no longer opens the alternate screen over the shell.
+
+## v0.0.18 - 2026-11-16
+
+Experimental bots (`experimental.bots`) come to stable: bots with a face and a page, memory and a recent-activity digest, notes, skills and schedules of their own, every session in reach, Hermes Agent bots on this machine, and the bots at work on the home screen. The left list gets a search, keeps projects in place, folds old sessions, fills its height, marks what each session waits for, shows the projects you typed in and lets you hide one; Enter on a project starts a chat there. The terminal starts lighter.
+
+### Upgrade notes
+
+- Same code as v0.0.18-beta.4.
+
+## v0.0.18-beta.4 - 2026-11-16
+
+A bot's chat names the bot's model from the start and keeps its first message where you wrote it, a plain new chat no longer inherits a bot, the home screen's Bots block reads like the Agent View, and pasting reaches the left list's search and the bot form. The wheel scrolls the left list; a bot's chat opens as fast as any other.
+
+### New
+
+- The mouse wheel or trackpad over the left session list scrolls the list instead of the chat.
+
+### Changed
+
+- The home screen's Bots block reads like the Agent View's sections: a `Bots` title, then one row per state with the bots on the left and the state on the right, in the Agent View's column (also when there are no sessions).
+
+### Fixed
+
+- A chat with a bot names the bot's model under the prompt after its first message too, and when Enter on the bot reuses the blank chat already open, instead of the session's default.
+- An external bot that its app reports busy stays busy when one of its MendCode chats goes idle.
+- `/new` and a project's row in the left list start a plain chat even when the blank chat they reuse was opened from a bot: the first message no longer gives it the bot.
+- A message sent as the first one of a bot's chat stays in that chat when you open another chat while the bot is being assigned.
+- Pasting into the new bot form fills the field it is on, and never answers the delete confirmation: a pasted `y` or `m` does nothing there.
+- Pasting while the left list's search is open goes into the search instead of the prompt.
+- `/new` on the blank chat a bot opened also drops the bot's name, color and agent from the chat, not only its model.
+- A chat with a bot keeps the bot's variant in the status row.
+- The home screen's Bots block stays current when the left list is hidden or the terminal is too narrow to draw it.
+- Clicking and hovering the home screen's bots works when the project's root or a session title holds the word "Bots".
+- The home screen's Bots rows that show icons alone stay within the block's width.
+- Opening a bot's chat from the left list draws it as fast as any other chat: looking up the bot's model no longer holds the chat's first frame.
+
+## v0.0.18-beta.3 - 2026-11-16
+
+Experimental bots learn on their own (notes, skills of their own, schedules), see every session and reach Hermes Agent bots on this machine. The left list keeps projects in place, shows only recent sessions, fills its height, marks what each session waits for, lists the projects you typed in and hides the ones you choose. This beta also fixes what review found in the betas before it.
+
+### New
+
+- Experimental bots: with a Hermes Agent running (on its own or inside a desktop app), its profiles show in the sidebar's Bots section with their model; Enter starts a chat with one, `o` opens its page, and the replies come from the real bot.
+- In the session list, a working row shows how long its turn has run, a session waiting for your answer or a plan review has its own mark next to the approval one, and a PR shows its state (`#812 merged`). The selected row also names its branch and worktree.
+- The Settled shelf shows 10 sessions and `+ N more` adds 25 each time; a session whose PR is merged or closed settles by itself and comes back on new activity.
+- The left list shows only sessions from the last 7 days, with the open, working, waiting and pinned ones always there; a `+ N older` row opens the rest. `/customize` › Top & side › Recent days sets the window (0 lists every age).
+- The left list fills its height with projects instead of stopping at six; `Projects shown` still caps it when you set a number.
+- MendCode now records who created each session and who sent each message: you in the terminal or web UI, the command line, another agent, or the daemon itself (loops, workflows, the PR reviewer). Sessions show it as `origin` and `lastHumanAt` in `session.list`.
+- The all-projects list shows the projects you typed in by default; folders where only tools worked wait behind `+ N more projects`. `/customize` › Top & side › Projects from switches it to `all`.
+- `x` on a project's row in the left list hides it, and `/customize` › Top & side › Hidden projects brings it back.
+- `/customize` → Sidebar & panel has a "Panel at start" row: remember (as before), shown or hidden decides whether new terminals and new chats open with the right panel; `/panel` still toggles it.
+- Experimental bots learn on their own: a bot can keep a note (`bot_note`), save a skill after a task that worked (`bot_skill`, kept in its own folder, offered only to it, you are asked the first time per skill) and schedule its own work when you say "every day at 9" or "every Monday" (`bot_schedule`, you are asked every time). Each shows in the chat as a short card: Learned, New skill, Scheduled.
+- Loops and bot schedules can wake on chosen weekdays: `weekly mon 09:00` or `weekly mon,thu 09:00 Europe/Madrid`.
+- `bot.list` reports each bot's schedules, so its page can show them.
+- The left list has a search: `/` in the list (or `ctrl+x <` from the chat) finds sessions, projects and bots by name as you type, with the matched letters marked; Enter opens a session, starts a new chat in a project or with a bot, and Esc puts the list back as it was.
+- Experimental bots: the home screen's Agent View lists the bots that are working, waiting for you or in trouble, one row per state with their icons and names and a `+ N more` when they do not all fit; Enter or a click on one opens its latest chat, or its page when it has none. Idle bots are not shown.
+
+### Changed
+
+- In the left list, Enter on a project starts a new chat in that folder and Enter on a bot's `chats` row starts a chat with the bot. Space folds or opens any header; `←` folds an open header and `→` opens a folded one; a click on the ▸/▾ arrow folds, a click on the name does what Enter does.
+- Bots of another app (Hermes) list under one foldable row per app (`▸ hermes · 23`), folded unless a bot works or has a chat from the last day. Their chats are listed under the bot like a MendCode bot's, in the left list and on the bot's page.
+- A chat with a bot wears the bot's colour on the prompt's rules and lead glyph, and the footer leads with the bot's glyph and name.
+- The terminal starts lighter: the vim layer, headless runs, pane integration, export and support output load only when used.
+- Enter on a bot opens a blank chat with that bot selected; it is listed, with its title, only once the first message is sent.
+- With experimental bots on, a bot sees every session: it lists, searches and reads any of them without the per-session prompt, and its prompt names the sessions running right now in every folder. Plain sessions keep the prompt. A bot's prompt now goes: who it is, personality, skills, memory, recent activity, what is running now, then how to look deeper and learn.
+
+### Fixed
+
+- With experimental bots, the home's Bots block follows the chats of other apps' bots too and asks again when its first list failed; bot chats stay under Projects when bots are turned off, and projects past the first six in the left list fold with Space and the arrows.
+- Opening a chat from another folder in the left list now moves the terminal to that folder: the footer, the code graph, the branch, the project's lists and the folder a new chat starts in follow it.
+- A chat's age in the list and its place in the ranking move only with real conversation (a message or a turn), not with background bookkeeping; chats bumped before get their real age back.
+- A bot shows as a problem only for ten minutes after one of its chats fails, or until it has newer activity that went well; before, one failed chat kept it red for good.
+- A PR review whose fetch fails because the network or DNS is down now waits for the network instead of spending its attempts, and its notice says what git reported.
+- Opening a chat in another project no longer moves the project groups in the left list: they rank by their latest message activity, and a streaming turn does not shuffle them.
+- A bot set to a Claude Code model (or another engine's) now runs its chats there instead of failing on MendCode's own engine, and a new chat with a bot shows the bot's model under the prompt from the start.
+
+- Opening `/add-dir` or changing a run limit in a sub-agent that runs without tool limits no longer stops its next turn on Claude Code or Codex.
+- Cancelling a turn now revokes the sub-agent bridge access that turn held, and the access an earlier turn kept for background agents is hidden from output like the current one.
+- Workflow work agents given the same `cwd` now take turns instead of editing one worktree together, and an agent can no longer be sent to the directory its own run started in.
+- A command that moved to the background no longer shows a secret in its end-of-turn report, a custom command's `!` expansion always waits for the command's full output, and a turn that ends on its last step, a structured answer or the step limit still waits for such a command.
+- Opening a sub-agent from the strip while older history loads no longer opens something in the session you switched to meanwhile.
+- The reviews page keeps every running and waiting review when the list is too long for one reply: it drops older finished reviews first, then the decision logs of live ones.
+- Esc Esc on a message the model has not answered keeps running sub-agents instead of taking it back with them, the third Esc stays with the session you interrupted, and sub-agents that would not stop are reported instead of counted as stopped.
+- A Claude Code background agent that is still working keeps its thread when many later turns start short agents.
+- A remote client can no longer start pi or an ACP agent by choosing an agent whose model is one of them; those engines stay local only.
+- With a sub-agent waiting for your answer or a plan review, the plain arrows keep moving between sub-agents (Alt+arrow enters the list), as they do for one waiting to be approved.
+- Opening the last page of the Settled list in the sessions sidebar selects the first session it shows instead of dropping the selection.
+- In the all-projects sidebar the arrow keys now stop on every project the list draws when the project count is automatic, a folder used in the last day stays listed when the height cuts the list, and the expanded list keeps its projects in activity order.
+- The PR reviewer reads an SSH connection or DNS failure of a git fetch as the network outage it is and waits, instead of counting it as a failed attempt.
+- Experimental bots: duplicating a bot always renames it, a save too large for the agent loader is refused instead of hiding the bot, saves at the same time no longer clash, editing a bot keeps its permission rules and replaces a frontmatter prompt, deleting with its memory keeps the bot if the memory cannot be removed, and `docs commands` lists `/bot` when bots are on.
+- The sidebar's bot states no longer go back to an older state when the bot list answers after a newer push, a custom sessions sidebar view keeps its full width when bots are on, and a bot's picture with a second PNG header is refused.
+- A new chat with a bot shows under the bot's chats from the first message instead of under Projects until a refresh, and starting a chat opens the bot's chats.
+- In the left list, `+ N more projects` and a project's `+ N more` / `+ N older` rows reveal one page of eight per press instead of everything, keep their count for the rest, and put the cursor on the first row that appeared.
+
+## v0.0.18-beta.2 - 2026-11-15
+
+Experimental bots arrive behind `/experimental bots on`: agents with a name, a face, their own memory and a sidebar section, that you send to work in any folder. The sidebar can list every project, and the sub-agent arrows move only between sub-agents still working.
+
+### New
+
+- Bots in the sidebar: Enter or a click on a bot starts a new chat with it in the folder you opened, `o` (or `/bot open`) opens its page, which now looks and scrolls like the other pages, bots come first by default, a bot's chats fold under it instead of mixing into the project lists, the icon has one space after it, a folder you used today stays listed, and the list follows other terminals live without polling.
+- The left list can show every project as folding groups (`/customize` › Sidebar projects), and with experimental bots on it also lists the bots with their state, marks a bot's sessions with its icon, opens a bot's page (new session in a folder, edit, memory) and takes a starting layout (projects first, bots first, icons only, from scratch) with sections you order and hide.
+- Experimental bots (`/experimental bots on`): an agent with a name, a look and its own memory that you send to work in any folder. `/bot new`, `/bot list`, `/bot edit` and `/bot duplicate` make and manage them, and `/bot memory` teaches one.
+- Experimental bots share one growing memory: a new chat with a bot starts knowing, in a short summary, what it did in the last day in every folder, keeps notes from its finished sessions, and can search its own past chats and notes on its own (plain chats stay from scratch).
+- Experimental bots have a form: `/bot new`, `/bot edit` and Edit on a bot's page open name, color, shape, face, personality, model and permission with a live face, and nothing is written until Create or Save. `/bot new -d <description>` has the model draft it into the same form to confirm.
+- Experimental bots can be deleted with `/bot delete <name>`, the Delete action (`d`) on a bot's page or the form's Delete button. It asks first (lowercase `y`), removes the agent file, keeps the bot's memory unless you choose to remove it too, and never deletes its sessions.
+- With experimental bots on, a bot's page shows its face beside its details, moving only while the page is open, and where the terminal draws images the left list shows each bot's picture in place of its icon.
+- Experimental bots have a face made from their name (same shape and color every time) that shows whether the bot is sleeping, listening, thinking, talking, waiting or has a problem: a real picture where the terminal shows images (a bot's own `avatar` when it has one), else text, else plain ASCII.
+
+### Changed
+
+- The all-projects left list shows projects (git work trees and the folder you opened, not the home, hidden or temp folders), ranked by use: the opened one, those with work in progress, then the latest up to `/customize` › Projects shown (6), the rest behind `+ N more projects`; every group starts open, other projects preview three sessions, and the whole list is driven from the keyboard (`←` focuses it, `↑` `↓` `Enter` move and act, `→` or `Esc` go back; `Alt+←` while a sub-agent is working).
+- With experimental bots on the left list shows every project by default (`/customize` › Sidebar projects is now `auto`, `folder` and `all` keep their meaning), and the sidebar rows in `/customize` stay available when the sidebar mode is hidden.
+- The left list with every project (or with bots on) shows only the latest 5 sessions of each project, plus the open one and any that work or wait, with a `+ N more` row that opens the rest and a `show less` row that folds it again; `/customize` › Sessions per project sets how many (1 to 50). Chats nobody used no longer fill it; `/sessions` still lists them.
+- The `/btw` side chat shows how to start a new chat and open earlier ones: type `/new` or `/history` in it (or `/btw new`, `/btw history`), named in its header and in an empty chat.
+- The advisor is no longer consulted on its own at the end of a turn. The agent asks it only when you or the project's instructions say so, before the work rather than after; `advisor.checkpoints` turns the automatic consultations back on.
+- The `/btw` side chat reads more easily: your questions stand out, each exchange has room around it, and the panel no longer repeats its name above the box.
+
+### Fixed
+
+- In the left list, `Tab` and `Shift+Tab` jump to the first row of the next and the previous section (Projects, Bots), `b` jumps to the first bot, and `↑` on the first row and `↓` on the last wrap around; the list's header shows `tab section`.
+- A session started with a bot now runs as that bot: the model chip and footer show the bot's model, the bot's turn opens with who it is (its name and description) before its personality and memory, and an image check or engine choice uses the bot's model instead of the session's.
+- The bot form's preview shows the bot's real picture (or its own image) on terminals that draw images, and it changes as you pick a shape or color; and the text face is now a small pixel-art character in the bot's color instead of line drawings, with the plain ASCII face kept for the ASCII glyph setting.
+- A bot's face is a picture only on terminals known to draw images; elsewhere, including terminals that only list sixel support, the page shows the text face instead of an empty area.
+- The left and right arrows between sub-agent chats move only between the sub-agents that are still working, not through the finished ones.
+- A Claude sub-agent started before a daemon restart and woken by a message shows its work in its own thread again; before, what it did was not shown or kept, so neither the session nor `/btw` could see it.
+- Restarting or stopping the daemon ends every Claude Code process it ran; one with a background agent could stay alive and keep working beside the new process for the same session.
+
+## v0.0.18-beta.1 - 2026-11-14
+
+Long commands no longer block a turn, Esc Esc spares running sub-agents, Claude Code sub-agents show everything they are told and do, and workflow agents can work side by side in their own worktrees.
+
+### New
+
+- Workflow scripts can run an agent in a git worktree they made themselves (`agent(prompt, { cwd })`); such agents work in parallel without holding the project directory.
+
+### Changed
+
+- `mendcode usage` now lists each day's input, output and cache tokens, and each engine's sub-agents, so these no longer need `--json`.
+- Esc Esc now stops only the turn: sub-agents keep running, also Claude Code's background agents. A third Esc right after stops them too.
+- A command the model runs that is still going after 15 seconds moves to the background with its output so far: the model gets control back and can keep working, wait for it or stop it. The turn still waits for it before answering, and it still stops at its timeout or when you cancel.
+- In full access, a workflow script of an installed package started by its name starts without an approval card; a script the model writes, or one saved in the project or the user's folder, still asks in every mode.
+- Editing a steering message the model already took now says it reads it when the running tool ends and to send a correction instead, rather than "that message already started".
+- A sub-agent that runs while the session goes on is marked `async` instead of `bg` in the agents list and its thread, so it no longer reads as a background command; an engine's own agent listed with the commands reads `agent`.
+
+### Fixed
+
+- A message the session sends to one of its Claude Code sub-agents now shows in that sub-agent's thread, so you can see what it was told and that it is waiting for its next step.
+- Pasting a path that is no file (to talk about it) keeps it as text without leaving a "not a file or directory" error above the prompt.
+- A long build or install the model runs, once it moves to the background, may run up to 30 minutes instead of being cut at 10.
+- MendCode no longer closes with an error when the daemon is slow to answer as it opens (a computer short on memory, after an update): it says so and keeps trying.
+- A Claude Code sub-agent that is sent a message after it finished shows its new work in its thread again, instead of staying marked done with nothing more.
+- A sub-agent's thread no longer ends with an empty bullet when its final report repeats its last message.
+- A sub-agent detached with `b` in `/tasks` keeps running when its parent's turn is interrupted, as detaching promises.
+- A Claude Code or Codex session asked to tell another session something now finds it among your MendCode sessions by its title and sends the message there, instead of looking only at Claude Code's own processes and giving up.
+- The reviews page keeps refreshing once many pull requests have been reviewed: the oldest finished reviews are left out of the list instead of the refresh failing and the page staying on an old list.
+- Clicking an agent that Claude Code runs in the background, or opening it with ctrl+x ↓, opens its sub-agent thread even when the call that started it is far back in a long session, instead of the background commands card.
+- A workflow whose work agents each run in their own worktree no longer keeps other workflows from starting in the same directory.
+- Commands such as `mendcode workflow list --json` and `mendcode export` no longer cut their output short when it goes to a pipe (`| jq`, a script).
+- `mendcode run --offline`, `--tools` and `--exclude-tools` also turn off the provider's own web search and image generation, so a ChatGPT model no longer searches the web in a run that excluded it.
+- `mendcode run` with `--tools`, `--exclude-tools` or `--offline` on a model another engine runs (Claude Code, Codex, pi, an ACP agent) now fails before calling the model instead of running with every tool, since those engines cannot be held to the limits.
+- A Claude Code or Codex session runs the workflows it starts through MendCode, so they show in `/workflows`; it no longer starts Claude Code's own hidden workflow and tells you to watch `/workflows`.
+- A Claude Code session whose background sub-agents are still running can launch sessions on other models in its next turn; it no longer fails with an Authorization error and a request to run `/mcp`.
+- The list of sub-agents and background commands above the prompt shares its rows: when one list is short the other shows more, and the sub-agent you are reading always keeps its row.
+- The assistant can remove an ACP agent you ask it to remove (it proposes the change for your approval) instead of failing and sending you to `/acp`; it also knows API-key providers are removed in `/providers`.
+
 ## v0.0.17 - 2026-11-13
 
 The `/btw` side chat can be selected and copied like the transcript, and the workflows page opens however many workflows there are.
@@ -524,7 +811,7 @@ how you work, and the daemon holds less memory while it runs commands.
 - PR reviewer: the verify pass scores each finding from 0 to 10, shown small on the comment; `min_score` in `.mendcode/review.yaml` hides the lower ones and the higher scores come first before `cap` cuts. See [PR reviewer](docs/pr-review.md).
 - PR reviewer: `fallback_models` names models a review moves to when its own model fails or is not available (never for a quota); the review says which model reviewed.
 - PR reviewer: hunks that only delete lines are sent as one line, and a diff too large for one call keeps the repository's main language longest, so reviews read fewer tokens.
-- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing Symbex-1#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
+- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing shop-api#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
 - `/reviews` lists one row per pull request with its earlier runs in the detail, so Failed holds only PRs whose last run failed; running rows show their live phase and time, done ones what they found, and this daemon's own jobs say `this device`.
 
 - With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).

@@ -108,6 +108,55 @@ describe("session.agent.set", () => {
 })
 
 describe("agents in a session's turns", () => {
+  test("a model picked in an agent's chat runs instead of the agent's own, until the default is picked again", async () => {
+    const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
+    put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol\neffort: low", "Review only."))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await say(h, sessionId, "first")
+    expect(h.requests[0]!.model).toBe("gpt-6-sol")
+    expect((await h.client.send({ type: "session.model.set", sessionId, choice: { model: "gpt-6-luna" } })).ok).toBe(true)
+    const listed = await h.client.send({ type: "models.list", sessionId })
+    expect((listed.ok ? (listed.result as { effective?: { model?: string } }).effective?.model : undefined)).toBe("gpt-6-luna")
+    await say(h, sessionId, "second")
+    expect(h.requests[1]!.model).toBe("gpt-6-luna")
+    await h.client.send({ type: "session.model.set", sessionId, choice: null })
+    await say(h, sessionId, "third")
+    expect(h.requests[2]!.model).toBe("gpt-6-sol")
+  })
+
+  test("choosing another agent with session.agent.set brings that agent's own model back over a model picked for the previous one", async () => {
+    const h = await start({ steps: [stop("one"), stop("two")] })
+    put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol"))
+    put(path.join(h.dir, "agents", "writer.md"), agentFile("description: Writes\nmode: primary\ntools: read\nmodel: gpt-6-astra"))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await h.client.send({ type: "session.model.set", sessionId, choice: { model: "gpt-6-luna" } })
+    await say(h, sessionId, "first")
+    expect(h.requests[0]!.model).toBe("gpt-6-luna")
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "writer" })
+    await say(h, sessionId, "second")
+    expect(h.requests[1]!.model).toBe("gpt-6-astra")
+  })
+
+  test("a fork and a focused handoff keep the model picked in the bot's chat over the bot's own", async () => {
+    const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
+    put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol"))
+    await h.client.send({ type: "settings.set", patch: { tier: "balanced" } })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await h.client.send({ type: "session.model.set", sessionId, choice: { model: "gpt-6-luna" } })
+    await say(h, sessionId, "first")
+    const fork = await h.client.send({ type: "session.fork", sessionId, transcript: true })
+    const handoff = await h.client.send({ type: "session.fork", sessionId, handoffGoal: "carry on" })
+    for (const [index, ack] of [fork, handoff].entries()) {
+      if (!ack.ok) throw new Error(`${index}: ${ack.error.message}`)
+      const child = ack.result!.sessionId as SessionId
+      await say(h, child, `child ${index}`)
+      expect(h.requests.at(-1)!.model).toBe("gpt-6-luna")
+    }
+  })
+
   test("the selected agent shapes the next model call: prompt, tools and model; an edit to its file applies to the next turn", async () => {
     const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
     const file = path.join(h.dir, "agents", "reviewer.md")

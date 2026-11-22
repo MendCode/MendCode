@@ -1,7 +1,7 @@
 import type { Line } from "../../ui/theme"
 
-/** The keys a game understands; the app maps arrows, WASD, vi keys and space onto them. */
-export type ArcadeKey = "up" | "down" | "left" | "right" | "space" | "restart"
+/** The keys a game understands; the app maps arrows, WASD, vi keys, space, `f` and `r` onto them. */
+export type ArcadeKey = "up" | "down" | "left" | "right" | "space" | "alt" | "restart"
 
 export type ArcadeView = {
   title: string
@@ -9,13 +9,22 @@ export type ArcadeView = {
   /** The playing field, one `Line` per row, every line `width` cells wide. */
   rows: Line[]
   width: number
+  /** The game's own keys beyond moving, for the help beside the field; "space start · pause" when absent. */
+  controls?: string
 }
 
 /** A running game. State is private to the instance; the app only ticks, feeds keys and draws. */
 export type ArcadeInstance = {
-  /** One frame (about 125 ms) of the render loop; a no-op for games that only move on keys. */
+  /** One step of the game (125 ms of play); a no-op for games that only move on keys. */
   tick(): void
+  /**
+   * Whether a step would change anything now: false before the first move, while paused and once the game is over.
+   * The app keeps no frame clock for a game that is standing still.
+   */
+  readonly moving: boolean
   key(key: ArcadeKey): void
+  /** Lets a lockout that waits on frames run down one step; the app calls it on a press that does not step the game (reduced motion draws no frames). */
+  settle?(): void
   view(options: { focused: boolean }): ArcadeView
   readonly score: number
   /** The best score of this instance, the one it was started with included. */
@@ -23,7 +32,7 @@ export type ArcadeInstance = {
 }
 
 export type ArcadeStart = {
-  /** Playing field in cells; each cell is two terminal columns wide. */
+  /** Playing field in cells; each cell is two terminal columns wide (two half-block pixels wide and two tall). */
   cols: number
   rows: number
   random: () => number

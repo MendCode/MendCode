@@ -184,7 +184,7 @@ export async function runMigration(options: MigrateOptions): Promise<MigrationRe
 /** Appends one mapped event: the session's first event creates the session row too. */
 function append(store: Store, clock: Clock, sessionId: SessionId, at: number, draft: SessionEventDraft) {
   clock.at = at
-  if (draft.type === "session.created") store.createSession({ id: sessionId, directory: draft.directory, title: draft.title, ...(draft.parentId ? { parentId: draft.parentId } : {}) })
+  if (draft.type === "session.created") store.createSession({ id: sessionId, directory: draft.directory, title: draft.title, origin: null, ...(draft.parentId ? { parentId: draft.parentId } : {}) })
   else store.sessionSink.append(draft)
 }
 

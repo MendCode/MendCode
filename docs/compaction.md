@@ -23,7 +23,7 @@ While memory is being written, a live panel sits above the prompt. Choose it wit
 |---|---|
 | `panel` (default) | phase, stage bar, tokens before → after, elapsed |
 | `stats` | context against the window or threshold, cache read/write, trend, saved, progress; only numbers the events reported |
-| `arcade` | a random game of snake, breakout or 2048 |
+| `arcade` | a random small game (list below) |
 | `scratchpad` | the project note, editable in the panel |
 | `quiet` | one line |
 
@@ -37,12 +37,28 @@ Panels draw no spinner while the activity line shows one: a single loading indic
 |---|---|
 | Tab or click | Focus the game |
 | Arrows or wasd/hjkl | Move |
-| Space | Start or pause |
+| Space | The game's action: start, pause, drop, fire, flap, serve or open |
+| `f` | Flag a tile (Mines) |
 | `r` | Restart |
 | `n` | Pick another game |
-| Esc/q/Tab/ctrl+c | Leave the game |
+| Esc/q/Tab/ctrl+c | Leave the game; close it once compaction is over |
 
-The prompt gets no key while the game has focus. Games advance on the render loop's frames only while focused (one step per move key with reduced motion). The games and their focus are dropped when compaction ends.
+| Game | Play |
+|---|---|
+| Snake | steer to the food; walls and your own body end the run |
+| Breakout | move the paddle, space launches; three balls |
+| 2048 | slide and merge equal tiles |
+| Blocks | falling four-cell pieces: ←→ move, ↑ turns, ↓ drops a row, space drops to the floor; full rows clear |
+| Mines | arrows move, space opens, `f` flags; the first tile is never a mine |
+| Pong | ↑↓ move your paddle against the computer, first to seven |
+| Cycles | light cycles against the computer: turn to stay clear of walls and trails; rounds won in a row |
+| Glide | space or ↑ flaps through the gaps in the walls |
+| Stars | ←→ move your ship, space fires at the marching formation; three ships |
+| Crossing | arrows cross lanes of traffic to the top kerb; three knocks |
+
+The prompt gets no key while the game has focus. Clicks outside the panel and the mouse wheel do not pause the game or take its keys; only Esc/q/Tab/ctrl+c do. Games advance only while focused, one step per 125 ms of play time whatever the frame timing (one step per move key with reduced motion); a game waiting for its first move, paused or over keeps no frame timer, and time spent unfocused or paused is never played back. A field wider than the terminal gives way to the compaction panel until it fits again. Snake, Pong, Cycles and Glide draw square half-block pixels, two per character row. Each game keeps its best score for the run of the terminal.
+
+A game that has focus when compaction ends stays above the prompt, still running and with its score, with "compaction done · esc to close" in its frame, until Esc/q/Tab/ctrl+c closes it. A game without focus is dropped when compaction ends; the next compaction picks a new one.
 
 ### Navigate and edit the scratchpad
 

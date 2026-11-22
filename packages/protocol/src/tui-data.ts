@@ -22,6 +22,10 @@ export const unknownStatParts = (text: string): string[] => text.split(",").map(
  */
 export const ACTIVITY_PARTS = ["spinner", "verb", "elapsed", "stalled", "model", "tokens", "tps", "queue", "interrupt", "cache", "hit", "ctx", "think", "calls", "spend", "ttft", "effort", "forecast"] as const
 export type ActivityPart = (typeof ACTIVITY_PARTS)[number]
+/** The sections of the left sidebar (`sidebarSections`, experimental bots): the folders' sessions, the bots, and the sessions that belong to no bot. */
+export const SIDEBAR_SECTION_IDS = ["projects", "bots", "sessions"] as const
+/** The names in `text` (a comma list) that are not sidebar sections; `none` alone is the empty list. */
+export const unknownSidebarSections = (text: string): string[] => text.trim() === "none" ? [] : text.split(",").map((name) => name.trim()).filter((name) => name && !(SIDEBAR_SECTION_IDS as readonly string[]).includes(name))
 /** What the row shows without any setting: `tps` and `queue` are opt-in. */
 export const ACTIVITY_PARTS_DEFAULT = "spinner,verb,elapsed,stalled,model,tokens,interrupt"
 /** How the activity status lays its parts out: `inline` is `⠋ Generating… (2m 53s · ↓ 4.3k tokens)`, `classic` one run of parts with blanks between. */
@@ -168,6 +172,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sessionAccent": false,
   "sidebarSide": "left",
   "panelNarrow": "hide",
+  "panelStart": "remember",
   "panelHeader": true,
   "activityMascot": false,
   "showActivity": true,
@@ -213,6 +218,14 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "sidebarWidth": 0,
   "promptStatus": "off",
   "sidebar": "auto",
+  "sidebarProjects": "auto",
+  "sidebarProjectsFrom": "you",
+  "sidebarHiddenProjects": [],
+  "sidebarPreviewCount": 3,
+  "sidebarProjectCount": 0,
+  "sidebarRecentDays": 7,
+  "sidebarLayout": "bots-first",
+  "sidebarSections": "",
   "images": "auto",
   "transcriptImages": true,
   "hyperlinks": true,
@@ -355,11 +368,19 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "hide",
     "sheet"
   ],
+  "panelStart": [
+    "remember",
+    "shown",
+    "hidden"
+  ],
   "sidebar": [
     "auto",
     "always",
     "hidden"
   ],
+  "sidebarProjects": ["auto", "folder", "all"],
+  "sidebarProjectsFrom": ["you", "all"],
+  "sidebarLayout": ["projects-first", "bots-first", "icons-only", "scratch"],
   "promptStatus": ["off", "border"],
   "scrollbar": ["auto", "always", "off"],
   "jumpHint": ["right", "center", "left", "off"],
@@ -416,7 +437,7 @@ export const PROFILE_KEY_ALIASES: Readonly<Record<string, string>> = {
 }
 
 /** Keys kept so old files still read; they draw nothing of their own and are never suggested. */
-export const LEGACY_PROFILE_KEYS: ReadonlySet<string> = new Set(["rightSidebar", "showFooterContext", "tutorialDone"])
+export const LEGACY_PROFILE_KEYS: ReadonlySet<string> = new Set(["rightSidebar", "showFooterContext", "tutorialDone", "todayLastVisit", "todayMarks", "todayDismissed"])
 
 /** Profile keys that look like a guessed name: `hideTopbar` → `showTopbar`, `panel_header` → `panelHeader`, `showFooter` → `showStatus`. */
 export function nearProfileKeys(guess: string): string[] {
@@ -455,12 +476,17 @@ export function tuiProblems(raw: unknown): string[] {
     else if (typeof value === "string" && (value.length > (key === "customAscii" ? 16000 : 4096) || /[\x1b\x00]/.test(value))) problems.push(`${key}: invalid terminal text`)
     else if (key === "draftRetentionDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 3650)) problems.push("draftRetentionDays: expected integer 0..3650")
     else if (key === "sidebarWidth" && (!Number.isInteger(value) || Number(value) !== 0 && (Number(value) < 32 || Number(value) > 80))) problems.push("sidebarWidth: expected 0 (automatic) or an integer 32..80")
-    else if (key === "wheelLines" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")
+    else if (key === "sidebarHiddenProjects" && ((value as unknown[]).length > 200 || (value as unknown[]).some((name) => typeof name !== "string" || name.length < 1 || name.length > 4096 || /[\x00-\x1f\x7f]/.test(name)))) problems.push("sidebarHiddenProjects: expected up to 200 folder paths")
+    else if (key === "sidebarPreviewCount" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("sidebarPreviewCount: expected integer 1..50")
+    else if (key === "sidebarProjectCount" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 30)) problems.push("sidebarProjectCount: expected integer 0..30 (0 fills the height)")
+    else if (key === "sidebarRecentDays" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 365)) problems.push("sidebarRecentDays: expected integer 0..365 (0 lists every age)")
+    else if (key === "wheelLines" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 20)) problems.push("wheelLines: expected integer 1..20")
     else if (key === "imageWaitSpeed" && (!Number.isInteger(value) || Number(value) < 80 || Number(value) > 5000)) problems.push("imageWaitSpeed: expected integer 80..5000 (milliseconds per frame)")
     else if (key === "imageWaitCanvas" && (!value || Array.isArray(value) || Object.entries(value).some(([field, bound]) => !Object.hasOwn(TUI_DEFAULTS.imageWaitCanvas as object, field) || typeof bound !== "number" || !Number.isFinite(bound)))) problems.push("imageWaitCanvas: expected numbers minWidth, maxWidth, minHeight, maxHeight, heightRatio, paddingX, paddingY")
     else if (key === "imageWaitArt" && ((value as unknown[]).length > 16 || JSON.stringify(value).length > 200_000 || (value as unknown[]).some((art) => !art || typeof art !== "object" || typeof (art as { name?: unknown }).name !== "string" || !Array.isArray((art as { frames?: unknown }).frames) && typeof (art as { static?: unknown }).static !== "string" && !Array.isArray((art as { static?: unknown }).static)))) problems.push("imageWaitArt: expected up to 16 presets { name, frames | static, fit?, align? }")
     else if (key === "pasteSummaryMinChars" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100000)) problems.push("pasteSummaryMinChars: expected integer 1..100000")
     else if ((key === "statusLeft" || key === "statusRight") && String(value).split(",").some((name) => name.trim() && !["mode", "model", "provider", "reasoning", "variant", "context", "permissionMode", "commandsHint", "agentsHint", "quota"].includes(name.trim()))) problems.push(`${key}: unknown status segment`)
+    else if (key === "sidebarSections" && (unknownSidebarSections(value as string).length || String(value).length > 64)) problems.push(`sidebarSections: expected a comma list of ${SIDEBAR_SECTION_IDS.join(", ")}, none, or empty for the layout's own`)
     else if (key === "activityParts" && (unknownActivityParts(value as string).length || String(value).length > 256)) problems.push(`activityParts: expected a comma list of ${ACTIVITY_PARTS.join(", ")}`)
     else if (key === "activityTokens" && (unknownActivityTokens(value as string).length || String(value).length > 32)) problems.push(`activityTokens: expected a comma list of ${ACTIVITY_TOKEN_PARTS.join(", ")}, or empty`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)

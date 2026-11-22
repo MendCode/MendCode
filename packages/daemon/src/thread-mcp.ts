@@ -13,6 +13,7 @@ import type { createOrchestrationReceipts } from "./orchestration-receipts"
 
 const target = { sessionId: z.string().min(4).max(64) }
 const paging = { limit: z.number().int().min(1).max(10).optional(), before: z.string().max(100).optional() }
+const reading = { ...paging, offset: z.number().int().min(0).optional() }
 /** The list takes up to 100 (a larger number is not an error: 100 come back); read and search pages stay at 10. */
 const listing = { limit: z.number().min(1).optional(), query: z.string().min(1).optional(), state: z.enum(["busy", "idle"]).optional() }
 const retry = { clientRequestId: z.string().min(1).max(128).optional() }
@@ -25,18 +26,21 @@ const schemas = {
   thread_create: z.strictObject({ title: z.string().min(1).max(80), ...retry }),
   thread_message: z.strictObject({ ...target, text: z.string().min(1).max(8_000), ...retry }),
   thread_wait: z.strictObject({ ...target, timeoutSeconds: z.number().int().min(1).max(120).optional() }),
-  thread_read: z.strictObject({ ...target, ...paging }),
+  thread_read: z.strictObject({ ...target, ...reading }),
   thread_search: z.strictObject({ ...target, ...paging, query: z.string().min(1).max(8_000) }),
   thread_interrupt: z.strictObject({ ...target, ...retry }),
   delegate_task: z.strictObject({
     description: z.string().min(1).max(80), prompt: z.string().min(1).max(20_000),
     engine: z.string().regex(DELEGATE_ENGINE).optional(),
-    model: z.string().min(1).max(200).optional(), variant: z.string().min(1).max(80).optional(),
+    model: z.string().min(1).max(200).optional().describe("This child's model, exact id"),
+    variant: z.string().min(1).max(80).optional().describe("This child's reasoning effort: low, medium, high, xhigh"),
+    effort: z.string().min(1).max(80).optional().describe("Same as variant"),
     agent: z.string().min(1).max(64).optional(), background: z.boolean().optional(),
     task_id: z.string().min(1).max(80).optional(),
     bare: z.boolean().optional(),
     ...retry,
   }),
+  task_progress: z.strictObject({ task_id: z.string().min(1).max(80).optional() }),
   orchestrator_capabilities: z.strictObject({}),
 }
 type Name = keyof typeof schemas
@@ -45,13 +49,14 @@ const descriptions: Record<Name, string> = {
   thread_create: "Create an idle child thread in this project with inherited permissions. Use thread_message to start it.",
   thread_message: "Send a self-contained message to another project thread. Normal approvals and peer rate limits apply.",
   thread_wait: "Wait until a project thread is idle and read its latest answer. Timeout does not cancel it.",
-  thread_read: "Read a bounded, redacted page of another project thread. Reasoning is excluded.",
+  thread_read: "Read a bounded, redacted page of another project thread (messages cut short). limit=1 reads the newest message whole (up to 24000 characters; offset reads on). Reasoning is excluded.",
   thread_search: "Search a bounded page of another project thread. Follow the before cursor for older history.",
   thread_interrupt: "Interrupt the running turn of another project thread.",
-  delegate_task: "Start a child agent on any configured engine/model with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
+  delegate_task: "Start a child agent on any configured engine, with its own model and effort (xhigh etc.) in this call, with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
+  task_progress: "Use only when the user asks how far along a running sub-agent is (yours, or one started with delegate_task): a short summary from a cheap model of what it has done, what it is doing now and what seems left, with a labelled estimate or \"cannot estimate\". task_id is optional when one sub-agent runs; a finished or unknown one is answered plainly. Do not call it to poll.",
   orchestrator_capabilities: "Describe this process's project-scoped thread tools and limits.",
 }
-const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "orchestrator_capabilities"].includes(name) } }))
+const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "task_progress", "orchestrator_capabilities"].includes(name) } }))
 
 /**
  * What the other harness's model is told about delegation (MCP `instructions`, which Claude Code puts in its system prompt; Codex
@@ -65,6 +70,7 @@ export function threadInstructions(input: { engine: BridgeEngine; models: Readon
   const call = input.engine === "codex" ? "tools.mcp__mendcode_threads__delegate_task (a nested tool of exec)" : "mcp__mendcode_threads__delegate_task"
   return [
     `Sub-agents on MendCode's models, not only this harness's own (your own sub-agent tool runs only those): ${call}, with model an exact id below and engine its group (none for native). A model the user names is one of these ids; never say it does not exist without looking here.${input.engine === "claude" ? ` If it is deferred, load it with ToolSearch "select:mcp__mendcode_threads__delegate_task".` : ""}`,
+    `When the user asks how far along a running sub-agent is, call ${input.engine === "codex" ? "tools.mcp__mendcode_threads__task_progress" : "mcp__mendcode_threads__task_progress"}: it summarizes the sub-agent's recorded work; never answer that progress cannot be known.`,
     ...(listed.length ? [`Models: ${listed.join("; ")}. \`${PROGRAM_NAME} models\` lists all.`] : []),
   ].join("\n")
 }
@@ -100,14 +106,42 @@ export function createThreadMcp(options: {
 }) {
   const leases = new Set<Lease>()
   let listener: { url: string; stop(): void } | undefined
-  const valid = (lease: Lease) => leases.has(lease) && !lease.controller.signal.aborted && !lease.turn.signal.aborted && lease.allowed() && options.clock.now() - lease.born < MAX_MS && options.clock.now() - lease.touched < IDLE_MS
+  /** The port the last listener had: a new one takes it again, so a Claude Code process kept alive keeps reaching its server. */
+  let lastPort: number | undefined
+  /**
+   * Tokens of turns that ended, with their session and the end of their lifetime. A Claude Code process kept alive for its background
+   * agents was started with an earlier turn's token; the next turn of the same session joins that process, so its token answers for
+   * that session's live lease, and never for another session's or past the hour it was issued for.
+   */
+  const retired = new Map<string, { sessionId: string; until: number; /** False for a turn that was cancelled: its token is revoked, only still scrubbed from output. */ reusable: boolean }>()
+  const RETIRED_MAX = 64
+  function retire(lease: Lease, reusable: boolean) {
+    const now = options.clock.now()
+    for (const [token, entry] of retired) if (entry.until <= now) retired.delete(token)
+    if (lease.born + MAX_MS <= now) return
+    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: lease.born + MAX_MS, reusable })
+    while (retired.size > RETIRED_MAX) retired.delete(retired.keys().next().value!)
+  }
+  /** The live lease of the session an ended turn's `bytes` token belonged to, when that token's hour has not run out. */
+  function successor(bytes: Buffer): Lease | undefined {
+    const entry = [...retired].find(([token]) => bytes.length === token.length && timingSafeEqual(bytes, Buffer.from(token)))?.[1]
+    if (!entry?.reusable || entry.until <= options.clock.now()) return undefined
+    return [...leases].reverse().find((lease) => lease.turn.sessionId === entry.sessionId && valid(lease))
+  }
+  /** `text` without the lease's token or any earlier token of its session: a kept process still holds the earlier one and may echo it. */
+  function redact(lease: Lease, text: string): string {
+    let out = text.replaceAll(lease.token, "[redacted]")
+    for (const [token, entry] of retired) if (entry.sessionId === lease.turn.sessionId) out = out.replaceAll(token, "[redacted]")
+    return out
+  }
+  const valid =(lease: Lease) => leases.has(lease) && !lease.controller.signal.aborted && !lease.turn.signal.aborted && lease.allowed() && options.clock.now() - lease.born < MAX_MS && options.clock.now() - lease.touched < IDLE_MS
 
   async function handle(request: Request): Promise<Response> {
     // No browser origins, redirects, remote hosts or alternate routes: protects the localhost bearer boundary.
     if (!listener || request.url !== listener.url || request.headers.has("origin")) return new Response(null, { status: 403 })
     const bearer = request.headers.get("authorization")?.replace(/^Bearer /, "") ?? ""
     const bytes = Buffer.from(bearer)
-    const lease = [...leases].find((entry) => bytes.length === entry.token.length && timingSafeEqual(bytes, Buffer.from(entry.token)))
+    const lease = [...leases].find((entry) => bytes.length === entry.token.length && timingSafeEqual(bytes, Buffer.from(entry.token))) ?? successor(bytes)
     if (!lease || !valid(lease)) return new Response(null, { status: 401 })
     if (request.method === "GET") return new Response(null, { status: 405 })
     if (request.method !== "POST") return new Response(null, { status: 405 })
@@ -141,7 +175,7 @@ export function createThreadMcp(options: {
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
     const name = message.params?.name as Name
     if (typeof name !== "string" || !Object.hasOwn(schemas, name)) return error(-32602, "Unknown tool")
-    const parsed = schemas[name].safeParse(JSON.parse(JSON.stringify(message.params?.arguments ?? {}).replaceAll(lease.token, "[redacted]")))
+    const parsed = schemas[name].safeParse(JSON.parse(redact(lease, JSON.stringify(message.params?.arguments ?? {}))))
     if (!parsed.success) return error(-32602, "Invalid tool arguments")
     const retryId = "clientRequestId" in parsed.data ? parsed.data.clientRequestId : undefined
     const retryKey = typeof retryId === "string" ? `${name}:${retryId}` : undefined
@@ -160,12 +194,12 @@ export function createThreadMcp(options: {
       const result = await lease.run(name, parsed.data, lease.controller.signal)
       if (!valid(lease)) return reply(content("Bridge released or disabled", true))
       const text = result.ok ? result.output : result.message
-      const output = content(text.replaceAll(lease.token, "[redacted]"), !result.ok)
-      if (retryKey) lease.retries.set(retryKey, { digest, result: result.ok ? { ok: true, output: text.replaceAll(lease.token, "[redacted]") } : { ok: false, message: text.replaceAll(lease.token, "[redacted]") } })
+      const output = content(redact(lease, text), !result.ok)
+      if (retryKey) lease.retries.set(retryKey, { digest, result: result.ok ? { ok: true, output: redact(lease, text) } : { ok: false, message: redact(lease, text) } })
       return reply(output)
     } catch (error) {
       // The cause goes back to the engine that called (a limit, an unknown task, a model that does not exist): "failed" alone left it guessing.
-      const cause = (error instanceof Error ? error.message : String(error)).replaceAll(lease.token, "[redacted]").slice(0, 2_000)
+      const cause = redact(lease, error instanceof Error ? error.message : String(error)).slice(0, 2_000)
       return reply(content(cause ? `Thread operation failed: ${cause}` : "Thread operation failed", true))
     }
     finally {
@@ -183,6 +217,8 @@ export function createThreadMcp(options: {
       threads: ThreadPort
       create(title: string): Promise<ThreadResult>
       delegate(args: TaskInput, signal: AbortSignal): Promise<ThreadResult>
+      /** A short summary of how far along a running sub-agent is (cheap model, on demand); absent: `task_progress` says it is unavailable. */
+      progress?(taskId: string | undefined, signal: AbortSignal): Promise<string>
       /** Normal host tool policy, including explicit deny; rechecked after approval. */
       authorize(name: string, args: Record<string, unknown>, read: boolean): Promise<boolean>
       receipts?: { project: string; run: ReturnType<typeof createOrchestrationReceipts>["run"] }
@@ -191,7 +227,11 @@ export function createThreadMcp(options: {
     }) {
       if (!input.allowed() || input.turn.signal.aborted) throw new Error("Bridge disabled or turn cancelled")
       listener ??= options.listen?.(handle) ?? (() => {
-        const server = Bun.serve({ hostname: "127.0.0.1", port: 0, maxRequestBodySize: MAX_BODY, idleTimeout: 0, fetch: handle })
+        const serve = (port: number) => Bun.serve({ hostname: "127.0.0.1", port, maxRequestBodySize: MAX_BODY, idleTimeout: 0, fetch: handle })
+        let server: ReturnType<typeof serve>
+        // The last port again when it is free, so a kept process's config still points here; any free port otherwise.
+        try { server = serve(lastPort ?? 0) } catch { server = serve(0) }
+        lastPort = server.port
         return { url: `http://127.0.0.1:${server.port}/mcp`, stop: () => void server.stop(true) }
       })()
       const controller = new AbortController()
@@ -201,24 +241,29 @@ export function createThreadMcp(options: {
         instructions: threadInstructions({ engine: input.engine, models: input.models ?? [] }),
         allowed: input.allowed,
         async run(name, args, signal) {
-          if (name === "orchestrator_capabilities") return { ok: true, output: "Local project only. create, message, wait, read, search, interrupt, delegate_task. Full tier; normal approvals; child permission ceiling; 10-minute idle / 1-hour maximum token lifetime. 200 calls per turn; calls sent together run one after another. delegate_task children: 4 running at once per agent and 16 in the conversation by default (the user changes both in /settings, Subagents); a limit error says the current number. No engine-internal child projection." }
-          const read = name === "thread_list" || (["thread_read", "thread_search", "thread_wait"].includes(name) && input.threads.granted(String(args.sessionId)))
+          if (name === "orchestrator_capabilities") return { ok: true, output: "Local project only. create, message, wait, read, search, interrupt, delegate_task, task_progress (how far along a running sub-agent is, only when the user asks). Full tier; normal approvals; child permission ceiling; 10-minute idle / 1-hour maximum token lifetime. 200 calls per turn; calls sent together run one after another. delegate_task children: 4 running at once per agent and 16 in the conversation by default (the user changes both in /settings, Subagents); a limit error says the current number. No engine-internal child projection." }
+          const read = name === "thread_list" || name === "task_progress" || (["thread_read", "thread_search", "thread_wait"].includes(name) && input.threads.granted(String(args.sessionId)))
           if (!await input.authorize(name, args, read) || !valid(lease)) return { ok: false, message: "Thread operation denied" }
           const execute = async (): Promise<ThreadResult> => {
             switch (name) {
               case "thread_list": return input.threads.list(args.limit as number | undefined, { query: args.query as string | undefined, state: args.state as "busy" | "idle" | undefined })
               case "thread_create": return input.create(String(args.title))
               case "thread_message": return input.threads.message(args as { sessionId: string; text: string })
-              case "thread_read": return input.threads.read(args as { sessionId: string; limit?: number; before?: string })
+              case "thread_read": return input.threads.read(args as { sessionId: string; limit?: number; before?: string; offset?: number })
               case "thread_search": return input.threads.search(args as { sessionId: string; query: string; limit?: number; before?: string })
               case "thread_wait": return input.threads.wait({ ...args as { sessionId: string; timeoutSeconds?: number }, signal })
               case "thread_interrupt": return input.threads.interrupt(args as { sessionId: string })
-              case "delegate_task": return input.delegate({ ...args as TaskInput, background: args.background !== false }, signal)
+              case "task_progress": return input.progress ? { ok: true, output: redact(lease, await input.progress(args.task_id as string | undefined, signal)) } : { ok: false, message: "Sub-agent progress is not available here" }
+              case "delegate_task": {
+                const { effort, ...rest } = args as TaskInput & { effort?: string }
+                if (effort && rest.variant && effort !== rest.variant) return { ok: false, message: `effort ${effort} and variant ${rest.variant} differ; pass one` }
+                return input.delegate({ ...rest, ...(effort ? { variant: effort } : {}), background: args.background !== false }, signal)
+              }
             }
           }
           if (input.receipts && typeof args.clientRequestId === "string") return input.receipts.run({ project: input.receipts.project, owner: input.turn.sessionId, operation: name, requestId: args.clientRequestId, args, execute: async () => {
             const result = await execute()
-            return result.ok ? { ok: true, output: result.output.replaceAll(lease.token, "[redacted]") } : { ok: false, message: result.message.replaceAll(lease.token, "[redacted]") }
+            return result.ok ? { ok: true, output: redact(lease, result.output) } : { ok: false, message: redact(lease, result.message) }
           } })
           const previous = typeof args.clientRequestId === "string" ? lease.retries.get(`${name}:${args.clientRequestId}`) : undefined
           if (previous) return previous.result
@@ -226,6 +271,8 @@ export function createThreadMcp(options: {
         },
         release() {
           if (!leases.delete(lease)) return
+          // A cancelled turn revokes its token; only a turn that ended on its own leaves it for the next turn of the session.
+          retire(lease, !input.turn.signal.aborted)
           controller.abort()
           input.turn.signal.removeEventListener("abort", lease.release)
           expiry.cancel()
@@ -249,7 +296,7 @@ export function createThreadMcp(options: {
         } else {
           args = []
         }
-        const scrub = (text: string) => text.replaceAll(lease.token, "[redacted]")
+        const scrub = (text: string) => redact(lease, text)
         const stream = () => {
           let held = ""
           return {

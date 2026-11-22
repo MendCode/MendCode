@@ -222,6 +222,7 @@ export function createScreen(
      * and an inline chat borrows the alternate screen for it. Cursor and images are hidden meanwhile.
      */
     hold(rows: Line[]) {
+      if (left) return
       if (!held && inline && !alt) {
         alt = true
         output.write(`\x1b[?1049h${mouseOn}\x1b[2J`)

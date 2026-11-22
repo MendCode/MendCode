@@ -271,9 +271,18 @@ Also `imageWaitArt` and `imageWaitCanvas` are set in the file. See [web and imag
 | Key | Row label |
 |---|---|
 | `sidebar` | Sidebar |
+| `sidebarProjects` | Sidebar projects |
+| `sidebarPreviewCount` | Sessions per project |
+| `sidebarProjectCount` | Projects shown |
+| `sidebarRecentDays` | Recent days |
+| `sidebarProjectsFrom` | Projects from |
+| `sidebarHiddenProjects` | Hidden projects |
+| `sidebarLayout` | Sidebar layout |
+| `sidebarSections` | Sidebar sections |
 | `sidebarSide` | Sidebar side |
 | `sidebarHeader` | Sidebar header |
 | `sidebarWidth` | Right bar width |
+| `panelStart` | Panel at start |
 | `panelNarrow` | Panel when narrow |
 | `panelHeader` | Panel header |
 | `showTasks` | Running tasks |

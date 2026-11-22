@@ -307,7 +307,11 @@ echo "summarize the diff" | mendcode run --ephemeral --tools read,grep --exclude
 | `--max-turns N` | Stops the turn after N model calls (1 to 1000). The turn fails with code `max_steps` and exit 4. The cap only lowers the daemon's own limit. |
 | `--tools a,b` / `--no-tools` | Allow-list: only these tools (globs such as `mcp__*` work) are offered and callable. It intersects with what the agent and permission rules already allow, so it narrows and never grants. Sub-agents (`task`) are off in a restricted run, and plan-mode tools disappear with an allow-list. Names that match nothing are ignored. |
 | `--exclude-tools a,b` | Removes tools from whatever is allowed. Combines with `--tools`. |
-| `--offline` | Global flag. Removes the tools that reach the network on their own (`webfetch`, `websearch`, `image_gen`) from the session started by this invocation, for `run` and the TUI. It does not block model provider calls, MCP servers or commands the model runs in `shell`. |
+| `--offline` | Global flag. Removes the tools that reach the network on their own (`webfetch`, `websearch`, `image_gen`, and the provider's own web search and image generation) from the session started by this invocation, for `run` and the TUI. It does not block model provider calls, MCP servers or commands the model runs in `shell`. |
+
+The provider's own web search and image generation (ChatGPT's, for one) follow the same limits as MendCode's tools: `--tools` must name `websearch` or `web_search` (`image_gen` or `image_generation`) to keep them, and `--exclude-tools` takes either name.
+
+`--tools`, `--exclude-tools` and `--offline` are enforced only on MendCode's own models. A run limited by any of them on a model another engine runs (`claude/…`, `codex:…`, `pi…`, `acp:…`) fails before the model is called, with code `run_limits_unenforced`, instead of running with every tool.
 | `--system-prompt TEXT` / `--append-system-prompt TEXT` | Replaces, or extends, the project's system prompt for this run's session. |
 | `--permission ask\|edits\|plan\|smart` | Starts the run in that permission mode. `full` is not accepted here. From a session's own shell, a mode above that session's is put to you on one card when your terminal has the session or its project open, and refused otherwise ([permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)). |
 | `-c`, `--config KEY=VALUE` | Per-run override, repeatable. `-c` followed by `KEY=VALUE` is a config override; a bare `-c` stays `--continue`. Supported keys (dashes or underscores): `model`, `agent`, `variant`, `permission`, `max_turns`, `tools`, `exclude_tools`, `system_prompt`, `append_system_prompt`, `output_schema`, `output_last_message`, `offline`, `ephemeral`, `thinking`. An explicit flag wins over its key. Other keys are a usage error: overrides never edit global settings. |
@@ -479,7 +483,7 @@ The native `threads` tool has the same report as `action: "stats"` (no `sessionI
 
 `session get ID` reads metadata. `inspect ID [--limit N]` and `status ID` include progress, visible conversation turns, children, subagents, loops, pending questions/approvals and file changes.
 
-The derived state (`State:` line, `status` in JSON, `--state` of `session list`) is `idle`, `running`, `waiting_for_input`, `waiting_for_approval`, `completed`, `failed`, `cancelled` (a deliberate cancel) or `interrupted` (the daemon lost the turn: restart, transport or a stalled stream; daemons before this change reported it as `cancelled`). `--state waiting` matches both waiting states.
+The derived state (`State:` line, `status` in JSON, `--state` of `session list`) is `idle`, `running`, `held` (no turn runs and the queue waits for the user: a cancel, an interrupt or a restart held it; the `State:` line adds how many messages wait), `waiting_for_input`, `waiting_for_approval`, `completed`, `failed`, `cancelled` (a deliberate cancel) or `interrupted` (the daemon lost the turn: restart, transport or a stalled stream; daemons before this change reported it as `cancelled`). `--state waiting` matches both waiting states.
 
 Treat a value you do not know as "not running". `export ID` uses that snapshot with as much history as fits the wire limit.
 

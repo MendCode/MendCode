@@ -1,4 +1,5 @@
 import type { createSession } from "./session"
+import { inProject } from "../../view/project-scope"
 import type { createLoops } from "./loops"
 import type { createWorkflows } from "./workflows"
 import type { createChanges } from "./changes"
@@ -8,7 +9,8 @@ import type { createAgents } from "./agents"
 import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
-import { normalizeTuiProfile } from "../../view/tui-profile"
+import { createActivityMemory, mergeActivity } from "../../view/session-activity"
+import { normalizeTuiProfile, panelStarted } from "../../view/tui-profile"
 import { resolvePanel } from "../../view/sidebar-spec"
 import { profilePanel } from "./session-look"
 import type { FooterSegment } from "@mendcode/protocol/wire"
@@ -46,6 +48,8 @@ export function createEvents(ctx: AppContext, actions: {
   reloadExtensions: (revision: number) => Promise<void>
   /** A turn of this session ended: a `/reload` or `/restart` that waited for it runs. */
   noteTurnEnded: () => void
+  /** A turn started or ended under a reader following the bottom: the history far above is let go (paging.ts). */
+  releaseFar: () => void
   /** The agent's `session_open` asked for this session: the same switch as choosing it in /sessions. */
   openSession: (sessionId: import("@mendcode/protocol").SessionId) => Promise<void>
 
@@ -157,8 +161,13 @@ export function createEvents(ctx: AppContext, actions: {
     // A /compact that did nothing says why; with no card in the transcript it would otherwise just vanish.
     if (event.type === "compaction.updated" && event.state === "skipped" && event.reason === "manual") say(event.note ?? "Nothing to compact", "info")
     if (measured) view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
+    // After the growth is counted: a release shortens the transcript above the reader, which is no growth to follow.
+    if (following && (event.type === "turn.started" || event.type === "turn.completed" || event.type === "turn.cancelled" || event.type === "turn.interrupted" || event.type === "turn.failed")) actions.releaseFar()
     requestFrame()
   }
+
+  /** What each session's last activity push showed, so a push that moved only its clock draws nothing. */
+  const activityMemory = createActivityMemory()
 
   function onGlobal(event: GlobalEvent) {
     if (event.type === "mflow.waiting") {
@@ -203,7 +212,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "tui.changed") {
       // The stored profile changed (customize_ui): only the keys that differ from the stored copy are new, so a profile's layer
       // keeps every other key it holds instead of seeing them all as the user's.
-      const stored = normalizeTuiProfile(event.profile), before = state.profileBase as Record<string, unknown>
+      const stored = panelStarted(normalizeTuiProfile(event.profile)), before = state.profileBase as Record<string, unknown>
       const changed = Object.fromEntries(Object.entries(stored).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(before[key])))
       state.profileBase = stored
       state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...changed })
@@ -280,24 +289,24 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "session.activity") {
+      // Most pushes of a working session move only its clock and current tool: no frame and no request of their own.
+      const shows = activityMemory.changed(event)
       noteActivity(event)
       // A sub-agent of the open session started or stopped working: the pet's `agents` state follows it.
       if (event.sessionId !== state.sessionId) followPet(state)
-      if (state.statusLoaded || state.page === "agents" || (state.page === "chat" && (state.dockOpen || state.tuiProfile.rightSidebar && state.tuiProfile.sidebarWidgets.some((widget) => widget.type === "jobs")))) {
+      // Background work starts and ends with a change of state: the list of it is asked again then, not on every push of every session.
+      if ((shows || state.page === "agents") && (state.statusLoaded || state.page === "agents" || (state.page === "chat" && (state.dockOpen || state.tuiProfile.rightSidebar && state.tuiProfile.sidebarWidgets.some((widget) => widget.type === "jobs"))))) {
         void loadAgentShells()
         requestFrame()
       }
-      const { sessionId: id, title, directory, state: localState, updatedAt } = event
-      const known = state.sessions.find((session) => session.sessionId === id)
-      const archived = event.archivedAt === null ? { archivedAt: undefined } : event.archivedAt !== undefined ? { archivedAt: event.archivedAt } : {}
-      // The draft of an untitled session labels it in every list: the push carries it when it appeared, changed its first line or went.
-      state.sessions = known
-        ? state.sessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state: localState, updatedAt, queued: event.queued ?? 0, paused: event.paused === true }, event.draft) : session))
-        : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state: localState, queued: event.queued ?? 0, paused: event.paused === true }, event.draft), ...state.sessions]
+      const { sessionId: id, title } = event
+      // Bots on or every project listed: that list follows the same push (before this terminal's own list takes it, so a new session is still new to it), with no request.
+      state.sidebarBots?.onActivity(event)
+      state.homeBots?.onActivity(event)
       // Sessions pushed by other terminals join at the top; past the cap the oldest go (the open one stays), and /sessions reads the rest again.
-      if (state.sessions.length > PUSHED_SESSIONS_MAX) state.sessions = state.sessions.filter((session, at) => at < PUSHED_SESSIONS_MAX || session.sessionId === state.sessionId)
+      state.sessions = mergeActivity(state.sessions, event, { cap: PUSHED_SESSIONS_MAX, keep: state.sessionId })
       state.paletteSessions = state.paletteSessions.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, title }, event.draft) : session))
-      if (state.page === "sessions" || state.page === "chat" && sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" })) requestFrame()
+      if (state.page === "sessions" || state.page === "chat" && shows && (state.sidebarBots?.live() === true || sidebarVisible({ mode: state.tuiProfile.sidebar, width: input.screen.size.width, minimal: state.mode === "minimal" }))) requestFrame()
       return
     }
     if (event.type === "memory.changed") {
@@ -334,7 +343,7 @@ export function createEvents(ctx: AppContext, actions: {
       noteWorkflow(run, event.deleted === true)
       if (run.state === "completed" && !event.deleted) state.pet?.cheer("jumping")
       if (state.page !== "workflows" || !state.workflowsLoaded) return requestFrame()
-      if (state.workflowsState.scope === "project" && run.directory !== input.directory) return
+      if (state.workflowsState.scope === "project" && !inProject(run.directory, input.directory)) return
       const known = state.workflows.some((entry) => entry.workflowId === run.workflowId)
       state.workflows = event.deleted ? state.workflows.filter((entry) => entry.workflowId !== run.workflowId) : known ? state.workflows.map((entry) => (entry.workflowId === run.workflowId ? run : entry)) : [run, ...state.workflows]
       return requestFrame()

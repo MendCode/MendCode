@@ -10,7 +10,6 @@ test("B86 REST controls and durable ledger reconcile into the existing app facto
     try {
       await h.type("/workflows\r")
       expect(h.text().join("\n")).toContain("REST workflow")
-      expect(h.text().join("\n")).toContain("┌")
       const paused = await h.request(`/workflow/${h.workflowId}/pause`, { reason: "Review first" })
       expect(paused.run.state).toBe("paused")
       h.app.render()

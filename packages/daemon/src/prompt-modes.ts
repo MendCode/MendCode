@@ -7,7 +7,7 @@ import { NATIVE_DEFAULTS, type SystemPart, type ToolCatalog } from "@mendcode/en
 import { createTuiControl } from "./tui-control"
 import { promptBehavior } from "./prompt-behavior"
 import { resolveFocus } from "./prompt-focus"
-import { focusCore, graphAutopilotText, guideText, operatorGuideText, renderingFor, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
+import { focusCore, graphAutopilotText, graphLocateText, guideText, operatorGuideText, renderingFor, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 
 type Choice = { mode?: PromptMode; focusID?: PromptFocusChoice }
 export const FOCUS_CONTEXT: Record<PromptFocus, { files: string[]; behavior: string }> = {
@@ -132,6 +132,14 @@ export function graphAutopilotPart({ tools, on }: { tools: ToolCatalog | undefin
   return { id: "graph-autopilot", label: "code graph autopilot", text: on && tools?.listed.includes(GRAPH_LOCATE_TOOL) ? graphAutopilotText().native : "" }
 }
 
+/**
+ * Where to look for a symbol, as a system part (docs/code-graph.md, "Graph answers in a text search"): one line while the call lists
+ * `graph_find` (balanced and full, feature `codegraph`, in a folder the graph indexes), empty otherwise. Focus, guide and full send it. Static text.
+ */
+export function graphLocatePart(tools: ToolCatalog | undefined): SystemPart {
+  return { id: "graph-locate", label: "code graph first", text: tools?.listed.includes(GRAPH_LOCATE_TOOL) ? graphLocateText().native : "" }
+}
+
 const boundary = (root: string) => `You are MendCode, a coding assistant working in ${root}. Answer directly. Read before editing, preserve unrelated work and verify changes with the available tools. Follow the user's scope, runtime permissions and budgets. Use loop tools for scheduled or repeated work, inspect existing loops first and never set an iteration cap to zero. Configured budgets are authoritative; do not infer limits from a provider name. Do not invent successful tests or tool results. Do not expose secrets.`
 
 const COST_ROOT = "/project"
@@ -189,7 +197,8 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
   // The visible plan's line (`visiblePlanText`, present while `todo` is listed): focus, guide and full only, right before the capability line.
   const plan = parts.filter((part) => part.id === "visible-plan")
   // The graph autopilot's line (present while the feature is on and `graph_find` is listed): the same modes, right after the plan line.
-  const autopilot = parts.filter((part) => part.id === "graph-autopilot")
+  // Before it, where to look for a symbol (`graphLocatePart`, present while `graph_find` is listed, whatever the autopilot).
+  const autopilot = [...parts.filter((part) => part.id === "graph-locate"), ...parts.filter((part) => part.id === "graph-autopilot")]
   const safe: SystemPart = { id: "boundary", label: "MendCode boundary", text: boundary(root) }
   // One line in every mode but `custom` (which inherits nothing): where to read about configuring and extending MendCode, instead of the web.
   const self: SystemPart = { id: "self-knowledge", label: "MendCode docs pointer", text: selfKnowledgeText() }
@@ -198,7 +207,7 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
   else if (mode === "custom") result = [safe, ...(custom.status.available ? [{ id: "base", label: custom.status.name, text: custom.text.replaceAll("{{cwd}}", root) }] : []), ...instructions, ...appended, ...memory]
   else {
     // Focus and guide keep the native harness (or SYSTEM.md in its place), the user's instructions, the skill catalog and APPEND_SYSTEM.md.
-    result = parts.filter((part) => part.id !== "memory" && part.id !== "capabilities-index" && part.id !== "visible-plan" && part.id !== "graph-autopilot" && (mode === "full" || ["base", "instructions", "skills", "append"].includes(part.id)))
+    result = parts.filter((part) => part.id !== "memory" && part.id !== "capabilities-index" && part.id !== "visible-plan" && part.id !== "graph-autopilot" && part.id !== "graph-locate" && (mode === "full" || ["base", "instructions", "skills", "append"].includes(part.id)))
     const longGuidance = mode === "guide" || mode === "full"
     result = [...result, safe, self, { id: "focus", label: `${promptFocusLabel({ focusID, resolvedFocus: resolved })} focus`, text: `MendCode focus: ${resolved}${focusID === "auto" ? " (auto)" : ""}. ${FOCUS_CONTEXT[resolved].behavior}` }]
     // `guide` and `full` add the working basics and the family's guidance file; `focus` the short core of the basics instead, never both.

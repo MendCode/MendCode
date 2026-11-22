@@ -22,7 +22,8 @@ export function renderPacketDiagram(input: string, width: number): string | unde
     fields.push({ start, end, label: cleanLabel(field[2]!) })
   }
   if (fields.length === 0) return undefined
-  const output = ["Packet layout"]
+  const title = lines.slice(1).map((line) => /^title\s+(.+)$/i.exec(line)?.[1]).find(Boolean)
+  const output = [cleanLabel(title) || "Packet layout"]
   const groups = new Map<number, typeof fields>()
   for (const field of fields) {
     for (let start = field.start; start <= field.end;) {

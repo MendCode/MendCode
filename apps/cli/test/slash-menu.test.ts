@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { resetKeyLabels } from "../src/ui/key-labels"
 import { readFileSync, writeFileSync } from "node:fs"
 import { SLASH_GROUPS, SLASH_LAYOUTS, TUI_DEFAULTS, tuiProblems } from "@mendcode/protocol/wire"
 import { SLASH_COMMANDS, DIAGNOSTIC_COMMANDS, gatedHint, gatedMatches, parseSlash, slashSuggestions } from "../src/view/commands"
@@ -11,6 +12,9 @@ import { renderSlashEditor, slashEditorKey } from "../src/view/slash-menu-editor
 import { textWidth } from "../src/view/wrap"
 import { appHarness, extension, scratch } from "./extensions-harness"
 import { appHarness as sessionHarness, cleanTemps, tempDir } from "./session-ui-harness"
+
+// Key labels are module state: an earlier test file in the same process may have left them on a Mac's `opt+`.
+beforeEach(() => resetKeyLabels())
 
 const made: ReturnType<typeof scratch>[] = []
 function temporary() { const dir = scratch(); made.push(dir); return dir }

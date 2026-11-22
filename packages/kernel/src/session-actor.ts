@@ -13,11 +13,12 @@ import type {
   Settings,
   TurnId,
 } from "@mendcode/protocol"
-import type { createIdFactory } from "@mendcode/protocol"
+import type { createIdFactory, SessionOrigin } from "@mendcode/protocol"
 import type { Clock, TimerHandle } from "./clock"
 import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, QueuedMessage, SessionEventDraft, SessionEventSink, TurnInput, TurnOutcome } from "./ports"
 import type { Scope } from "./scope"
 import { createLiveOutput } from "./live-output"
+import { SPARE_AGENTS } from "./ports"
 
 type IdFactory = ReturnType<typeof createIdFactory>
 type ActorCommand = Extract<
@@ -34,6 +35,9 @@ export type InterruptCause = "daemon_shutdown"
  * A steering turn: `text` goes to the engine as the user message, but the transcript shows only `label` (a thin
  * marker), tagged with `meta`. It is never queued or persisted: it starts at once or not at all (see `steer`).
  */
+/** The session that cancelled another session's turn, as `turn.cancelled` names it. */
+export type CancelAuthor = { sessionId: SessionId; title: string }
+
 export type Steering = { text: string; label: string; meta: Record<string, string>; /** The user asked for it: it may start although a user cancel left the session held. */ force?: boolean; /** Carries on a turn a daemon shutdown interrupted: it starts ahead of the queue the restart restored (held), which then follows it as it would have followed that turn. */ afterRestart?: boolean }
 
 type QueueEntry = { queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; /** With `compact`: started by the daemon in an idle session (`compactIdle`), never queued or persisted. */ idle?: true; instructions?: string; notice?: true; shell?: true; local?: true; steer?: Pick<Steering, "label" | "meta">; /** Per-message override of the queue policy; not persisted (a restored queue is held). */ delivery?: QueueDelivery; /** A notice nobody waits on for a reply (a background task ended): held after a cancel, it goes with the user's next message. Not persisted. */ rides?: true; /** When a `rides` notice arrived, to keep it in order with notices held outside the queue. */ at?: number; /** True once the model was shown what this notice says by another way: it is then dropped unread. Not persisted. */ unless?: () => boolean; /** Sent now on its own (send now, restart, idle steer): no other queued message joins its turn. Not persisted. */ alone?: true }
@@ -64,6 +68,8 @@ type ActiveTurn = {
   /** When the current run of network failures began; cleared by the next item event. */
   offlineSince?: number | undefined
   compaction?: { reason: "auto" | "manual"; idle?: true; followUp: string }
+  /** The compaction item an engine opened inside the turn on its own (Claude Code or pi compacting as the context fills). */
+  inTurnCompaction?: ItemId
   /** Started alone (send now, restart) or with an explicit model/agent selection or turn options: no message joins it after its answer. */
   alone?: true
   /** The running output figure for the activity line (`onLiveOutput`), made at the turn's first count or streamed word. */
@@ -76,7 +82,7 @@ type ActiveTurn = {
 const MAX_AGENT_ITEMS = 500
 
 type Message =
-  | { kind: "command"; command: ActorCommand; authorityText?: string; reply(result: ActorResult): void }
+  | { kind: "command"; command: ActorCommand; authorityText?: string; origin?: SessionOrigin; cancelledBy?: CancelAuthor; reply(result: ActorResult): void }
   | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
   | { kind: "pause"; paused: boolean; keepHeld?: boolean; reply(paused: boolean): void }
   | { kind: "restart.release"; reply(released: boolean): void }
@@ -386,9 +392,9 @@ export function createSessionActor(options: SessionActorOptions) {
     turn.pending.clear()
   }
 
-  function stopTurn(turn: ActiveTurn) {
+  function stopTurn(turn: ActiveTurn, reason?: string) {
     abandonPending(turn)
-    turn.abort.abort()
+    turn.abort.abort(reason)
     turn.grace = turn.scope.timer(cancelGraceMs, () =>
       post({
         kind: "engine.done",
@@ -404,12 +410,12 @@ export function createSessionActor(options: SessionActorOptions) {
    * stops behind it (some take seconds, Claude Code finishing its step); the turn stays active until then, so nothing new starts
    * and the daemon keeps waiting on it (undo, restart), and whatever the engine still sends is dropped.
    */
-  function cancel(turn: ActiveTurn, by: "user" | "promotion") {
+  function cancel(turn: ActiveTurn, by: "user" | "promotion", spareAgents = false, cancelledBy?: CancelAuthor) {
     turn.cancelBy = by
-    stopTurn(turn)
+    stopTurn(turn, spareAgents ? SPARE_AGENTS : undefined)
     compactionUpdated(turn, "cancelled")
     closeOpenItems(turn, "cancelled")
-    emit({ type: "turn.cancelled", sessionId, turnId: turn.turnId, by })
+    emit({ type: "turn.cancelled", sessionId, turnId: turn.turnId, by, ...(cancelledBy ? { cancelledBy: { sessionId: cancelledBy.sessionId, title: cancelledBy.title.slice(0, 200) } } : {}) })
     settleIdle()
   }
 
@@ -420,6 +426,7 @@ export function createSessionActor(options: SessionActorOptions) {
   }
 
   function closeOpenItems(turn: ActiveTurn, status: "cancelled" | "interrupted" | "unknown") {
+    if (turn.inTurnCompaction) compactionUpdated(turn, status === "cancelled" ? "cancelled" : "interrupted")
     for (const itemId of turn.openItems) emit({ type: "item.completed", sessionId, itemId, status })
     turn.openItems.clear()
     turn.agentOpen.clear()
@@ -438,7 +445,16 @@ export function createSessionActor(options: SessionActorOptions) {
     if (!turn || turn.turnId !== turnId || turn.phase !== phase) return
     const unread = sent.filter((each) => each.turnId === turnId)
     if (unread.length) {
-      for (const each of unread) showRead(each)
+      // A turn that ended on its own had the messages written to its engine: they count as read there. One cancelled, interrupted or
+      // failed stopped the engine before it reported them read (Claude Code drops what it had not started): they wait in the queue
+      // again, first and in order, for the next turn, instead of being shown in a turn that never answered them.
+      if (turn.cancelBy || turn.interruptReason || outcome.status === "error") {
+        // A message sent now (`promotion`) was put first to start alone: it keeps that place.
+        let at = 0
+        while (turn.cancelBy === "promotion" && queue[at]?.alone) at++
+        for (const each of unread) sent.splice(sent.indexOf(each), 1)
+        queue.splice(at, 0, ...unread.map((each) => each.entry))
+      } else for (const each of unread) showRead(each)
       emitQueue()
     }
     turn.grace?.cancel()
@@ -480,7 +496,7 @@ export function createSessionActor(options: SessionActorOptions) {
       if (followUpQueueId && text) {
         // Persist the queue entry before completion. A recovered queue remains held after a restart.
         queue.unshift({ queueId: followUpQueueId, text, attachments: [], alone: true })
-        emit({ type: "queue.added", sessionId, queueId: followUpQueueId, text, attachments: [] })
+        emit({ type: "queue.added", sessionId, queueId: followUpQueueId, text, attachments: [], origin: "auto" })
         emitQueue()
       }
       compactionUpdated(turn, outcome.compacted ? "packed" : "skipped", followUpQueueId, outcome.compacted ? undefined : outcome.note)
@@ -492,6 +508,11 @@ export function createSessionActor(options: SessionActorOptions) {
   function compactionUpdated(turn: ActiveTurn, state: "writing" | "packed" | "skipped" | "failed" | "cancelled" | "interrupted", followUpQueueId?: QueueId, note?: string) {
     if (!turn.compaction) return
     emit({ type: "compaction.updated", sessionId, turnId: turn.turnId, ...turn.compaction, state, ...(followUpQueueId ? { followUpQueueId } : {}), ...(note ? { note: note.slice(0, 500) } : {}) })
+    // A compaction inside a turn ends once: the turn's own end (completed, failed, cancelled) has no compaction to report after it.
+    if (turn.inTurnCompaction && state !== "writing") {
+      delete turn.inTurnCompaction
+      delete turn.compaction
+    }
   }
 
   function showLive(turnId: TurnId, figure: { output: number; estimated: boolean } | undefined) {
@@ -523,7 +544,13 @@ export function createSessionActor(options: SessionActorOptions) {
       if (typeof event.meta?.agentParent === "string") turn.agentOpen.add(event.itemId)
       else {
         if (event.kind === "agent_message" || event.kind === "reasoning") (turn.streaming ??= new Map()).set(event.itemId, event.kind === "agent_message" ? "text" : "reasoning")
-        if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+        // An engine compacting inside the turn: the session reads as compacting until that item ends, as a compaction of its own does.
+        if (event.kind === "compaction" && turn.phase === "turn" && !turn.compaction) {
+          turn.inTurnCompaction = event.itemId
+          turn.compaction = { reason: "auto", followUp: "" }
+          compactionUpdated(turn, "writing")
+          setForeground("compacting")
+        } else if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
       }
       return
     }
@@ -548,6 +575,11 @@ export function createSessionActor(options: SessionActorOptions) {
       ...(event.render ? { render: event.render } : {}),
       ...(event.meta ? { meta: displayMeta(event.meta) } : {}),
     })
+    if (event.itemId === turn.inTurnCompaction) {
+      compactionUpdated(turn, event.status === "ok" ? "packed" : "failed")
+      if (turn.phase === "turn") setForeground("generating")
+      return
+    }
     if (!turn.agentOpen.delete(event.itemId) && turn.phase === "turn" && foreground === "tool") setForeground("generating")
   }
 
@@ -621,7 +653,8 @@ export function createSessionActor(options: SessionActorOptions) {
   const waiting = () => queue.length + sent.length
   const queueFull = (): ActorResult => ({ ok: false, code: "busy", message: `[ACTOR]: the queue already holds ${MAX_QUEUE_ENTRIES} messages; send this one after some of them ran` })
 
-  function onCommand(command: ActorCommand, authorityText?: string): ActorResult {
+  /** `origin`: who sent the message, decided by the daemon from the connection; a caller that names none is the daemon's own work. */
+  function onCommand(command: ActorCommand, authorityText?: string, origin: SessionOrigin = "auto", cancelledBy?: CancelAuthor): ActorResult {
     if (command.sessionId !== sessionId) return { ok: false, code: "unknown_session", message: "[ACTOR]: command for another session" }
     switch (command.type) {
       case "user.submit": {
@@ -641,7 +674,7 @@ export function createSessionActor(options: SessionActorOptions) {
           ? { text: `[while the session was stopped, this happened]\n${waited.map((notice) => notice.text).join("\n\n")}\n\n[the user's message]\n${command.text}`, displayText: command.displayText ?? command.text, authorityText: authorityText ?? command.text }
           : {}
         // Stored first: a message the store refuses (too large once serialized) changes nothing and is answered as refused.
-        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}) }))
+        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}), origin }))
         if (stored) return stored
         for (const notice of waited) queue.splice(queue.indexOf(notice), 1)
         const entry: QueueEntry = { queueId, text: command.text, attachments: command.attachments, ...authority, ...display, ...folded, ...stable, ...turnOptions, ...(command.selection ? { selection: command.selection } : {}), ...(delivery ? { delivery } : {}) }
@@ -661,7 +694,7 @@ export function createSessionActor(options: SessionActorOptions) {
         if (waiting() >= MAX_QUEUE_ENTRIES) return queueFull()
         const queueId = ids("queue")
         const local = command.local ? { local: true as const } : {}
-        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}) }))
+        const stored = attempt(() => emit({ type: "queue.added", sessionId, queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}), origin }))
         if (stored) return stored
         queue.push({ queueId, text: command.command, attachments: [], shell: true, ...local, ...(command.messageId ? { messageId: command.messageId } : {}) })
         held = false
@@ -671,6 +704,18 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "queue.promote": {
         const index = queue.findIndex((entry) => entry.queueId === command.queueId)
+        const handed = index < 0 ? sent.find((each) => each.entry.queueId === command.queueId) : undefined
+        if (handed && active && active.turnId === handed.turnId && !active.cancelBy && !active.interruptReason) {
+          // Already written to the engine, waiting for its running tool: sending it now stops that turn, and the message comes back
+          // first (onEngineDone puts unread messages back) to start a turn of its own.
+          // Paused: the running turn is left to finish, as an ordinary promotion does; the message only moves first.
+          handed.entry.alone = true
+          sent.splice(sent.indexOf(handed), 1)
+          sent.unshift(handed)
+          emitQueue()
+          if (!paused) cancel(active, "promotion")
+          return { ok: true }
+        }
         if (index < 0) return { ok: false, code: "target_mismatch", message: "[ACTOR]: queued message not found" }
         const [entry] = queue.splice(index, 1)
         if (entry) queue.unshift({ ...entry, alone: true })
@@ -750,7 +795,7 @@ export function createSessionActor(options: SessionActorOptions) {
         if (active.cancelBy || active.interruptReason) return { ok: true, result: { alreadyStopping: true } }
         held = true
         heldSinceRestart = false
-        cancel(active, "user")
+        cancel(active, "user", command.spareAgents === true, cancelledBy)
         return { ok: true }
       }
       case "request.resolve": {
@@ -848,7 +893,7 @@ export function createSessionActor(options: SessionActorOptions) {
         // A command always gets its answer: one that throws is refused instead of leaving its caller waiting.
         let result: ActorResult
         try {
-          result = onCommand(message.command, message.authorityText)
+          result = onCommand(message.command, message.authorityText, message.origin, message.cancelledBy)
         } catch (error) {
           result = { ok: false, code: "internal", message: `[ACTOR]: ${error instanceof Error ? error.message : String(error)}` }
         }
@@ -1017,8 +1062,12 @@ export function createSessionActor(options: SessionActorOptions) {
 
   return {
     sessionId,
-    handle(command: ActorCommand, authorityText?: string) {
-      return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), reply }))
+    handle(command: ActorCommand, authorityText?: string, origin?: SessionOrigin) {
+      return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), ...(origin ? { origin } : {}), reply }))
+    },
+    /** A `turn.cancel` another session asked for (`threads` interrupt): the same cancel and hold, and `turn.cancelled` names that session. */
+    cancelFrom(command: Extract<ActorCommand, { type: "turn.cancel" }>, cancelledBy: CancelAuthor) {
+      return new Promise<ActorResult>((reply) => post({ kind: "command", command, cancelledBy, reply }))
     },
     interrupt(reason: InterruptReason, cause?: InterruptCause) {
       return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))

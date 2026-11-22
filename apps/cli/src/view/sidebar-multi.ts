@@ -1,0 +1,610 @@
+import type { BotListReport, BotState, ExternalBotInfo, SessionSummary } from "@mendcode/protocol"
+import { glyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
+import type { ImagePlacement } from "../ui/image-layer"
+import { botIcon, type BotIcon, type IconFaces } from "./bot-icon"
+import { fit, spread } from "./deck"
+import { relativeTime, truncateEnd } from "./session-list"
+import { labelSpans, rowLabel, sessionActivityAt, sessionOrderAt } from "./session-label"
+import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, restingWorkflow, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
+import { agentsSpans, elapsedLabel, isCompacting, prSpans } from "./sidebar-marks"
+import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
+import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
+import type { SidebarSection } from "./tui-profile"
+import { lineWidth, wrap } from "./wrap"
+
+/**
+ * The left sidebar of the experimental bots (docs/agents.md): sections for the projects (the opened folder's sessions, or every
+ * folder's as folding groups), the bots, and the opened folder's sessions that belong to no bot; or one narrow column of icons.
+ * Loaded by the first frame that needs it, never at start. The classic list (`renderSessionSidebar`) stays as it was.
+ *
+ * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
+ */
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting" | "named" | "createdAt">> & { /** A bot's chat known only from the bot list: where it stands in the order (see `sessionOrderAt`). */ orderAt?: number | undefined }
+
+/**
+ * The rows held still while the pointer or the selection is in the list (docs/sidebar.md "A list that holds still"). The first
+ * build with an empty hold keeps its rows here; every later one draws the same rows in the same places, each with what it shows
+ * now (mark, title, age, counts), and leaves out rows that appeared since. Clearing `rows` takes the list as it is now.
+ */
+export type SidebarHold = { rows?: unknown[] | undefined; /** Written by the build: the list as it is now has other rows, or another order, than the ones held. */ behind?: boolean }
+
+export type MultiInput = {
+  sessions: readonly MultiSession[]
+  current: string
+  /** The opened project: its group comes first and starts open. */
+  directory: string
+  selected?: string
+  focused: boolean
+  height: number
+  now: number
+  /** The bots, once asked for; undefined draws no bots section and no icon column. */
+  bots?: BotListReport | undefined
+  sections: readonly SidebarSection[]
+  scope: "folder" | "all"
+  icons: boolean
+  /** A group the user opened (true) or folded (false) by hand; the others follow the default (every shown group is open). */
+  open: ReadonlyMap<string, boolean>
+  /**
+   * Which folders are projects and how many show: absent, every folder with a session is listed (no cap). `canonical` names a
+   * linked worktree by its main repo, so its sessions list under it.
+   */
+  projects?: { isProject(directory: string): boolean; canonical?(directory: string): string; /** Path-only check (no disk): a folder used in the last day lists as a project even when it is no git root. */ eligible?(directory: string): boolean; /** The most projects listed before `+ N more projects`; 0 fills the sidebar's height. */ count: number; /** `sidebarProjectsFrom`: `you` lists the projects a person typed in first; absent, `all`. */ from?: SidebarProjectsFrom; /** `sidebarHiddenProjects` as a set of canonical folders; never listed, the opened one apart. */ hidden?: ReadonlySet<string> }
+  /** Days of activity a project's list reaches back; older sessions wait behind `+ N older`. Absent, `DEFAULT_RECENT_DAYS`; 0 lists every age. */
+  recentDays?: number
+  /** Each project's rank time, kept between frames (see `rankProjects`); absent, every frame ranks from scratch. */
+  rankStamps?: Map<string, number>
+  /** Sessions this terminal opened, by id: when, and the activity time the session had then. */
+  visits?: ReadonlyMap<string, { at: number; updatedAt: number }>
+  /** The `+ N more projects` row was opened: the whole ranked list shows, ending in `show fewer`. */
+  projectsExpanded?: boolean
+  /** How many of the projects past the cap the `+ N more projects` row has revealed so far (a page per press); `projectsExpanded` reveals them all. */
+  projectsRevealed?: number
+  /** Sessions a project shows before its `+ N more` row (the profile's `sidebarPreviewCount`); absent, `DEFAULT_PREVIEW`. */
+  previewCount?: number
+  /** The folders whose whole list the user opened with the more row; the others show the preview. */
+  expanded?: ReadonlySet<string>
+  /** Per folder (or `bot:<name>` key), how many hidden rows the more row has revealed so far (a page per press). */
+  revealed?: ReadonlyMap<string, number>
+  /** Chats this terminal knows belong to a bot before any list says so (a blank chat started from the bot, a first message just sent): session id to the bot's name, or an external bot's row id. */
+  chatBots?: ReadonlyMap<string, string>
+  unread?: readonly string[]
+  spinner?: string
+  blink?: boolean
+  ascii?: boolean
+  header?: boolean
+  glyphs?: Glyphs
+  /** The terminal draws images: bot icons become pictures (see `botIcon`); absent, the glyphs of today. */
+  faces?: IconFaces | undefined
+  /** Where the wheel put the list's window; the renderer reports the window it drew in it. */
+  scroll?: SidebarScroll | undefined
+  /** Present while the list holds still: see `SidebarHold`. */
+  hold?: SidebarHold | undefined
+}
+
+const PAD_X = 2
+/** The first row of the full list: opens the "New chat in…" picker. */
+export const NEW_CHAT_ID = "new:"
+export const isNewChatId = (id: string) => id === NEW_CHAT_ID
+/** A read-only row under a bot of another app: one of the sessions it has running there (`xact:<origin>:<bot id>:<its session id>`). */
+const EXTERNAL_ACTIVITY = "xact:"
+export const isExternalActivityId = (id: string) => id.startsWith(EXTERNAL_ACTIVITY)
+export const externalActivityId = (bot: { origin: string; id: string }, session: string) => `${EXTERNAL_ACTIVITY}${bot.origin}:${bot.id}:${session}`
+/** The connector, bot and session an `xact:` row names (an origin never holds a colon; a bot id is a profile name, which holds none either). */
+export function externalActivityOf(id: string): { origin: string; bot: string; session: string } | undefined {
+  if (!isExternalActivityId(id)) return undefined
+  const [origin, bot, ...session] = id.slice(EXTERNAL_ACTIVITY.length).split(":")
+  return origin && bot && session.length ? { origin, bot, session: session.join(":") } : undefined
+}
+/** The most rows a working bot of another app lists for what it does there. */
+const ACTIVITY_ROWS = 3
+const GROUP = "group:"
+const BOT = "bot:"
+const MORE = "more:"
+const MORE_PROJECTS = "projects:"
+const BOT_CHATS = "botchats:"
+const BOT_MORE = "botmore:"
+/** A bot of another app (`bot.list` `external`) that a connector can chat with: `xbot:<origin>:<id>`. */
+const EXTERNAL_BOT = "xbot:"
+/** The foldable row of the bots of one other app: `xgroup:<origin>` (also its key in `open`). */
+const XGROUP = "xgroup:"
+export const isExternalGroupId = (id: string) => id.startsWith(XGROUP)
+export const isExternalBotId = (id: string) => id.startsWith(EXTERNAL_BOT)
+export const externalBotId = (bot: { origin: string; id: string }) => `${EXTERNAL_BOT}${bot.origin}:${bot.id}`
+/** The connector and bot an `xbot:` row names (an origin never holds a colon). */
+export function externalBotOf(id: string): { origin: string; id: string } | undefined {
+  const rest = id.slice(EXTERNAL_BOT.length)
+  const colon = rest.indexOf(":")
+  return isExternalBotId(id) && colon > 0 ? { origin: rest.slice(0, colon), id: rest.slice(colon + 1) } : undefined
+}
+/** How many hidden projects or sessions one press of a more row reveals. */
+export const REVEAL_PAGE = 8
+/** Sessions every project and every bot shows before its `+ N more` row: the same for all, so opening one changes no height. */
+export const DEFAULT_PREVIEW = 3
+export const DEFAULT_RECENT_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
+/** An automatic project count lists at least this many projects, whatever their groups cost in rows. */
+const AUTO_MIN_PROJECTS = 6
+/** An untitled session whose log holds no more than this many events (created, permission mode) was opened and left alone. */
+const UNUSED_EVENTS = 2
+const STATE_WORD: Record<BotState, string> = { working: "working", idle: "idle", waiting: "waiting", problem: "problem" }
+const STATE_FG: Record<BotState, ColorName> = { working: "primary", idle: "muted", waiting: "warning", problem: "error" }
+const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●", "*"], idle: ["◌", "o"], waiting: ["…", "~"], problem: ["!", "!"] }
+/** A row that works or waits for you: its header counts it while it is not drawn, and it keeps its project listed. */
+const busyMark = (value: SessionMark) => value === "running" || waitsOnYou(value)
+
+type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> }; /** A folding header: its ▸/▾ glyph starts `col` cells in from the line's start. */ fold?: { col: number; open: boolean }; /** The row ends in a `+` that starts a chat. */ plus?: boolean }
+type Push = (line: Line, id?: string, picture?: { col: number; at: NonNullable<BotIcon["image"]> }, fold?: { col: number; open: boolean }, extra?: { /** A folded header that holds the open session carries its bar. */ holds?: boolean; plus?: boolean }) => void
+
+export const isGroupId = (id: string) => id.startsWith(GROUP)
+export const isBotId = (id: string) => id.startsWith(BOT)
+export const groupDirectory = (id: string) => id.slice(GROUP.length)
+/** The row under a project's preview: `+ N more` while it is short, `show less` once opened. */
+export const isMoreId = (id: string) => id.startsWith(MORE)
+export const moreDirectory = (id: string) => id.slice(MORE.length)
+/** The row under the last project: `+ N more projects` while the list is cut, `show fewer` once it is whole. */
+export const MORE_PROJECTS_ID = MORE_PROJECTS
+export const isMoreProjectsId = (id: string) => id === MORE_PROJECTS
+export const botName = (id: string) => id.slice(BOT.length)
+/** The row under a bot that folds or opens its chats, and the `+ N more` row under its preview. */
+export const isBotChatsId = (id: string) => id.startsWith(BOT_CHATS)
+export const botChatsName = (id: string) => id.slice(BOT_CHATS.length)
+export const isBotMoreId = (id: string) => id.startsWith(BOT_MORE)
+export const botMoreName = (id: string) => id.slice(BOT_MORE.length)
+/** The key a bot's chats use in `open` (folded or opened by hand) and `expanded` (whole list); a folder path never starts with it. */
+export const botKey = (name: string) => `${BOT}${name}`
+/** The same key for a chat host: a bot's name, or the row id of a bot of another app (which already starts with `xbot:`). */
+export const hostKey = (host: string) => host.startsWith(EXTERNAL_BOT) ? host : botKey(host)
+
+const baseName = (directory: string) => directory.replace(/\/+$/, "").split("/").pop() || directory
+/** The folder's own name, with its parent's when two listed folders share it. */
+function groupLabels(directories: readonly string[]): Map<string, string> {
+  const counts = new Map<string, number>()
+  for (const directory of directories) counts.set(baseName(directory), (counts.get(baseName(directory)) ?? 0) + 1)
+  return new Map(directories.map((directory) => {
+    const parts = directory.replace(/\/+$/, "").split("/").filter(Boolean)
+    return [directory, (counts.get(baseName(directory)) ?? 0) > 1 ? parts.slice(-2).join("/") : baseName(directory)]
+  }))
+}
+
+/**
+ * A chat nobody used: no title, no draft, nothing queued, idle, and a log that stops at its first events. The daemon already
+ * leaves the structurally empty ones out of the list; this catches the ones a model choice kept alive. They stay in /sessions.
+ */
+const unused = (session: MultiSession) => !session.title.trim() && !session.draft && session.queued === 0 && session.state === "idle" && !session.paused && session.lifecycle === undefined && session.lastSeq !== undefined && session.lastSeq <= UNUSED_EVENTS
+
+/** The folder's listed sessions in drawing order, without the unused ones (the open session is always kept). */
+const live = (sessions: readonly MultiSession[], directory: string, input: MultiInput) => (projectSessions(sessions as readonly SessionSummary[], directory, input.current) as MultiSession[]).filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
+
+/**
+ * A session this terminal opened within the last day that has taken part since (its activity moved past the one it had when first
+ * opened here) is never an empty one, whatever its pushed summary says (a pushed session carries no event count).
+ */
+const usedHere = (session: MultiSession, input: Pick<MultiInput, "now" | "visits">) => {
+  const visit = input.visits?.get(session.sessionId)
+  return visit !== undefined && input.now - visit.at <= FRESH_MS && session.updatedAt > visit.updatedAt
+}
+/** Also a workflow's session at rest: the run lives on /workflows, not as a chat here (the open one still shows). */
+const hiddenEmpty = (session: MultiSession, input: Pick<MultiInput, "now" | "visits">) => (unused(session) && !usedHere(session, input)) || restingWorkflow(session as never)
+
+/**
+ * The first `limit` sessions in the list's own order. An open session further down takes the last place instead of adding a row,
+ * so the group is as tall whichever session is open; a busy one further down adds none either (its header counts it).
+ */
+function preview(list: readonly MultiSession[], limit: number, current: string): MultiSession[] {
+  const first = list.slice(0, limit)
+  const open = list.find((session) => session.sessionId === current)
+  return !open || limit < 1 || first.includes(open) ? first : [...first.slice(0, -1), open]
+}
+
+/** The right side of a folding header: how many of its sessions work or wait out of sight, then how many it holds. */
+const headerCount = (hiddenBusy: number, total: number): Line => hiddenBusy > 0 ? [{ text: `${hiddenBusy} active`, fg: "warning" }, { text: ` ${total}`, fg: "muted" }] : [{ text: String(total), fg: "muted" }]
+
+/** The `shown` rows plus the next `extra` of the others, in the list's own order. */
+function reveal(list: readonly MultiSession[], shown: readonly MultiSession[], extra: number): MultiSession[] {
+  const have = new Set(shown.map((session) => session.sessionId))
+  let left = extra
+  return list.filter((session) => have.has(session.sessionId) || (left > 0 && left-- > 0))
+}
+
+/** The folders to list: the opened one first, then the busy ones, then the most recently used up to the cap; `rest` waits behind the more-projects row. */
+function directoriesOf(input: MultiInput, busy: (session: MultiSession) => boolean): ReturnType<typeof rankProjects> {
+  if (input.scope === "folder") return { shown: [input.directory], rest: [], all: [input.directory], always: new Set([input.directory]) }
+  const listed = input.sessions.filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input)))
+  return rankProjects({ sessions: listed, opened: input.directory, now: input.now, count: input.projects?.count || Number.POSITIVE_INFINITY, busy: busy as never, ...(input.rankStamps ? { stamps: input.rankStamps } : {}), isProject: input.projects?.isProject ?? (() => true), ...(input.projects?.eligible ? { eligible: input.projects.eligible } : {}), ...(input.projects?.from ? { from: input.projects.from } : {}), ...(input.projects?.hidden ? { hidden: input.projects.hidden } : {}) })
+}
+
+/** Every shown group starts open; a fold or an open by hand wins. */
+const isOpen = (input: MultiInput, directory: string) => input.open.get(directory) ?? true
+
+/** Which sections draw: the sessions without a bot only stand in for the projects, which hold them already. */
+const shown = (input: MultiInput): SidebarSection[] => input.sections.filter((section) => section !== "sessions" || !input.sections.includes("projects")).filter((section) => section !== "bots" || input.bots !== undefined)
+
+/** A linked worktree's sessions list under its main repo: only the sessions whose folder has such a name are copied. */
+function canonicalized(input: MultiInput): MultiInput {
+  const canonical = input.projects?.canonical
+  if (!canonical || input.scope === "folder") return input
+  const directory = canonical(input.directory)
+  let changed = directory !== input.directory
+  const sessions = input.sessions.map((session) => {
+    const named = canonical(session.directory)
+    if (named === session.directory) return session
+    changed = true
+    return { ...session, directory: named }
+  })
+  return changed ? { ...input, directory, sessions } : input
+}
+
+type Built = { entries: Entry[]; names: Map<string, string>; starts: Array<{ section: SidebarSection; id: string }> }
+
+/** The list as drawn: as it is now, or, while `hold` is given, the rows it held with what each shows now. */
+function build(raw: MultiInput): Built {
+  const live = buildLive(raw)
+  const hold = raw.hold
+  if (!hold) return live
+  const held = hold.rows as Entry[] | undefined
+  if (!held) {
+    hold.rows = live.entries
+    hold.behind = false
+    return live
+  }
+  const ids = (entries: readonly Entry[]) => entries.map((entry) => entry.id ?? "").join("\n")
+  hold.behind = ids(held) !== ids(live.entries)
+  // The preview of the list as it is now may leave out a held session that still exists, or add one that was not held: the sessions
+  // of every group are then the held ones, so a held row shows its session as it is and a header counts what the held rows hide.
+  const heldIds = new Set(held.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
+  const liveIds = new Set(live.entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
+  const same = heldIds.size === liveIds.size && [...heldIds].every((id) => liveIds.has(id))
+  const current = same ? live : buildLive(raw, heldIds)
+  const now = new Map<string, Entry>()
+  for (const entry of current.entries) if (entry.id !== undefined && !now.has(entry.id)) now.set(entry.id, entry)
+  // A held row that is gone keeps its place, without the selection's fill, until the list is taken again.
+  const entries = held.map((entry): Entry => entry.id === undefined ? entry : now.get(entry.id) ?? { line: entry.line.map((span) => ({ ...span, fg: "muted" as const, bold: false })), id: entry.id, lead: [{ text: "  " }] })
+  const shown = new Set(entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
+  return { entries, names: current.names, starts: current.starts.filter((start) => shown.has(start.id)) }
+}
+
+/** `only`: the sessions a held list draws; every group lists those instead of its own preview. */
+function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
+  const input = canonicalized(raw)
+  const g = input.glyphs ?? glyphs()
+  const inner = (input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH) - 1 - PAD_X - 2
+  const picked = input.focused ? input.selected ?? input.current : undefined
+  const unread = new Set(input.unread ?? [])
+  const botOf = new Map<string, { name: string; state: BotState; identity: BotListReport["bots"][number]["identity"] }>()
+  for (const bot of input.bots?.bots ?? []) for (const project of bot.projects) for (const member of project.sessions) botOf.set(member.sessionId, { name: bot.name, state: bot.state, identity: bot.identity })
+  // The chats of a bot of another app are sessions on its chat model: the row id names the host, as a bot's name does for its own.
+  const externalHost = new Map<string, string>()
+  for (const external of input.bots?.external ?? []) {
+    if (external.chat) externalHost.set(external.chat, externalBotId(external))
+    for (const project of external.projects ?? []) for (const member of project.sessions) botOf.set(member.sessionId, { name: externalBotId(external), state: external.state, identity: external.identity ?? { origin: external.origin } })
+  }
+  // A chat of a bot lives under its bot: the project lists, their counts and their ranking leave it out (/sessions still lists it).
+  const botNames = new Set((input.bots?.bots ?? []).map((bot) => bot.name))
+  /** The host of a chat: a bot's name or an external bot's row id, from the report, the terminal's own note, the agent, or the chat model. */
+  const hostOf = (session: MultiSession): string | undefined => botOf.get(session.sessionId)?.name ?? input.chatBots?.get(session.sessionId) ?? (session.agent !== undefined && botNames.has(session.agent) ? session.agent : undefined) ?? (session.model ? externalHost.get(session.model.model) : undefined)
+  const ofBot = (session: MultiSession) => hostOf(session) !== undefined
+  const known = new Map(input.sessions.map((session) => [session.sessionId, session]))
+  const byHost = new Map<string, MultiSession[]>()
+  for (const session of input.sessions) {
+    const host = hostOf(session)
+    if (host !== undefined) byHost.set(host, [...(byHost.get(host) ?? []), session])
+  }
+  const projectInput: MultiInput = botNames.size || externalHost.size || input.chatBots?.size ? { ...input, sessions: input.sessions.filter((session) => !ofBot(session)) } : input
+  const mark = (session: MultiSession) => sessionMark(session as never, unread.has(session.sessionId) && session.sessionId !== input.current)
+  const symbol = (value: SessionMark): Span => markSymbol(value, { g, spinner: input.spinner, blink: input.blink, ascii: input.ascii })
+  const names = new Map<string, string>()
+  const entries: Entry[] = []
+  const lead = (id: string): Line => id === input.current ? [{ text: "▌", fg: "primary" }, { text: " " }] : id === picked ? [{ text: input.ascii ? ">" : "›", fg: "muted" }, { text: " " }] : [{ text: "  " }]
+  const starts: Array<{ section: SidebarSection; id: string }> = []
+  let inSection: SidebarSection | undefined
+  const push: Push = (line, id, picture, fold, extra) => {
+    if (id !== undefined && inSection && !starts.some((start) => start.section === inSection)) starts.push({ section: inSection, id })
+    const selected = id !== undefined && id === picked
+    entries.push({ line, ...(id !== undefined ? { id, lead: extra?.holds && id !== picked ? [{ text: "▌", fg: "primary" }, { text: " " }] : lead(id) } : { lead: [{ text: "  " }] }), ...(selected ? { fill: true } : {}), ...(picture ? { picture } : {}), ...(fold ? { fold } : {}), ...(extra?.plus ? { plus: true } : {}) })
+  }
+  /** The `+` that ends a row a chat can be started from; its cells (and the blank before the rule) are the row's own hit zone. */
+  const plus: Line = [{ text: " +", fg: "muted" }]
+  const blankBetween = () => { if (entries.length) entries.push({ line: [] }) }
+  const heading = (title: string, count: number) => push(spread([{ text: title, fg: "muted" }], [{ text: String(count), fg: "muted" }], inner))
+  /** `slot` names the picture for the image layer when the terminal draws images: one per row. */
+  const icon = (bot: { name: string; state?: BotState; identity: { shape?: never; color?: never } | BotListReport["bots"][number]["identity"] }, slot: string) => botIcon({ name: bot.name, shape: bot.identity.shape, color: bot.identity.color, ascii: input.ascii, state: bot.state, ...(input.faces ? { faces: { ...input.faces, slot: `${input.faces.slot}:${slot}` } } : {}) })
+  /** The icon cells of a session row: the bot's icon, else blanks of the same width. */
+  // The icon, then exactly one space: a glyph is its cell and the space, a picture its two cells and the space.
+  const pictured = Boolean(input.faces && !input.ascii && input.faces.capability.images && !input.faces.capability.ascii)
+  const gap = input.ascii || pictured ? 3 : 2
+  const iconSpan = (bot: { name: string; state?: BotState; identity: BotListReport["bots"][number]["identity"] } | undefined, slot: string): { span: Span; image?: NonNullable<BotIcon["image"]> } => {
+    if (!bot) return { span: { text: " ".repeat(gap) } }
+    const made = icon(bot, slot)
+    return { span: { text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, ...(made.image ? { image: made.image } : {}) }
+  }
+
+  /** `iconed` false is a bot's own chat list: every row there is that bot's, so none repeats the icon and none leaves a blank for it. */
+  const sessionRows = (list: readonly MultiSession[], indent: string, iconed = true) => {
+    for (const session of list) {
+      const value = mark(session)
+      const bot = iconed ? botOf.get(session.sessionId) : undefined
+      const room = iconed && input.bots ? gap : 0
+      names.set(session.sessionId, session.title || "Untitled session")
+      const made = iconSpan(bot, session.sessionId)
+      if (input.icons) {
+        const mark: Span = { ...symbol(value), text: `${symbol(value).text} ` }
+        push([mark, ...(bot ? [made.span] : [])], session.sessionId, made.image ? { col: lineWidth([mark]), at: made.image } : undefined)
+        continue
+      }
+      const current = session.sessionId === input.current
+      const quiet = value === "idle" || value === "settled" || value === "queued"
+      // A running row counts up from its turn's start (the tick that moves its spinner redraws it); the others show their age.
+      const age = value === "running" && session.since !== undefined && input.now >= session.since ? elapsedLabel(input.now - session.since) : relativeTime(input.now, sessionActivityAt(session))
+      const pr = session.lifecycle?.pr
+      // Compacting takes the time's place, and the sub-agents at work follow it (`↳2`), as in the one-folder list.
+      const clock: Span = isCompacting(session) ? { text: "compacting", fg: "info" } : { text: age, fg: "muted" }
+      const metaOf = (withNumber: boolean): Line => [clock, ...agentsSpans(session, input.ascii), ...(pr ? prSpans(pr, withNumber) : [])]
+      const used = indent.length + 2 + room
+      // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
+      const meta = pr && inner - used - lineWidth(metaOf(true)) - 2 < 10 ? metaOf(false) : metaOf(true)
+      const titleRoom = Math.max(4, inner - used - lineWidth(meta) - 2)
+      const title = labelSpans(rowLabel(session, { untitled: "Untitled session", marker: "Draft", ascii: input.ascii }), titleRoom, { fg: current || session.sessionId === picked || !quiet ? "text" : "muted", bold: current || session.sessionId === picked })
+      const before: Line = [{ text: indent }, { ...symbol(value), text: `${symbol(value).text} ` }]
+      push(spread([...before, ...(room ? [made.span] : []), ...title], meta, inner), session.sessionId, made.image ? { col: lineWidth(before), at: made.image } : undefined)
+    }
+  }
+
+  /** A bot's chats in every folder, newest first: what the daemon reports for it, plus the listed sessions that belong to it. `host` is the bot's name or the external bot's row id. */
+  const chatsOf = (host: string, projects: BotListReport["bots"][number]["projects"]): MultiSession[] => {
+    const found = new Map<string, MultiSession>()
+    for (const project of projects) for (const member of project.sessions) found.set(member.sessionId, known.get(member.sessionId) ?? { sessionId: member.sessionId, title: member.title, state: (member.status === "running" ? "generating" : "idle") as MultiSession["state"], queued: 0, updatedAt: member.updatedAt, ...(member.orderAt !== undefined ? { orderAt: member.orderAt } : {}), directory: project.directory })
+    for (const session of byHost.get(host) ?? []) if (!found.has(session.sessionId)) found.set(session.sessionId, session)
+    return [...found.values()].filter((session) => session.archivedAt === undefined && (session.sessionId === input.current || !hiddenEmpty(session, input))).sort((a, b) => sessionOrderAt(b) - sessionOrderAt(a) || a.sessionId.localeCompare(b.sessionId))
+  }
+  /**
+   * The folding row under a bot and, when open, its chats: the same preview and `+ N more` row as a project's group. It starts
+   * open for a MendCode bot and folded for a bot of another app (`startsOpen`), and only a fold by hand changes that: which chat
+   * is open never does.
+   */
+  const botChats = (host: string, label: string, projects: BotListReport["bots"][number]["projects"], indent = "", startsOpen = true) => {
+    if (input.icons) return
+    const chats = chatsOf(host, projects)
+    if (!chats.length) return
+    const key = hostKey(host)
+    const id = `${BOT_CHATS}${host}`
+    const busy = (session: MultiSession) => busyMark(mark(session))
+    const open = input.open.get(key) ?? startsOpen
+    const limit = input.previewCount ?? DEFAULT_PREVIEW
+    const expanded = input.expanded?.has(key) === true
+    const more = expanded ? Number.POSITIVE_INFINITY : input.revealed?.get(key) ?? 0
+    const collapsed = preview(chats, limit, input.current)
+    const rows = !open ? [] : only ? chats.filter((session) => only.has(session.sessionId)) : more > 0 ? reveal(chats, collapsed, more) : collapsed
+    const drawn = new Set(rows.map((session) => session.sessionId))
+    names.set(id, `${label} chats`)
+    push(spread([{ text: `  ${indent}` }, { text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: "chats", fg: "muted", bold: id === picked }], headerCount(chats.filter((session) => busy(session) && !drawn.has(session.sessionId)).length, chats.length), inner), id, undefined, { col: 2 + indent.length, open }, { holds: !open && chats.some((session) => session.sessionId === input.current) })
+    if (!open) return
+    sessionRows(rows, `    ${indent}`, false)
+    const hidden = chats.length - rows.length
+    if (hidden > 0 || (more > 0 && chats.length > limit)) {
+      const more = `${BOT_MORE}${host}`
+      push([{ text: `      ${indent}` }, { text: hidden > 0 ? `+ ${hidden} more` : "show less", fg: "muted", bold: more === picked }], more)
+    }
+  }
+
+  const sections = shown(input)
+  // The one row that starts a chat anywhere: it opens the folder picker, with the open folder first.
+  if (!input.icons && sections.length) {
+    names.set(NEW_CHAT_ID, "New chat")
+    push([{ text: "+ ", fg: "primary" }, { text: "New chat…", fg: NEW_CHAT_ID === picked ? "text" : "muted", bold: NEW_CHAT_ID === picked }], NEW_CHAT_ID)
+  }
+  for (const section of sections) {
+    inSection = section
+    if (section === "bots") {
+      const bots = input.bots!
+      if (!input.icons) { blankBetween(); heading("Bots", bots.bots.length + bots.external.length) }
+      else blankBetween()
+      if (!bots.bots.length && !bots.external.length && !input.icons) push([{ text: "No bots · /bot new <name>", fg: "muted" }])
+      for (const bot of bots.bots) {
+        names.set(`${BOT}${bot.name}`, bot.name)
+        const made = icon(bot, `${BOT}${bot.name}`)
+        const [unicodeMark, asciiMark] = STATE_MARK[bot.state]
+        const stateMark = input.ascii ? asciiMark : unicodeMark
+        const fg = STATE_FG[bot.state]
+        const iconCells: Span = { text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }
+        const picture = made.image ? { col: 0, at: made.image } : undefined
+        if (input.icons) { push([iconCells, { text: stateMark, fg }], `${BOT}${bot.name}`, picture); continue }
+        const right: Line = [{ text: `${stateMark} ${STATE_WORD[bot.state]}`, fg }, ...plus]
+        const room = inner - lineWidth(right) - 2 - lineWidth([iconCells])
+        const name = truncateEnd(bot.name, Math.max(3, room))
+        const originRoom = room - lineWidth([{ text: name }]) - 2
+        const origin = originRoom >= 3 ? [{ text: `  ${truncateEnd(bot.identity.origin, originRoom)}`, fg: "muted" as const }] : []
+        push(spread([iconCells, { text: name, fg: "text", bold: `${BOT}${bot.name}` === picked }, ...origin], right, inner), `${BOT}${bot.name}`, picture, undefined, { plus: true })
+        botChats(bot.name, bot.name, bot.projects)
+      }
+      // The bots of another app list under one foldable row per origin: folded, only the ones with a chat that works or was active in the last day show.
+      const origins = new Map<string, ExternalBotInfo[]>()
+      for (const external of input.icons ? [] : bots.external) origins.set(external.origin, [...(origins.get(external.origin) ?? []), external])
+      for (const [origin, members] of origins) {
+        const groupId = `${XGROUP}${origin}`
+        const chatsOfBot = (external: ExternalBotInfo) => chatsOf(externalBotId(external), external.projects ?? [])
+        const lately = (external: ExternalBotInfo) => external.state !== "idle" || chatsOfBot(external).some((session) => busyMark(mark(session)) || input.now - sessionActivityAt(session as never) <= DAY_MS)
+        const recent = members.filter(lately)
+        const open = input.open.get(groupId) ?? false
+        names.set(groupId, `${origin} bots`)
+        push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: `${truncateEnd(origin, inner - 12)} · ${members.length}`, fg: "muted", bold: groupId === picked }], !open && recent.length ? [{ text: `${recent.length} active`, fg: "warning" }] : [], inner), groupId, undefined, { col: 0, open }, { holds: !open && members.some((external) => !recent.includes(external) && chatsOfBot(external).some((session) => session.sessionId === input.current)) })
+        for (const external of open ? members : recent) {
+          const [unicodeMark, asciiMark] = STATE_MARK[external.state]
+          const stateMark = input.ascii ? asciiMark : unicodeMark
+          const identity = external.identity ?? { origin: external.origin }
+          // An imported bot keeps its glyph: it has no row to pick, so no picture is placed for it.
+          const made = botIcon({ name: external.name, shape: identity.shape, color: identity.color, ascii: input.ascii })
+          // One a connector can chat with is a row to pick (Enter chats, `o` opens its page); one it cannot stays a plain line.
+          const row = external.chat ? externalBotId(external) : undefined
+          push(spread([{ text: "  " }, { text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }, ...(row ? plus : [])], inner), row, undefined, undefined, row ? { plus: true } : undefined)
+          // What it does in its own app right now: one read-only row per session running there, newest first.
+          for (const running of (external.activity ?? []).slice(0, ACTIVITY_ROWS)) {
+            const id = externalActivityId(external, running.id)
+            const age: Line = [{ text: relativeTime(input.now, running.activeAt ?? running.startedAt ?? input.now), fg: "muted" }]
+            const title = running.title?.trim() || (running.source ? `${running.source} session` : "session")
+            names.set(id, title)
+            push(spread([{ text: "    " }, { text: `${input.spinner || g.running} `, fg: "primary" }, { text: truncateEnd(title, Math.max(4, inner - 6 - lineWidth(age) - 2)), fg: id === picked ? "text" : "muted", bold: id === picked }], age, inner), id)
+          }
+          if (row) botChats(row, external.name, external.projects ?? [], "  ", false)
+        }
+      }
+    } else if (section === "projects") {
+      const ranked = input.icons ? { shown: [input.directory], rest: [] as string[], all: [input.directory], always: new Set([input.directory]) } : directoriesOf(projectInput, (session) => busyMark(mark(session)))
+      const extra = input.projectsExpanded ? Number.POSITIVE_INFINITY : input.projectsRevealed ?? 0
+      // The list is the ranking, newest first: the shown ones and the revealed page of the rest in ranking order, so an old opened folder never goes ahead of newer ones.
+      const visible = new Set([...ranked.shown, ...ranked.rest.slice(0, extra)])
+      const directories = ranked.all.filter((directory) => visible.has(directory))
+      const labels = groupLabels(directories)
+      if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
+      else blankBetween()
+      // An automatic count fills the height: a group that would not fit is taken back, and with it every plain one after it.
+      const auto = !input.icons && input.scope === "all" && input.projects?.count === 0
+      // In the automatic count a page reveals projects past the height's cut: this many more are drawn after it.
+      let spare = extra
+      let revealedPast = 0
+      const room = input.height - (input.header === false ? 0 : 2) - 1
+      const ownBusy = (session: MultiSession) => busyMark(mark(session))
+      const recentMs = (input.recentDays ?? DEFAULT_RECENT_DAYS) > 0 ? (input.recentDays ?? DEFAULT_RECENT_DAYS) * DAY_MS : Number.POSITIVE_INFINITY
+      let cutAt = -1
+      let listed = 0
+      for (const [at, directory] of directories.entries()) {
+        const list = live(projectInput.sessions, directory, input)
+        // The opened, busy and used-today folders show past the height cut as they do past the count.
+        const forced = directory === input.directory || ranked.always.has(directory) || list.some(ownBusy)
+        if (auto && cutAt >= 0 && !forced) {
+          if (spare <= 0) continue
+          spare--
+          revealedPast++
+        }
+        const rollback = entries.length
+        listed++
+        const open = input.icons || isOpen(input, directory)
+        // Every project previews the same number of sessions, the opened one too: opening a session changes no group's height.
+        const limit = input.previewCount ?? DEFAULT_PREVIEW
+        const expanded = !input.icons && input.expanded?.has(directory) === true
+        const more = expanded ? Number.POSITIVE_INFINITY : input.icons ? 0 : input.revealed?.get(directory) ?? 0
+        // Sessions older than the window wait behind the more row; the open and pinned ones show at any age.
+        const keep = (session: MultiSession) => session.sessionId === input.current || session.lifecycle?.pinnedAt !== undefined
+        const recent = input.icons || recentMs === Number.POSITIVE_INFINITY ? list : list.filter((session) => keep(session) || input.now - sessionActivityAt(session as never) <= recentMs)
+        const collapsed = input.icons ? list : preview(recent, limit, input.current)
+        const rows = !open ? [] : only ? list.filter((session) => only.has(session.sessionId)) : more > 0 ? reveal(list, collapsed, more) : collapsed
+        if (!input.icons) {
+          const id = `${GROUP}${directory}`
+          names.set(id, labels.get(directory) ?? baseName(directory))
+          const holdsCurrent = list.some((session) => session.sessionId === input.current)
+          const drawn = new Set(rows.map((session) => session.sessionId))
+          // The sessions that work or wait without a row of their own (folded, or past the preview) are counted here, never added as rows.
+          const right: Line = [...headerCount(list.filter((session) => ownBusy(session) && !drawn.has(session.sessionId)).length, list.length), ...plus]
+          push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: truncateEnd(labels.get(directory) ?? baseName(directory), inner - lineWidth(right) - 4), fg: "text", bold: holdsCurrent || id === picked }], right, inner), id, undefined, { col: 0, open }, { holds: !open && holdsCurrent, plus: true })
+        }
+        if (open) {
+          if (!list.length && !input.icons) push([{ text: "  No sessions yet", fg: "muted" }])
+          sessionRows(rows, input.icons ? "" : "  ")
+          const hidden = list.length - rows.length
+          if (hidden > 0 || (more > 0 && list.length > collapsed.length)) {
+            const id = `${MORE}${directory}`
+            const shownIds = new Set(rows.map((session) => session.sessionId))
+            const recentIds = new Set(recent.map((session) => session.sessionId))
+            const older = list.every((session) => shownIds.has(session.sessionId) || !recentIds.has(session.sessionId))
+            push([{ text: "    " }, { text: hidden > 0 ? `+ ${hidden} ${older ? "older" : "more"}` : "show less", fg: "muted", bold: id === picked }], id)
+          }
+        }
+        if (auto && cutAt < 0 && !forced && at >= AUTO_MIN_PROJECTS && entries.length > room) {
+          cutAt = at
+          // A revealed page lifts the cut: the group that would have been taken back stays as the first of the page.
+          if (spare > 0) { spare--; revealedPast++ }
+          else { entries.length = rollback; listed-- }
+        }
+      }
+      // The projects past the cap wait behind one row that opens the whole ranked list (and folds it back).
+      const revealedRest = directories.length - ranked.shown.length
+      const waiting = ranked.rest.length - revealedRest + (auto ? directories.length - listed : 0)
+      const foldable = waiting > 0 || revealedRest + revealedPast > 0
+      if (!input.icons && foldable) push([{ text: "  " }, { text: waiting > 0 ? `+ ${waiting} more projects` : "show fewer", fg: "muted", bold: MORE_PROJECTS === picked }], MORE_PROJECTS)
+    } else {
+      blankBetween()
+      const loose = live(projectInput.sessions, input.directory, input)
+      if (!input.icons) heading("Sessions", loose.length)
+      if (!loose.length && !input.icons) push([{ text: "No sessions yet", fg: "muted" }])
+      sessionRows(loose, "")
+    }
+  }
+  if (!sections.length) {
+    push([{ text: "Nothing shown", fg: "muted" }])
+    if (!input.icons) push([{ text: "/customize › Sidebar sections", fg: "muted" }])
+  }
+  return { entries, names, starts }
+}
+
+/** The ids the keyboard stops on, in drawing order. */
+export function multiStops(input: MultiInput): string[] {
+  return build(input).entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : [])
+}
+
+/** The first pickable row of every section that has one, in drawing order: where Tab and Shift+Tab land. */
+export function multiSectionStarts(input: MultiInput): string[] {
+  return build(input).starts.map((start) => start.id)
+}
+/**
+ * Whether the row folds, as drawn now: `open` or `folded` for a project, a bot's chats or an origin's bots (a bot's own row answers
+ * for its chats row), undefined for a row that does not fold.
+ */
+export function multiFoldState(input: MultiInput, id: string): "open" | "folded" | undefined {
+  const target = isBotId(id) ? `${BOT_CHATS}${botName(id)}` : isExternalBotId(id) ? `${BOT_CHATS}${id}` : id
+  const fold = build(input).entries.find((entry) => entry.id === target)?.fold
+  return fold ? (fold.open ? "open" : "folded") : undefined
+}
+
+/** The sidebar, exactly `input.height` rows by the width of its kind, every row closed by the rule. */
+export function renderMultiSidebar(input: MultiInput): { rows: Line[]; hits: Array<{ row: number; id: string; /** The cells (from the sidebar's left edge) of the ▸/▾ glyph of a folding row. */ fold?: { from: number; to: number }; /** The cells of the `+` that ends a row a chat can be started from. */ plus?: { from: number; to: number } }>; /** The bots' pictures at the sidebar's own row and column; empty unless `faces` was given. */ images: ImagePlacement[] } {
+  const g = input.glyphs ?? glyphs()
+  const width = input.icons ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
+  const inner = width - 1 - PAD_X - 2
+  const { entries, names, starts } = build(input)
+  const picked = input.focused ? input.selected ?? input.current : undefined
+  const unread = new Set(input.unread ?? [])
+  // The header's right side counts what works and what waits, over the sessions listed.
+  const counts = { running: 0, approval: 0 }
+  for (const session of input.sessions) {
+    if (session.archivedAt !== undefined) continue
+    const value = sessionMark(session as never, unread.has(session.sessionId) && session.sessionId !== input.current)
+    if (value === "running") counts.running++
+    else if (waitsOnYou(value)) counts.approval++
+  }
+  const summary: Line = input.focused ? [{ text: picked !== undefined && (isBotId(picked) || isExternalBotId(picked)) ? "↵ fold n chat o page" : picked !== undefined && isBotChatsId(picked) ? "↵ fold  n chat" : picked !== undefined && isGroupId(picked) ? "↵ fold n new x hide" : picked !== undefined && isExternalGroupId(picked) ? "↵ fold  → prompt" : picked !== undefined && isNewChatId(picked) ? "↵ pick a folder" : picked !== undefined && isExternalActivityId(picked) ? "↵ read  → prompt" : starts.length > 1 ? "tab section  → prompt" : "→ prompt", fg: "muted" }] : counts.running || counts.approval
+    ? [...(counts.running ? [{ text: `${input.spinner || g.running} ${counts.running}`, fg: "primary" as const }] : []), ...(counts.running && counts.approval ? [{ text: "  " }] : []), ...(counts.approval ? [{ text: `${g.ask} ${counts.approval}`, fg: "warning" as const }] : [])]
+    : [{ text: "← focus", fg: "muted" }]
+  const head: Entry[] = input.icons || input.header === false ? [] : [{ line: spread([{ text: "Sessions", fg: "primary", bold: true }], summary, inner) }, { line: [] }]
+  // The icons column names the picked row under the list, since an icon alone does not say who it is.
+  const caption = input.icons && picked && names.get(picked) ? wrap(names.get(picked)!, inner).slice(0, 2) : []
+  const reserved = caption.length ? caption.length + 1 : 0
+  const room = Math.max(0, input.height - head.length - reserved)
+  const overflow = entries.length > room
+  const shownRoom = overflow ? Math.max(0, room - 1) : room
+  const anchor = picked ?? input.current
+  const lastOfPicked = entries.findLastIndex((entry) => entry.id === anchor)
+  const start = sidebarWindowStart({ total: entries.length, shownRoom, overflow, anchorIndex: lastOfPicked, scroll: input.scroll })
+  const windowed = entries.slice(start, start + shownRoom)
+  const body: Entry[] = [...head]
+  const hits: Array<{ row: number; id: string; fold?: { from: number; to: number }; plus?: { from: number; to: number } }> = []
+  const images: ImagePlacement[] = []
+  for (const entry of windowed) {
+    // One cell of margin, the two of the marker, then the cells before the glyph and its space. The `+` zone is the blank before it, the sign and the blank before the rule.
+    if (entry.id !== undefined) hits.push({ row: body.length, id: entry.id, ...(entry.fold ? { fold: { from: 1 + PAD_X + entry.fold.col, to: 1 + PAD_X + entry.fold.col + 2 } } : {}), ...(entry.plus ? { plus: { from: 1 + PAD_X + inner - 2, to: 1 + PAD_X + inner + 1 } } : {}) })
+    // One cell of margin, the two of the marker, then the cells before the icon.
+    const placed = entry.picture?.at({ row: body.length, col: 1 + PAD_X + entry.picture.col })
+    if (placed && body.length < input.height) images.push(placed)
+    body.push(entry)
+  }
+  if (overflow) {
+    const hidden = entries.filter((entry, index) => (index < start || index >= start + windowed.length) && entry.id !== undefined).length
+    const [up, down] = input.ascii ? ["^", "v"] : ["↑", "↓"]
+    body.push({ line: [{ text: `${start > 0 ? `${up} ` : ""}${start + windowed.length < entries.length ? `${down} ` : ""}${hidden} more`, fg: "muted" }] })
+  }
+  while (body.length < input.height - reserved) body.push({ line: [] })
+  if (reserved) body.push({ line: [] }, ...caption.map((text): Entry => ({ line: [{ text, fg: "text", bold: true }] })))
+  const rows = body.slice(0, input.height).map(({ line, lead, fill }): Line => {
+    const row: Line = [{ text: " " }, ...(lead ?? [{ text: " ".repeat(PAD_X) }]), ...fit(line, inner), { text: " ", fg: "muted" }]
+    return [...(fill ? row.map((span) => ({ ...span, bg: "element" as const })) : row), { text: "│", fg: "border" }]
+  })
+  return { rows, hits, images }
+}

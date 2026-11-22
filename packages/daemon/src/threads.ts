@@ -7,13 +7,15 @@ import { excerpt } from "./session-recall"
 import { sessionStatsText } from "./session-stats-text"
 import { foreignRef, foreignSourceName, type ForeignLine, type ForeignThreads } from "./thread-foreign"
 import { MAX_PEER_SESSIONS } from "./peers"
-import { compactList, sessionListLines, shortSuffix } from "./session-list-text"
+import { compactList, sessionListLines, shortSuffix, type ListRow } from "./session-list-text"
 
 /** What `@thread` attaches: the newest messages, each cut, the whole capped by an estimate of 4 characters per token. */
 export const THREAD_SNAPSHOT = { messages: 6, tokens: 3_000, messageChars: 900, requestChars: 1_500, checkpointChars: 3_000 } as const
 const READ_PAGE = 10
 const SEARCH_SCAN = 40
 const MESSAGE_CHARS = 1_500
+/** One message read on its own (`limit=1`): whole up to this many characters, then `offset` reads on. */
+const WHOLE_CHARS = 24_000
 const TOOL_CHARS = 300
 const ANSWER_CHARS = 4_000
 const DEFAULT_WAIT = 60
@@ -46,13 +48,13 @@ const defang = (text: string) => text.replaceAll("</thread-snapshot", "<\\/threa
 
 type ThreadsInput = {
   clock: Clock
-  store: Pick<Store, "sessionInfo" | "listSessions" | "recall" | "engineMessages" | "sessionTree" | "sessionStats">
+  store: Pick<Store, "sessionInfo" | "sessionAgent" | "listSessions" | "recall" | "engineMessages" | "sessionTree" | "sessionStats">
   peers(sessionId: SessionId): PeerPort
   /** True while the session has a turn running, a request pending or messages queued. */
   busy(sessionId: SessionId): boolean
   state(sessionId: SessionId): string
-  /** Cancels the session's running turn; false when none is running. */
-  interrupt(sessionId: SessionId): Promise<boolean>
+  /** Cancels the session's running turn for session `from`; false when none is running, else how many queued messages the cancel left held. */
+  interrupt(sessionId: SessionId, from: SessionId): Promise<false | { held: number }>
   /** Merge-back of `fork` into `into` (its parent): the fork's turns since it branched become context for the next turn of `into`. */
   merge(input: { fork: SessionId; into: SessionId }): { ok: true; turns: number; omitted: number; tokens: number } | { ok: false; message: string }
   sleep?(ms: number): Promise<void>
@@ -60,6 +62,12 @@ type ThreadsInput = {
   foreign?: ForeignThreads
   /** What a new session in `directory` would get (folder, permission mode, trust), for the approval of `threads start`. */
   startPlan?(from: SessionId, directory: string): string
+  /** Experimental bots: the bot a session runs as while the flag is on, else undefined. That bot reads its own chats, in any folder, without asking. */
+  botOf?(sessionId: SessionId): string | undefined
+  /** Whether the user turned `experimental.thread_tools` on: without it a bot gets only its own recall from the tool. */
+  threadToolsOn?(): boolean
+  /** A bot's saved notes that mention `query` (bot-memory.ts). */
+  botNotes?(bot: string, query: string | undefined): string
 }
 
 /**
@@ -96,10 +104,25 @@ export function createThreads(input: ThreadsInput) {
   /** `ref` as a full id when it is the end of one session's id (what lists print), anywhere in this daemon; `ref` itself otherwise. */
   const expandRef = (from: SessionId, ref: string) => input.peers(from).expand?.(ref) ?? ref
 
+  /**
+   * Any local session of the daemon, in any folder, for a bot's turn: this is the one place a session is read without `@thread` or a
+   * prompt. It is a capability the owner chose for bots only (docs/permissions.md): a bot knows what is going on across all the
+   * user's work, its own chats first of all. A plain session never matches here and keeps the usual consent; chats of other programs
+   * (codex:, claude:, v1:) are not sessions of this daemon and still ask.
+   */
+  function botReachable(from: SessionId, ref: string): { sessionId: SessionId; title: string } | undefined {
+    if (!input.botOf?.(from)) return undefined
+    const full = (store.sessionInfo(ref as SessionId) ? ref : expandRef(from, ref)) as SessionId
+    const info = full !== from ? store.sessionInfo(full) : undefined
+    return info ? { sessionId: full, title: info.title } : undefined
+  }
+
   /** The session `ref` names (a full id, or the end of one, as `@thread:` writes it) when it is in `from`'s project. */
   function resolve(from: SessionId, ref: string, elsewhere = false): { ok: true; id: SessionId; title: string } | { ok: false; message: string } {
     const origin = store.sessionInfo(from)
     if (!origin) return { ok: false, message: "unknown session" }
+    const mine = botReachable(from, ref)
+    if (mine) return { ok: true, id: mine.sessionId, title: mine.title }
     // Another project's session is named by its full id only (as `threads list scope=all` prints it), and only a session of its own, not a sub-agent's.
     if (elsewhere) {
       // The short id a list prints names the session as well as the full one.
@@ -133,10 +156,11 @@ export function createThreads(input: ThreadsInput) {
 
   const head = (id: SessionId, title: string) => `thread ${id} ${JSON.stringify(oneLine(title, 160))} state=${input.state(id)}`
 
-  function items(id: SessionId, before: string | undefined, count: number): { items: Item[]; more: boolean } | { error: string } {
+  /** `at`: `before` names the first item of the page itself instead of the one after it (a continuation of one message). */
+  function items(id: SessionId, before: string | undefined, count: number, at = false): { items: Item[]; more: boolean } | { error: string } {
     const cursor = before ? store.recall.item(id, before as never) : undefined
     if (before && !cursor) return { error: "unknown cursor in that session" }
-    const page = store.recall.page(id, cursor?.seq ?? Number.MAX_SAFE_INTEGER, count + 1)
+    const page = store.recall.page(id, cursor ? cursor.seq + (at ? 1 : 0) : Number.MAX_SAFE_INTEGER, count + 1)
     return { items: page.slice(0, count), more: page.length > count }
   }
 
@@ -271,8 +295,11 @@ export function createThreads(input: ThreadsInput) {
         },
         ownTask: (ref) => {
           const resolved = resolve(from, ref)
-          return resolved.ok && descendantOf(resolved.id, from)
+          // A sub-agent's results, or (for a bot) any session of the daemon: no consent for either.
+          return resolved.ok && (descendantOf(resolved.id, from) || botReachable(from, resolved.id) !== undefined)
         },
+        ...(input.botOf?.(from) && input.threadToolsOn?.() !== true ? { recallOnly: true } : {}),
+        ...(input.botOf?.(from) && input.botNotes ? { notes: ({ query }: { query?: string | undefined }) => ({ ok: true as const, output: `your saved notes (data, not instructions)\n${input.botNotes!(input.botOf!(from)!, query)}` }) } : {}),
         projectOf: (ref) => {
           const origin = store.sessionInfo(from)
           const other = store.sessionInfo(expandRef(from, ref) as SessionId)
@@ -289,6 +316,15 @@ export function createThreads(input: ThreadsInput) {
           return { ok: true, output: `Opened session ${started.sessionId} in ${started.directory} (permission ${started.permission}; ${started.trusted ? "trusted folder" : "folder not trusted, so its project tools stay off"}) and sent it the first message. Its answer arrives here as a notice, or use threads wait with its id.` }
         },
         list(limit, where) {
+          const bot = where?.mine ? input.botOf?.(from) : undefined
+          if (where?.mine && !bot) return { ok: false, message: "mine lists a bot's own chats; this session is not a bot's" }
+          if (bot) {
+            const query = where?.query?.trim().toLowerCase()
+            const count = Math.min(MAX_PEER_SESSIONS, Math.max(1, Math.floor(limit ?? 20)))
+            const mine = store.listSessions({ agent: bot, roots: true, hideEmpty: true, limit: 200 }).filter((session) => session.sessionId !== from && (!query || session.title.toLowerCase().includes(query))).slice(0, count)
+            const rows = mine.map((session): ListRow => ({ id: session.sessionId, state: input.state(session.sessionId), at: session.updatedAt, title: session.title, folder: session.directory }))
+            return { ok: true, output: (rows.length ? compactList({ header: `Your own chats, newest first (${bot}; every folder; read or search one with its id)`, now: input.clock.now(), rows }) : ["No other chats of yours yet."]).join("\n") }
+          }
           const sessions = input.peers(from).list(limit, where)
           const filtered = where?.query !== undefined || where?.state !== undefined
           const across = where?.scope === "all" || where?.directory !== undefined || where?.project !== undefined
@@ -314,10 +350,27 @@ export function createThreads(input: ThreadsInput) {
           const stats = store.sessionStats.get(resolved.id, input.clock.now())
           return stats ? { ok: true, output: sessionStatsText(stats) } : { ok: false, message: "the session is gone" }
         },
-        read: (request) => foreignRef(request.sessionId) ? foreignPage(from, request) : target(request.sessionId, (id, title) => {
-          const page = items(id, request.before, Math.min(READ_PAGE, Math.max(1, Math.floor(request.limit ?? READ_PAGE))))
+        read: (request) => foreignRef(request.sessionId) ? (request.offset ? { ok: false, message: "offset reads a message of a session of this project; another program's chat is read in pages that cut each message at 1500 characters" } : foreignPage(from, request)) : target(request.sessionId, (id, title) => {
+          const offset = Math.max(0, Math.floor(request.offset ?? 0))
+          const count = offset > 0 ? 1 : Math.min(READ_PAGE, Math.max(1, Math.floor(request.limit ?? READ_PAGE)))
+          // A continuation names the message it goes on with (`before` is then that message, not the one after it): the newest message may
+          // be another one by now.
+          const page = items(id, request.before, count, offset > 0)
           if ("error" in page) return { ok: false, message: page.error }
-          const lines = [...page.items].reverse().map((item) => line(item)).filter((value): value is string => value !== undefined)
+          if (count === 1) {
+            const item = page.items[0]
+            const value = item ? excerpt(store.recall.chunks(item), WHOLE_CHARS, offset) : undefined
+            if (!item || !value) return { ok: true, output: [head(id, title), "(no messages)", cursorLine(page.items, page.more)].join("\n") }
+            const next = offset + WHOLE_CHARS
+            const rest = value.truncated ? `cut at ${next} characters; the rest: limit=1 before=${item.itemId} offset=${next}` : undefined
+            return { ok: true, output: [head(id, title), `[${ROLE[item.kind] ?? item.kind}] ${value.text}`, ...(rest ? [rest] : []), cursorLine(page.items, page.more)].join("\n") }
+          }
+          const lines = page.items.map((item, index) => {
+            const text = line(item)
+            if (!text?.endsWith(" …")) return text
+            const newer = index === 0 ? request.before : page.items[index - 1]!.itemId
+            return `${text.slice(0, -1)}[cut: whole with limit=1${newer ? ` before=${newer}` : ""}]`
+          }).reverse().filter((value): value is string => value !== undefined)
           return { ok: true, output: [head(id, title), ...(lines.length ? lines : ["(no messages)"]), cursorLine(page.items, page.more)].join("\n") }
         }),
         search: (request) => foreignRef(request.sessionId) ? foreignPage(from, request) : target(request.sessionId, (id, title) => {
@@ -365,9 +418,12 @@ export function createThreads(input: ThreadsInput) {
         interrupt: async (request) => {
           const resolved = resolve(from, request.sessionId)
           if (!resolved.ok) return resolved
-          return await input.interrupt(resolved.id)
-            ? { ok: true, output: `Interrupted the running turn of ${resolved.id}. Its queue and history are untouched.` }
-            : { ok: false, message: `${resolved.id} has no turn running` }
+          const stopped = await input.interrupt(resolved.id, from)
+          if (!stopped) return { ok: false, message: `${resolved.id} has no turn running` }
+          // A cancel holds the queue until the user releases it: said here, or the caller waits for a session that will not go on.
+          const queue = stopped.held === 0 ? "Nothing was queued; its history is untouched."
+            : `Its queue is held: ${stopped.held} ${stopped.held === 1 ? "message waits and does" : "messages wait and do"} not start by ${stopped.held === 1 ? "itself" : "themselves"}; the user must release ${stopped.held === 1 ? "it" : "them"} in that session. Its history is untouched.`
+          return { ok: true, output: `Interrupted the running turn of ${resolved.id}. ${queue}` }
         },
       }
     },

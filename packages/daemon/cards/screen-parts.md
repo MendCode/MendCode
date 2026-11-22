@@ -17,7 +17,7 @@ A session, top to bottom:
   empty prompt's example text: showPlaceholder, placeholderText
   footer under the prompt: showStatus false removes it; its parts showModel, showProvider, showAgent, showPermission, showEffort; rows and icons: footerRows ({{program}} docs footer)
 Home (start) screen: homeHeader (its first row), logoKind wordmark|mascot|both|custom|none, logoText, productName, tagline, homeInput bottom|center|top (where the chat input sits on the home), homePanel (the session list under the logo), homeRightPanel, homeLayout centered|split, homeTips, homeFooter
-Left session list: sidebar auto|always|hidden, sidebarSide left|right, sidebarHeader (its title row)
+Left session list: sidebar auto|always|hidden, sidebarSide left|right, sidebarHeader (its title row), sidebarProjects auto|folder|all (auto: every project while bots are on), sidebarPreviewCount 1..50 (sessions a project shows before "+ N more"), sidebarProjectCount 0..30 (0 fills the height), sidebarRecentDays 0..365 (default 7, 0 no limit; older sessions wait behind "+ N older"); left key focuses the list; with experimental bots: sidebarLayout projects-first|bots-first|icons-only|scratch, sidebarSections (projects, bots, sessions)
 Right panel (/panel): panelHeader (its first row), sidebarWidth, its cards sidebarWidgets ({{program}} docs layout)
 The whole screen: density compact|comfortable|spacious, theme ({{program}} docs theme), pet, terminalTitle, titleTemplate; notices: usageNotices, cacheNotices, confirmNotices
 A part drawn in a way no key offers: a view or an extension ({{program}} docs extensions).

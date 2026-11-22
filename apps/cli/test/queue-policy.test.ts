@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { createSettingsPageState, SETTINGS_GROUPS, settingsPageKey } from "../src/view/settings-page"
 import { renderQueuePanel } from "../src/view/queue-panel"
 import { createTranscript } from "../src/view/transcript"
+import { sessionHuman } from "../src/session-output"
 import { textWidth } from "../src/view/wrap"
 import { b51Harness } from "./b51-harness"
 import { appHarness, cleanTemps, ids, NOW } from "./session-ui-harness"
@@ -92,6 +93,31 @@ test("the transcript remembers what stopped the last turn, for the held queue's 
   expect(transcript.lastStop).toBeUndefined()
 })
 
+test("session inspect prints a held queue as held with what waits, never as running", () => {
+  const session = { sessionId: "ses_a", title: "ui", directory: "/work/app", updatedAt: 0, queued: 2, state: "queued", permission: "ask" }
+  const line = (status: string) => sessionHuman({ ...session, status } as never).split("\n")[1]
+  expect(line("held")).toBe("State: held (2 queued; no turn is running; the queue waits for the user to send it)")
+  expect(line("running")).toBe("State: running")
+})
+
+test("a queue held by another session's interrupt names that session, not the user", () => {
+  const title = (heldBySession?: string) => renderQueuePanel({ width: 100, previews: ["next"], held: true, heldBy: "cancel", ...(heldBySession !== undefined ? { heldBySession } : {}) }).rows.map((line) => line.map((span) => span.text).join("")).join("\n")
+  expect(title("api  review")).toContain("1 queued · Held since the cancel by session api review")
+  expect(title("api")).not.toContain("your cancel")
+  expect(title()).toContain("1 queued · Held since your cancel")
+  expect(title("x".repeat(80))).not.toContain("x".repeat(40))
+
+  const transcript = createTranscript()
+  const base = { sessionId: "ses_a", at: 1 } as const
+  transcript.apply({ ...base, seq: 1, type: "turn.started", turnId: "trn_1", queueId: "que_1" } as never)
+  transcript.apply({ ...base, seq: 2, type: "turn.cancelled", turnId: "trn_1", by: "user", cancelledBy: { sessionId: "ses_b", title: "api" } } as never)
+  expect([transcript.lastStop, transcript.lastStopBy]).toEqual(["cancel", "api"])
+  // The user's own cancel afterwards is theirs again.
+  transcript.apply({ ...base, seq: 3, type: "turn.started", turnId: "trn_2", queueId: "que_2" } as never)
+  transcript.apply({ ...base, seq: 4, type: "turn.cancelled", turnId: "trn_2", by: "user" } as never)
+  expect([transcript.lastStop, transcript.lastStopBy]).toEqual(["cancel", undefined])
+})
+
 test("the daemon's internal notices for the agent are neither listed nor counted in the queue panel, and carry no send or steering badge", async () => {
   const h = b51Harness(100, 30, "after-tools")
   const notice = "Internal notification. A session you started is blocked waiting for the user's approval: - ses_a"
@@ -137,4 +163,22 @@ test("send now, drop last and edit last act on the messages the queue panel show
   expect(h.sentOf("queue.remove")).toHaveLength(2)
   expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: message })
   expect(h.app.editor.text).toBe("Also check cancellation before sending the next prompt")
+})
+
+test("send now that races with the daemon taking the message leaves no notice behind", async () => {
+  const h = b51Harness(100, 30, "after-tools", false, { ok: false, error: { code: "target_mismatch", message: "[ACTOR]: queued message not found" } })
+  h.app.render()
+  const rows = h.text()
+  const at = rows.findIndex((row) => row.includes("↗ SEND"))
+  await h.app.onKey(`\x1b[<0;${rows[at]!.indexOf("SEND") + 1};${at + 1}M`)
+  expect(h.sentOf("queue.promote")).toHaveLength(1)
+  await h.app.onKey("\x13")
+  expect(h.sentOf("queue.promote")).toHaveLength(2)
+  expect(h.text().join("\n")).not.toContain("queued message not found")
+})
+
+test("send now still reports a failure other than the message having left the queue", async () => {
+  const h = b51Harness(100, 30, "after-tools", false, { ok: false, error: { code: "invalid_command", message: "[DAEMON]: queue is busy" } })
+  await h.app.onKey("\x13")
+  expect(h.text().join("\n")).toContain("queue is busy")
 })

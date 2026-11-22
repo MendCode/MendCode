@@ -58,6 +58,34 @@ describe("/restart keeps the frame", () => {
   })
 })
 
+describe("no frame outside the alternate screen", () => {
+  const rows = [[{ text: "Sessions ← focus" }], [{ text: "> prompt" }]] as never
+
+  test("a frame drawn after leaving writes nothing, nor does a crash screen or a resize", () => {
+    const { writes, output } = fakeOutput()
+    const screen = createScreen(output as never, {})
+    screen.enter()
+    screen.draw(rows)
+    screen.leave()
+    const mark = writes.length
+    screen.draw(rows)
+    screen.hold(rows)
+    screen.resize(30, 8)
+    screen.draw(rows)
+    expect(writes.slice(mark)).toEqual([])
+  })
+
+  test("an inline chat that crashes after leaving does not borrow the alternate screen of the shell", () => {
+    const { writes, output } = fakeOutput()
+    const screen = createScreen(output as never, {}, { inline: true })
+    screen.enter()
+    screen.leave()
+    const mark = writes.length
+    screen.hold(rows)
+    expect(writes.slice(mark)).toEqual([])
+  })
+})
+
 describe("exit summary", () => {
   test("names the session, its usage and how to resume it", () => {
     expect(exitSummary({ sessionId: "ses_1", title: "fix reconnect", turns: 3, input: 12_340, output: 1_100, model: "gpt-6-luna", elapsedMs: 65_000 })).toBe(

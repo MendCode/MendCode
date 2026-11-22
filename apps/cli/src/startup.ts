@@ -93,6 +93,19 @@ const BLOCKED: Record<string, string> = {
 /** Where `--file` candidates are looked up at parse time: the shell's directory (default) and the existence check (default: the file system). */
 export type FileProbe = { cwd?: string; exists?(file: string): boolean }
 
+/**
+ * A launch that names no command: flags and their values only (`--dir D`, `--model M`, `-c`). The subcommand parsers
+ * (automation.ts and everything it reaches) cannot match it, so main.ts does not load them. Anything the terminal parser
+ * rejects (`--version`, `--json`), asks for help, or names a word (`attach`, `session list`, a prompt) is left to them.
+ */
+export function launchesWithoutCommand(argv: string[]): boolean {
+  if (!argv.length || ["attach", "session", "thread", "pet"].some((word) => argv.includes(word))) return false
+  try {
+    const parsed = parseStartup(argv)
+    return parsed.kind === "tui" && parsed.words.length === 0 && parsed.project === undefined && !parsed.help
+  } catch { return false }
+}
+
 export function parseStartup(argv: string[], probe: FileProbe = {}): Startup {
   const values = new Map<string, string>()
   const flags = new Set<string>()

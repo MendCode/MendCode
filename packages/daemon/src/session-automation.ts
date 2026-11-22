@@ -29,6 +29,8 @@ export function sanitizeSession<T>(value: T): T {
 export function createSessionAutomation(input: {
   store: Store
   foreground(id: SessionId): ForegroundState | undefined
+  /** True when the session's queue is held (a cancel, an interrupt or a restart): nothing of it starts until the user releases it. */
+  held?(id: SessionId): boolean
   loops(): SessionInspection["loops"]
   tasks(id: SessionId): SessionInspection["subagents"]
 }) {
@@ -42,6 +44,8 @@ export function createSessionAutomation(input: {
     const pending = store.pendingRequestsOf(id)
     const status = pending.some((event) => event.kind === "question") ? "waiting_for_input"
       : pending.length ? "waiting_for_approval"
+      // No turn and a queue that waits for the user: it is not running, and whoever watches it must not wait for it to go on.
+      : state === "queued" && summary.queued && input.held?.(id) ? "held"
       : summary.queued || !["idle", "error"].includes(state) ? "running"
       : state === "error" || last === "failed" ? "failed"
       // A deliberate cancel and a turn the daemon lost (restart, transport) are different facts: a script retries only the second.

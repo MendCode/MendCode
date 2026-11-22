@@ -16,7 +16,7 @@ const temp = (prefix: string) => { const dir = realpathSync(mkdtempSync(path.joi
  * A watched repository as it was: the PR's recorded base predates the commit on master that adds `.mendcode/review.yaml`, and the
  * user's checkout is on a branch without the file. The policy must come from master's tip.
  */
-async function symbexLike(yaml: string) {
+async function shopApiLike(yaml: string) {
   const origin = temp("pr-policy-origin-"), dir = temp("pr-policy-clone-")
   const git = async (cwd: string, ...args: string[]) => { const done = await gitRun(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], cwd); if (done.code) throw new Error(args.join(" ")); return done.out.trim() }
   await git(origin, "init", "-q", "--bare", "-b", "master")
@@ -75,7 +75,7 @@ describe("the repository's policy", () => {
   const TEAM = "enabled: true\nreviewers: [carol, dave]\npublishers: [ana, carol]\n"
 
   test("reviewers as a list: a listed member's command is answered under the base branch's current publishers; anyone else's is not taken, and nobody is told", async () => {
-    const repo = await symbexLike(TEAM)
+    const repo = await shopApiLike(TEAM)
     const s = service(repo)
     await s.reviewer.control({ sessionId: "ses_a", action: "publish-on" })
     // Not in the team, even with write access elsewhere: dropped without a reply, a notice or a retry.
@@ -89,7 +89,7 @@ describe("the repository's policy", () => {
   })
 
   test("being in reviewers grants no execution: a listed member without write access is refused as before", async () => {
-    const repo = await symbexLike(TEAM)
+    const repo = await shopApiLike(TEAM)
     const s = service(repo)
     await s.reviewer.control({ sessionId: "ses_a", action: "publish-on" })
     await s.reviewer.command(s.command("dave"))
@@ -100,7 +100,7 @@ describe("the repository's policy", () => {
 
   test("all and requested keep their meaning: anyone's comment is taken and the write-access check decides", async () => {
     for (const role of ["all", "requested"]) {
-      const repo = await symbexLike(`enabled: true\nreviewers: ${role}\npublishers: [ana]\n`)
+      const repo = await shopApiLike(`enabled: true\nreviewers: ${role}\npublishers: [ana]\n`)
       const s = service(repo)
       await s.reviewer.control({ sessionId: "ses_a", action: "publish-on" })
       await s.reviewer.command(s.command("mallory"))
@@ -109,7 +109,7 @@ describe("the repository's policy", () => {
   })
 
   test("a publisher only master's tip lists may post a review: enabled and publishers are read there, not at the PR's older base", async () => {
-    const repo = await symbexLike(TEAM)
+    const repo = await shopApiLike(TEAM)
     const s = service(repo)
     await s.reviewer.control({ sessionId: "ses_a", action: "publish-on" })
     await s.reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })

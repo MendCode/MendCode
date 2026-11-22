@@ -26,6 +26,7 @@ import {
   chatgptQuota,
   codexSubscriptionHeaders,
   createChatgptModelCatalog,
+  latestCodexRelease,
   createInstructionLoader,
   createNativeEngine,
   createLoopbackJevEvaluator,
@@ -63,6 +64,7 @@ import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDef
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents } from "../../engine-acp/src/agents"
+import { connectorAgents, lazyHermesConnector } from "./bot-connector-agents"
 import { withAcpEngine } from "../../engine-acp/src/router"
 import { createPiConfig, piCapabilities, probePi } from "../../engine-pi/src/config"
 import { withPiEngine } from "../../engine-pi/src/router"
@@ -77,8 +79,10 @@ import type { ReviewSetup, SetupMemory } from "./pr-review/setup"
 import { workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
 import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
+import { BOT_TOOLS } from "./bot-tools"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
+import { todayTool } from "./today-tool"
 import { createLazyCodegraph } from "./lazy-codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
 import { filteredCatalog, modelAllowed } from "./models"
@@ -103,9 +107,10 @@ import { createCodegraphStatus } from "./codegraph-status"
 import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
-import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
+import { createPromptModes, graphAutopilotPart, graphLocatePart, visiblePlanPart } from "./prompt-modes"
 import { renderingFor, renderingText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
+import { withRunLimitGuard } from "./run-limit-guard"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
 import { withCodexEngine } from "./codex-router"
@@ -195,7 +200,9 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
+const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), searchOn: () => featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
+/** The graph's answer for a text search (docs/code-graph.md, "Graph answers in a text search"); absent with `MENDCODE_CODEGRAPH=0`. */
+const searchHint = graph?.searchHint
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
 const codeGate = graph?.gate
 // Builds the graph of a real project by itself and keeps it fresh (feature `graph_autopilot`, nightly/dev/local by default); the same gate decides where.
@@ -313,11 +320,12 @@ const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" ||
 /** A login the subscription backend's own endpoints (search, images) take; a Sign in with ChatGPT login only reaches api.openai.com's Responses. */
 const subscriptionBackend = () => subscriptionLogin() && providerAuth.chatgpt.route() !== "plan"
 /** The models the ChatGPT account can use, asked of the subscription backend with that same login and kept in `<dir>/chatgpt-models.json` (docs/connect.md#where-each-list-comes-from). */
-const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, planAccount: () => providerAuth.chatgpt.planAccount(), log: (message) => logLine(`[MODELS]: ${message}`) })
+const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, planAccount: () => providerAuth.chatgpt.planAccount(), latestClientVersion: () => latestCodexRelease(), log: (message) => logLine(`[MODELS]: ${message}`) })
 const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
   dir,
+  extra: connectorAgents,
   displayName: acpAgentName,
   catalogEfforts: (model) => {
     const slash = model.indexOf("/")
@@ -453,6 +461,8 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
       { id: "skills", label: "skills", text: skillBlock, count: (skillBlock.match(/^- /gm) ?? []).length },
       // One line while `todo` is listed (balanced and full, feature `visible_plan`): the user follows the list in the progress row.
       visiblePlanPart(tools),
+      // One line while `graph_find` is listed: a symbol is looked up in the graph first, and what the `[code graph]` block above a search is.
+      graphLocatePart(tools),
       // One line while the feature is on and `graph_find` is listed: the graph is built and kept fresh for the model, which locates code with it first.
       graphAutopilotPart({ tools, on: featureOn(extractionSettings(), "graph_autopilot", { safeMode }) }),
       { id: "capabilities-index", label: "MendCode capabilities", text: tools ? capabilityIndex(tools) : "" },
@@ -479,6 +489,8 @@ export const daemon = await startDaemon({
   ...(argv.includes("--web") ? { web: (await import("./http-web")).HTTP_WEB } : {}),
   ...(hosting.log ? { log: hosting.log } : {}),
   release: { version: packageJson.version },
+  // Experimental bots: the Hermes connector loads with the first `bot.list` that runs with the flag on, never at start.
+  botConnectors: [lazyHermesConnector({ dir })],
   trace: argv.includes("--trace") || process.env.MENDCODE_TRACE === "1",
   ...(otlp ? { otlp } : {}),
   ...(arg("mflow-listen") ? { mflowListen: arg("mflow-listen")! } : {}),
@@ -520,7 +532,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, bot, today, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -578,7 +590,7 @@ export const daemon = await startDaemon({
     // A Claude Code session (`host`) has no image tool of its own: the ChatGPT login or an OpenAI key makes image_gen work there unconfigured,
     // as the hosted `image_generation` does for a native session. MENDCODE_IMAGE_GEN=0 turns both off.
     const imageGenTool = (host = false) => createDaemonImageGenTool({ dir, settings: () => store.settings.get(), provider: routedProvider(), models: () => modelCatalog.list(), credentials: (id) => providerService.imageTransport?.(id), subscriptionHeaders, ...(host ? { implicit: () => process.env.MENDCODE_IMAGE_GEN !== "0" && (subscriptionBackend() || providerService.imageTransport?.("openai") !== undefined) } : {}) })
-    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, diagnosticsTool, questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, lspTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
+    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, diagnosticsTool, questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, ...BOT_TOOLS, packagesTool, sessionMetaTool, todayTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, lspTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
     // Extensions tell an override from a clash, and `api.builtinTool` wraps, by these.
     builtinTools.push(createCustomizeUiTool(dir, extensions.reload, emitGlobal))
     builtinTools.push(createExtendTool({ dir, extensions: { reload: extensions.reload, report: extensions.report, routeInput: extensions.routeInput, checkTool: extensionToolCheck(extensions) } }))
@@ -682,6 +694,8 @@ export const daemon = await startDaemon({
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
+              // A Grep or a Bash grep/rg for identifiers the code graph knows gets its answer as the call's context (its sub-agents' calls too).
+              ...(searchHint ? { searchHint } : {}),
               replyLanguage,
               // Smart mode decides as it does natively: Claude's tool names become the native ones the rules know.
               smart: ({ sessionId, tool, permission, args, cwd: root }) => {
@@ -783,6 +797,8 @@ export const daemon = await startDaemon({
           computer,
           browser,
           loops,
+          bot,
+          today,
           loopRun,
           // Smart-mode reads of what this session's prompt was built from: the folders of the skills it may load and its instruction files, as the system prompt finds them.
           instructionRoots: (sessionId, root) => {
@@ -893,6 +909,8 @@ export const daemon = await startDaemon({
           afterWrite,
           lateWriteNotes: afterWrite.late,
           oneTree: oneTree.note,
+          // A `grep` or a shell grep/rg for identifiers the code graph knows carries its answer above the search's own output.
+          ...(searchHint ? { searchHint } : {}),
           // The subscription backend runs web search itself: no API key, no local process. MENDCODE_WEB_SEARCH=0 turns it off.
           // The provider-run web search is offered only when no `websearch` tool is registered: the model needs one way to search, and the hosted one has been failing.
           hostedTools: () => [...(process.env.MENDCODE_WEB_SEARCH === "0" || keyedTools.length ? [] : (["web_search"] as const)), ...(process.env.MENDCODE_IMAGE_GEN === "0" ? [] : (["image_generation"] as const))],
@@ -980,7 +998,11 @@ export const daemon = await startDaemon({
         })
       },
     })
-    return withPiEngine({
+    // A run that limits the model's tools (`--tools`, `--exclude-tools`, `--offline`) fails on an engine that would ignore them.
+    return withRunLimitGuard({ limits: (sessionId) => runLimits.get(sessionId), route: (sessionId, override) => {
+      const model = turnModel(sessionId, override).model
+      return { model, engine: foreignEngine(model, modelCatalog) }
+    }, base: withPiEngine({
       base: withCodex,
       usesPi: (sessionId, override) => piEnabled() && modelEngine(turnModel(sessionId, override), modelCatalog) === "pi",
       pi: async (sessionId) => {
@@ -1023,7 +1045,7 @@ export const daemon = await startDaemon({
         stopPi = () => engine.stop()
         return engine
       },
-    })
+    }) })
   },
   clock: realClock,
   buildId: computeBuildId(),
@@ -1060,6 +1082,7 @@ export const daemon = await startDaemon({
   formatter,
   models: modelCatalog,
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
+  ...(engineName === "native" ? { claudeComplete: (request: { system: string; prompt: string; signal: AbortSignal; model: import("@mendcode/protocol").ModelChoice }) => runClaudeAdvisor({ bin: claudeBin, cwd: quotaProbeDir(dir), ...request }) } : {}),
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
       const fullMemory = fullMemoryTier(extractionSettings())
