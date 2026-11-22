@@ -51,6 +51,25 @@ test("an engine's own sub-agents are in the Agents strip with what each does now
   expect(text).not.toContain("Locate the file named a.txt")
 })
 
+test("a sub-agent that has not taken a step yet opens on its empty thread, which fills as it starts working", async () => {
+  const { h, talk } = await chat()
+  // A third sub-agent whose call has started and that has reported nothing of its own yet.
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_new", kind: "tool_call", meta: { tool: "agent Contracts", subagent: true, agent: "general-purpose", background: false } })
+  h.app.render()
+  await h.type("\x18\x1b[B")
+  h.app.render()
+  expect(screen(h)).toContain("1 of 3")
+  await h.type("\x1b[C")
+  h.app.render()
+  await h.type("\x1b[C")
+  h.app.render()
+  expect(screen(h)).toContain("3 of 3 · ←→ · ↑ back")
+  expect(screen(h)).not.toContain("no longer running")
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_new_tool", kind: "tool_call", meta: { tool: "read /work/contracts.ts", agentParent: "item_new" } })
+  h.app.render()
+  expect(screen(h)).toContain("read /work/contracts.ts")
+})
+
 test("ctrl+x down opens the sub-agent at work in the chat's place; right changes sibling; up returns to the conversation where it was", async () => {
   const { h, talk } = await chat()
   await h.type("\x18\x1b[B")
