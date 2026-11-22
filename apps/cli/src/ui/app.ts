@@ -129,6 +129,7 @@ import { createChatRows } from "./app/chat-rows"
 import { createChrome } from "./app/chrome"
 import { createExtensions } from "./app/extensions"
 import { createTicks } from "./app/ticks"
+import { pacedFrames } from "./app/paced"
 import { createSettings } from "./app/settings"
 import { createEvents } from "./app/events"
 import { createAcp } from "./app/acp"
@@ -168,7 +169,7 @@ export function createApp(input: AppInput) {
     input = remoteInput
   }
   const now = input.now ?? Date.now
-  const schedule = input.schedule ?? ((fn: () => void) => void setTimeout(fn, 16))
+  const schedule = input.schedule ?? pacedFrames()
   // One glyph object for the whole app, changed in place when the `glyphs` setting resolves to another set (glyph-mode.ts).
   const g = { ...(input.glyphs ?? defaultGlyphs()) }
   // In ASCII mode every frame is transliterated on its way out, so no view (built-in or an extension's) can put a non-ASCII byte on screen.

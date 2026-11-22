@@ -88,8 +88,8 @@ function terminal(chats: ChatLog[], options: { start?: SessionId; height?: numbe
 }
 
 describe("the kept chats", () => {
-  test("hold three, newest last; the oldest goes first and a taken one is no longer held", () => {
-    const cache = createSessionCache()
+  test("hold their limit, newest last; the oldest goes first and a taken one is no longer held", () => {
+    const cache = createSessionCache(3)
     const entry = {} as KeptSession
     const [a, b, c, d] = [ids("session"), ids("session"), ids("session"), ids("session")]
     for (const id of [a, b, c]) cache.keep(id, entry)
@@ -98,7 +98,8 @@ describe("the kept chats", () => {
     expect([a, b, c, d].map((id) => cache.has(id))).toEqual([true, false, true, true])
     expect(cache.take(c)).toBe(entry)
     expect(cache.has(c)).toBe(false)
-    expect(cache.size).toBe(KEPT_SESSIONS - 1)
+    expect(cache.size).toBe(2)
+    expect(KEPT_SESSIONS).toBe(4)
   })
 
   test("a chat that read many events, holds many blocks or much text is not kept", () => {
@@ -249,17 +250,17 @@ describe("going back to a recently left chat", () => {
     expect(h.text().join("\n")).toContain("beta answer away")
   })
 
-  test("only the last three chats left are kept: the fourth one back opens from its window again", async () => {
-    const chats = ["alpha", "beta", "gamma", "delta", "epsilon"].map((title) => chatLog(title, 5))
+  test("only the last four chats left are kept: the fifth one back opens from its window again", async () => {
+    const chats = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"].map((title) => chatLog(title, 5))
     const h = terminal(chats)
     await h.app.start()
     await settle()
     for (const chat of chats.slice(1)) await h.switchTo(chat.sessionId)
-    // Left in order: alpha, beta, gamma, delta. Alpha is the one past the three kept.
+    // Left in order: alpha, beta, gamma, delta, epsilon. Alpha is the one past the four kept.
     await h.switchTo(chats[0]!.sessionId)
     expect(h.windowsOf(chats[0]!.sessionId)).toBe(2)
     expect(h.text().join("\n")).toContain("alpha answer 5")
-    for (const chat of chats.slice(2, 4)) {
+    for (const chat of chats.slice(2, 5)) {
       await h.switchTo(chat.sessionId)
       expect(h.windowsOf(chat.sessionId)).toBe(1)
     }
