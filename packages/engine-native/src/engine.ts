@@ -2012,15 +2012,20 @@ export function createNativeEngine(options: {
     // The command was resolved from secret markers before it ran, and its output may print one: both leave here masked, as in `runCall`.
     const clean = (text: string) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text
     const parts: string[] = []
+    // A message the user sends while the turn waits ends the wait: the commands run on in the background and the message is read now.
+    const interrupted = new AbortController()
+    input.onQueued?.(() => interrupted.abort())
+    const signal = AbortSignal.any([input.signal, interrupted.signal])
     for (const id of [...ids]) {
+      if (interrupted.signal.aborted) break
       ids.delete(id)
       const running = port.peek(id, 0)
       if (running?.task.status !== "running") continue
       // A card shows what the turn waits for while it waits.
       const itemId = input.newItemId()
       input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: `waiting for ${clean(running.task.command).split("\n")[0]!.slice(0, 160)}` } })
-      const read = await port.read(id, { waitMs: YIELD_WAIT_MS, signal: input.signal, until: "exit" })
-      if (!read || input.signal.aborted) {
+      const read = await port.read(id, { waitMs: YIELD_WAIT_MS, signal, until: "exit" })
+      if (!read || signal.aborted) {
         input.emit({ type: "item.completed", itemId, status: "cancelled", text: "" })
         return undefined
       }

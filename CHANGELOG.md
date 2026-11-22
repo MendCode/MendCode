@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A message you send while a turn waits for a command that moved to the background is read at once; the command keeps running.
 - The right panel, shown or hidden with `/panel`, stays that way in every session, bot chats included.
 - Switching sessions draws the right panel at once and asks the daemon for less.
 - The session list stays beside every page you open when it is on, and a click on a chat in it works there.

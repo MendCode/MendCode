@@ -87,3 +87,19 @@ test("the last step and the step limit still wait for a command that moved to th
   expect(outcome).toMatchObject({ status: "error", code: "max_steps" })
   expect(capped.exits).toHaveLength(1)
 })
+
+test("a message the user sends while the turn waits for a moved command ends the wait; the command keeps running", async () => {
+  const s = scenario([callTool("shell", { command: "sleep 3; echo built" }), stop("done before the build ended"), stop("never asked")])
+  const t = turn({ text: "build it", mode: () => "full" })
+  let queued: (() => void) | undefined
+  t.input.onQueued = (handler) => { queued = handler }
+  const started = Date.now()
+  const running = s.engine.runTurn(t.input)
+  while (!t.events.some((event) => event.type === "item.started" && (event as { meta?: { tool?: string } }).meta?.tool?.startsWith("waiting for "))) await Bun.sleep(20)
+  queued?.()
+  const outcome = await running
+  expect(outcome).toMatchObject({ status: "ok" })
+  expect(Date.now() - started).toBeLessThan(2_500)
+  expect(s.requests).toHaveLength(2)
+  expect(s.exits).toHaveLength(0)
+})
