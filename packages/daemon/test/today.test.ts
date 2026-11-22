@@ -174,7 +174,7 @@ async function toolOutput(h: NativeHarness, marker: string) {
 }
 const alnum = (length: number) => "Ab3dE6gH9jK2mN5pQ8sT1vW4yZ7cF0".repeat(Math.ceil(length / 30)).slice(0, length)
 const seed = (h: NativeHarness, count: number, category: string, directory = h.project) => {
-  for (let index = 0; index < count; index++) h.store.memories.add({ memoryId: ids("memory") as MemoryId, scope: "project", directory, text: `${category} fact ${index} of ${path.basename(directory)}`, category, status: "pending", source: "agent" })
+  for (let index = 0; index < count; index++) h.store.memories.add({ memoryId: ids("memory") as MemoryId, scope: "project", directory, text: `${category} fact #${index} of ${path.basename(directory)}`, category, status: "pending", source: "agent" })
 }
 async function openToday(h: NativeHarness) {
   const reply = await h.client.send({ type: "today.open", directory: h.project })
@@ -227,8 +227,9 @@ describe("the Today chat", () => {
     const h = await boot({ extraTools: [todayTool], steps: [
       callTool("today", { action: "brief" }),
       callTool("today", { action: "accept", category: "conventions" }),
-      callTool("today", { action: "memories", query: "stack fact 1" }),
-      callTool("today", { action: "decline", query: "stack fact 1" }),
+      // `#1`: a bare `1` can also be in the random name of the test's project folder.
+      callTool("today", { action: "memories", query: "stack fact #1" }),
+      callTool("today", { action: "decline", query: "stack fact #1" }),
       callTool("today", { action: "accept" }),
       stop("done"),
     ] })
@@ -244,7 +245,7 @@ describe("the Today chat", () => {
     // Accepting with no project, kind, words or ids decides nothing.
     expect(await toolOutput(h, "say which memories")).toContain("[TODAY]:")
     expect(savedOf(h).map((entry) => entry.category)).toEqual(Array(6).fill("conventions"))
-    expect(pendingOf(h).map((entry) => entry.text).sort()).toEqual([`stack fact 0 of ${path.basename(h.project)}`, `stack fact 2 of ${path.basename(h.project)}`])
+    expect(pendingOf(h).map((entry) => entry.text).sort()).toEqual([`stack fact #0 of ${path.basename(h.project)}`, `stack fact #2 of ${path.basename(h.project)}`])
     expect(h.store.memories.list({ status: "archived", session: "all" })).toHaveLength(1)
   })
 
