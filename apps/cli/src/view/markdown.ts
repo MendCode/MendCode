@@ -513,7 +513,9 @@ function diagramRows(input: { body: string[]; width: number; style: MarkdownStyl
   if (!render) return style.enhanced ? [[{ text: "loading diagram…", fg: "muted", dim: true }]] : [sourceHeader(), [{ text: "loading diagram…", fg: "muted", dim: true }]]
   const diagram = render(code, width)
   if ("lines" in diagram) {
-    if (!style.enhanced) return diagram.lines
+    // What the drawing leaves out, or how it was reduced to fit, is said under it.
+    const said = diagram.note ? wrapSpans([{ text: diagram.note, fg: "muted", dim: true }], width) : []
+    if (!style.enhanced) return [...diagram.lines, ...said]
     // The diagram's own lines are drawn in `heading` and `accent`; the enhanced style gives them their own slots.
     const recolored = diagram.lines.map((row) => carryPicture(row, row.map((span): Span => (span.fg === "heading" ? { ...span, fg: roles.diagramLine } : span.fg === "accent" ? { ...span, fg: roles.diagramAccent } : span))))
     // Some layouts pad their canvas with empty rows above and below.
@@ -521,7 +523,7 @@ function diagramRows(input: { body: string[]; width: number; style: MarkdownStyl
     const first = recolored.findIndex((row) => !blank(row))
     const drawn = first < 0 ? recolored : recolored.slice(first, recolored.findLastIndex((row) => !blank(row)) + 1)
     // A drawn diagram or chart shows no buttons: only the copy key reaches its source.
-    return tagCopy(drawn, code, "diagram")
+    return tagCopy([...drawn, ...said], code, "diagram")
   }
   return [sourceHeader(), ...body.flatMap((line) => codeLines({ raw: line, width, style })), ...wrapSpans([{ text: diagram.note, fg: "muted", dim: true }], width)]
 }

@@ -30,6 +30,8 @@ export function renderXyChart(input: string, width: number): string | { text: st
   let yMin: number | undefined
   let yMax: number | undefined
   let categories: string[] = []
+  /** `x-axis "Month" 1 --> 12`: a numeric axis, its ticks spread over the points of the first series. */
+  let xRange: { min: number; max: number } | undefined
   const series: Array<{ kind: "bar" | "line"; values: number[] }> = []
   for (const line of lines.slice(1)) {
     const titleMatch = /^title\s+"?([^"]+)"?$/i.exec(line)
@@ -41,7 +43,9 @@ export function renderXyChart(input: string, width: number): string | { text: st
     if (axis) {
       if (axis[1]!.toLowerCase() === "x-axis") {
         const list = /\[([^\]]+)\]/.exec(axis[2]!)
+        const span = /(-?[0-9.]+)\s*-->\s*(-?[0-9.]+)\s*$/.exec(axis[2]!)
         if (list) categories = splitMermaidTopLevel(list[1]!, ",").map(cleanMermaidLabel)
+        else if (span && Number.isFinite(Number(span[1])) && Number.isFinite(Number(span[2]))) xRange = { min: Number(span[1]), max: Number(span[2]) }
       } else {
         const range = /^(?:"([^"]+)"|(.*?))?\s*(-?[0-9.]+)\s*-->\s*(-?[0-9.]+)$/.exec(axis[2]!)
         if (range) {
@@ -52,7 +56,8 @@ export function renderXyChart(input: string, width: number): string | { text: st
       }
       continue
     }
-    const seriesMatch = /^(bar|line)\s+\[([^\]]+)\]$/i.exec(line)
+    // `line "Revenue" [1, 2, 3]`: a series may carry a name before its values.
+    const seriesMatch = /^(bar|line)\s+(?:"[^"]*"\s*|[^\[\]"]+?\s+)?\[([^\]]+)\]$/i.exec(line)
     if (seriesMatch) {
       const values = splitMermaidTopLevel(seriesMatch[2]!, ",").map(Number)
       if (!values.length || values.some((value) => !Number.isFinite(value))) return undefined
@@ -62,6 +67,11 @@ export function renderXyChart(input: string, width: number): string | { text: st
   if (series.length === 0) return undefined
   if ((yMin !== undefined && !Number.isFinite(yMin)) || (yMax !== undefined && !Number.isFinite(yMax)) || (yMin !== undefined && yMax !== undefined && yMax <= yMin)) return undefined
   const count = Math.max(...series.map((item) => item.values.length), categories.length, 1)
+  if (categories.length === 0 && xRange) {
+    const { min, max } = xRange
+    const tick = (index: number) => Number((count === 1 ? min : min + ((max - min) * index) / (count - 1)).toFixed(2))
+    categories = Array.from({ length: count }, (_, index) => String(tick(index)))
+  }
   if (categories.length === 0) categories = Array.from({ length: count }, (_, index) => String(index + 1))
   const values = series.flatMap((item) => item.values)
   const minimum = yMin ?? Math.min(0, ...values)

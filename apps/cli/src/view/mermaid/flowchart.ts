@@ -9,8 +9,10 @@ type Shape = "rect" | "round" | "circle" | "diamond" | "cylinder" | "subroutine"
 type Head = "none" | "arrow" | "x" | "o"
 export type Direction = "TD" | "LR" | "BT" | "RL"
 type FlowNode = { id: string; lines: string[]; shape: Shape; order: number; explicit: boolean }
-type FlowEdge = { from: string; to: string; label: string | undefined; line: LineStyle; head: Head; tail: Head }
-type Flow = { direction: Direction; nodes: Map<string, FlowNode>; edges: FlowEdge[]; groups?: Map<string, string> }
+type FlowEdge = { from: string; to: string; label: string | undefined; line: LineStyle; head: Head; tail: Head; /** `~~~`: it places its two nodes and is not drawn. */ hidden?: boolean }
+type Flow = { direction: Direction; nodes: Map<string, FlowNode>; edges: FlowEdge[]; groups?: Map<string, string>; /** Statements that were not understood, as written. */ skipped?: string[]; /** The source went on past the most a parse reads. */ cut?: boolean }
+/** A source with nothing to draw: the statements that were not understood. */
+export type Unread = { skipped: string[] }
 
 const ID = /^[\wÀ-￿]+(?:[.:-](?=[\wÀ-￿])[\wÀ-￿]+)*/
 const SHAPES: [string, string, Shape][] = [
@@ -57,33 +59,43 @@ function headOf(marker: string | undefined): Head {
   return marker === ">" || marker === "<" ? "arrow" : marker === "x" ? "x" : marker === "o" ? "o" : "none"
 }
 
-function parseOperator(source: string, pos: number): { line: LineStyle; head: Head; tail: Head; label: string | undefined; end: number } | undefined {
+/** A whole link: `-->`, `---`, `--x`, `==>`, `-.->`, `-..-`, `~~~`, any length, with an optional `<`, `x` or `o` at its start. */
+const LINK = /^([<xo])?(?:(-{2,}(?:-|!?>|[xo](?=\s|$|\|)))|(={2,}(?:=|>|[xo](?=\s|$|\|)))|(-\.+-(?:>|[xo](?=\s|$|\|))?)|(~{3,}))/
+/** A link whose text sits inside it, with or without spaces: `-- text -->`, `--text-->`, `== text ==>`, `-.text.->`. */
+const TEXT_LINKS: [RegExp, LineStyle][] = [
+  [/^([<xo])?--(?![->])\s*("[^"]*"|.+?)\s*-{2,}(-|>|[xo](?=\s|$))/, "solid"],
+  [/^([<xo])?==(?![=>])\s*("[^"]*"|.+?)\s*={2,}(=|>|[xo](?=\s|$))/, "thick"],
+  [/^([<xo])?-\.(?![.-])\s*("[^"]*"|.+?)\s*\.+-(>|[xo](?=\s|$))?/, "dashed"],
+]
+/** What models write that mermaid does not have: `<--`, `--` and `==` on their own between two nodes. */
+const LOOSE_LINK = /^(<)?(?:(-{2,})|(={2,}))(?=\s)/
+
+function parseOperator(source: string, pos: number): { line: LineStyle; head: Head; tail: Head; label: string | undefined; hidden?: boolean; end: number } | undefined {
+  // `e1@-->` names the link; the name is only for styling.
+  const named = /^[\w-]+@(?=[<xo]?(?:-|=|~))/.exec(source.slice(pos))
+  if (named) pos += named[0].length
   const rest = source.slice(pos)
-  const inline = /^(<)?(--|==|-\.)\s+(.+?)\s+(-{2,}[>xo]?|={2,}>?|\.-+>?)(?=\s|$)/.exec(rest)
-  if (inline) {
-    const opener = inline[2]!
-    const closer = inline[4]!
-    const last = closer[closer.length - 1]
-    return {
-      line: opener === "==" ? "thick" : opener === "-." ? "dashed" : "solid",
-      head: headOf(last),
-      tail: inline[1] ? "arrow" : "none",
-      label: inline[3]!,
-      end: pos + inline[0].length,
-    }
-  }
   const unicode = /^[—–-]*→/.exec(rest)
   if (unicode) return { line: "solid", head: "arrow", tail: "none", label: undefined, end: pos + unicode[0].length }
-  const plain = /^([<xo])?(?:(-{2,})|(={2,})|(-\.+-))(!?>|[xo](?=\s|$))?/.exec(rest)
-  if (!plain) return undefined
-  let end = pos + plain[0].length
-  let label: string | undefined
-  const piped = /^\s*\|([^|]*)\|/.exec(source.slice(end))
-  if (piped) {
-    label = piped[1]!
-    end += piped[0].length
+  const plain = LINK.exec(rest)
+  if (plain) {
+    let end = pos + plain[0].length
+    let label: string | undefined
+    const piped = /^\s*\|("[^"]*"|[^|]*)\|/.exec(source.slice(end))
+    if (piped) {
+      label = piped[1]!
+      end += piped[0].length
+    }
+    const last = plain[0][plain[0].length - 1]
+    return { line: plain[3] ? "thick" : plain[4] ? "dashed" : "solid", head: headOf(last), tail: headOf(plain[1]), label, ...(plain[5] ? { hidden: true } : {}), end }
   }
-  return { line: plain[3] ? "thick" : plain[4] ? "dashed" : "solid", head: headOf(plain[5]?.replace("!", "")), tail: headOf(plain[1]), label, end }
+  for (const [pattern, line] of TEXT_LINKS) {
+    const inline = pattern.exec(rest)
+    if (inline) return { line, head: headOf(inline[3]), tail: headOf(inline[1]), label: inline[2]!, end: pos + inline[0].length }
+  }
+  const loose = LOOSE_LINK.exec(rest)
+  if (loose) return { line: loose[3] ? "thick" : "solid", head: "none", tail: headOf(loose[1]), label: undefined, end: pos + loose[0].length }
+  return undefined
 }
 
 function registerNode(flow: Flow, id: string, text: string | undefined, shape: Shape | undefined) {
@@ -141,43 +153,97 @@ function parseFlowStatement(source: string, flow: Flow): boolean {
     const next = parseGroup(source, op.end, flow)
     if (!next) return false
     const label = op.label === undefined ? undefined : decodeLabel(op.label).join(" ")
-    for (const from of group.ids) for (const to of next.ids) flow.edges.push({ from, to, label: label || undefined, line: op.line, head: op.head, tail: op.tail })
+    for (const from of group.ids) for (const to of next.ids) flow.edges.push({ from, to, label: op.hidden ? undefined : label || undefined, line: op.line, head: op.head, tail: op.tail, ...(op.hidden ? { hidden: true } : {}) })
     group = next
   }
+}
+
+/** Parsing stops taking statements past these, so a huge source costs a bounded amount; the rest is counted as skipped. */
+const PARSE_MAX_NODES = 2000
+const PARSE_MAX_EDGES = 4000
+/** `e1@{ animate: true }` styles a named link; with `shape`, `label`, `icon` or `img` the same form declares a node. */
+const LINK_STYLE = /^[\w-]+@\{(?![^}]*\b(?:shape|label|icon|img)\s*:)[^}]*\}$/
+
+/** `subgraph id [Title]`, `subgraph id["Title"]`, `subgraph "Title"`, `subgraph Several Words`: the id an edge can name, and the title drawn. */
+function subgraphHeader(text: string): { id: string; title: string } {
+  const named = /^([^\s[("]+)\s*\[\s*(.*?)\s*\]$/.exec(text)
+  const raw = named ? named[2]! : text
+  const title = decodeLabel(raw).join(" ").trim()
+  return { id: named ? named[1]! : text, title: title || (named ? named[1]! : text) }
+}
+
+/** An edge that names a subgraph is drawn to the first node inside it; the box the name alone made is dropped. */
+function retargetSubgraphEdges(flow: Flow, firstMember: Map<string, string>) {
+  let dropped = false
+  for (const [id, member] of firstMember) {
+    const node = flow.nodes.get(id)
+    if (!node || node.explicit || member === id) continue
+    for (const edge of flow.edges) {
+      if (edge.from === id) edge.from = member
+      if (edge.to === id) edge.to = member
+    }
+    flow.nodes.delete(id)
+    flow.groups?.delete(id)
+    dropped = true
+  }
+  if (!dropped) return
+  flow.edges = flow.edges.filter((edge) => edge.from !== edge.to || !firstMember.has(edge.from))
+  let order = 0
+  for (const node of flow.nodes.values()) node.order = order++
 }
 
 /** Nested subgraph titles are joined with this separator in `Flow.groups`; the layout splits them back into a path. */
 export const GROUP_SEPARATOR = " / "
 
-export function parseFlowchart(lines: string[], direction: Direction): Flow | undefined {
-  const flow: Flow = { direction, nodes: new Map(), edges: [], groups: new Map() }
-  const groups: string[] = []
+export function parseFlowchart(lines: string[], direction: Direction): Flow | Unread {
+  const flow: Flow = { direction, nodes: new Map(), edges: [], groups: new Map(), skipped: [] }
+  const groups: { id: string; title: string }[] = []
+  const firstMember = new Map<string, string>()
+  let statements = 0
   for (const raw of lines) {
     const trimmed = raw.trim()
     if (!trimmed || trimmed.startsWith("%%")) continue
     for (const statement of splitMermaidTopLevel(trimmed, ";")) {
       const text = statement.trim()
-      if (!text || IGNORED_STATEMENT.test(text)) continue
+      if (!text || IGNORED_STATEMENT.test(text) || LINK_STYLE.test(text)) continue
       if (/^end$/i.test(text)) {
-        if (!groups.pop()) return undefined
+        if (!groups.pop()) flow.skipped!.push(text)
         continue
       }
-      const group = /^subgraph\s+(.+)$/i.exec(text)
+      const group = /^subgraph(?:\s+(.+))?$/i.exec(text)
       if (group) {
-        const parsed = parseFlowchartNodeExpression(group[1]!)
-        groups.push((parsed?.label ?? group[1]!).trim())
+        groups.push(subgraphHeader((group[1] ?? "").trim() || " "))
         continue
       }
-      const previous = new Map([...flow.nodes].map(([id, node]) => [id, node.explicit]))
-      if (!parseFlowStatement(text, flow)) return undefined
-      if (flow.nodes.size > 120 || flow.edges.length > 240) return undefined
-      if (groups.length) for (const [id, node] of flow.nodes) {
-        // A forward reference outside the subgraph must not steal its later declaration.
-        if (!previous.has(id) || (!previous.get(id) && node.explicit)) flow.groups!.set(id, groups.join(GROUP_SEPARATOR))
+      if (flow.nodes.size >= PARSE_MAX_NODES || flow.edges.length >= PARSE_MAX_EDGES) {
+        flow.cut = true
+        continue
+      }
+      const known = flow.nodes.size
+      const implicit = groups.length ? [...flow.nodes.values()].filter((node) => !node.explicit).map((node) => node.id) : []
+      const edges = flow.edges.length
+      if (parseFlowStatement(text, flow)) statements++
+      else {
+        // Nothing of a line that was not understood is drawn: a half-read line would show a link the source does not have.
+        flow.skipped!.push(text)
+        flow.edges.length = edges
+        for (const id of [...flow.nodes.keys()].slice(known)) flow.nodes.delete(id)
+        continue
+      }
+      if (!groups.length) continue
+      const path = groups.map((entry) => entry.title).join(GROUP_SEPARATOR)
+      // A forward reference outside the subgraph must not steal its later declaration.
+      const joined = [...[...flow.nodes.keys()].slice(known), ...implicit.filter((id) => flow.nodes.get(id)!.explicit)]
+      for (const id of joined) {
+        flow.groups!.set(id, path)
+        for (const entry of groups) if (!firstMember.has(entry.id)) firstMember.set(entry.id, id)
       }
     }
   }
-  return flow.nodes.size && groups.length === 0 ? flow : undefined
+  retargetSubgraphEdges(flow, firstMember)
+  // Mostly unread text is not a flowchart with a few slips: it is shown as written, with the first line that failed.
+  if (!flow.nodes.size || flow.skipped!.length > statements) return { skipped: flow.skipped! }
+  return flow
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -861,6 +927,8 @@ function layeredFlowchart(flow: Flow, maxWidth: number, options: LayoutOptions):
     const points = dedupe(abstract.map(({ s, c }) => toReal(s, c)))
     const first = chain.segs[0]!
     const last = chain.segs[chain.segs.length - 1]!
+    // `~~~` places its two nodes like any link and draws nothing.
+    if (chain.edge.hidden) continue
     canvas.path(points, first.style)
     if (points.length < 2) continue
     const p0 = points[0]!
@@ -926,8 +994,11 @@ function narrowed(flow: Flow, labelWidth: number): Flow {
 /** The single-column scene: every box stacked, every connection on a side channel. The last resort when layers do not fit. */
 function sceneFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
   const nodes = [...flow.nodes.values()].map((node) => ({ id: node.id, label: node.lines.join(" "), draw: (canvas: Canvas, rect: { x: number; y: number; w: number; h: number }) => drawBox(canvas, rect, { ...node, lines: wrap(node.lines.join(" "), rect.w - 4) }), ...(flow.groups?.get(node.id) ? { group: flow.groups.get(node.id)! } : {}) }))
-  const edges = flow.edges.map((edge) => ({ from: edge.from, to: edge.to, ...(edge.label ? { label: edge.label } : {}), style: edge.line, head: edge.head === "none" ? "─" : edge.head === "x" ? "✕" : edge.head === "o" ? "○" : "◀", ...(edge.tail !== "none" ? { tail: headGlyph(edge.tail, -1, 0) } : {}) }))
-  if (flow.direction === "LR" || flow.direction === "RL") return horizontalScene(nodes, edges, maxWidth, flow.direction === "RL")
+  const edges = flow.edges.filter((edge) => !edge.hidden).map((edge) => ({ from: edge.from, to: edge.to, ...(edge.label ? { label: edge.label } : {}), style: edge.line, head: edge.head === "none" ? "─" : edge.head === "x" ? "✕" : edge.head === "o" ? "○" : "◀", ...(edge.tail !== "none" ? { tail: headGlyph(edge.tail, -1, 0) } : {}) }))
+  if (flow.direction === "LR" || flow.direction === "RL") {
+    const sideways = horizontalScene(nodes, edges, maxWidth, flow.direction === "RL")
+    if ("lines" in sideways) return sideways
+  }
   return graphScene(flow.direction === "BT" ? [...nodes].reverse() : nodes, edges, maxWidth)
 }
 
@@ -938,22 +1009,87 @@ function sceneFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { not
  * stacked single-column scene. Only when none fits is the source shown, with a note that says every step was tried.
  * A diagram that cannot be drawn for another reason keeps the first attempt's note.
  */
-export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
-  if (flow.nodes.size > MAX_NODES) return { note: MERMAID_NOTES.tooComplex }
-  const first = layeredFlowchart(flow, maxWidth, { spacing: 14 })
-  if ("lines" in first) return first
-  const retry = first.note === MERMAID_NOTES.tooWide || first.note === MERMAID_NOTES.tooComplex
-  if (!retry) return first
-  const compact = layeredFlowchart(narrowed(flow, 16), maxWidth, { spacing: 3 })
-  if ("lines" in compact) return compact
+export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[]; note?: string } {
+  const drawn = flow.nodes.size > MAX_NODES ? undefined : drawFlowchart(flow, maxWidth)
+  const result = drawn ?? listFlowchart(flow, maxWidth)
+  const skipped = flow.skipped?.length ? skippedNote(flow.skipped) : undefined
+  const note = [result.note, flow.cut ? `only the first ${flow.nodes.size} nodes were read` : undefined, skipped].filter(Boolean).join(" · ")
+  return note ? { lines: result.lines, note } : { lines: result.lines }
+}
+
+/** A flowchart from bare links, for a diagram type that has no drawing of its own but whose lines join two names. */
+export function flowFromLinks(links: ReadonlyArray<{ from: string; to: string; label?: string; dashed?: boolean; head?: boolean }>): Flow {
+  const flow: Flow = { direction: "TD", nodes: new Map(), edges: [] }
+  for (const link of links) {
+    for (const id of [link.from, link.to]) registerNode(flow, id, id, "rect")
+    flow.edges.push({ from: link.from, to: link.to, label: link.label ? decodeLabel(link.label).join(" ") : undefined, line: link.dashed ? "dashed" : "solid", head: link.head === false ? "none" : "arrow", tail: "none" })
+  }
+  return flow
+}
+
+/** `1 line not understood: A -=> B`, the first one quoted so the writer can find it. */
+export function skippedNote(skipped: readonly string[]) {
+  const first = truncateEnd(skipped[0]!.trim(), 60)
+  return skipped.length === 1 ? `1 line not understood: ${first}` : `${skipped.length} lines not understood, the first: ${first}`
+}
+
+function drawFlowchart(flow: Flow, maxWidth: number): { lines: Line[]; note?: string } | undefined {
+  const attempt = (layout: () => { lines: Line[] } | { note: string }) => {
+    // A layout that outgrows its canvas throws; the next, smaller layout is tried.
+    try {
+      const made = layout()
+      return "lines" in made ? made : undefined
+    } catch {
+      return undefined
+    }
+  }
+  const layered = attempt(() => layeredFlowchart(flow, maxWidth, { spacing: 14 })) ?? attempt(() => layeredFlowchart(narrowed(flow, 16), maxWidth, { spacing: 3 }))
+  if (layered) return layered
   if (flow.direction === "LR" || flow.direction === "RL") {
     const turned: Flow = { ...flow, direction: flow.direction === "LR" ? "TD" : "BT" }
-    for (const attempt of [layeredFlowchart(turned, maxWidth, { spacing: 14 }), layeredFlowchart(narrowed(turned, 16), maxWidth, { spacing: 3 })]) if ("lines" in attempt) return attempt
+    const rotated = attempt(() => layeredFlowchart(turned, maxWidth, { spacing: 14 })) ?? attempt(() => layeredFlowchart(narrowed(turned, 16), maxWidth, { spacing: 3 }))
+    if (rotated) return rotated
   }
-  const final = first.note !== MERMAID_NOTES.tooWide ? first : { note: flow.direction === "LR" || flow.direction === "RL" ? MERMAID_NOTES.tooWideRotated : MERMAID_NOTES.tooWideTried }
-  if (!flow.groups?.size) return final
-  const stacked = sceneFlowchart(narrowed(flow, 24), maxWidth)
-  return "lines" in stacked ? stacked : final
+  return attempt(() => sceneFlowchart(narrowed(flow, 24), maxWidth))
+}
+
+/** Rows a listed flowchart shows before it says how many are left. */
+const LIST_MAX_ROWS = 240
+
+/**
+ * The flowchart as a list: every node that links to another, with its links under it. What a flowchart too large or too
+ * wide to draw becomes, at any width and any size: one pass over the links, a bounded number of rows.
+ */
+function listFlowchart(flow: Flow, maxWidth: number): { lines: Line[]; note: string } {
+  const name = (id: string) => flow.nodes.get(id)?.lines.join(" ") ?? id
+  const outgoing = new Map<string, FlowEdge[]>()
+  const linked = new Set<string>()
+  for (const edge of flow.edges) {
+    if (edge.hidden) continue
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge])
+    linked.add(edge.from).add(edge.to)
+  }
+  const rows: Line[] = []
+  const fit = (text: string, room: number) => truncateEnd(text, Math.max(1, room))
+  for (const node of flow.nodes.values()) {
+    const edges = outgoing.get(node.id)
+    if (!edges && linked.has(node.id)) continue
+    const group = flow.groups?.get(node.id)
+    const title = fit(name(node.id), maxWidth - (group ? 4 : 0))
+    rows.push([{ text: title, fg: "heading", bold: true }, ...(group && textWidth(title) + 4 < maxWidth ? [{ text: fit(`  ${group}`, maxWidth - textWidth(title)), fg: "muted" as const }] : [])])
+    for (const [at, edge] of (edges ?? []).entries()) {
+      const stroke = edge.line === "thick" ? "━" : edge.line === "dashed" ? "┄" : "─"
+      const head = edge.head === "arrow" ? "▶" : edge.head === "x" ? "✕" : edge.head === "o" ? "○" : stroke
+      const lead = `${at === edges!.length - 1 ? "└" : "├"}${stroke}${head} `
+      const target = fit(name(edge.to), maxWidth - textWidth(lead))
+      const room = maxWidth - textWidth(lead) - textWidth(target) - 3
+      rows.push([{ text: lead, fg: "muted" }, { text: target, fg: "body" }, ...(edge.label && room >= 4 ? [{ text: `  ${fit(edge.label, room)}`, fg: "code" as const }] : [])])
+    }
+  }
+  const shown = rows.slice(0, LIST_MAX_ROWS)
+  if (rows.length > shown.length) shown.push([{ text: fit(`… ${rows.length - shown.length} more rows`, maxWidth), fg: "muted" }])
+  const size = `${flow.nodes.size} nodes, ${flow.edges.length} links`
+  return { lines: shown, note: flow.nodes.size > MAX_NODES ? `${size}: more than a drawing holds · listed instead` : `${size}: too large to draw at this width · listed instead` }
 }
 
 // ---------------------------------------------------------------------------------------------

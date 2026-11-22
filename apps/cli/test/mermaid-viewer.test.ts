@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { MERMAID_NOTES, renderMermaid } from "../src/view/mermaid"
+import { renderMermaid } from "../src/view/mermaid"
 import {
   createDiagramView,
   diagramBounds,
@@ -59,10 +59,23 @@ describe("diagram layout and zoom", () => {
     expect(plain(view.lines)).toEqual(plain((natural as { lines: Line[] }).lines))
     expect(view.height).toBe(view.lines.length)
     expect(view.width).toBe(Math.max(...view.lines.map((line) => textWidth(text(line)))))
-    expect(renderMermaid(WIDE, 60)).toEqual({ note: MERMAID_NOTES.tooWideTried })
+    // The chat stacks a row of fifteen boxes into its 60 columns; here the row is laid out as written.
+    const chat = renderMermaid(WIDE, 60)
+    if (!("lines" in chat)) throw new Error(`no diagram: ${chat.note}`)
+    for (const line of chat.lines) expect(textWidth(text(line))).toBeLessThanOrEqual(60)
     const wide = layout(WIDE)
     expect(wide.note).toBeUndefined()
     expect(wide.width).toBeGreaterThan(60)
+    expect(wide.height).toBeLessThan(chat.lines.length)
+  })
+
+  test("what a drawing leaves out is said under it, at any zoom", () => {
+    for (const zoom of [-1, 0, 2] as const) {
+      const view = layout("flowchart TD\n A --> B\n B --> C\n C -=> D", zoom)
+      expect(view.note).toBeUndefined()
+      expect(plain(view.lines).slice(-2)).toEqual(["", "1 line not understood: C -=> D"])
+    }
+    expect(plain(layout("flowchart TD\n A --> B\n B --> C\n C -=> D").lines).join("\n")).toContain("│ A │")
   })
 
   test("200% and 300% spread the diagram sideways, keeping every label whole and every line within the new width", () => {
@@ -121,11 +134,12 @@ describe("diagram layout and zoom", () => {
   })
 
   test("a diagram the renderer cannot draw shows its note and its source, at any zoom", () => {
-    const unsupported = "unknownDiagram title Pets\n \"Dogs\" : 3"
+    const unread = "flowchart TD\n A -=> B"
+    const note = "1 line not understood: A -=> B · shown as source"
     for (const zoom of [-1, 0, 2] as const) {
-      const view = layout(unsupported, zoom)
-      expect(view.note).toBe("unsupported diagram")
-      expect(plain(view.lines)).toEqual(["unsupported diagram", "", "unknownDiagram title Pets", " \"Dogs\" : 3"])
+      const view = layout(unread, zoom)
+      expect(view.note).toBe(note)
+      expect(plain(view.lines)).toEqual([note, "", "flowchart TD", " A -=> B"])
     }
   })
 })
@@ -295,7 +309,7 @@ describe("full-screen diagram render", () => {
     expect(text(render(layout(SMALL), createDiagramView(), 100, 24)[1]!)).toContain("zoom 100%")
     expect(text(render(layout(SMALL, 1), { index: 0, zoom: 1, x: 0, y: 0 }, 100, 24)[1]!)).toContain("zoom 200%")
     expect(text(render(layout(SMALL, -1), { index: 0, zoom: -1, x: 0, y: 0 }, 100, 24)[1]!)).toContain("zoom overview")
-    expect(text(render(layout("unknownDiagram\n \"a\" : 1"), createDiagramView(), 100, 24)[1]!)).toContain("source")
+    expect(text(render(layout("flowchart TD\n A -=> B"), createDiagramView(), 100, 24)[1]!)).toContain("source")
   })
 
   test("no layout yet says loading, and no diagram says so", () => {
@@ -383,14 +397,18 @@ describe("/diagram in the app", () => {
     expect(h.rows()).toHaveLength(24)
   })
 
-  test("a diagram the chat showed as source is drawn here", async () => {
-    const h = await session([fence(WIDE)], { width: 70, height: 24 })
+  test("a diagram the chat cut at its right edge is whole here", async () => {
+    const people = `sequenceDiagram\n${Array.from({ length: 12 }, (_, i) => ` Service${i}->>Service${i + 1}: call number ${i}`).join("\n")}`
+    const h = await session([fence(people)], { width: 70, height: 24 })
     await h.key("\x1b")
-    expect(h.text()).toContain("diagram too wide, even compacted · shown as source")
+    expect(h.text().replace(/\s+/g, " ")).toContain("cut at the right edge · /diagram shows it whole")
+    expect(h.text()).not.toContain("sequenceDiagram")
     await open(h)
     expect(h.app.page).toBe("diagram")
-    expect(h.text()).not.toContain("shown as source")
-    expect(h.text()).toContain("Node number 0")
+    expect(h.text()).not.toContain("cut at the right edge")
+    expect(h.text()).toContain("Service0")
+    expect(layout(people).width).toBeGreaterThan(70)
+    expect(plain(layout(people).lines).join("\n")).toContain("Service12")
   })
 
   test("the leader chord ctrl+x i opens it", async () => {

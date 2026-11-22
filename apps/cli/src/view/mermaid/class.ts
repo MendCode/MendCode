@@ -19,8 +19,25 @@ function classRelationConnector(relation: string) {
     "--": "─────",
     "..": "╌╌╌╌╌",
   }
-  return connectors[relation]! ?? relation
+  if (connectors[relation]) return connectors[relation]!
+  // Any other pairing of ends (`<-->`, `*--o`, `()--`, `<..>`): each end drawn as it is on a one-ended relation.
+  const ends = /^(<\||\*|o|<|\(\))?(--|\.\.)(\|>|\*|o|>|\(\))?$/.exec(relation)
+  if (!ends) return relation
+  const left = ({ "<|": "◁", "*": "◆", o: "◇", "<": "◀", "()": "○" } as Record<string, string>)[ends[1] ?? ""] ?? (ends[2] === ".." ? "╌" : "─")
+  const right = ({ "|>": "▷", "*": "◆", o: "◇", ">": "▶", "()": "○" } as Record<string, string>)[ends[3] ?? ""] ?? (ends[2] === ".." ? "╌" : "─")
+  return left + (ends[2] === ".." ? "╌╌╌" : "───") + right
 }
+
+/** A class name as written: `Shape`, `shapes.Circle`, `List~T~`, or any text between backticks. */
+const NAME = String.raw`(?:\x60[^\x60]+\x60|[\p{L}_][\p{L}\p{N}_.-]*(?:~[^~]+~)?)`
+const RELATION = String.raw`(?:<\||\*|o|<|\(\))?(?:--|\.\.)(?:\|>|\*|o|>|\(\))?`
+const CLASS_BLOCK = new RegExp(String.raw`^class\s+(${NAME})(?:\s*\[\s*"?([^"\]]*)"?\s*\])?(?:\s*:::[\w-]+)?\s*\{(.*)$`, "u")
+const CLASS_RELATION = new RegExp(String.raw`^(${NAME})\s*(?:"([^"]*)"\s*)?(${RELATION})\s*(?:"([^"]*)"\s*)?(${NAME})(?:\s*:\s*(.+))?$`, "u")
+const CLASS_ANNOTATED = new RegExp(String.raw`^<<\s*([^>]+?)\s*>>\s+(${NAME})$`, "u")
+const CLASS_MEMBER = new RegExp(String.raw`^(${NAME})\s*:\s*(.+)$`, "u")
+const CLASS_LINE = new RegExp(String.raw`^class\s+(${NAME})`, "u")
+/** `List~T~` is drawn `List<T>`; backticks and a `:::style` are dropped. */
+const className = (raw: string) => raw.replace(/^\x60|\x60$/g, "").replace(/~([^~]+)~/g, "<$1>")
 
 export function renderClassDiagram(input: string, width: number): string | undefined {
   const lines = input
@@ -66,42 +83,55 @@ export function renderClassDiagram(input: string, width: number): string | undef
       continue
     }
 
-    const blockStart = /^class\s+([A-Za-z][\w-]*)\s*\{$/.exec(line)
+    const blockStart = CLASS_BLOCK.exec(line)
     if (blockStart) {
-      currentClass = blockStart[1]!
-      ensureClass(currentClass)
+      const name = className(blockStart[1]!)
+      ensureClass(name)
+      const inline = blockStart[3]!.trim()
+      // `class A { +x; +y() }` on one line holds its members between the braces.
+      if (inline.endsWith("}")) classes.set(name, [...classes.get(name)!, ...inline.slice(0, -1).split(/[;\n]/).map(cleanLabel).filter(Boolean)])
+      else {
+        currentClass = name
+        if (inline) classes.set(name, [...classes.get(name)!, cleanLabel(inline)])
+      }
       continue
     }
 
-    const cardinality = /^([A-Za-z][\w-]*)\s+"([^\"]+)"\s+(\S+)\s+"([^\"]+)"\s+([A-Za-z][\w-]*)(?:\s*:\s*(.+))?$/.exec(line)
+    const cardinality = CLASS_RELATION.exec(line)
     if (cardinality) {
-      ensureClass(cardinality[1]!)
-      ensureClass(cardinality[5]!)
-      relations.push({ from: cardinality[1]!, to: cardinality[5]!, relation: cardinality[3]!, label: `${cardinality[2]} → ${cardinality[4]} ${cleanLabel(cardinality[6])}` })
+      const from = className(cardinality[1]!)
+      const to = className(cardinality[5]!)
+      ensureClass(from)
+      ensureClass(to)
+      const counted = cardinality[2] !== undefined || cardinality[4] !== undefined
+      const label = counted ? `${cardinality[2] ?? ""} → ${cardinality[4] ?? ""} ${cleanLabel(cardinality[6])}`.trim() : cleanLabel(cardinality[6]) || undefined
+      relations.push({ from, to, relation: cardinality[3]!, label })
       continue
     }
 
-    const relation = /^([A-Za-z][\w-]*)\s+(<\|--|--\|>|\*--|--\*|o--|--o|<--|-->|<\.\.|\.\.>|\.\.\|>|<\|\.\.|\.\.|--)\s+([A-Za-z][\w-]*)(?:\s*:\s*(.+))?$/.exec(line)
-    if (relation) {
-      ensureClass(relation[1]!)
-      ensureClass(relation[3]!)
-      relations.push({ from: relation[1]!, to: relation[3]!, relation: relation[2]!, label: cleanLabel(relation[4]!) || undefined })
+    const annotated = CLASS_ANNOTATED.exec(line)
+    if (annotated) {
+      const name = className(annotated[2]!)
+      ensureClass(name)
+      classes.set(name, [`«${annotated[1]}»`, ...classes.get(name)!])
       continue
     }
 
-    const member = /^([A-Za-z][\w-]*)\s*:\s*(.+)$/.exec(line)
+    const member = CLASS_MEMBER.exec(line)
     if (member) {
-      ensureClass(member[1]!)
-      classes.set(member[1]!, [...(classes.get(member[1]!) ?? []), cleanLabel(member[2]!)])
+      const name = className(member[1]!)
+      ensureClass(name)
+      classes.set(name, [...(classes.get(name) ?? []), cleanLabel(member[2]!)])
       continue
     }
 
-    const classLine = /^class\s+([A-Za-z][\w-]*)/.exec(line)
+    const classLine = CLASS_LINE.exec(line)
     if (classLine) {
-      ensureClass(classLine[1]!)
+      ensureClass(className(classLine[1]!))
       continue
     }
-    if (/^(?:classDef|style|click|linkStyle|cssClass|annotation)\b/.test(line)) continue
+    // Notes, links and styling have no place in the boxes; the classes and their relations are the diagram.
+    if (/^(?:classDef|style|click|link|callback|linkStyle|cssClass|annotation|note|title|accTitle|accDescr)\b/.test(line)) continue
     return undefined
   }
 
@@ -114,7 +144,9 @@ export function renderClassDiagram(input: string, width: number): string | undef
       const tail = connector[0]!
       return { from: relation.from, to: relation.to, ...(relation.label ? { label: relation.label } : {}), dashed: relation.relation.includes(".."), head: head === "▶" ? "◀" : head === "▷" ? "◁" : /[◆◇]/.test(head) ? head : "─", ...(/[◀◁◆◇]/.test(tail) ? { tail } : {}) }
     })
-    return sceneText(direction === "LR" || direction === "RL" ? horizontalScene(nodes, edges, width, direction === "RL") : graphScene(direction === "BT" ? nodes.reverse() : nodes, edges, width))
+    // A row of classes wider than the room is stacked instead: every class and relation is still drawn.
+    const sideways = direction === "LR" || direction === "RL" ? sceneText(horizontalScene(nodes, edges, width, direction === "RL")) : undefined
+    return sideways ?? sceneText(graphScene(direction === "BT" ? nodes.reverse() : nodes, edges, width))
   }
   if (groups.size || explicitDirection) return scene()
   const related = new Set(relations.flatMap((relation) => [relation.from, relation.to]))

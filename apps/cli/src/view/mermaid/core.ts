@@ -2,22 +2,30 @@ import type { ColorName, Line, Span } from "../../ui/theme"
 import { cells, wrap } from "../wrap"
 
 /** Shared cell canvas and resource limits for the lazily loaded diagram families. */
-export type MermaidResult = { lines: Line[] } | { note: string }
+/**
+ * `lines` is what was drawn; a `note` beside them says what the drawing leaves out or how it was reduced. A `note` alone
+ * means nothing could be drawn: the caller shows the source with it.
+ */
+export type MermaidResult = { lines: Line[]; note?: string } | { note: string }
 
+/**
+ * Why one layout made nothing, as a layout says it to the dispatch (returned, or thrown by `assertCanvas`). The dispatch
+ * answers each with another drawing (a narrower layout, the picture cut at the edge, a list, an outline); none of these
+ * reaches the reader, except `tooWide` for a room under four cells.
+ */
 export const MERMAID_NOTES = {
   unsupported: "unsupported diagram",
   tooWide: "diagram too wide · shown as source",
-  tooWideTried: "diagram too wide, even compacted · shown as source",
-  tooWideRotated: "diagram too wide, even rotated · shown as source",
   tooComplex: "diagram too complex · shown as source",
 } as const
 
 export const MAX_NODES = 120
 export const MAX_LABEL_WIDTH = 28
-export const MAX_ROWS = 400
+/** A chain of MAX_NODES boxes, one under the other, is this tall: the longest drawing a flowchart or a sequence makes. */
+export const MAX_ROWS = 800
 
 export function assertCanvas(width: number, height: number) {
-  if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0) || width > 1600 || height > 600 || width * height > 160_000) throw new Error(MERMAID_NOTES.tooComplex)
+  if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0) || width > 1600 || height > MAX_ROWS || width * height > 160_000) throw new Error(MERMAID_NOTES.tooComplex)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -186,8 +194,10 @@ export function wrapPlain(text: string, max: number): string[] {
 export function decodeLabel(raw: string): string[] {
   let text = raw.trim()
   if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) text = text.slice(1, -1)
-  if (text.startsWith("`") && text.endsWith("`") && text.length >= 2) text = text.slice(1, -1)
-  text = text.replace(/#quot;/g, '"').replace(/#amp;/g, "&").replace(/#lt;/g, "<").replace(/#gt;/g, ">")
+  // A markdown string keeps its words; the emphasis marks have nothing to draw with.
+  if (text.startsWith("`") && text.endsWith("`") && text.length >= 2) text = text.slice(1, -1).replace(/\*\*(.+?)\*\*/g, "$1").replace(/(^|\s)[*_](\S(?:.*?\S)?)[*_](?=\s|$)/g, "$1$2").replace(/\n/g, "<br>")
+  text = text.replace(/#quot;/g, '"').replace(/#amp;/g, "&").replace(/#lt;/g, "<").replace(/#gt;/g, ">").replace(/#nbsp;/g, " ")
+  text = text.replace(/#(\d{1,7});/g, (whole, code: string) => (Number(code) >= 32 && Number(code) <= 0x10ffff ? String.fromCodePoint(Number(code)) : whole))
   return text
     .split(/<br\s*\/?>|\\n/i)
     .flatMap((part) => wrapPlain(part.replace(/<[^>]+>/g, "").replace(/[\u0000-\u001f\u007f]/g, ""), MAX_LABEL_WIDTH))

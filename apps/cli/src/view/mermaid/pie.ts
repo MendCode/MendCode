@@ -34,11 +34,13 @@ export function renderPieChart(input: string, width: number): { lines: Line[] } 
       title = cleanMermaidLabel(line.replace(/^title\s+/, ""))
       continue
     }
-    const slice = /^"?([^":]+)"?\s*:\s*([\d.]+)$/.exec(line)
+    if (/^showData$/i.test(line)) continue
+    // A quoted label may hold a colon of its own: `"Tests: unit" : 40`.
+    const slice = /^(?:"([^"]+)"|([^":]+))\s*:\s*([\d.]+)$/.exec(line)
     if (!slice) return undefined
-    const value = Number(slice[2])
+    const value = Number(slice[3])
     if (!Number.isFinite(value) || value < 0) return undefined
-    slices.push({ label: cleanMermaidLabel(slice[1]), value })
+    slices.push({ label: cleanMermaidLabel(slice[1] ?? slice[2]), value })
   }
   const total = slices.reduce((sum, slice) => sum + slice.value, 0)
   if (!slices.length || total <= 0) return undefined
