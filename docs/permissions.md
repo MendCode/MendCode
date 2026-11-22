@@ -36,6 +36,8 @@ One exception, an owner-chosen capability for experimental bots (`/experimental 
 
 A bot's own learning tools ask less than a write tool: `bot_note` keeps a note in the bot's memory without asking, `bot_skill` asks the first time per skill (creating one, or updating one you never approved) and then saves into the bot's own folder only, and `bot_schedule` asks every time before it creates a schedule, in every permission mode, showing the trigger, the folder and what a run may do. Listing and cancelling the bot's own schedules asks nothing. A scheduled run has no more than the permission of the session that created it, and a report-only run (the default) cannot edit.
 
+The [Today](today.md) chat's `today` tool reads the brief and keeps or removes your standing instructions without asking; accepting or declining memories and setting a memory rule are writes and follow the chat's permission mode. Only a Today chat is offered the tool.
+
 Allow rules, automatic reviewers and session grants cannot substitute for that consent. Explicit deny rules still win; individually approved reads are permitted in plan mode.
 
 ## Smart mode

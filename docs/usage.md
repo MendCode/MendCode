@@ -149,7 +149,7 @@ unknown), under the session or directory it was made for:
 | `setup` | the setup helper's answers | `setup.ask` |
 | `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
 | `whatsNew` | `/whatsnew` picking the changes that fit you ([what's new](whats-new.md)) | `whatsnew.ask` |
-| `todayTriage` | `/today`'s `t`, grouping the page's rows ([today](today.md#triage)) | `today.triage` |
+| `todayTriage` | past calls of the old `/today` page's triage; nothing records it any more ([today](today.md) is a chat, its turns are counted as the session's) | none |
 | `prReview` | the PR reviewer's own turns (review, verify, fix children), one row per day, model and directory | `pr-review/service.ts` |
 
 ### Calls already in the totals

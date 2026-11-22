@@ -416,11 +416,11 @@ export type TuiProfile = {
   activitySound: "off" | "pulse" | "hum"
   sidebarWidgets: SidebarWidget[]
   rightSidebar: boolean
-  /** Epoch ms of the last visit to /today, the "since" of its summary; 0 when it was never opened (docs/today.md). Not a look setting. */
+  /** Legacy: the old /today page's last visit. /today is a chat now (docs/today.md); the key is kept so old files still read. */
   todayLastVisit: number
-  /** Rows pinned with `m` on /today, for one local day (`YYYY-MM-DD`); another day reads as none. At most 50 ids. */
+  /** Legacy: the old /today page's pins; kept so old files still read. */
   todayMarks: { day: string; ids: string[] }
-  /** Rows dismissed with `x` on /today (`tab:id` → the row's time when dismissed); a row with something newer comes back. At most 300. */
+  /** Legacy: the old /today page's dismissed rows; kept so old files still read. */
   todayDismissed: Record<string, number>
   /** Cells the right bar takes; 0 keeps the automatic 48 (56 from 150 columns). */
   sidebarWidth: number
