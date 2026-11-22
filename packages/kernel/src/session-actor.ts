@@ -65,6 +65,8 @@ type ActiveTurn = {
   /** When the current run of network failures began; cleared by the next item event. */
   offlineSince?: number | undefined
   compaction?: { reason: "auto" | "manual"; idle?: true; followUp: string }
+  /** The compaction item an engine opened inside the turn on its own (Claude Code or pi compacting as the context fills). */
+  inTurnCompaction?: ItemId
   /** Started alone (send now, restart) or with an explicit model/agent selection or turn options: no message joins it after its answer. */
   alone?: true
   /** The running output figure for the activity line (`onLiveOutput`), made at the turn's first count or streamed word. */
@@ -421,6 +423,7 @@ export function createSessionActor(options: SessionActorOptions) {
   }
 
   function closeOpenItems(turn: ActiveTurn, status: "cancelled" | "interrupted" | "unknown") {
+    if (turn.inTurnCompaction) compactionUpdated(turn, status === "cancelled" ? "cancelled" : "interrupted")
     for (const itemId of turn.openItems) emit({ type: "item.completed", sessionId, itemId, status })
     turn.openItems.clear()
     turn.agentOpen.clear()
@@ -502,6 +505,11 @@ export function createSessionActor(options: SessionActorOptions) {
   function compactionUpdated(turn: ActiveTurn, state: "writing" | "packed" | "skipped" | "failed" | "cancelled" | "interrupted", followUpQueueId?: QueueId, note?: string) {
     if (!turn.compaction) return
     emit({ type: "compaction.updated", sessionId, turnId: turn.turnId, ...turn.compaction, state, ...(followUpQueueId ? { followUpQueueId } : {}), ...(note ? { note: note.slice(0, 500) } : {}) })
+    // A compaction inside a turn ends once: the turn's own end (completed, failed, cancelled) has no compaction to report after it.
+    if (turn.inTurnCompaction && state !== "writing") {
+      delete turn.inTurnCompaction
+      delete turn.compaction
+    }
   }
 
   function showLive(turnId: TurnId, figure: { output: number; estimated: boolean } | undefined) {
@@ -533,7 +541,13 @@ export function createSessionActor(options: SessionActorOptions) {
       if (typeof event.meta?.agentParent === "string") turn.agentOpen.add(event.itemId)
       else {
         if (event.kind === "agent_message" || event.kind === "reasoning") (turn.streaming ??= new Map()).set(event.itemId, event.kind === "agent_message" ? "text" : "reasoning")
-        if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+        // An engine compacting inside the turn: the session reads as compacting until that item ends, as a compaction of its own does.
+        if (event.kind === "compaction" && turn.phase === "turn" && !turn.compaction) {
+          turn.inTurnCompaction = event.itemId
+          turn.compaction = { reason: "auto", followUp: "" }
+          compactionUpdated(turn, "writing")
+          setForeground("compacting")
+        } else if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
       }
       return
     }
@@ -558,6 +572,11 @@ export function createSessionActor(options: SessionActorOptions) {
       ...(event.render ? { render: event.render } : {}),
       ...(event.meta ? { meta: displayMeta(event.meta) } : {}),
     })
+    if (event.itemId === turn.inTurnCompaction) {
+      compactionUpdated(turn, event.status === "ok" ? "packed" : "failed")
+      if (turn.phase === "turn") setForeground("generating")
+      return
+    }
     if (!turn.agentOpen.delete(event.itemId) && turn.phase === "turn" && foreground === "tool") setForeground("generating")
   }
 
