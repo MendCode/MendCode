@@ -157,7 +157,7 @@ Trusted custom subagents can replace these profiles.
 
 ### Start or resume a task
 
-`task { description, prompt, agent?, subagent_type?, task_id?, model?, variant?, background?, isolation?, fork? }` runs in the foreground by default.
+`task { description, prompt, agent?, subagent_type?, task_id?, model?, variant? (or effort?), background?, isolation?, fork? }` runs in the foreground by default.
 
 `subagent_type` aliases `agent`.
 
@@ -176,6 +176,8 @@ Use `task_id` to continue the same saved conversation after completion, cancella
 An active child cannot be resumed, and another parent cannot resume it.
 
 `model` may use `model#variant`; a conflicting explicit variant is refused.
+
+To set a child's reasoning effort, pass `variant` (alias `effort`), e.g. `model: "gpt-6.2-astra", effort: "xhigh"`; `mendcode models <provider> --verbose` lists a model's efforts, and an unknown one is refused naming the valid ones.
 
 An explicit model starts a fresh model choice; resuming without an override keeps the child's choice.
 

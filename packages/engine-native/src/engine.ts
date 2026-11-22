@@ -241,19 +241,20 @@ export const PLAN_TOOL = {
 export const TASK_TOOL = {
   name: "task",
   description:
-    "Delegate a self-contained subtask to a sub-agent with fresh context and the same tools (not main-agent controls or question): independent research or focused changes that would flood your context. Give a complete prompt; it cannot see this conversation. task_id continues a saved child with its history, and model moves it to another model. background returns at once; task_status inspects, waits or summarizes progress.",
+    "Delegate a self-contained subtask to a sub-agent with fresh context and the same tools (not main-agent controls or question) for research or changes that would flood your context. Complete prompt: it cannot see this conversation. model and variant (effort) are this child's own. task_id continues a saved child (model moves it). background returns at once; task_status inspects or waits.",
   args: z.object({
     description: z.string().min(1).max(80).describe("3-8 word label shown to the user"),
     prompt: z.string().min(1).max(20_000).describe("Full instructions and context for the sub-agent, including what to return"),
     task_id: z.string().optional(),
     background: z.boolean().optional(),
     model: z.string().min(1).max(200).optional(),
-    engine: z.string().regex(/^(native|claude|codex|pi|acp:[a-zA-Z0-9_-]+)$/).optional().describe("Full tier: run the child on this configured engine; model must belong to it. Claude models (Opus, Sonnet, Haiku) on the user's Claude login run with engine \"claude\"; prefer that over another provider's copy of the same model"),
-    variant: z.string().min(1).max(80).optional(),
+    engine: z.string().regex(/^(native|claude|codex|pi|acp:[a-zA-Z0-9_-]+)$/).optional().describe("Full tier: run the child on this engine; model must belong to it. Claude models (Opus, Sonnet, Haiku) use \"claude\", not another provider's copy"),
+    variant: z.string().min(1).max(80).optional().describe("Reasoning effort: low, medium, high, xhigh (`mendcode models <provider> --verbose`)"),
+    effort: z.string().min(1).max(80).optional().describe("Same as variant"),
     subagent_type: z.string().min(1).max(64).optional(),
-    agent: z.string().min(1).max(64).optional().describe("Name of a custom sub-agent to run as (see the list in this tool's description); omit for a general one"),
-    isolation: z.literal("worktree").optional().describe("Child works in a new git worktree of HEAD; result names its branch (never merged)"),
-    fork: z.boolean().optional().describe("true: the child starts from this conversation (your model; cached, so cheap to start) and the prompt needs only the task; your main-agent tools fail there. Omit for independent work"),
+    agent: z.string().min(1).max(64).optional().describe("Custom sub-agent to run as (listed below); omit for a general one"),
+    isolation: z.literal("worktree").optional().describe("Child works in a new git worktree; result names its branch (never merged)"),
+    fork: z.boolean().optional().describe("true: the child starts from this conversation (your model, cached) and the prompt needs only the task; your main-agent tools fail there"),
     bare: z.boolean().optional().describe("No instructions, memories or skills; only if the user asks"),
   }),
 }
@@ -1774,7 +1775,9 @@ export function createNativeEngine(options: {
       const args = TASK_TOOL.args.safeParse(call.args)
       if (!args.success) return finish({ output: `invalid arguments for task: ${z.prettifyError(args.error)}`, truncated: false, title: "task", isError: true })
       if (input.workflow && !args.data.task_id && !input.workflow.reserveChild()) return finish({ output: "workflow child budget exhausted", truncated: false, title: "task", isError: true })
-      return finish(await runTask(input, args.data, itemId, toolset))
+      const { effort, ...rest } = args.data
+      if (effort && rest.variant && effort !== rest.variant) return finish({ output: `effort ${effort} and variant ${rest.variant} differ; they name the same setting, pass one`, truncated: false, title: "task", isError: true })
+      return finish(await runTask(input, effort ? { ...rest, variant: effort } : rest, itemId, toolset))
     }
     if (call.name === SECRETS_TOOL.name && secrets) return finish(secretsResult(secrets.list(input.sessionId)))
     if (call.name === SNIP_TOOL.name) {

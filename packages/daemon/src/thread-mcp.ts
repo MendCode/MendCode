@@ -31,7 +31,9 @@ const schemas = {
   delegate_task: z.strictObject({
     description: z.string().min(1).max(80), prompt: z.string().min(1).max(20_000),
     engine: z.string().regex(DELEGATE_ENGINE).optional(),
-    model: z.string().min(1).max(200).optional(), variant: z.string().min(1).max(80).optional(),
+    model: z.string().min(1).max(200).optional().describe("This child's model, exact id"),
+    variant: z.string().min(1).max(80).optional().describe("This child's reasoning effort: low, medium, high, xhigh"),
+    effort: z.string().min(1).max(80).optional().describe("Same as variant"),
     agent: z.string().min(1).max(64).optional(), background: z.boolean().optional(),
     task_id: z.string().min(1).max(80).optional(),
     bare: z.boolean().optional(),
@@ -49,7 +51,7 @@ const descriptions: Record<Name, string> = {
   thread_read: "Read a bounded, redacted page of another project thread. Reasoning is excluded.",
   thread_search: "Search a bounded page of another project thread. Follow the before cursor for older history.",
   thread_interrupt: "Interrupt the running turn of another project thread.",
-  delegate_task: "Start a child agent on any configured engine/model with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
+  delegate_task: "Start a child agent on any configured engine, with its own model and effort (xhigh etc.) in this call, with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
   task_progress: "Use only when the user asks how far along a running sub-agent is (yours, or one started with delegate_task): a short summary from a cheap model of what it has done, what it is doing now and what seems left, with a labelled estimate or \"cannot estimate\". task_id is optional when one sub-agent runs; a finished or unknown one is answered plainly. Do not call it to poll.",
   orchestrator_capabilities: "Describe this process's project-scoped thread tools and limits.",
 }
@@ -251,7 +253,11 @@ export function createThreadMcp(options: {
               case "thread_wait": return input.threads.wait({ ...args as { sessionId: string; timeoutSeconds?: number }, signal })
               case "thread_interrupt": return input.threads.interrupt(args as { sessionId: string })
               case "task_progress": return input.progress ? { ok: true, output: redact(lease, await input.progress(args.task_id as string | undefined, signal)) } : { ok: false, message: "Sub-agent progress is not available here" }
-              case "delegate_task": return input.delegate({ ...args as TaskInput, background: args.background !== false }, signal)
+              case "delegate_task": {
+                const { effort, ...rest } = args as TaskInput & { effort?: string }
+                if (effort && rest.variant && effort !== rest.variant) return { ok: false, message: `effort ${effort} and variant ${rest.variant} differ; pass one` }
+                return input.delegate({ ...rest, ...(effort ? { variant: effort } : {}), background: args.background !== false }, signal)
+              }
             }
           }
           if (input.receipts && typeof args.clientRequestId === "string") return input.receipts.run({ project: input.receipts.project, owner: input.turn.sessionId, operation: name, requestId: args.clientRequestId, args, execute: async () => {
