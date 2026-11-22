@@ -71,6 +71,11 @@ export function createDraftSync(input: {
   let queued: { sessionId: SessionId; content: DraftContent; key: string } | undefined
   /** Saves sent and not yet answered, so quitting or a closing terminal can wait for them. */
   const inFlight = new Set<Promise<unknown>>()
+  /**
+   * Sessions just opened whose saved draft has not come back yet: their prompt is empty only because it is still loading, so an
+   * empty prompt there (leaving again before a long chat finished opening) must not take the draft away. Typing ends the wait.
+   */
+  const restoring = new Set<SessionId>()
 
   function save(sessionId: SessionId, content: DraftContent, key: string) {
     saved.set(sessionId, key)
@@ -100,6 +105,8 @@ export function createDraftSync(input: {
       // Spaces and line breaks alone are an empty prompt: they save no draft and take a saved one away.
       const content = blank(composed) ? { text: "", images: [] } : composed
       const key = keyOf(content)
+      if (key === EMPTY_KEY && restoring.has(sessionId)) return false
+      restoring.delete(sessionId)
       if (queued && queued.sessionId !== sessionId) flush()
       if ((saved.get(sessionId) ?? EMPTY_KEY) === key) {
         cancel()
@@ -122,9 +129,13 @@ export function createDraftSync(input: {
       flush()
       await Promise.all([...inFlight])
     },
+    /** A session is being opened: until `restore` answers for it, an empty prompt there keeps its saved draft. */
+    opening(sessionId: SessionId) {
+      restoring.add(sessionId)
+    },
     /** The saved draft of a session, remembered as saved so opening it does not write it back. */
     async restore(sessionId: SessionId): Promise<RestoredDraft | undefined> {
-      const reply = await input.send({ type: "draft.get", sessionId })
+      const reply = await input.send({ type: "draft.get", sessionId }).finally(() => restoring.delete(sessionId))
       const draft = reply.ok ? (reply.result?.draft as { text?: unknown; attachments?: unknown } | undefined) : undefined
       if (!draft || typeof draft.text !== "string") return undefined
       const content: DraftContent = { text: draft.text, images: Array.isArray(draft.attachments) ? (draft.attachments as BlobRef[]) : [] }
