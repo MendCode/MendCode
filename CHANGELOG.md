@@ -25,6 +25,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
 - A Claude Code sub-agent that the session sends a new message to after it finished now shows the message, its new work and its new end in a thread; before, its thread kept saying done while it worked unseen.
 - A mermaid block in an answer is now drawn whatever the model wrote: every link and node form of a flowchart, names in any language, and diagrams too wide or too large for the chat (wrapped, stacked, cut at the edge with `/diagram` to see them whole, or listed); only text that is not a diagram shows as source, with the line that was not understood instead of "unsupported diagram".
 - Clicking elsewhere or scrolling no longer pauses the arcade game or moves the keys to the prompt; Esc, q or Tab leave it.

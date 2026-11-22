@@ -51,7 +51,7 @@ export function createChildTasks(options: {
   cancel(session: SessionId): Promise<void>
 }) {
   const { store, now } = options
-  const get = (id: string) => store.tasks.list().find((task) => task.taskId === id)
+  const get = (id: string) => store.tasks.get(id)
   const lineage = (id: SessionId): { rootId: SessionId; depth: number } => {
     const task = get(id)
     if (task) return task

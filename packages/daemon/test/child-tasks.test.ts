@@ -231,3 +231,22 @@ test("a child resumed with task_id and another model goes on with its own histor
   expect(h.requests[2]!.model).toBe("gpt-6-luna")
   expect(h.store.sessionModel(task.taskId)).toMatchObject({ model: "gpt-6-luna" })
 })
+
+test("a streamed answer reads the task table no more than a one-word answer: no whole-table read per event", async () => {
+  // Every event of every session is shown to the task registry. With one read of all the tasks the data directory ever held per
+  // event, twenty children streaming at once kept the daemon from answering a terminal that opened their parent.
+  const reads = async (deltas: number) => {
+    const words = Array.from({ length: deltas }, (_, index) => ({ type: "text" as const, delta: `word${index} ` }))
+    const h = await start({ steps: [[...words, { type: "finish", reason: "stop" }], [...words, { type: "finish", reason: "stop" }]] })
+    const parent = await openSession(h)
+    let count = 0
+    const whole = h.store.tasks.list
+    h.store.tasks.list = () => { count++; return whole() }
+    const child = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Stream", prompt: "go" } }))
+    expect(child.state).toBe("completed")
+    // A session that is no one's child streams too, and is not looked up in the whole table either.
+    await say(h, parent, "and you")
+    return count
+  }
+  expect(await reads(300)).toBe(await reads(1))
+})
