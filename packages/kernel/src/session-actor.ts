@@ -35,6 +35,9 @@ export type InterruptCause = "daemon_shutdown"
  * A steering turn: `text` goes to the engine as the user message, but the transcript shows only `label` (a thin
  * marker), tagged with `meta`. It is never queued or persisted: it starts at once or not at all (see `steer`).
  */
+/** The session that cancelled another session's turn, as `turn.cancelled` names it. */
+export type CancelAuthor = { sessionId: SessionId; title: string }
+
 export type Steering = { text: string; label: string; meta: Record<string, string>; /** The user asked for it: it may start although a user cancel left the session held. */ force?: boolean; /** Carries on a turn a daemon shutdown interrupted: it starts ahead of the queue the restart restored (held), which then follows it as it would have followed that turn. */ afterRestart?: boolean }
 
 type QueueEntry = { queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; /** With `compact`: started by the daemon in an idle session (`compactIdle`), never queued or persisted. */ idle?: true; instructions?: string; notice?: true; shell?: true; local?: true; steer?: Pick<Steering, "label" | "meta">; /** Per-message override of the queue policy; not persisted (a restored queue is held). */ delivery?: QueueDelivery; /** A notice nobody waits on for a reply (a background task ended): held after a cancel, it goes with the user's next message. Not persisted. */ rides?: true; /** When a `rides` notice arrived, to keep it in order with notices held outside the queue. */ at?: number; /** True once the model was shown what this notice says by another way: it is then dropped unread. Not persisted. */ unless?: () => boolean; /** Sent now on its own (send now, restart, idle steer): no other queued message joins its turn. Not persisted. */ alone?: true }
@@ -79,7 +82,7 @@ type ActiveTurn = {
 const MAX_AGENT_ITEMS = 500
 
 type Message =
-  | { kind: "command"; command: ActorCommand; authorityText?: string; origin?: SessionOrigin; reply(result: ActorResult): void }
+  | { kind: "command"; command: ActorCommand; authorityText?: string; origin?: SessionOrigin; cancelledBy?: CancelAuthor; reply(result: ActorResult): void }
   | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
   | { kind: "pause"; paused: boolean; keepHeld?: boolean; reply(paused: boolean): void }
   | { kind: "restart.release"; reply(released: boolean): void }
@@ -407,12 +410,12 @@ export function createSessionActor(options: SessionActorOptions) {
    * stops behind it (some take seconds, Claude Code finishing its step); the turn stays active until then, so nothing new starts
    * and the daemon keeps waiting on it (undo, restart), and whatever the engine still sends is dropped.
    */
-  function cancel(turn: ActiveTurn, by: "user" | "promotion", spareAgents = false) {
+  function cancel(turn: ActiveTurn, by: "user" | "promotion", spareAgents = false, cancelledBy?: CancelAuthor) {
     turn.cancelBy = by
     stopTurn(turn, spareAgents ? SPARE_AGENTS : undefined)
     compactionUpdated(turn, "cancelled")
     closeOpenItems(turn, "cancelled")
-    emit({ type: "turn.cancelled", sessionId, turnId: turn.turnId, by })
+    emit({ type: "turn.cancelled", sessionId, turnId: turn.turnId, by, ...(cancelledBy ? { cancelledBy: { sessionId: cancelledBy.sessionId, title: cancelledBy.title.slice(0, 200) } } : {}) })
     settleIdle()
   }
 
@@ -651,7 +654,7 @@ export function createSessionActor(options: SessionActorOptions) {
   const queueFull = (): ActorResult => ({ ok: false, code: "busy", message: `[ACTOR]: the queue already holds ${MAX_QUEUE_ENTRIES} messages; send this one after some of them ran` })
 
   /** `origin`: who sent the message, decided by the daemon from the connection; a caller that names none is the daemon's own work. */
-  function onCommand(command: ActorCommand, authorityText?: string, origin: SessionOrigin = "auto"): ActorResult {
+  function onCommand(command: ActorCommand, authorityText?: string, origin: SessionOrigin = "auto", cancelledBy?: CancelAuthor): ActorResult {
     if (command.sessionId !== sessionId) return { ok: false, code: "unknown_session", message: "[ACTOR]: command for another session" }
     switch (command.type) {
       case "user.submit": {
@@ -788,7 +791,7 @@ export function createSessionActor(options: SessionActorOptions) {
         if (active.cancelBy || active.interruptReason) return { ok: true, result: { alreadyStopping: true } }
         held = true
         heldSinceRestart = false
-        cancel(active, "user", command.spareAgents === true)
+        cancel(active, "user", command.spareAgents === true, cancelledBy)
         return { ok: true }
       }
       case "request.resolve": {
@@ -886,7 +889,7 @@ export function createSessionActor(options: SessionActorOptions) {
         // A command always gets its answer: one that throws is refused instead of leaving its caller waiting.
         let result: ActorResult
         try {
-          result = onCommand(message.command, message.authorityText, message.origin)
+          result = onCommand(message.command, message.authorityText, message.origin, message.cancelledBy)
         } catch (error) {
           result = { ok: false, code: "internal", message: `[ACTOR]: ${error instanceof Error ? error.message : String(error)}` }
         }
@@ -1057,6 +1060,10 @@ export function createSessionActor(options: SessionActorOptions) {
     sessionId,
     handle(command: ActorCommand, authorityText?: string, origin?: SessionOrigin) {
       return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), ...(origin ? { origin } : {}), reply }))
+    },
+    /** A `turn.cancel` another session asked for (`threads` interrupt): the same cancel and hold, and `turn.cancelled` names that session. */
+    cancelFrom(command: Extract<ActorCommand, { type: "turn.cancel" }>, cancelledBy: CancelAuthor) {
+      return new Promise<ActorResult>((reply) => post({ kind: "command", command, cancelledBy, reply }))
     },
     interrupt(reason: InterruptReason, cause?: InterruptCause) {
       return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))

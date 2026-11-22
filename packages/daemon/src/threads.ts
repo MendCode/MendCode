@@ -51,8 +51,8 @@ type ThreadsInput = {
   /** True while the session has a turn running, a request pending or messages queued. */
   busy(sessionId: SessionId): boolean
   state(sessionId: SessionId): string
-  /** Cancels the session's running turn; false when none is running. */
-  interrupt(sessionId: SessionId): Promise<boolean>
+  /** Cancels the session's running turn for session `from`; false when none is running, else how many queued messages the cancel left held. */
+  interrupt(sessionId: SessionId, from: SessionId): Promise<false | { held: number }>
   /** Merge-back of `fork` into `into` (its parent): the fork's turns since it branched become context for the next turn of `into`. */
   merge(input: { fork: SessionId; into: SessionId }): { ok: true; turns: number; omitted: number; tokens: number } | { ok: false; message: string }
   sleep?(ms: number): Promise<void>
@@ -398,9 +398,12 @@ export function createThreads(input: ThreadsInput) {
         interrupt: async (request) => {
           const resolved = resolve(from, request.sessionId)
           if (!resolved.ok) return resolved
-          return await input.interrupt(resolved.id)
-            ? { ok: true, output: `Interrupted the running turn of ${resolved.id}. Its queue and history are untouched.` }
-            : { ok: false, message: `${resolved.id} has no turn running` }
+          const stopped = await input.interrupt(resolved.id, from)
+          if (!stopped) return { ok: false, message: `${resolved.id} has no turn running` }
+          // A cancel holds the queue until the user releases it: said here, or the caller waits for a session that will not go on.
+          const queue = stopped.held === 0 ? "Nothing was queued; its history is untouched."
+            : `Its queue is held: ${stopped.held} ${stopped.held === 1 ? "message waits and does" : "messages wait and do"} not start by ${stopped.held === 1 ? "itself" : "themselves"}; the user must release ${stopped.held === 1 ? "it" : "them"} in that session. Its history is untouched.`
+          return { ok: true, output: `Interrupted the running turn of ${resolved.id}. ${queue}` }
         },
       }
     },

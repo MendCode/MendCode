@@ -10,6 +10,7 @@ import type { ViewLine } from "../../view/transcript"
 import { buildCommentMessage, locateQuote, MAX_MESSAGE_CHARS, replyUnits, type ReplyComment, type ReplyUnit } from "../../view/reply-comments"
 import { chipPill, chipRow, commentHint, commentList, commentToastHint, composeHeader, decideHeader, hintByPassage, hintOnRule, lettersOf, markRows, parkedRow, parseDecisions, replyBar, REPLY_KEYS, tintRule, type ChipModel, type ReplyKeys } from "../../view/reply-comments-view"
 import { MOUSE_SGR } from "./constants"
+import { logCommentEvent, type CommentOrigin } from "./comment-log"
 
 /**
  * Comments on passages of the assistant's answer (docs/editor.md). The user selects (or copies) a passage, presses the comment key and
@@ -436,6 +437,7 @@ export function createComments(ctx: AppContext, actions: {
   /** The message was sent: the comments are spent. */
   function sent() {
     if (!store.count && !store.parked) return
+    logCommentEvent(ctx.input.dataDir, { kind: "sent", sessionId: state.sessionId, count: store.count })
     leave()
     store.clear()
     actions.syncDraft()
@@ -450,8 +452,9 @@ export function createComments(ctx: AppContext, actions: {
   }
 
   /** Comments from a restored draft; nothing is taken when some are pending already. */
-  function restore(comments: readonly ReplyComment[], parked: boolean) {
+  function restore(comments: readonly ReplyComment[], parked: boolean, origin: CommentOrigin) {
     if (store.count || store.composing) return
+    logCommentEvent(ctx.input.dataDir, { kind: origin, sessionId: state.sessionId, count: comments.length, parked })
     store.restore(comments, parked)
     store.owner = state.sessionId
     requestFrame()

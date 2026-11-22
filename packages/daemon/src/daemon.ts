@@ -3262,12 +3262,15 @@ export async function startDaemon(options: DaemonOptions) {
       const snapshot = actors.get(sessionId)?.snapshot()
       return snapshot !== undefined && (snapshot.foreground !== "idle" || snapshot.queue.length > 0)
     },
-    interrupt: async (sessionId) => {
+    interrupt: async (sessionId, from) => {
       const actor = actors.get(sessionId)
       const turnId = actor?.snapshot().turnId
       if (!actor || !turnId) return false
-      const result = await actor.handle({ id: ids("command"), clientId: taskClientId, type: "turn.cancel", sessionId, turnId })
-      return result.ok
+      const result = await actor.cancelFrom({ id: ids("command"), clientId: taskClientId, type: "turn.cancel", sessionId, turnId }, { sessionId: from, title: store.sessionInfo(from)?.title ?? from })
+      if (!result.ok) return false
+      // The cancel holds the queue (FC-13); the caller is told how much waits, so it does not expect the session to go on by itself.
+      const after = actor.snapshot()
+      return { held: after.held ? after.queue.length : 0 }
     },
     merge: ({ fork, into }) => {
       const merged = portable.merge({ fork, into })
@@ -3928,7 +3931,7 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
-  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
+  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); return snapshot !== undefined && snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
   const loopControl = async (command: Parameters<ReturnType<typeof import("./loop-control").createLoopControl>>[0]) => {
     const { createLoopControl } = await import("./loop-control")
     return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)

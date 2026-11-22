@@ -67,7 +67,7 @@ export function createComposerRecovery(ctx: AppContext, actions: {
       comments.push(...parsed.comments)
       return parsed.text
     })
-    if (comments.length) ctx.comments.restore(comments, false)
+    if (comments.length) ctx.comments.restore(comments, false, "queue")
     return texts.filter((text, index) => text || entries[index]!.kind !== "message")
   }
 
