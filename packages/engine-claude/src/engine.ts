@@ -113,6 +113,27 @@ const SUBAGENT_HOOK = "mendcode-subagent-start"
 const ONE_TREE_HOOK = "mendcode-one-tree"
 /** The Claude Code tools One tree hears about: the shell, whose output names files, and the ones that write a file. */
 const ONE_TREE_TOOLS = "Bash|Edit|Write|MultiEdit|NotebookEdit"
+/** The id of the `PostToolUse` hook MendCode registers at `initialize` for text searches (`searchHint`). */
+const GRAPH_SEARCH_HOOK = "mendcode-graph-search"
+/** The Claude Code tools that search text: its Grep, and the shell, where `grep` and `rg` run. Hooks fire for its sub-agents' calls too. */
+const GRAPH_SEARCH_TOOLS = "Grep|Bash"
+/** Tool calls whose graph answer is remembered until their result arrives; a result that never comes must not grow this. */
+const MAX_HINTED_CALLS = 200
+
+/** What a `PostToolUse` call searched, from Claude Code's hook input: a Bash command line, or Grep's pattern under its path. */
+export function searchCall(input: unknown): { cwd?: string; command?: string; pattern?: string; toolUseId?: string } | undefined {
+  const hook = (input ?? {}) as { tool_name?: unknown; tool_input?: Record<string, unknown>; cwd?: unknown; tool_use_id?: unknown }
+  const args = hook.tool_input ?? {}
+  const cwd = typeof hook.cwd === "string" && hook.cwd ? hook.cwd : undefined
+  const id = typeof hook.tool_use_id === "string" ? { toolUseId: hook.tool_use_id } : {}
+  if (hook.tool_name === "Bash" && typeof args.command === "string" && args.run_in_background !== true) return { ...(cwd ? { cwd } : {}), command: args.command, ...id }
+  if (hook.tool_name === "Grep" && typeof args.pattern === "string") {
+    const under = typeof args.path === "string" && args.path ? path.resolve(cwd ?? "/", args.path) : cwd
+    return { ...(under ? { cwd: under } : {}), pattern: args.pattern, ...id }
+  }
+  return undefined
+}
+
 /** The id of the `UserPromptSubmit` hook MendCode registers at `initialize` (`replyLanguage`). */
 const REPLY_LANGUAGE_HOOK = "mendcode-reply-language"
 
@@ -191,6 +212,8 @@ type Connection = {
   agentTasks: Set<string>
   /** What each recent Bash, Monitor or Agent call runs, by tool use id, then by the task id Claude Code gives it (`task_started`): a daemon restart says which commands it stopped. */
   launches?: Map<string, string>
+  /** Searches whose `PostToolUse` hook added the code graph's answer, by tool use id, with the identifiers answered: their result's `meta.graphHint`. */
+  hinted?: Map<string, number>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
   /** The process's token total at its last `result`: a compaction's calls are the gap `result.usage` leaves. */
@@ -260,6 +283,12 @@ export function createClaudeEngine(options: {
   /** Where each session's language line is kept for Claude Code's automatic compaction (`PreCompact` reads it); tests name their own. */
   languageDir?: string
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
+  /**
+   * The code graph's answer for a text search (docs/code-graph.md, "Graph answers in a text search"): asked by a `PostToolUse` hook
+   * after each Grep and Bash call, the main agent's and its sub-agents', with the pattern or the command. What it returns reaches the
+   * model as that call's `additionalContext`; the call's own result is never changed, and no answer adds nothing.
+   */
+  searchHint?(input: { cwd: string; command?: string; pattern?: string }): Promise<{ text: string; identifiers: number } | undefined>
   /**
    * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
    * `undefined` (a tool it does not judge) and `ask` keep the approval; `allow` runs the call; `deny` refuses it without a prompt.
@@ -473,6 +502,22 @@ export function createClaudeEngine(options: {
         line = options.oneTree?.({ sessionId: call.agent ? `${connection.sessionId}#${call.agent}` as SessionId : connection.sessionId, cwd: call.cwd ?? options.cwdFor(connection.sessionId), written: call.written, output: call.output })
       } catch { line = undefined }
       if (!connection.closed) write(connection, controlResponse(String(message.request_id), line ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: line } } : {}))
+      return
+    }
+    if (message.request?.callback_id === GRAPH_SEARCH_HOOK) {
+      // Additive context only: whatever happens here, the search's own result reaches the model untouched.
+      let hint: { text: string; identifiers: number } | undefined
+      const call = searchCall(message.request?.input)
+      try {
+        hint = call ? await options.searchHint?.({ cwd: call.cwd ?? options.cwdFor(connection.sessionId), ...(call.command !== undefined ? { command: call.command } : {}), ...(call.pattern !== undefined ? { pattern: call.pattern } : {}) }) : undefined
+      } catch { hint = undefined }
+      const toolUseId = call?.toolUseId ?? (typeof message.request?.tool_use_id === "string" ? message.request.tool_use_id : undefined)
+      if (hint?.text && toolUseId) {
+        const hinted = connection.hinted ??= new Map()
+        if (hinted.size >= MAX_HINTED_CALLS) hinted.delete(hinted.keys().next().value!)
+        hinted.set(toolUseId, hint.identifiers)
+      }
+      if (!connection.closed) write(connection, controlResponse(String(message.request_id), hint?.text ? { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: hint.text } } : {}))
       return
     }
     if (message.request?.callback_id === REPLY_LANGUAGE_HOOK) {
@@ -843,7 +888,7 @@ export function createClaudeEngine(options: {
       connection.turn?.finish({ status: "error", code: "claude_exited", message: `[CLAUDE]: claude exited during the turn${tail ? `: ${tail.slice(-1_000)}` : ""}` })
       close(connection, `process exited${tail ? `: ${tail.slice(-200)}` : ""}`)
     })()
-    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}), ...(options.replyLanguage ? { UserPromptSubmit: [{ hookCallbackIds: [REPLY_LANGUAGE_HOOK] }] } : {}) }
+    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree || options.searchHint ? { PostToolUse: [...(options.oneTree ? [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] : []), ...(options.searchHint ? [{ matcher: GRAPH_SEARCH_TOOLS, hookCallbackIds: [GRAPH_SEARCH_HOOK] }] : [])] } : {}), ...(options.replyLanguage ? { UserPromptSubmit: [{ hookCallbackIds: [REPLY_LANGUAGE_HOOK] }] } : {}) }
     connection.ready = control(connection, { subtype: "initialize", hooks }).then(() => undefined)
     return connection
   }
@@ -1012,7 +1057,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, ...(options.storeImage ? { storeImage: (bytes: Uint8Array, mime: string) => options.storeImage!(bytes, mime, input.sessionId) } : {}), plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, ...(options.storeImage ? { storeImage: (bytes: Uint8Array, mime: string) => options.storeImage!(bytes, mime, input.sessionId) } : {}), plan: connection.plan, compactAt: connection.compactAt, processMark: connection.spendMark, resultMeta: (toolUseId) => { const identifiers = connection.hinted?.get(toolUseId); connection.hinted?.delete(toolUseId); return identifiers ? { graphHint: identifiers } : undefined }, onTool: (name, args, toolUseId) => { if (changesMcpServers(name, args)) connection.reload = true; if (toolUseId && args) rememberLaunch(connection, toolUseId, name, args) } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

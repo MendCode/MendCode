@@ -332,7 +332,7 @@ function isTaskNotice(message: ClaudeMessage): boolean {
   return message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification")
 }
 
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined } }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined }; /** Facts about one tool call learned outside the stream (a hook: `graphHint`), added to its result's `meta`; asked once per result. */ resultMeta?(toolUseId: string): Record<string, number> | undefined }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   /** A tool result's pictures kept in the blob store, for its card; none without a store or when one cannot be kept. */
   const resultPictures = (part: any): BlobRef[] => {
@@ -579,7 +579,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       const written = writeInputs.get(String(part.tool_use_id))
       writeInputs.delete(String(part.tool_use_id))
       const pictures = resultPictures(part)
-      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(pictures.length ? { attachments: pictures } : {}), ...(late ? { meta: late } : {}) })
+      const hinted = input.resultMeta?.(String(part.tool_use_id))
+      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(pictures.length ? { attachments: pictures } : {}), ...(late || hinted ? { meta: { ...late, ...hinted } } : {}) })
     }
   }
 
@@ -615,7 +616,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         const todos = agentTodos.get(String(part.tool_use_id))
         agentTodos.delete(String(part.tool_use_id))
         const pictures = resultPictures(part)
-        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), ...(pictures.length ? { attachments: pictures } : {}), meta: { agentParent: parent } })
+        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), ...(pictures.length ? { attachments: pictures } : {}), meta: { agentParent: parent, ...input.resultMeta?.(String(part.tool_use_id)) } })
       }
     }
   }

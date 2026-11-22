@@ -197,6 +197,50 @@ test("One tree hears Bash output and file writes through a PostToolUse hook, and
   h.engine.stop()
 })
 
+test("a Grep or a Bash grep gets the code graph's answer through a PostToolUse hook, a sub-agent's too, and the search's own result is not touched", async () => {
+  const search = (id: string, tool: string, input: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({ type: "control_request", request_id: id, request: { subtype: "hook_callback", callback_id: "mendcode-graph-search", input: { hook_event_name: "PostToolUse", cwd: "/repo", tool_name: tool, tool_input: input, tool_response: { stdout: "src/b.ts:1:export function helper() {", stderr: "" }, ...extra } } })
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    streamTool(api, 0, "toolu_1", "Bash", { command: "grep -rn helper src" })
+    api.push(search("hook-1", "Bash", { command: "grep -rn helper src" }, { tool_use_id: "toolu_1" }))
+    api.push(search("hook-2", "Grep", { pattern: "helper", path: "packages/core" }))
+    // One of Claude Code's own sub-agents: its searches reach the same hook, in the directory it works in.
+    api.push(search("hook-3", "Bash", { command: "rg -n helper" }, { agent_id: "explore-1", cwd: "/repo/packages" }))
+    api.push(search("hook-4", "Bash", { command: "ls -la" }))
+    api.push(search("hook-5", "Bash", { command: "grep -rn helper src", run_in_background: true }))
+    setTimeout(() => {
+      api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "src/b.ts:1:export function helper() {", is_error: false }] }, parent_tool_use_id: null })
+      api.push(result())
+    }, 20)
+  } })
+  const asked: Array<{ cwd: string; command?: string; pattern?: string }> = []
+  const block = "[code graph] Where the searched names are declared and who calls them (graph_find and graph_callers give more):\nhelper  function  src/b.ts:1  export  1 caller"
+  const h = engineWith([fake], { searchHint: async (input: { cwd: string; command?: string; pattern?: string }) => (asked.push(input), input.command === "ls -la" ? undefined : { text: block, identifiers: 1 }) })
+  const { input, events } = turnInput()
+  expect(await h.engine.runTurn(input)).toEqual({ status: "ok" })
+  expect(fake.written[0].request.hooks.PostToolUse).toEqual([{ matcher: "Grep|Bash", hookCallbackIds: ["mendcode-graph-search"] }])
+  expect(asked).toEqual([{ cwd: "/repo", command: "grep -rn helper src" }, { cwd: "/repo/packages/core", pattern: "helper" }, { cwd: "/repo/packages", command: "rg -n helper" }, { cwd: "/repo", command: "ls -la" }])
+  const answers = fake.written.filter((message) => message.type === "control_response")
+  for (const id of ["hook-1", "hook-2", "hook-3"]) expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: id, response: { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: block } } } })
+  // No answer, and a background command, add nothing: the hook is still answered so Claude Code never waits.
+  for (const id of ["hook-4", "hook-5"]) expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: id, response: {} } })
+  // The card shows what the search printed, and its meta counts the block (docs/code-graph.md, "Measure it").
+  const done = events.find((event) => event.type === "item.completed" && event.meta?.graphHint !== undefined)
+  expect(done).toMatchObject({ status: "ok", text: "src/b.ts:1:export function helper() {", meta: { graphHint: 1 } })
+  h.engine.stop()
+})
+
+test("One tree and the graph's search answer each register their own PostToolUse matcher", async () => {
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const h = engineWith([fake], { oneTree: () => undefined, searchHint: async () => undefined })
+  expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+  expect(fake.written[0].request.hooks.PostToolUse).toEqual([{ matcher: "Bash|Edit|Write|MultiEdit|NotebookEdit", hookCallbackIds: ["mendcode-one-tree"] }, { matcher: "Grep|Bash", hookCallbackIds: ["mendcode-graph-search"] }])
+  h.engine.stop()
+})
+
 test("Claude Code's own sub-agents are refused the advisor, workflows and MendCode's sub-agent tools; the main agent is not", async () => {
   const call = (id: string, tool: string, agent?: string) => ({ type: "control_request", request_id: id, request: { subtype: "hook_callback", callback_id: "mendcode-subagent-tools", input: { hook_event_name: "PreToolUse", tool_name: tool, tool_input: {}, ...(agent ? { agent_id: agent } : {}) } } })
   const fake = fakeClaude({ onUser(api) {

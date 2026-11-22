@@ -13,6 +13,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - The compaction arcade has new games: Blocks, Mines, Pong and Cycles against the computer, Glide, Stars and Crossing.
 - A game you are playing when compaction ends stays on screen with its score until you close it with Esc.
+- When a model greps for a function, class or symbol in a project that has a code graph, the search result now also says where it is declared and who calls it. It works for MendCode's own models and for Claude Code and its sub-agents.
+- Models are told to look a symbol up in the code graph first, and to check its callers before changing it.
 
 ### Changed
 

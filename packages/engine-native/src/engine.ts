@@ -6,6 +6,7 @@ import { CONTINUITY_TOOLS, continuityResult } from "./continuity"
 import { declaredRoots, expandedShellPatterns, externalPatterns, matchingRule, nestedShellPatterns, permissionMatch, permissionName, permissionPatterns, policyRules, projectRulesOf, splitDeclared, toolDisabled, withoutBlindAllow } from "./permission-rules"
 import { workflowToolAsks, workflowToolDenied } from "./workflow-policy"
 import { createHash } from "node:crypto"
+import { resolve as resolveDirectory } from "node:path"
 import { createPromptTrace } from "./prompt-trace"
 import { compactionThreshold, historyTokens, prunable, pruneDue, pruneToolOutputs, pruneUrgent, splitCompaction } from "./compaction-policy"
 import { AUTO_RECALL_CHARS, AUTO_RECALL_PREFIX, AUTO_RECALL_TURNS, notInHistory, packedAway, recalledText } from "./auto-recall"
@@ -324,6 +325,14 @@ const MAX_TOOL_IMAGE_BYTES = 5 * 1024 * 1024
 /** Tools that change project files. When one fails, the calls after it in the same model response are not run. */
 const FILE_WRITE_TOOLS = new Set(["edit", "write", "apply_patch", "notebook_edit"])
 
+/** What a text search of the model asked and where: a `shell` command line in its working directory, or the `grep` tool's pattern under its path. */
+function searchOf(tool: string, args: unknown, cwd: string): { cwd: string; command?: string; pattern?: string } | undefined {
+  const record = (args ?? {}) as Record<string, unknown>
+  if (tool === SHELL_TOOL && typeof record.command === "string" && record.background !== true) return { cwd: typeof record.workdir === "string" ? resolveDirectory(cwd, record.workdir) : cwd, command: record.command }
+  if (tool === "grep" && typeof record.pattern === "string") return { cwd: typeof record.path === "string" ? resolveDirectory(cwd, record.path) : cwd, pattern: record.pattern }
+  return undefined
+}
+
 /** Files a successful write tool touched, from its arguments (apply_patch reports only a count in its meta). */
 function writtenPaths(tool: string, args: unknown): string[] {
   const record = (args ?? {}) as Record<string, unknown>
@@ -608,6 +617,12 @@ export function createNativeEngine(options: {
    * names files another session is changing in the same checkout. Synchronous and in memory.
    */
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
+  /**
+   * The code graph's answer for a text search (docs/code-graph.md, "Graph answers in a text search"): asked after each `shell` and
+   * `grep` call of the model with the command or the pattern, it returns a short block put above the call's output, or nothing.
+   * It never fails the call and must answer fast (the daemon's drops an answer that is not there in time).
+   */
+  searchHint?(input: { cwd: string; command?: string; pattern?: string }): Promise<{ text: string; identifiers: number } | undefined>
   /** Provider-side tools (web search) offered on answer calls, read per call so a setting applies to the next one. */
   hostedTools?(): HostedTool[]
   /** Opt-in interception points (daemon extensions): tool calls, system prompt, context, request body, compaction. Absent = none, no cost. */
@@ -1893,6 +1908,10 @@ export function createNativeEngine(options: {
       const notes = (extra ?? "") + (late ?? "") + (shared ? `\n${shared}` : "")
       result = { ...result, output: result.output + notes, ...(result.display !== undefined ? { display: result.display + notes } : {}) }
     }
+    // A text search for identifiers the code graph knows carries the graph's answer above its own output, which is left as it is.
+    const search = options.searchHint && !userInitiated && !input.signal.aborted && !call.callId.startsWith(INLINE_SHELL_CALL_PREFIX) ? searchOf(call.name, shownArgs, cwd) : undefined
+    const hint = search ? await options.searchHint!(search).catch(() => undefined) : undefined
+    if (hint?.text) result = { ...result, output: `${hint.text}\n\n${result.output}`, ...(result.display !== undefined ? { display: `${hint.text}\n\n${result.display}` } : {}), meta: { ...result.meta, graphHint: hint.identifiers } }
     // Extensions see markers in the arguments and masked output, like the model.
     if (secrets) result = maskResult(result, maskText)
     if (!options.compound?.(input.sessionId) && hooks?.has("tool.after", cwd) && hooks.toolAfter && !input.signal.aborted) {
