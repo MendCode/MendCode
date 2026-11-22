@@ -1,7 +1,7 @@
 ---
 summary: TypeScript extensions: slots, keys, pages, views, daemon hooks
 docs: extensions-tui, extensions, views
-aliases: extension, plugins, plugin, slots, views, slot
+aliases: extension, slots, views, slot
 ---
 An extension is one .ts or .js file in <data dir>/extensions/ (also extensions/<name>/index.ts). Adding a file adds the feature; deleting it removes it. Layers: user profiles, user folder, project profiles, project folder (later wins a name, key or slot); project modules load only after the user trusts the project in /tools. Code runs with the user's privileges, not sandboxed.
   export default { name: "unique", tui(api) { ... }, daemon(api) { ... } }

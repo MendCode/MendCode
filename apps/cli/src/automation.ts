@@ -56,7 +56,7 @@ export const SCHEMA = "mendcode.cli"
 /** `denied` is retained for compatibility; `session send` now leaves unapproved requests pending. */
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
-export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
+export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plugins", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
 const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast"])
 /** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
 const WORKFLOW_LIST_LIMIT = 50
@@ -295,8 +295,10 @@ export const USAGE: Record<string, string> = {
   profile: [
     `usage: ${PROGRAM_NAME} profile <command> [--project] [--json]`,
     "  (user scope; --project: this directory's .mendcode/packages)",
+    `  (also spelled package, packages or plugins: ${PROGRAM_NAME} plugins disable NAME)`,
+    "  enable and disable apply at once: no /reload and no restart",
     "",
-    "  list                    installed profiles: what each adds, on or off",
+    "  list                  installed profiles: what each adds, on or off",
     "  status                  same as list",
     "  install <source>        folder, npm:name@x.y.z[#sha512-...], github:owner/repo#ref",
     "                          or git:URL; --replace. npm and a full git commit are pinned",
@@ -354,6 +356,9 @@ export const USAGE: Record<string, string> = {
 }
 
 export const HELP = indexText(SCHEMA)
+
+/** First words after `plugin` that mean the profile command of that name, not an extension module. */
+const PLUGIN_PROFILE_WORDS: ReadonlySet<string> = new Set(["list", "status", "enable", "disable", "config", "remove", "restore", "new", "check"])
 
 function tokenize(argv: string[]) {
   const flags = new Map<string, string | true>()
@@ -467,6 +472,12 @@ export function parseAutomation(argv: string[]): ParseResult {
     const normalized = [...argv]
     if (name === "control-plane") normalized.splice(normalized.indexOf("control-plane"), 1)
     normalized[normalized.indexOf("workflows")] = "workflow"
+    return parseAutomation(normalized)
+  }
+  // Users and models call a profile a "plugin": `plugins …`, and `plugin <profile command> …`, run the profile command. `plugin MODULE` still installs an extension.
+  if (name === "plugins" || name === "plugin" && PLUGIN_PROFILE_WORDS.has(sub ?? "")) {
+    const normalized = [...argv]
+    normalized[normalized.indexOf(name)] = "profile"
     return parseAutomation(normalized)
   }
   if (flags.get("version") === true && !(name === "control-plane" && sub === "project" && rest[0] === "package-set")) return { ok: true, command: { kind: "version", json: false } }
@@ -933,7 +944,7 @@ export function parseAutomation(argv: string[]): ParseResult {
 export const isPlanFile = (target: string) => target.endsWith(".json") || target.includes("/")
 
 /** Older words for a command that still run it: their help is the help of the current one. */
-const HELP_OF: Readonly<Record<string, string>> = { package: "profile", packages: "profile", profiles: "profile" }
+const HELP_OF: Readonly<Record<string, string>> = { package: "profile", packages: "profile", profiles: "profile", plugins: "profile" }
 
 export function helpText(topic?: string) {
   topic = topic === undefined ? topic : HELP_OF[topic] ?? topic

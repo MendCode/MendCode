@@ -112,6 +112,33 @@ test("an image with a token in the text goes right after the token: text, image,
   other.engine.stop()
 })
 
+test("a message that starts with a slash reaches Claude Code as text: its last character is a block of its own so no command runs, and the words stay whole", async () => {
+  const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+  const h = engineWith([fake])
+  const first = turnInput({ text: "/some-command no existe, abre los PRs ahora." })
+  await h.engine.runTurn(first.input)
+  const blocks = fake.written.find((message) => message.type === "user").message.content
+  expect(blocks.map((block: any) => block.text).join("")).toBe("/some-command no existe, abre los PRs ahora.")
+  expect(blocks.at(-1).text.startsWith("/")).toBe(false)
+  expect(blocks.length).toBeGreaterThan(1)
+  h.engine.stop()
+})
+
+test("a turn Claude Code answers with its own synthetic message shows that text, and a turn with no output says it ended without an answer", async () => {
+  const own = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push({ type: "assistant", message: { id: "m1", model: "<synthetic>", content: [{ type: "text", text: "Reloaded: 2 plugins" }] } }); api.push(result()) } })
+  const a = engineWith([own])
+  const first = turnInput({ text: "hello" })
+  await a.engine.runTurn(first.input)
+  expect(first.events.filter((event) => event.type === "item.completed")).toContainEqual(expect.objectContaining({ text: "Reloaded: 2 plugins" }))
+  const empty = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-2" }); api.push({ ...result(), result: "Unknown command: /zz" }) } })
+  const b = engineWith([empty])
+  const second = turnInput({ text: "hello" })
+  await b.engine.runTurn(second.input)
+  expect(second.events.filter((event) => event.type === "item.completed")).toContainEqual(expect.objectContaining({ text: "Claude Code ended the turn without an answer: Unknown command: /zz" }))
+  a.engine.stop()
+  b.engine.stop()
+})
+
 test("Claude Code's own sub-agents are told about MendCode's tools through a SubagentStart hook; any other callback gets an empty answer", async () => {
   const fake = fakeClaude({ onUser(api) {
     api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
@@ -2645,11 +2672,15 @@ describe("claude engine plan mode note", () => {
     expect(JSON.stringify(decision)).not.toMatch(/plan/i)
   })
 
-  test("a slash command in plan is sent as typed", async () => {
+  test("MendCode's own /compact in plan is sent as typed; the same words from the user are text", async () => {
     const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
     const { engine } = engineWith([fake])
-    await engine.runTurn(turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" }).input)
+    const own = turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" })
+    await engine.runTurn({ ...own.input, authority: { sourceId: "t", text: "/compact", synthetic: true } })
     expect(fake.written.filter((message) => message.type === "user")[0].message.content).toEqual([{ type: "text", text: "/compact" }])
+    await engine.runTurn(turnInput({ sessionId: own.input.sessionId, text: "/compact", mode: () => "plan" }).input)
+    expect(fake.written.filter((message) => message.type === "user")[1].message.content.map((block: any) => block.text).join("")).toBe("/compact")
+    expect(fake.written.filter((message) => message.type === "user")[1].message.content.at(-1).text).toBe("t")
     engine.stop()
   })
 })

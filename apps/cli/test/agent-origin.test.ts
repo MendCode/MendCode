@@ -50,6 +50,16 @@ describe("this program, started from a session's own shell", () => {
     expect(sent).toEqual(["settings.get", "user.submit", "request.resolve"])
   })
 
+  test("a refused profile change tells the session to use the profiles tool", async () => {
+    const client = guardClient({ send: async () => ({ ok: true as const }) }, ["plugins", "disable", "demo"])
+    const send = client.send as unknown as (command: Record<string, unknown>) => Promise<{ ok: boolean; error?: { code: string; message: string } }>
+    const refused = await send({ type: "profiles.enable", directory: "/x", key: "user:demo", enabled: false })
+    expect([refused.ok, refused.error?.code]).toEqual([false, "forbidden"])
+    expect(refused.error?.message).toContain("call the profiles tool")
+    expect(refused.error?.message).not.toContain("mendcode_settings")
+    expect((await send({ type: "profiles.list", directory: "/x" })).ok).toBe(true)
+  })
+
   test("the command shown to the user is quoted and never repeats a token", () => {
     expect(shownCommand(["run", "do it now", "--model", "a/b"])).toBe("mendcode run 'do it now' --model a/b")
     expect(shownCommand(["github", "run", "--token", "ghp_secret"])).toBe("mendcode github run --token …")

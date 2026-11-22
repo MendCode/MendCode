@@ -1133,7 +1133,8 @@ export function createClaudeEngine(options: {
           },
           { once: true },
         )
-        if (!adopted) write(connection, userMessage(body, messageUuid(input.turnId)))
+        // Only MendCode's own `/compact` (synthetic) is a command for Claude Code; whatever the user typed is text.
+        if (!adopted) write(connection, userMessage(body, messageUuid(input.turnId), input.authority?.synthetic === true && /^\/compact(\s|$)/.test(input.text)))
         // "Send now": the message goes into this turn as Claude Code's own send-now does (`interrupt` with `send_now`), which ends the
         // step at hand without stopping the background agents a plain interrupt stops. Claude Code closes this turn and answers the
         // message as its next one; those records wait as an unsolicited turn whose notice is the message, and its MendCode turn adopts them.

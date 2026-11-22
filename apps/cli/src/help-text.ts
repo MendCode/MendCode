@@ -257,6 +257,9 @@ export const GENERATE_HELP = text([
 export const PLUGIN_HELP = text([
   `usage: ${P} plugin <module|file://path> [options]`,
   "",
+  `Installed profiles (packages): ${P} plugins list|enable|disable ...`,
+  `is the same as ${P} profile ... (see ${P} profile --help).`,
+  "",
   "  --global, -g  --force, -f  --dir D  --json",
   "",
   "Offline pnpm cache only; project code requires trust; --pure skips external",
