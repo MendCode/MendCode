@@ -17,6 +17,7 @@ const models: ModelInfo[] = [
 function app(options: { settings?: Record<string, unknown>; advisor?: AIConfigAdvisor } = {}) {
   let settings = options.settings ?? {}
   const h = appHarness({
+    profile: { sidebar: "hidden" },
     directory: tempDir("mendcode-advisor-"),
     reply: (command: CommandInput) => {
       if (command.type === "settings.get") return reply({ ok: true, result: { settings } })

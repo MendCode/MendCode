@@ -397,7 +397,7 @@ async function appPage({ typed }: { typed: string[] }): Promise<Line[]> {
   const home = process.env.HOME
   process.env.HOME = HOME
   try {
-    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" })
     const h = appHarness({
       width: COLUMNS, height: ROWS, mode: "balanced", sessionId: "session_readme_shop_api" as SessionId, dataDir, directory: PROJECT,
       reply: (command) => {

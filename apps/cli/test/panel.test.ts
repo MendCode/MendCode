@@ -75,8 +75,9 @@ describe("panel commands", () => {
     const h = fixture()
     await h.type("/panel\r")
     expect(h.app.accessibility.profile.rightSidebar).toBe(true)
-    // Showing it is this session's: the stored profile and the panel's file, every terminal's default, are left as they were.
-    expect(readTuiProfile(h.dataDir).rightSidebar).toBe(false)
+    // Showing it is the user's, in every session: it is saved in the profile.
+    await settle()
+    expect(readTuiProfile(h.dataDir).rightSidebar).toBe(true)
     expect(presetOf(h.app.accessibility.profile.sidebarWidgets)).toBe("pulse")
     await h.type("/sidebar\r")
     expect(h.app.accessibility.profile.rightSidebar).toBe(true)
@@ -653,7 +654,7 @@ describe("a profile's custom panel and a session's preset choice", () => {
     await settle()
     expect(types(h.app.accessibility.profile.sidebarWidgets)).toEqual(types(CUSTOM_GALAXY))
     const look = [...readSessionLook(h.dataDir).values()][0]!
-    expect(look).toEqual({ rightSidebar: true, panelPreset: "galaxy" })
+    expect(look).toEqual({ panelPreset: "galaxy" })
     // A list the session built itself (not a preset's copy) stays its own.
     const own = fixture(220, 60, undefined, false, { stored: CUSTOM_GALAXY, look: { sidebarWidgets: [{ type: "clock", options: {} }] } })
     await settle()

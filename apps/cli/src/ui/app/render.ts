@@ -170,7 +170,7 @@ export function createRender(ctx: AppContext, actions: {
     const layered = (rows: Line[]) => (paint ? composeOverlay(rows, paint, width) : modal ? overlayLines(rows, modal.rows, { row: modal.top, col: modal.left }, width) : rows)
     // A toast floats over everything, the palette included (v1: z 4000 over the dialogs' 3000).
     const right = state.page === "chat" ? actions.rightLayout(width) : { right: 0, bottom: false }
-    const leftWidth = state.page === "chat" && sidebarShown(width) ? sidebarCells(width) + SIDEBAR_GAP : 0
+    const leftWidth = sidebarShown(width) ? sidebarCells(width) + SIDEBAR_GAP : 0
     const chatCols = width - leftWidth - (right.right ? right.right + 1 : 0)
     const sessionsSide = right.right ? "left" : state.tuiProfile.sidebarSide
     const chatOffset = sessionsSide === "left" ? leftWidth : 0
@@ -236,8 +236,16 @@ export function createRender(ctx: AppContext, actions: {
       }
       state.pet?.setVisible(false)
       const placements: ImagePlacement[] = []
-      const rows = pageRows(width, height, placements)
-      input.screen.draw(withToast(layered(rows)), paint?.cursor ?? (modal ? undefined : state.page === "memory-assistant" && state.memoryAssistant ? memoryAssistantCursor(state.memoryAssistant, width, height - (state.tuiProfile.showStatus ? actions.statusRows(width).length : 0)) : state.page === "compaction" ? state.compactionCursor : undefined), paint || modal || toast.length ? [] : placements)
+      // The session list stays beside the page, which is drawn in the width that is left.
+      const pageWidth = width - leftWidth
+      state.pageCols = { left: chatOffset, width: pageWidth }
+      const sidebarOn = leftWidth > 0
+      const pageBody = pageRows(pageWidth, height, placements)
+      const rows = sidebarOn ? attachSidebar(pageBody, sidebarRows(height), pageWidth, sessionsSide, sidebarCells(width)) : pageBody
+      const pageCursor = state.page === "memory-assistant" && state.memoryAssistant ? memoryAssistantCursor(state.memoryAssistant, pageWidth, height - (state.tuiProfile.showStatus ? actions.statusRows(pageWidth).length : 0)) : state.page === "compaction" ? state.compactionCursor : undefined
+      const shiftedPageCursor = pageCursor ? { ...pageCursor, col: pageCursor.col + chatOffset } : undefined
+      const sidebarPlacements = sidebarOn ? (state.sidebarImages ?? []).map((placement) => ({ ...placement, col: placement.col + (sessionsSide === "left" ? 0 : width - sidebarCells(width)) })) : []
+      input.screen.draw(withToast(layered(rows)), paint?.cursor ?? (modal ? undefined : shiftedPageCursor), paint || modal || toast.length ? [] : [...placements.map((placement) => ({ ...placement, col: placement.col + chatOffset })), ...sidebarPlacements])
     }
   }
 

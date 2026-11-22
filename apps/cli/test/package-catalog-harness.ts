@@ -1,4 +1,5 @@
 import type { PackageCatalogEntry, PackageCatalogReport, PackageInfo, PackageSourceInfo } from "@mendcode/protocol"
+import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { appHarness, tempDir } from "./session-ui-harness"
 
 /** `entries` replaces the team catalog, `installed` is added to the one installed profile, `failInstall` refuses installs with that message. */
@@ -10,7 +11,10 @@ export function catalogHarness(width = 100, height = 30, fail = false, options: 
   let sources: PackageSourceInfo[] = [{ id: "local", location: "/work/project", enabled: true, builtin: true }, { id: "team", location: "/catalog", enabled: true, builtin: false }]
   let installed: PackageInfo[] = [{ name: "local-kit", key: "user:local-kit", source: "user", dir: "/data/packages/local-kit", enabled: true, manifest: { name: "local-kit", version: "1.0.0", description: "Local workflow commands" }, contents: { tools: 0, skills: 1, commands: 2, themes: 0, mcp: false } }, ...(options.installed ?? [])]
   let resources = [{ id: "skills/deploy", kind: "skills", name: "deploy", enabled: true }, { id: "commands/review", kind: "commands", name: "review", enabled: true }]
-  const h = appHarness({ width, height, dataDir: tempDir(), directory: "/work/project", reply: (command) => {
+  // The page is drawn at the whole width; the list beside a page has its own test (sidebar-pages.test.ts).
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" })
+  const h = appHarness({ width, height, dataDir, directory: "/work/project", reply: (command) => {
     if (!command.type.startsWith("profiles.")) return undefined
     if (fail) return { ok: false, error: { code: "invalid_command", message: "Catalog unavailable" } }
     if (command.type === "profiles.list") return { ok: true, result: { directory: "/work/project", packages: installed } }

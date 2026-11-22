@@ -1,3 +1,4 @@
+import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { afterEach, describe, expect, test } from "bun:test"
 import type { SessionSummary } from "@mendcode/protocol"
 import { createSessionListState, filterSessions, groupSessions, orderSessions, viewOf } from "../src/view/session-list"
@@ -305,7 +306,9 @@ describe("picker in the app", () => {
   test("ctrl+f asks the daemon to look in messages, scoped to the listed sessions, and the hits filter the list", async () => {
     const one = make({ title: "alpha", directory: "/project" })
     const two = make({ title: "beta", directory: "/project" })
-    const h = appHarness({ sessionId: one.sessionId, dataDir: tempDir(), directory: "/project", reply: (command) => {
+    const dataDir = tempDir()
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden" })
+    const h = appHarness({ sessionId: one.sessionId, dataDir, directory: "/project", reply: (command) => {
       if (command.type === "session.list") return { ok: true, result: { sessions: [one, two] } }
       if (command.type === "session.search") return { ok: true, result: { hits: [{ sessionId: two.sessionId, snippet: "we should refund the order" }] } }
     } })

@@ -45,6 +45,9 @@ import { noteSidebarFrame, OWN_INPUT_MS, type SidebarScroll } from "../../view/s
 /** The shortest terminal that gives the full view's footer its second row (docs/layout.md "Footer by tier"). */
 const DETAIL_ROW_MIN_HEIGHT = 24
 
+/** Pages that draw the whole screen, without the session list beside them: the first-run flows and the tutorial, which has its own rail. */
+const FULL_SCREEN_PAGES = new Set(["setup", "intro", "tutorial"])
+
 /** A turn in progress: the cache is being read and written, so there is nothing to count down. */
 const WORKING = new Set(["generating", "tool", "compacting", "cancelling"])
 
@@ -696,7 +699,9 @@ export function createChrome(ctx: AppContext, actions: {
   // A custom `sessions.sidebar` view draws the classic full-width list: the bots' icon column (and its narrower reservation) is not for it.
   const botsSidebar = () => botsOn() && !ctx.views.hasCustom("sessions.sidebar")
   const sidebarKindNow = (width: number) => sidebarKind({ mode: state.tuiProfile.sidebar, width, minimal: state.mode === "minimal", bots: botsSidebar(), iconsOnly: botsSidebar() && state.tuiProfile.sidebarLayout === "icons-only" })
-  const sidebarShown = (width: number) => (!rightWanted() || width >= BREAKPOINTS.xl) && sidebarKindNow(width) !== "none"
+  /** The session list stays beside every page that opens; the first-run flows own the whole screen. The right panel is the chat's, so only the chat gives way to it. */
+  const leftListPage = () => state.page === "chat" || !FULL_SCREEN_PAGES.has(state.page) && state.onboarding === undefined
+  const sidebarShown = (width: number) => leftListPage() && (state.page !== "chat" || !rightWanted() || width >= BREAKPOINTS.xl) && sidebarKindNow(width) !== "none"
   /** Columns the left list takes, without the gap: 0 when it does not show. */
   const sidebarCells = (width: number) => !sidebarShown(width) ? 0 : sidebarKindNow(width) === "icons" ? ICON_SIDEBAR_WIDTH : SIDEBAR_WIDTH
 

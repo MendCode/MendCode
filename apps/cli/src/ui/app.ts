@@ -360,6 +360,7 @@ export function createApp(input: AppInput) {
     activation: undefined,
     profileApplied: {},
     sessionLook: new Map(),
+    pageCols: { left: 0, width: 0 },
     profileRuntime: {},
     keptKeys: new Set<string>(),
     keptValues: {},
@@ -737,7 +738,7 @@ export function createApp(input: AppInput) {
     syncAppearance: () => syncAppearance(),
     loadEarlier,
     checkResume: (options) => returnFlow.checkResume(options),
-    sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec() },
+    sessionLookSwitched: (previous) => { if (switchSessionLook(ctx, previous, (patch) => changeProfile(patch, { layer: true }))) void rightBar.loadSpec({ known: true }) },
     openTree: (options) => sessionTree.open(options),
   })
   const sessionNav = createSessionNav(ctx)
@@ -1080,6 +1081,7 @@ export function createApp(input: AppInput) {
     runSlash: (...args) => runSlash(...args),
     chatWidth: (...args) => chatWidth(...args),
     sidebarShown: (...args) => sidebarShown(...args),
+    sidebarCells: (...args) => sidebarCells(...args),
     transcriptWidth: () => transcriptWidth(),
     pickApproval: (...args) => pickApproval(...args),
     pickQuestion: (...args) => pickQuestion(...args),

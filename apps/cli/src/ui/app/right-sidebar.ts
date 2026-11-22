@@ -44,11 +44,21 @@ import type { createFileOpen } from "./file-open"
 const PULSE_RIDE_MS = 125
 
 /**
- * `look` puts a change on screen for this session of this terminal only (session-look.ts): showing, hiding, presets, an added card and
- * the width. `/panel edit` and `/panel reset` edit the panel's file, every terminal's default.
+ * `look` puts a change on screen: showing or hiding is the user's everywhere (saved in the profile); presets, an added card and the
+ * width stay this session's own (session-look.ts). `/panel edit` and `/panel reset` edit the panel's file, every terminal's default.
  */
-export function createRightSidebar(ctx: AppContext, slotContext: (width: number, height: number) => SlotContext, fileOpen: ReturnType<typeof createFileOpen>, openNode: (node: OrbitNode) => Promise<void>, look: (patch: Partial<TuiProfile>, panel?: PanelChoice | null) => void) {
+export function createRightSidebar(ctx: AppContext, slotContext: (width: number, height: number) => SlotContext, fileOpen: ReturnType<typeof createFileOpen>, openNode: (node: OrbitNode) => Promise<void>, sessionLook: (patch: Partial<TuiProfile>, panel?: PanelChoice | null) => void) {
   const { input, state, now, requestFrame, fail } = ctx
+  /** Whether the panel shows is the user's, in every session (saved in the profile); only its cards and width are the session's own. */
+  function look(patch: Partial<TuiProfile>, panel?: PanelChoice | null) {
+    const { rightSidebar, ...own } = patch
+    if (rightSidebar !== undefined) {
+      state.tuiProfile = { ...state.tuiProfile, rightSidebar }
+      state.profileBase = { ...state.profileBase, rightSidebar }
+      void persistVisible(rightSidebar)
+    }
+    if (Object.keys(own).length || panel !== undefined) sessionLook(own, panel)
+  }
   let loadedKey = ""
   let scope: "user" | "project" = "user"
   let git: { branch?: string; ahead?: number; behind?: number; dirty?: number; conflicts?: number; untracked?: number; error?: string } = {}
@@ -68,6 +78,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
   let savings: Array<{ source: string; tokens: number }> | undefined
   let rent: ContextReport["rent"] | undefined
   let sessionKey = ""
+  /** What the folder-wide cards (git, MCP, jobs, loops, workflows, backlog, tools) were last asked for: another session of the same folder shows them as they are. */
+  let askedShared = ""
   let telemetryKey = ""
   let telemetry: ReturnType<typeof panelSession> | undefined
   let orbit: typeof import("../../view/panel-orbit") | undefined
@@ -164,21 +176,32 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     return { right: bar.cells, bottom: !bar.cells }
   }
 
-  async function loadSpec() {
+  /** The cards this session shows, from the panel's spec as known now. */
+  function applySpec() {
+    // The cards of an enabled profile are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
+    // Saving or editing from here is the user's own change, which then wins over the layer.
+    // A session that built its own list (`/panel widget`) keeps it; one that chose a preset gets the profile's version of it now.
+    const own = state.sessionLook.get(state.sessionId)
+    if (own?.panelPreset) state.tuiProfile.sidebarWidgets = resolvePanel(own.panelPreset, profilePanel(state)).widgets
+    else if (!("sidebarWidgets" in state.profileApplied) && !own?.sidebarWidgets && state.panelSpec) state.tuiProfile.sidebarWidgets = state.panelSpec
+    noteCustomPanels(customPresetsOf(profilePanel(state)))
+  }
+
+  /** `known`: a spec already read is drawn at once and the daemon is not asked again (a session switch; `sidebar.changed` keeps it current). */
+  async function loadSpec({ known = false } = {}) {
+    if (known && state.panelSpec) {
+      applySpec()
+      requestFrame()
+      return
+    }
     const directory = input.directory ?? process.cwd()
     const reply = await input.send({ type: "sidebar.get", directory })
     if (directory !== (input.directory ?? process.cwd())) return
     if (reply.ok && Array.isArray(reply.result?.widgets)) {
       state.panelSpec = sidebarSpec(reply.result.widgets)
-      // The cards of an enabled profile are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
-      // Saving or editing from here is the user's own change, which then wins over the layer.
-      // A session that built its own list (`/panel widget`) keeps it; one that chose a preset gets the profile's version of it now.
-      const own = state.sessionLook.get(state.sessionId)
-      if (own?.panelPreset) state.tuiProfile.sidebarWidgets = resolvePanel(own.panelPreset, profilePanel(state)).widgets
-      else if (!("sidebarWidgets" in state.profileApplied) && !own?.sidebarWidgets) state.tuiProfile.sidebarWidgets = state.panelSpec
       scope = reply.result?.scope === "project" ? "project" : "user"
-    }
-    noteCustomPanels(customPresetsOf(profilePanel(state)))
+      applySpec()
+    } else noteCustomPanels(customPresetsOf(profilePanel(state)))
     requestFrame()
   }
 
@@ -242,8 +265,12 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       clearInterval(state.rightTick)
       state.rightTick = undefined
     }
-    if (!visible || !widgets.length) return
-    if (sessionKey !== state.sessionId) {
+    if (!visible || !widgets.length) {
+      askedShared = ""
+      return
+    }
+    const switched = sessionKey !== state.sessionId
+    if (switched) {
       sessionKey = state.sessionId
       files = undefined
       savings = undefined
@@ -277,10 +304,14 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     if (types.has("alerts")) ["mcp", "jobs"].forEach((type) => types.add(type))
     const directory = input.directory ?? process.cwd()
     if (types.has("mcp")) state.sidebarMcpAsked = true
-    const query = (type: string, command: Parameters<typeof input.send>[0], apply: (result: Record<string, unknown> | undefined) => void) => {
-      if (!types.has(type)) return
+    const sharedKey = `${directory}:${[...types].sort().join(",")}`
+    // Another session of the same folder, same cards: the folder-wide answers are still right, so they are not asked again.
+    const reuseShared = switched && askedShared === sharedKey
+    askedShared = sharedKey
+    const query = (type: string, command: Parameters<typeof input.send>[0], apply: (result: Record<string, unknown> | undefined) => void, shared = false) => {
+      if (!types.has(type) || shared && reuseShared) return
       void input.send(command).then((reply) => {
-        if (key !== loadedKey) return
+        if (shared ? sharedKey !== askedShared : key !== loadedKey) return
         if (reply.ok) {
           sourceErrors.delete(type)
           apply(reply.result)
@@ -289,17 +320,17 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
         requestFrame()
       })
     }
-    query("mcp", { type: "mcp.status", directory }, (result) => { state.sidebarMcp = (result as McpStatusReport | undefined)?.servers })
-    query("jobs", { type: "background.list" }, (result) => { if (Array.isArray(result?.tasks)) state.agentShells = result.tasks as typeof state.agentShells })
-    query("loops", { type: "loop.list", directory }, (result) => { state.loops = (result?.loops ?? []) as Loop[] })
+    query("mcp", { type: "mcp.status", directory }, (result) => { state.sidebarMcp = (result as McpStatusReport | undefined)?.servers }, true)
+    query("jobs", { type: "background.list" }, (result) => { if (Array.isArray(result?.tasks)) state.agentShells = result.tasks as typeof state.agentShells }, true)
+    query("loops", { type: "loop.list", directory }, (result) => { state.loops = (result?.loops ?? []) as Loop[] }, true)
     // This folder's runs only: the Workflows page owns the list while it is open (its "all projects" view must not shrink to this folder).
-    query("workflows", { type: "workflow.list", directory }, (result) => { if (state.page !== "workflows") state.workflows = (result?.workflows ?? []) as WorkflowSummary[] })
+    query("workflows", { type: "workflow.list", directory }, (result) => { if (state.page !== "workflows") state.workflows = (result?.workflows ?? []) as WorkflowSummary[] }, true)
     // The backlog card asks only while its feature is on; off, the card says so and the daemon is not asked.
-    if (featureOn(state.settingsNow, "backlog")) query("backlog", { type: "backlog.get", directory }, (result) => { state.backlog = Array.isArray(result?.items) ? result.items as BacklogItem[] : [] })
+    if (featureOn(state.settingsNow, "backlog")) query("backlog", { type: "backlog.get", directory }, (result) => { state.backlog = Array.isArray(result?.items) ? result.items as BacklogItem[] : [] }, true)
     query("git", { type: "git.status", directory }, (result) => {
       git = result ?? {}
       gitKnown = true
-    })
+    }, true)
     query("agents", { type: "session.tree", sessionId: state.sessionId }, (result) => { if (Array.isArray(result?.nodes)) state.sidebarTree = result.nodes as SessionTreeNode[] })
     query("files", { type: "session.changes", sessionId: state.sessionId }, (result) => {
       files = Array.isArray(result?.files) ? (result.files as ChangesReport["files"]).map((file) => ({ ...file, diff: "" })) : undefined
@@ -313,7 +344,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       if (!map || typeof map !== "object") return
       const entries = Object.entries(map as Record<string, unknown>)
       tools = { enabled: entries.filter(([, on]) => on === true).length, total: entries.length, names: entries.filter(([, on]) => on === true).map(([name]) => name).sort() }
-    })
+    }, true)
   }
 
   const isRunning = () => ["generating", "tool", "compacting"].includes(state.transcript.foreground)

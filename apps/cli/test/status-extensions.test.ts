@@ -52,7 +52,7 @@ const daemon = (overrides: Record<string, unknown> = {}) => (command: Record<str
 }
 
 async function status(options: { reply?: (command: Record<string, unknown>) => unknown; width?: number; height?: number } = {}) {
-  const h = await appHarness({ width: options.width ?? 120, height: options.height ?? 50, version: "0.4.2", daemonBuildId: "0123456789ab", reply: options.reply ?? daemon() })
+  const h = await appHarness({ width: options.width ?? 160, height: options.height ?? 50, version: "0.4.2", daemonBuildId: "0123456789ab", reply: options.reply ?? daemon() })
   await h.start({ onboarded: true })
   h.sent.length = 0
   await h.type("/status")
@@ -175,7 +175,7 @@ describe("/status page", () => {
 
 describe("/extensions page", () => {
   async function open(options: { reply?: (command: Record<string, unknown>) => unknown; dataDir?: string; directory?: string; width?: number; height?: number } = {}) {
-    const h = await appHarness({ ...(options.dataDir ? { dataDir: options.dataDir } : {}), ...(options.directory ? { directory: options.directory } : {}), width: options.width ?? 120, height: options.height ?? 40, reply: options.reply ?? daemon() })
+    const h = await appHarness({ ...(options.dataDir ? { dataDir: options.dataDir } : {}), ...(options.directory ? { directory: options.directory } : {}), width: options.width ?? 160, height: options.height ?? 40, reply: options.reply ?? daemon() })
     await h.start({ onboarded: true })
     await h.type("/extensions")
     await h.key("\r")
@@ -243,7 +243,7 @@ describe("/extensions page", () => {
     const { dataDir, write, project } = layout()
     write("data/extensions/mine.ts", extension("mine", `api.slot("welcome.below", () => [[{ text: "x" }]])\napi.key("ctrl+g", (actions) => actions.toast("hi"))\napi.command("hello", "Say hello", () => {})\napi.page("dash", { title: "Dash", render: () => [] })`))
     write("data/extensions/bad.ts", `export default { name: "bad", tui() { throw new Error("nope") } }\n`)
-    const h = await open({ dataDir, directory: project, width: 140, reply: daemon({ "extensions.list": { extensions: [] } }) })
+    const h = await open({ dataDir, directory: project, width: 180, reply: daemon({ "extensions.list": { extensions: [] } }) })
     await h.app.extensionsReady
     h.app.render()
     const text = h.text()
@@ -261,7 +261,7 @@ describe("/extensions page", () => {
   test("a slot an error disabled says so", async () => {
     const { dataDir, write, project } = layout()
     write("data/extensions/flaky.ts", extension("flaky", `api.slot("welcome.below", () => { throw new Error("boom") })`))
-    const h = await appHarness({ dataDir, directory: project, width: 140, height: 40, reply: daemon({ "extensions.list": { extensions: [] } }) })
+    const h = await appHarness({ dataDir, directory: project, width: 180, height: 40, reply: daemon({ "extensions.list": { extensions: [] } }) })
     await h.start({ onboarded: true })
     h.app.render()
     await h.type("/extensions")

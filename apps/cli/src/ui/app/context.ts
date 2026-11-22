@@ -641,6 +641,8 @@ export type AppState = {
   sidebarSelected?: string | undefined
   /** Where the wheel put the left list's window, and the window the last frame drew (view/sidebar-window.ts); memory only. */
   sidebarScroll?: import("../../view/sidebar-window").SidebarScroll | undefined
+  /** The columns a page is drawn in, beside the left list: where it starts and its width (0 until a page was drawn). */
+  pageCols: { left: number; width: number }
   sidebarHits?: Array<{ row: number; sessionId: string; /** The cells of a folding row's ▸/▾ glyph, from the sidebar's left edge. */ fold?: { from: number; to: number }; /** The cells of the `+` that ends a row a chat can be started from. */ plus?: { from: number; to: number } }>
   /** The bots' pictures in the left list, at the list's own rows and columns (empty unless the terminal draws images). */
   sidebarImages?: import("../image-layer").ImagePlacement[] | undefined

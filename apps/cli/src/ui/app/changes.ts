@@ -24,7 +24,7 @@ export function createChanges(ctx: AppContext, deps: { openRef(ref: { raw: strin
     if (!report) return false
     // Inside the Git page the Changes page is drawn one row lower, under the tabs row.
     const top = state.pageBodyTop ?? 0
-    const hit = changesPageHits({ report, state: state.changesState, width: input.screen.size.width, height: state.pageBodyHeight ?? input.screen.size.height }).find((entry) => entry.row + top === at.row && at.col >= entry.from && at.col < entry.to)
+    const hit = changesPageHits({ report, state: state.changesState, width: state.pageCols.width || input.screen.size.width, height: state.pageBodyHeight ?? input.screen.size.height }).find((entry) => entry.row + top === at.row && at.col >= entry.from && at.col < entry.to)
     if (!hit) return false
     const previous = state.changesState
     if (hit.file !== previous.selected) {
