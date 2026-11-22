@@ -78,10 +78,11 @@ export function createDaemon(ctx: AppContext, deps: { reloadTerminal: () => Prom
    * project, then this terminal's keys, extensions and theme files. Skills, prompts and context files are read at each turn.
    */
   async function reload() {
-    const reply = await input.send({ type: "extensions.reload", directory: input.directory ?? "" })
+    const reply = await input.send({ type: "extensions.reload", directory: input.directory ?? "", sessionId: input.sessionId })
     if (!reply.ok) return fail(reply.error.message)
     await deps.reloadTerminal()
-    say("Reloaded extensions, profiles, keys and themes")
+    const claude = (reply.result as { claude?: string } | undefined)?.claude
+    say(`Reloaded extensions, profiles, keys and themes${claude === "next" ? " · Claude Code restarts on your next message" : claude === "later" ? " · Claude Code restarts once its current work ends" : ""}`)
   }
 
   const RUN = { reload, restart: restartTerminal } as const

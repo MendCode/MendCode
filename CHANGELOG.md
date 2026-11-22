@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- `/reload` in a Claude session also ends its idle Claude Code process, so the next message starts one that reads your current plugins and hooks on the same conversation; a running turn or background task is never cut.
+
 ### Fixed
 
 - `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.

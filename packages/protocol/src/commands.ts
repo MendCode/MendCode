@@ -1201,7 +1201,8 @@ export const HooksList = lazySchema(() => z.strictObject({
   directory: z.string().min(1).max(4096),
 }))
 
-export const ExtensionsReload = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.reload"), directory: z.string().min(1).max(4096) }))
+/** `sessionId` (the `/reload` of a session) also ends that session's idle Claude Code process so its next message reads the current plugins and hooks; the ack then adds `claude`: `"next"` or `"later"` (after the running turn or tasks). */
+export const ExtensionsReload = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.reload"), directory: z.string().min(1).max(4096), sessionId: SessionId.optional() }))
 export const ExtensionsReportUi = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.report"), revision: z.number().int().nonnegative(), errors: z.array(z.string().max(1000)).max(64) }))
 /** Turns an extension off (or on) by name: persisted in `disabledExtensions`, applied at once. Local clients only. Ack: the reload report. */
 export const ExtensionsDisable = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.disable"), directory: z.string().min(1).max(4096), name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/), disabled: z.boolean() }))

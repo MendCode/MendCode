@@ -12,7 +12,7 @@ Discover `profiles` through `tool_search`. Its schema is deferred even when gene
 
 A session cannot run `mendcode profile install|enable|disable|remove` in its shell; the refusal says so and names the way. In chat the `profiles` tool does it: the user sees the approval card and only their Approve applies it, in every permission mode.
 
-Enabling, disabling, installing or removing a profile applies at once. It needs no `/reload` and no restart. `/reload` reads extensions, profiles, keys and themes again without restarting anything; it is the only reload command (`/reload-plugins` is Claude Code's, and here it runs `/reload`). `/restart` starts only this terminal again, on the same session. Neither restarts the daemon.
+Enabling, disabling, installing or removing a profile applies at once. It needs no `/reload` and no restart. `/reload` reads extensions, profiles, keys and themes again without restarting the daemon; in a Claude session it also ends the idle Claude Code process (after a running turn or background task, once that ends), so its next message starts one that reads the current Claude Code plugins and hooks; it is the only reload command (`/reload-plugins` is Claude Code's, and here it runs `/reload`). `/restart` starts only this terminal again, on the same session. Neither restarts the daemon.
 
 ### Read or change profiles
 
