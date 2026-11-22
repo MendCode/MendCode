@@ -136,6 +136,50 @@ describe("workflows in the chat", () => {
     app.render()
     expect(text().join("\n")).toContain("Workflows")
   })
+  test("reopening the page draws the last list at once while a slow daemon answers", async () => {
+    const kept = run({ name: "kept-run" })
+    let slow = false
+    let release: () => void = () => {}
+    const { app, text, slash } = harness(async (command) => {
+      if (command.type !== "workflow.list") return undefined
+      if (slow) await new Promise<void>((resolve) => { release = resolve })
+      return { ok: true, result: { workflows: [kept] } }
+    })
+    await slash("/workflows")
+    expect(text().join("\n")).toContain("kept-run")
+    await app.onKey("\x1b")
+    slow = true
+    const opening = slash("/workflows")
+    await Bun.sleep(20)
+    app.render()
+    expect(text().join("\n")).toContain("kept-run")
+    expect(text().join("\n")).not.toContain("loading workflows")
+    release()
+    await opening
+  })
+
+  test("a list that arrives after the scope changed does not replace the other scope's list", async () => {
+    const here = run({ name: "local" })
+    const elsewhere = run({ name: "elsewhere", directory: "/elsewhere" })
+    const releases: Array<() => void> = []
+    let slow = false
+    const { app, text, slash } = harness(async (command) => {
+      if (command.type !== "workflow.list") return undefined
+      if (slow && command.directory) await new Promise<void>((resolve) => releases.push(resolve))
+      return { ok: true, result: { workflows: command.directory ? [here] : [here, elsewhere] } }
+    })
+    await slash("/workflows")
+    slow = true
+    void app.onKey("\t")
+    await Bun.sleep(10)
+    await app.onKey("\t")
+    await Bun.sleep(10)
+    for (const release of releases) release()
+    await Bun.sleep(10)
+    app.render()
+    expect(text().join("\n")).toContain("elsewhere")
+  })
+
   test("the workflows page shows other projects immediately and can switch to this project", async () => {
     const here = run({ name: "local" })
     const elsewhere = run({ name: "elsewhere", directory: "/elsewhere", state: "needs_input" })

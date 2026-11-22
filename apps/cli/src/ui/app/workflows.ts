@@ -7,15 +7,36 @@ import type { AppContext } from "./context"
 export function createWorkflows(ctx: AppContext) {
   const { input, state, requestFrame, report, say, fail } = ctx
 
+  /**
+   * Asks the daemon for the runs of the page's scope. The page never waits on it: while the page has no list yet it draws the
+   * last one it got for this scope (or the runs of this project it already follows), and the reply replaces it.
+   */
   async function loadWorkflows() {
-    const reply = await input.send({ type: "workflow.list", ...(state.workflowsState.scope === "project" ? { directory: input.directory ?? "" } : {}) })
+    const scope = state.workflowsState.scope
+    if (!state.workflowsLoaded) {
+      const known = state.workflows.filter((run) => scope === "all" || inProject(run.directory, input.directory))
+      const seed = state.workflowsSeen[scope] ?? (known.length ? known : undefined)
+      if (seed) {
+        state.workflows = seed
+        state.workflowsLoaded = true
+        state.workflowsError = ""
+      }
+      requestFrame()
+    }
+    const reply = await input.send({ type: "workflow.list", ...(scope === "project" ? { directory: input.directory ?? "" } : {}) })
     if (reply.ok) {
-      state.workflows = (reply.result?.workflows ?? []) as WorkflowSummary[]
+      const runs = (reply.result?.workflows ?? []) as WorkflowSummary[]
+      state.workflowsSeen[scope] = runs
+      if (state.workflowsState.scope !== scope) return
+      state.workflows = runs
       const omitted = Number(reply.result?.omitted ?? 0)
       if (omitted > 0) say(`${omitted} older workflow${omitted === 1 ? " is" : "s are"} not listed; the newest are shown`, "info")
       state.workflowsLoaded = true
       state.workflowsError = ""
-    } else state.workflowsError = reply.error.message
+    } else if (state.workflowsState.scope === scope) {
+      if (state.workflowsLoaded) fail(reply.error.message)
+      else state.workflowsError = reply.error.message
+    }
     requestFrame()
   }
 
@@ -40,6 +61,7 @@ export function createWorkflows(ctx: AppContext) {
     if (at < 0) return false
     await preload("workflows")
     state.workflows = runs
+    state.workflowsSeen.all = runs
     state.workflowsState = createWorkflowsPageState("all", runs[at]!.workflowId)
     state.workflowsLoaded = true
     state.workflowsError = ""
@@ -51,7 +73,10 @@ export function createWorkflows(ctx: AppContext) {
   async function controlWorkflow(workflowId: string, action: WorkflowControlAction | "retry" | "approve" | "reject", taskId?: string) {
     const reply = await input.send({ type: "workflow.control", workflowId: workflowId as WorkflowId, action, ...(taskId ? { taskId } : {}) })
     report(reply)
-    if (reply.ok && action === "delete") state.workflows = state.workflows.filter((run) => run.workflowId !== workflowId)
+    if (reply.ok && action === "delete") {
+      state.workflows = state.workflows.filter((run) => run.workflowId !== workflowId)
+      for (const scope of ["project", "all"] as const) if (state.workflowsSeen[scope]) state.workflowsSeen[scope] = state.workflowsSeen[scope]!.filter((run) => run.workflowId !== workflowId)
+    }
     requestFrame()
   }
 
