@@ -1021,7 +1021,11 @@ export async function startDaemon(options: DaemonOptions) {
     planExitAgent: () => store.settings.get().plan_exit_agent ?? store.settings.get().planExitAgent,
     settings: () => store.settings.get(),
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
-    select: (sessionId, name) => store.setSessionAgent(sessionId, name === "build" ? undefined : name),
+    select: (sessionId, name) => {
+      store.setSessionAgent(sessionId, name === "build" ? undefined : name)
+      // Another agent (bot) brings its own model again: a model picked for the previous one no longer overrides it.
+      store.meta.set(pickedModelKey(sessionId), "")
+    },
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
     botsOn: () => botsOn(),
     botRecall: (name, sessionId) => {
@@ -1053,6 +1057,8 @@ export async function startDaemon(options: DaemonOptions) {
    */
   function agentModelOf(sessionId: SessionId, models: { list(): ModelInfo[] }, override?: string): ModelChoice | undefined {
     if (!override && !store.sessionAgent(sessionId)) return undefined
+    // The user picked a model in this chat: it runs, not the one the bot names (the bot's model is the chat's starting point).
+    if (!override && store.meta.get(pickedModelKey(sessionId))) return undefined
     // Only the model is read: the prompt a bot's turn builds (memory, digest, overview) is not, so asking never costs a chat opening that.
     const profile = agents.port().primary(sessionId, override, { prompt: false })
     if (!profile?.model || !models.list().some((model) => model.id === profile.model)) return undefined
@@ -1379,7 +1385,16 @@ export async function startDaemon(options: DaemonOptions) {
     extensions,
     secrets,
     extensionLayers: layersFor,
-    agents: agents.port(),
+    agents: {
+      ...agents.port(),
+      // A model the user picked in a bot's chat runs instead of the bot's own (agentModelOf says the same for the other engines).
+      primary: (sessionId, override, detail) => {
+        const profile = agents.port().primary(sessionId, override, detail)
+        if (!profile || override || !store.meta.get(pickedModelKey(sessionId))) return profile
+        const { model: _model, effort: _effort, variant: _variant, ...rest } = profile
+        return rest
+      },
+    },
     plans: { latest: (sessionId) => readPlanReviews(store, sessionId, 1)[0], pointer: (sessionId) => planFiles.pointer(sessionId), roots: (sessionId) => planFiles.roots(sessionId), anchored: (sessionId) => planFiles.anchored(sessionId) },
     background: (sessionId) => background.forSession(sessionId),
     interactive: (sessionId) => interactive.forSession(sessionId),
@@ -1472,6 +1487,10 @@ export async function startDaemon(options: DaemonOptions) {
   const retiredEngineError = { status: "error" as const, code: "engine_unavailable", message: "[DAEMON]: optional engine removed; select an available model or use a portable handoff" }
   /** The default a session without a model of its own last followed, once it ran a turn (`keepSessionEngine`). Cleared by `/model`. */
   const followedKey = (sessionId: SessionId) => `session.followed-default:${sessionId}`
+  /** Set when the user picks a model for the session (`/model`): that pick runs instead of the model its agent (bot) names. */
+  function pickedModelKey(sessionId: SessionId) {
+    return `session.model-picked:${sessionId}`
+  }
   /** What a session without a model of its own follows in its project: the `main` role, else the catalog's default model. */
   const followedDefault = (sessionId: SessionId): ModelChoice => {
     const main = rolesFor(store.settings.get(), store.sessionDirectory(sessionId)).main
@@ -6333,6 +6352,8 @@ export async function startDaemon(options: DaemonOptions) {
           // Saved by its catalog id, also when it was named by the reference `mendcode models` prints (`claude/claude-opus`).
           const chosen = command.choice ? { ...command.choice, model: catalogModel(catalog, command.choice.model)?.id ?? command.choice.model } : undefined
           store.setSessionModel(command.sessionId, chosen && chosen.fast === undefined && fast !== undefined ? { ...chosen, fast } : chosen)
+          // A pick of its own outranks the bot's model; going back to the default lets the bot's model run again.
+          store.meta.set(pickedModelKey(command.sessionId), chosen ? "1" : "")
           // The user's own pick: back to the default, the session follows it wherever it runs.
           if (store.meta.get(followedKey(command.sessionId))) store.meta.set(followedKey(command.sessionId), "")
           usageLimit.revalidate(command.sessionId)

@@ -108,6 +108,23 @@ describe("session.agent.set", () => {
 })
 
 describe("agents in a session's turns", () => {
+  test("a model picked in an agent's chat runs instead of the agent's own, until the default is picked again", async () => {
+    const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
+    put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol\neffort: low", "Review only."))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await say(h, sessionId, "first")
+    expect(h.requests[0]!.model).toBe("gpt-6-sol")
+    expect((await h.client.send({ type: "session.model.set", sessionId, choice: { model: "gpt-6-luna" } })).ok).toBe(true)
+    const listed = await h.client.send({ type: "models.list", sessionId })
+    expect((listed.ok ? (listed.result as { effective?: { model?: string } }).effective?.model : undefined)).toBe("gpt-6-luna")
+    await say(h, sessionId, "second")
+    expect(h.requests[1]!.model).toBe("gpt-6-luna")
+    await h.client.send({ type: "session.model.set", sessionId, choice: null })
+    await say(h, sessionId, "third")
+    expect(h.requests[2]!.model).toBe("gpt-6-sol")
+  })
+
   test("the selected agent shapes the next model call: prompt, tools and model; an edit to its file applies to the next turn", async () => {
     const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
     const file = path.join(h.dir, "agents", "reviewer.md")
