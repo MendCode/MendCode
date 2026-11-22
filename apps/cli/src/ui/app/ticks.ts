@@ -39,7 +39,11 @@ export function createTicks(ctx: AppContext, actions: {
     // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
     // The all-projects and bots list keeps the other folders' sessions and the bots' chats itself, so it says whether one of its rows moves.
     const listed = state.page === "chat" && (state.sidebarBots?.moving() || (state.sessions ?? []).some((s) => !restingWorkflow(s) && (BUSY.has(s.state) || s.state === "waiting_approval" || (s.agents ?? 0) > 0) && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true)))) && sidebarShown(ctx.input.screen.size.width)
-    const near = busy || preview || agents || thread || reviewing
+    // A compaction game that has the keys and moves by itself keeps the frames coming, also once its compaction has ended
+    // (it stays until closed); none once it is closed or left.
+    const live = state.compactionLive
+    const arcade = state.page === "chat" && live?.focused === true && live.session?.definition.ticks === true
+    const near = busy || preview || agents || thread || reviewing || arcade
     const wanted = (near || home || listed) && !state.reducedMotion
     // Only other sessions working (the list's rows, the home's Agent View): their symbols turn at a quarter of the speed. Each tick
     // redraws the whole screen, so a list of busy chats no longer keeps the terminal drawing 8 frames a second for a chat at rest.

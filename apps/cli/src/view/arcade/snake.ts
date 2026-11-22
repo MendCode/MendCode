@@ -1,4 +1,4 @@
-import type { Line, Span } from "../../ui/theme"
+import { pixelRows, type Pixel } from "./pixels"
 import { seeded, type ArcadeDefinition, type ArcadeKey } from "./types"
 
 type Point = { x: number; y: number }
@@ -7,13 +7,18 @@ type Direction = "up" | "down" | "left" | "right"
 const STEP: Record<Direction, Point> = { up: { x: 0, y: -1 }, down: { x: 0, y: 1 }, left: { x: -1, y: 0 }, right: { x: 1, y: 0 } }
 const OPPOSITE: Record<Direction, Direction> = { up: "down", down: "up", left: "right", right: "left" }
 
-/** Snake: arrows steer, space pauses, `r` restarts. Walls and the snake's own body end the run. */
+/**
+ * Snake: arrows steer, space pauses, `r` restarts. Walls and the snake's own body end the run. Every snake and food
+ * cell is one square half-block pixel: two per field cell across and two down.
+ */
 export const snake: ArcadeDefinition = {
   id: "snake",
   label: "Snake",
   ticks: true,
   min: { cols: 10, rows: 6 },
   start({ cols, rows, random, best }) {
+    const width = cols * 2
+    const height = rows * 2
     const next = seeded(Math.floor(random() * 0xffffffff))
     let body: Point[] = []
     let direction: Direction = "right"
@@ -27,11 +32,11 @@ export const snake: ArcadeDefinition = {
     const free = (point: Point) => !body.some((part) => part.x === point.x && part.y === point.y)
     function place() {
       const open: Point[] = []
-      for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) if (free({ x, y })) open.push({ x, y })
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) if (free({ x, y })) open.push({ x, y })
       food = open[Math.floor(next() * open.length)] ?? { x: 0, y: 0 }
     }
     function reset() {
-      const y = Math.floor(rows / 2)
+      const y = Math.floor(height / 2)
       body = [{ x: 3, y }, { x: 2, y }, { x: 1, y }]
       direction = "right"
       queued = []
@@ -58,7 +63,7 @@ export const snake: ArcadeDefinition = {
         const target = { x: head.x + step.x, y: head.y + step.y }
         const eats = target.x === food.x && target.y === food.y
         const tail = eats ? body : body.slice(0, -1)
-        if (target.x < 0 || target.y < 0 || target.x >= cols || target.y >= rows || tail.some((part) => part.x === target.x && part.y === target.y)) {
+        if (target.x < 0 || target.y < 0 || target.x >= width || target.y >= height || tail.some((part) => part.x === target.x && part.y === target.y)) {
           alive = false
           return
         }
@@ -66,7 +71,7 @@ export const snake: ArcadeDefinition = {
         if (eats) {
           score++
           record = Math.max(record, score)
-          if (body.length >= cols * rows) alive = false
+          if (body.length >= width * height) alive = false
           else place()
         }
       },
@@ -84,22 +89,15 @@ export const snake: ArcadeDefinition = {
       },
       view({ focused }) {
         const head = body[0]!
-        const lines: Line[] = []
-        for (let y = 0; y < rows; y++) {
-          const spans: Span[] = []
-          for (let x = 0; x < cols; x++) {
-            if (head.x === x && head.y === y) spans.push({ text: "██", fg: alive ? "primary" : "error" })
-            else if (!free({ x, y })) spans.push({ text: "▓▓", fg: alive ? "success" : "error", dim: !focused })
-            else if (food.x === x && food.y === y) spans.push({ text: "◆ ", fg: "warning", bold: true })
-            else spans.push({ text: "· ", fg: "muted", dim: true })
-          }
-          lines.push(spans)
-        }
+        const cells = new Map<number, Pixel>()
+        for (const part of body) cells.set(part.y * width + part.x, alive ? "success" : "error")
+        cells.set(head.y * width + head.x, alive ? "primary" : "error")
+        cells.set(food.y * width + food.x, "warning")
         return {
           title: `Snake · ${score} · best ${record}`,
-          status: !alive ? (body.length >= cols * rows ? "Board full. r restarts" : "Game over. r restarts") : paused ? (score === 0 ? "Arrow keys start" : "Paused") : "Eat ◆, avoid walls and yourself",
-          rows: lines,
-          width: cols * 2,
+          status: !alive ? (body.length >= width * height ? "Board full. r restarts" : "Game over. r restarts") : paused ? (score === 0 ? "Arrow keys start" : "Paused") : "Eat the gold, miss the walls",
+          rows: pixelRows({ width, height, at: (x, y) => cells.get(y * width + x), dim: !focused }),
+          width,
         }
       },
     }

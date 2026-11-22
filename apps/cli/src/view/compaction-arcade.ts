@@ -1,10 +1,17 @@
+import { blocks } from "./arcade/blocks"
 import { breakout } from "./arcade/breakout"
+import { crossing } from "./arcade/crossing"
+import { cycles } from "./arcade/cycles"
 import { game2048 } from "./arcade/game2048"
+import { glide } from "./arcade/glide"
+import { mines } from "./arcade/mines"
+import { pong } from "./arcade/pong"
 import { snake } from "./arcade/snake"
+import { stars } from "./arcade/stars"
 import type { ArcadeDefinition, ArcadeInstance, ArcadeKey } from "./arcade/types"
 
-/** The games the arcade panel picks from, one at random each compaction. */
-export const ARCADE_GAMES: readonly ArcadeDefinition[] = [snake, breakout, game2048]
+/** The games the arcade panel picks from, one at random each compaction. This module and the games load only with the arcade. */
+export const ARCADE_GAMES: readonly ArcadeDefinition[] = [snake, breakout, game2048, blocks, mines, pong, cycles, glide, stars, crossing]
 
 /** What the app does with a key while the arcade has focus. */
 export type ArcadeInput = { type: "game"; key: ArcadeKey } | { type: "leave" } | { type: "next" }
@@ -20,7 +27,7 @@ const KEYS: Record<string, ArcadeInput> = {
   "\x1b[B": { type: "game", key: "down" }, "\x1bOB": { type: "game", key: "down" }, s: { type: "game", key: "down" }, j: { type: "game", key: "down" },
   "\x1b[D": { type: "game", key: "left" }, "\x1bOD": { type: "game", key: "left" }, a: { type: "game", key: "left" }, h: { type: "game", key: "left" },
   "\x1b[C": { type: "game", key: "right" }, "\x1bOC": { type: "game", key: "right" }, d: { type: "game", key: "right" }, l: { type: "game", key: "right" },
-  " ": { type: "game", key: "space" }, r: { type: "game", key: "restart" },
+  " ": { type: "game", key: "space" }, r: { type: "game", key: "restart" }, f: { type: "game", key: "alt" },
   n: { type: "next" },
   "\x1b": { type: "leave" }, q: { type: "leave" }, "\x03": { type: "leave" }, "\t": { type: "leave" },
 }
