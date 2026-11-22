@@ -11,7 +11,7 @@ const STRIDE = 2
 function bounce(y: number, vy: number, height: number): [number, number] {
   const ny = y + vy
   if (ny < 0) return [-ny, -vy]
-  if (ny >= height) return [2 * (height - 1) - ny, -vy]
+  if (ny > height - 1) return [2 * (height - 1) - ny, -vy]
   return [ny, vy]
 }
 

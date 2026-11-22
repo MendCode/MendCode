@@ -9,13 +9,13 @@ import { workflowToolDenied } from "../src/workflow-policy"
 const ids = createIdFactory()
 const execution = (extra: Partial<WorkflowTaskExecution> = {}): WorkflowTaskExecution => ({ directory: "/tmp", workspace: { mode: "in-place" }, permission: "ask", readOnly: false, ...extra })
 
-function harness(policy: WorkflowTaskExecution, steps: ModelEvent[][], exhausted?: () => string | undefined) {
+function harness(policy: WorkflowTaskExecution, steps: ModelEvent[][], exhausted?: () => string | undefined, children?: { reserveChild: () => boolean; subagents: boolean }) {
   const requests: ModelRequest[] = []
   const asked: EngineRequest[] = []
   const wrote: string[] = []
   const write = defineTool({ name: "write", description: "Write", permission: "write", args: z.object({ path: z.string() }), execute: async ({ path }) => { wrote.push(path); return { output: "wrote", title: "write", truncated: false, isError: false } } })
-  const engine = createNativeEngine({ provider: { id: "fake", model: "base", async *stream(request) { requests.push(request); yield* steps.shift() ?? [] } }, history: memoryHistory(), tools: [write], hostedTools: () => ["web_search"], cwdFor: () => "/tmp", system: () => "test", compactionPrompt: "summarize", permissionPolicy: () => ({ permission: "allow" }), modelFor: () => ({ model: "main", variant: "fast" }) })
-  const input: TurnInput = { sessionId: ids("session"), turnId: ids("turn"), text: "Do the task", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, permissionMode: () => "full", setPermissionMode: () => {}, ask: async (request) => { asked.push(request); return { kind: "deny" } }, workflow: { execution: policy, beforeCall: exhausted ?? (() => undefined), reserveChild: () => false } }
+  const engine = createNativeEngine({ ...(children?.subagents ? { subagents: true, tasks: { nests: () => true, isChild: () => true } as unknown as NonNullable<Parameters<typeof createNativeEngine>[0]["tasks"]> } : {}), provider: { id: "fake", model: "base", async *stream(request) { requests.push(request); yield* steps.shift() ?? [] } }, history: memoryHistory(), tools: [write], hostedTools: () => ["web_search"], cwdFor: () => "/tmp", system: () => "test", compactionPrompt: "summarize", permissionPolicy: () => ({ permission: "allow" }), modelFor: () => ({ model: "main", variant: "fast" }) })
+  const input: TurnInput = { sessionId: ids("session"), turnId: ids("turn"), text: "Do the task", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, permissionMode: () => "full", setPermissionMode: () => {}, ask: async (request) => { asked.push(request); return { kind: "deny" } }, workflow: { execution: policy, beforeCall: exhausted ?? (() => undefined), reserveChild: children?.reserveChild ?? (() => false) } }
   return { engine, input, requests, asked, wrote }
 }
 const done: ModelEvent[] = [{ type: "text", delta: "done" }, { type: "finish", reason: "stop" }]
@@ -61,6 +61,17 @@ describe("B45 native workflow policies", () => {
     const h = harness(execution({ budget: { maxTurns: 0 } }), [done], () => "model-call budget exhausted")
     expect(await h.engine.runTurn(h.input)).toMatchObject({ status: "error", message: expect.stringContaining("budget exhausted") })
     expect(h.requests).toHaveLength(0)
+  })
+
+  test("a task call whose effort and variant differ is rejected before it takes a workflow child slot", async () => {
+    let slots = 1
+    const reserveChild = () => slots-- > 0
+    const call = (callId: string, args: Record<string, unknown>): ModelEvent[] => [{ type: "tool_call", call: { callId, name: "task", args } }, { type: "finish", reason: "tool_calls" }]
+    const h = harness(execution({ budget: { maxChildren: 1, maxDepth: 2 } }), [call("t-1", { description: "d", prompt: "p", effort: "high", variant: "low" }), call("t-2", { description: "d", prompt: "p", agent: "?" }), done], undefined, { reserveChild, subagents: true })
+    await h.engine.runTurn(h.input)
+    expect(slots).toBe(0)
+    expect(JSON.stringify(h.requests[1]?.messages)).toContain("differ")
+    expect(JSON.stringify(h.requests[2]?.messages)).not.toContain("budget exhausted")
   })
 
   test("read-only blocks plan exit, child creation, shell, external sends and arbitrary custom writes", () => {

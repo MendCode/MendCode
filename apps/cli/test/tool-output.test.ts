@@ -357,7 +357,7 @@ describe("shell", () => {
     expect(view(events, { mode: "full", width: 60 }).text().filter((line) => /│ out\d+/.test(line))).toHaveLength(10)
   })
 
-  const LONG = "cd /Users/user/Code/repos/heltecv4/heltecv4-32bit-windows && bun scripts/build.ts --base-url https://github.com/Obed0101"
+  const LONG = "cd /Users/user/Code/repos/lorabox4/lorabox4-32bit-windows && bun scripts/build.ts --base-url https://github.com/acme-dev"
 
   test("a long command wraps under its rail in the full view, finished or running, with the duration after its last word", () => {
     const finished = calls([{ title: `shell: ${LONG}`, text: "built" }]).events

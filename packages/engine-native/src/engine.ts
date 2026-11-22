@@ -1774,9 +1774,9 @@ export function createNativeEngine(options: {
     if (call.name === TASK_TOOL.name && toolset.allowTask) {
       const args = TASK_TOOL.args.safeParse(call.args)
       if (!args.success) return finish({ output: `invalid arguments for task: ${z.prettifyError(args.error)}`, truncated: false, title: "task", isError: true })
-      if (input.workflow && !args.data.task_id && !input.workflow.reserveChild()) return finish({ output: "workflow child budget exhausted", truncated: false, title: "task", isError: true })
       const { effort, ...rest } = args.data
       if (effort && rest.variant && effort !== rest.variant) return finish({ output: `effort ${effort} and variant ${rest.variant} differ; they name the same setting, pass one`, truncated: false, title: "task", isError: true })
+      if (input.workflow && !args.data.task_id && !input.workflow.reserveChild()) return finish({ output: "workflow child budget exhausted", truncated: false, title: "task", isError: true })
       return finish(await runTask(input, effort ? { ...rest, variant: effort } : rest, itemId, toolset))
     }
     if (call.name === SECRETS_TOOL.name && secrets) return finish(secretsResult(secrets.list(input.sessionId)))

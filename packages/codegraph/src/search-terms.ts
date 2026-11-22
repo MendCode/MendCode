@@ -69,7 +69,7 @@ function shellWords(command: string): Array<{ word: string } | { separator: true
 }
 
 /** The pattern arguments of one simple command (`grep -rn foo src`), or none when it is not a text search. */
-function commandPatterns(words: string[]): Array<{ pattern: string; fixed: boolean }> {
+function commandPatterns(words: string[], gitDirs?: string[]): Array<{ pattern: string; fixed: boolean }> {
   // `find … -exec grep foo {} +`: the search is what `-exec` runs.
   let at = words[0] === "find" ? Math.max(words.indexOf("-exec"), words.indexOf("-execdir")) + 1 : 0
   if (words[0] === "find" && at === 0) return []
@@ -81,7 +81,12 @@ function commandPatterns(words: string[]): Array<{ pattern: string; fixed: boole
   let program = programName(words[at] ?? "")
   if (program === "git") {
     at++
-    while (at < words.length && words[at]!.startsWith("-")) at += words[at] === "-C" || words[at] === "-c" ? 2 : 1
+    while (at < words.length && words[at]!.startsWith("-")) {
+      // `-C dir` moves where git searches; a git directory or work tree given another way is a place that cannot be told here.
+      if (words[at] === "-C") gitDirs?.push(words[at + 1] ?? "")
+      else if (/^--(?:git-dir|work-tree)\b/.test(words[at]!) || words[at] === "-c" && /^core\.worktree=/i.test(words[at + 1] ?? "")) gitDirs?.push("$")
+      at += words[at] === "-C" || words[at] === "-c" ? 2 : 1
+    }
     if (words[at] !== "grep") return []
     program = "git grep"
   } else if (!PROGRAMS.has(program)) return []
@@ -148,15 +153,42 @@ export function patternTerms(pattern: string, { fixed = false }: { fixed?: boole
   return names
 }
 
-/** The identifiers the text searches of a command line ask about (`grep -rn "foo" src | head`, `rg -w 'a|b'`, `git grep -e x`); empty for any other command. */
-export function searchTerms(command: string): string[] {
-  if (command.length > MAX_COMMAND_CHARS || !SEARCH_COMMAND.test(command)) return []
+/** A directory argument whose place is not known from the text: a variable, `~`, a glob, a command substitution, `-` or nothing. */
+const UNKNOWN_DIRECTORY = /^$|^-|[$`~*?[{]/
+
+/**
+ * The identifiers the text searches of a command line ask about, and where they are searched: `directories` are the folders the search
+ * moved into from the shell's own, in order (`cd` targets and `git -C` values; each relative to the one before). `directories` is
+ * undefined when the place cannot be told (a variable, `~`, a `cd` inside brackets, searches in different places), so the caller says nothing.
+ */
+export function searchPlan(command: string): { terms: string[]; directories: string[] | undefined } {
+  if (command.length > MAX_COMMAND_CHARS || !SEARCH_COMMAND.test(command)) return { terms: [], directories: [] }
   const parts = shellWords(command)
-  if (!parts) return []
+  if (!parts) return { terms: [], directories: [] }
   const names: string[] = []
   let words: string[] = []
+  const moved: string[] = []
+  let place: string[] | undefined
+  let certain = !/[({]/.test(command) || !/\b(?:cd|pushd)\b/.test(command)
   const end = () => {
-    for (const { pattern, fixed } of words.length ? commandPatterns(words) : []) for (const name of patternTerms(pattern, { fixed })) if (!names.includes(name)) names.push(name)
+    const first = words[0] === "cd" || words[0] === "pushd" ? words : undefined
+    if (first) {
+      const target = first[1] === "--" ? first[2] : first[1]
+      if (first.length > (first[1] === "--" ? 3 : 2) || target === undefined || UNKNOWN_DIRECTORY.test(target)) certain = false
+      else moved.push(target)
+      words = []
+      return
+    }
+    const gitDirs: string[] = []
+    const patterns = words.length ? commandPatterns(words, gitDirs) : []
+    let found = false
+    for (const { pattern, fixed } of patterns) for (const name of patternTerms(pattern, { fixed })) { found = true; if (!names.includes(name)) names.push(name) }
+    if (found) {
+      const here = [...moved, ...gitDirs]
+      if (here.some((directory) => UNKNOWN_DIRECTORY.test(directory))) certain = false
+      else if (place && place.join("\n") !== here.join("\n")) certain = false
+      place ??= here
+    }
     words = []
   }
   for (const part of parts) {
@@ -164,5 +196,8 @@ export function searchTerms(command: string): string[] {
     else end()
   }
   end()
-  return names.slice(0, MAX_SEARCH_TERMS)
+  return { terms: names.slice(0, MAX_SEARCH_TERMS), directories: certain ? place ?? [] : undefined }
 }
+
+/** The identifiers the text searches of a command line ask about (`grep -rn "foo" src | head`, `rg -w 'a|b'`, `git grep -e x`); empty for any other command. */
+export const searchTerms = (command: string): string[] => searchPlan(command).terms

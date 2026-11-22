@@ -23,6 +23,8 @@ export type ArcadeInstance = {
    */
   readonly moving: boolean
   key(key: ArcadeKey): void
+  /** Lets a lockout that waits on frames run down one step; the app calls it on a press that does not step the game (reduced motion draws no frames). */
+  settle?(): void
   view(options: { focused: boolean }): ArcadeView
   readonly score: number
   /** The best score of this instance, the one it was started with included. */

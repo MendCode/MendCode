@@ -708,8 +708,12 @@ export function createSessionActor(options: SessionActorOptions) {
         if (handed && active && active.turnId === handed.turnId && !active.cancelBy && !active.interruptReason) {
           // Already written to the engine, waiting for its running tool: sending it now stops that turn, and the message comes back
           // first (onEngineDone puts unread messages back) to start a turn of its own.
+          // Paused: the running turn is left to finish, as an ordinary promotion does; the message only moves first.
           handed.entry.alone = true
-          cancel(active, "promotion")
+          sent.splice(sent.indexOf(handed), 1)
+          sent.unshift(handed)
+          emitQueue()
+          if (!paused) cancel(active, "promotion")
           return { ok: true }
         }
         if (index < 0) return { ok: false, code: "target_mismatch", message: "[ACTOR]: queued message not found" }

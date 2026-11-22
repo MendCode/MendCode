@@ -8,7 +8,7 @@ import { groupFiles, parseReaderAnswer, readerPrompt, readGroups } from "../src/
 import { graftCallers } from "../src/pr-review/readers-graft"
 
 /**
- * A pull request whose diff against its base is far larger than 4 MiB because of data and generated files (the Symbex #23 incident:
+ * A pull request whose diff against its base is far larger than 4 MiB because of data and generated files (the shop-api #23 incident:
  * the whole diff was refused before triage). Real git in a temp directory: the file list and sizes come first, data files are
  * fetched as samples for readers, and only the reviewable rest counts toward the bound.
  */

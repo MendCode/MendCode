@@ -93,7 +93,7 @@ describe("reader models", () => {
     expect(chooseReaderModel({ owner: { model: "anthropic:claude-opus-4-1" }, catalog: CATALOG }).ok).toBe(false)
   })
 
-  test("an ACP harness model is never the reader, though the ChatGPT login lists them first (live job on Symbex-1 #23)", () => {
+  test("an ACP harness model is never the reader, though the ChatGPT login lists them first (live job on shop-api #23)", () => {
     const live = catalogOf([
       model("acp:opencode/opencode-go/claude-haiku-5-5"), model("acp:opencode/openai/gpt-6-luna"), model("acp:opencode/opencode/gemini-3.5-flash-lite"),
       model("gpt-5.6-luna"), model("gpt-6-luna"), model("gpt-6.1-sol"), model("gpt-6.1-terra"),

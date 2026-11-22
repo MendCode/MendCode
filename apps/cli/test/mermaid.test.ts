@@ -283,6 +283,41 @@ describe("fallbacks", () => {
     expect(outline.lines.map(text)).toEqual(["unknownDiagram", '├ "a": 1', '├ "b": 2'])
     expect(outline.note).toBe("unknownDiagram has no drawing here · shown as an outline")
   })
+  test("a rejected flowchart line leaves the nodes declared before it as they were", () => {
+    const result = renderMermaid("flowchart TD\nA --> B\nA[Wrong] -=> C\nA[Correct] --> D", 100)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    const drawn = result.lines.map(text).join("\n")
+    expect(drawn).toContain("Correct")
+    expect(drawn).not.toContain("Wrong")
+    expect(result.note).toContain("1 line not understood")
+  })
+  test("one very long statement still gives an outline of bounded rows", () => {
+    const result = renderMermaid(`unknownDiagram\n${"x".repeat(100000)}`, 80)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    expect(result.lines.length).toBeLessThanOrEqual(242)
+    expect(text(result.lines.at(-1)!)).toMatch(/^… \d+ more lines$/)
+  })
+  test("outline rows stay inside the width, however narrow or deep", () => {
+    const deep = Array.from({ length: 12 }, (_, i) => `${"  ".repeat(i)}word${i} abcdef`).join("\n")
+    for (const [source, width] of [["unknownDiagram\nabcdef", 4], ["unknownDiagram\nabcdef ghijkl", 5], [`unknownDiagram\n${deep}`, 12], [`unknownDiagram\n${deep}`, 30]] as const) {
+      const result = renderMermaid(source, width)
+      if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+      for (const line of result.lines) expect(textWidth(text(line))).toBeLessThanOrEqual(width)
+    }
+  })
+  test("ER aliases that name each other's ids keep two entities and their own fields", () => {
+    const result = renderMermaid("erDiagram\na[b] {\n string first\n}\nb[c] {\n int second\n}\na ||--|| b : owns", 100)
+    if (!("lines" in result)) throw new Error(`no diagram: ${result.note}`)
+    const drawn = result.lines.map(text).join("\n")
+    for (const label of ["string first", "int second", "owns"]) expect(drawn).toContain(label)
+    expect(drawn).toMatch(/│ +b +│/)
+    expect(drawn).toMatch(/│ +c +│/)
+  })
+  test("a header-only flowchart or sequence is a note, not an exception", () => {
+    for (const source of ["flowchart TD", "graph LR", "sequenceDiagram"]) {
+      expect(renderMermaid(source, 80)).toEqual({ note: "empty diagram · shown as source" })
+    }
+  })
   test("text that is not a diagram is a note that quotes it, never a bare 'unsupported'", () => {
     expect(renderMermaid("", 100)).toEqual({ note: "empty diagram" })
     expect(renderMermaid("not mermaid at all", 100)).toEqual({ note: "not a mermaid diagram type: not mermaid at all · shown as source" })
@@ -421,16 +456,16 @@ describe("every mermaid block a model writes is drawn", () => {
   test("the reported flowchart: a dotted link with its text inside, accents and · / + in the labels", () => {
     const source = [
       "flowchart TD",
-      "  Yo[Tú / mendy en MendCode] --> SW[Oficina Software · Opus · director]",
-      "  SW --> P1[Oficina Proyecto A · Opus + mend-autopilot]",
-      "  SW -.consulta.-> SEC[Ciberseguridad · Opus · solo lectura]",
-      "  P1 --> PR1[PRs para que tú revises]",
+      "  Yo[Tú / asistente] --> SW[Equipo A · modelo · líder]",
+      "  SW --> P1[Equipo B · modelo + revisión]",
+      "  SW -.consulta.-> SEC[Seguridad · modelo · solo lectura]",
+      "  P1 --> PR1[PRs para revisión]",
     ].join("\n")
-    for (const label of ["Tú / mendy en MendCode", "mend-autopilot", "Ciberseguridad · Opus · solo", "PRs para que tú revises", "consulta"]) expect(whole(source, 120)).toContain(label)
+    for (const label of ["Tú / asistente", "modelo + revisión", "Seguridad · modelo · solo", "PRs para revisión", "consulta"]) expect(whole(source, 120)).toContain(label)
     // Narrower, a label wraps inside its box: every word is still there, and the dotted link with its text.
     for (const width of [40, 60, 80, 120]) {
       const drawn = whole(source, width)
-      for (const word of ["Tú", "mendy", "MendCode", "Oficina", "Software", "director", "Proyecto", "mend-autopilot", "Ciberseguridad", "lectura", "PRs", "revises", "consulta"]) expect(drawn).toContain(word)
+      for (const word of ["Tú", "asistente", "Equipo", "líder", "modelo", "revisión", "Seguridad", "lectura", "PRs", "revisión", "consulta"]) expect(drawn).toContain(word)
       expect(drawn).toMatch(/[┄┆]/)
       // From 60 columns the layers fit; narrower, the boxes are stacked with their links beside them.
       expect((drawn.match(/[▼◀]/g) ?? []).length).toBe(4)

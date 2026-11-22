@@ -38,6 +38,7 @@ export const threadsTool = defineTool({
     state: z.enum(["busy", "idle"]).optional().describe("list: only busy or idle"),
     project: z.string().min(1).optional().describe("list: folder contains"),
     before: z.string().max(100).optional().describe("read, search: the `before=` cursor of the previous page"),
+    offset: z.number().int().min(0).optional().describe("read, with limit=1 (a session of this project): start this many characters into the message that `before=` names; copy both from the cut line"),
     timeoutSeconds: z.number().int().min(1).max(120).optional().describe("wait: seconds to wait, default 60"),
   }),
   permissionFor(args, context): ToolPermission {
@@ -92,7 +93,7 @@ export const threadsTool = defineTool({
     const result = args.action === "list" ? port.list(args.limit, { mine: args.mine, scope: args.scope, directory: args.directory, query: args.query, state: args.state, project: args.project })
       : args.action === "start" ? await (port.start?.({ directory: args.directory!, text, title: args.title }) ?? Promise.resolve({ ok: false as const, message: "starting sessions is not available here" }))
       : args.action === "stats" ? port.stats({ sessionId: args.sessionId })
-      : args.action === "read" ? await port.read({ sessionId, limit: args.limit, before: args.before })
+      : args.action === "read" ? await port.read({ sessionId, limit: args.limit, before: args.before, offset: args.offset })
       : args.action === "search" ? await port.search({ sessionId, query: text, limit: args.limit, before: args.before })
       : args.action === "message" ? await port.message({ sessionId, text, ...elsewhere })
       : args.action === "wait" ? await port.wait({ sessionId, timeoutSeconds: args.timeoutSeconds, signal: context.signal, ...elsewhere })

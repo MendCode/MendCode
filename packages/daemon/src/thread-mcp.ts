@@ -13,6 +13,7 @@ import type { createOrchestrationReceipts } from "./orchestration-receipts"
 
 const target = { sessionId: z.string().min(4).max(64) }
 const paging = { limit: z.number().int().min(1).max(10).optional(), before: z.string().max(100).optional() }
+const reading = { ...paging, offset: z.number().int().min(0).optional() }
 /** The list takes up to 100 (a larger number is not an error: 100 come back); read and search pages stay at 10. */
 const listing = { limit: z.number().min(1).optional(), query: z.string().min(1).optional(), state: z.enum(["busy", "idle"]).optional() }
 const retry = { clientRequestId: z.string().min(1).max(128).optional() }
@@ -25,7 +26,7 @@ const schemas = {
   thread_create: z.strictObject({ title: z.string().min(1).max(80), ...retry }),
   thread_message: z.strictObject({ ...target, text: z.string().min(1).max(8_000), ...retry }),
   thread_wait: z.strictObject({ ...target, timeoutSeconds: z.number().int().min(1).max(120).optional() }),
-  thread_read: z.strictObject({ ...target, ...paging }),
+  thread_read: z.strictObject({ ...target, ...reading }),
   thread_search: z.strictObject({ ...target, ...paging, query: z.string().min(1).max(8_000) }),
   thread_interrupt: z.strictObject({ ...target, ...retry }),
   delegate_task: z.strictObject({
@@ -48,7 +49,7 @@ const descriptions: Record<Name, string> = {
   thread_create: "Create an idle child thread in this project with inherited permissions. Use thread_message to start it.",
   thread_message: "Send a self-contained message to another project thread. Normal approvals and peer rate limits apply.",
   thread_wait: "Wait until a project thread is idle and read its latest answer. Timeout does not cancel it.",
-  thread_read: "Read a bounded, redacted page of another project thread. Reasoning is excluded.",
+  thread_read: "Read a bounded, redacted page of another project thread (messages cut short). limit=1 reads the newest message whole (up to 24000 characters; offset reads on). Reasoning is excluded.",
   thread_search: "Search a bounded page of another project thread. Follow the before cursor for older history.",
   thread_interrupt: "Interrupt the running turn of another project thread.",
   delegate_task: "Start a child agent on any configured engine, with its own model and effort (xhigh etc.) in this call, with fresh context and inherited permission ceiling. Default: async; background=false waits for completion. task_id continues a child you started, with its history; add model to go on with another model (after a usage limit, or a cheaper one). bare=true (task_bare, only if the user asks): no instructions, memories or skills.",
@@ -248,7 +249,7 @@ export function createThreadMcp(options: {
               case "thread_list": return input.threads.list(args.limit as number | undefined, { query: args.query as string | undefined, state: args.state as "busy" | "idle" | undefined })
               case "thread_create": return input.create(String(args.title))
               case "thread_message": return input.threads.message(args as { sessionId: string; text: string })
-              case "thread_read": return input.threads.read(args as { sessionId: string; limit?: number; before?: string })
+              case "thread_read": return input.threads.read(args as { sessionId: string; limit?: number; before?: string; offset?: number })
               case "thread_search": return input.threads.search(args as { sessionId: string; query: string; limit?: number; before?: string })
               case "thread_wait": return input.threads.wait({ ...args as { sessionId: string; timeoutSeconds?: number }, signal })
               case "thread_interrupt": return input.threads.interrupt(args as { sessionId: string })

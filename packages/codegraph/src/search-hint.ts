@@ -39,13 +39,13 @@ function declarations(graph: Graph, term: string): GraphNode[] {
 const callersOf = (graph: Graph, node: GraphNode): GraphNode[] =>
   (graph.callers.get(node.id) ?? []).map((id) => graph.byId.get(id)).filter((caller): caller is GraphNode => caller !== undefined).sort((a, b) => a.path.localeCompare(b.path) || a.start - b.start)
 
-/** The files a block for `terms` would cite, so their freshness can be checked before it is written. */
-export function searchHintFiles({ graph, terms }: { graph: Graph; terms: readonly string[] }): string[] {
+/** The files a block for `terms` would cite once the files in `stale` are left out, so their freshness can be checked before it is written. */
+export function searchHintFiles({ graph, terms, stale }: { graph: Graph; terms: readonly string[]; stale?: ReadonlySet<string> | undefined }): string[] {
   const paths = new Set<string>()
   for (const term of terms) {
-    const found = declarations(graph, term)
+    const found = declarations(graph, term).filter((node) => !stale?.has(node.path))
     for (const node of found.slice(0, 1 + SEARCH_HINT.others)) paths.add(node.path)
-    if (found[0]) for (const caller of callersOf(graph, found[0]).slice(0, SEARCH_HINT.callers * 2)) paths.add(caller.path)
+    if (found[0]) for (const caller of callersOf(graph, found[0]).filter((node) => !stale?.has(node.path)).slice(0, SEARCH_HINT.callers)) paths.add(caller.path)
   }
   return [...paths]
 }
@@ -89,14 +89,24 @@ function indexedRoot(cacheDir: string, exists: (file: string) => boolean, direct
   return undefined
 }
 
-async function staleFiles(graph: Graph, root: string, paths: readonly string[]): Promise<Set<string>> {
+/**
+ * The files among those the block would cite that changed since they were indexed. A stale file is left out and the next declaration or
+ * caller takes its place, so the check repeats for the files that take over until the block cites only files that were checked.
+ */
+async function staleFiles({ graph, root, terms }: { graph: Graph; root: string; terms: readonly string[] }): Promise<Set<string> | undefined> {
   const stale = new Set<string>()
-  await Promise.all(paths.map(async (path) => {
-    const indexed = graph.files.get(path)
-    const now = await stat(join(root, path)).catch(() => undefined)
-    if (!indexed || !now || now.mtimeMs !== indexed.mtimeMs || now.size !== indexed.size) stale.add(path)
-  }))
-  return stale
+  const checked = new Set<string>()
+  for (let round = 0; round < 8; round++) {
+    const next = searchHintFiles({ graph, terms, stale }).filter((path) => !checked.has(path))
+    if (!next.length) return stale
+    await Promise.all(next.map(async (path) => {
+      checked.add(path)
+      const indexed = graph.files.get(path)
+      const now = await stat(join(root, path)).catch(() => undefined)
+      if (!indexed || !now || now.mtimeMs !== indexed.mtimeMs || now.size !== indexed.size) stale.add(path)
+    }))
+  }
+  return undefined
 }
 
 /**
@@ -120,7 +130,8 @@ export function createSearchHints({ cacheDir, indexer, exists = existsSync, allo
       if (!root || allowed?.(root) === false) return undefined
       const graph = await (await indexer()).cached(root)
       if (!graph) return undefined
-      const stale = await staleFiles(graph, root, searchHintFiles({ graph, terms }))
+      const stale = await staleFiles({ graph, root, terms })
+      if (!stale) return undefined
       // A search run below the indexed folder reads paths relative to its own directory: say where these start.
       return searchHint({ graph, terms, stale, ...(root !== cwd ? { note: `(paths are relative to ${root})` } : {}) })
     })().catch(() => undefined)

@@ -473,3 +473,20 @@ test("formatting helpers: compact tokens, bars with eighth blocks and sparklines
   expect(bar(0.55, 10, "primary").map((span) => span.text).join("")).toBe("█████▌░░░░")
   expect(sparkline([1, 5, 9], 8)).toBe("▁▅█")
 })
+
+test("a game kept after the compaction survives a narrow terminal and is back when the terminal widens", async () => {
+  const harness = await compacting("arcade")
+  await harness.type("\t")
+  await harness.type("\x1b[C")
+  harness.finish()
+  harness.app.render()
+  expect(text(harness)).toContain("compaction done · esc to close")
+  harness.size.width = 30
+  harness.app.render()
+  harness.app.render()
+  expect(text(harness)).not.toContain("Snake")
+  harness.size.width = 100
+  harness.app.render()
+  expect(text(harness)).toContain("Arcade · Snake")
+  expect(text(harness)).toContain("compaction done · esc to close")
+})

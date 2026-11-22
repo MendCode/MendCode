@@ -121,6 +121,14 @@ describe("chats other programs keep for the project", () => {
     expect(out(await port.read({ sessionId: `codex:${ELSEWHERE}` }))).toContain("no chat")
   })
 
+  test("an offset is refused for another program's chat, which is read in clipped pages, instead of repeating the same prefix", async () => {
+    const { port } = world()
+    const refused = await port.read({ sessionId: `codex:${CODEX}`, limit: 1, offset: 1_500 })
+    expect(refused.ok).toBe(false)
+    expect(out(refused)).toContain("offset reads a message of a session of this project")
+    expect(out(await port.read({ sessionId: `codex:${CODEX}`, limit: 1, offset: 0 }))).toContain("[assistant] Two files.")
+  })
+
   test("another program's chat always asks before it is read and cannot be messaged, waited on or interrupted", async () => {
     const { port } = world()
     const context = { threads: port } as never

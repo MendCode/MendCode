@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.19 - 2026-11-21
+
+Everything since v0.0.17 comes to stable, v0.0.18 included. Bots (`experimental.bots`) with a face, a page, memory, skills and schedules, Hermes Agent bots, and a model you pick in a bot's chat that runs there. The sessions list starts a chat in any folder with `+`, orders by what you sent and holds still under the pointer. `/today` is one chat per day that sorts memories with you. Long chats scroll and switch faster with less memory. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when started again. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, and the compaction arcade has more games.
+
+### Upgrade notes
+
+- Same code as v0.0.19-beta.3.
+
+## v0.0.19-beta.3 - 2026-11-21
+
+The sessions list starts a chat in any folder with `+` or `n`, orders by what you sent and holds still under the pointer, and a working Hermes bot shows what it runs. `/today` is one chat per day on the main model that sorts memories with you and learns what you want in it. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when a message starts them again; a session with many of them opens at once. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, a model picked in a bot's chat runs there, and the compaction arcade has seven more games that stay when compaction ends.
+
 ### New
 
 - Ask the main agent how far along a running sub-agent is and it now answers: a short summary of what the sub-agent has done, what it is doing and what seems left, with an estimate labelled as such or "cannot estimate". It is written by a cheap model only when you ask, from the sub-agent's recorded work, for MendCode's sub-agents and for Claude Code's own.
@@ -35,6 +47,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A finished sub-agent's report now reaches the model whole: the completion notice carries it, and reading the child's thread with `limit=1` returns its last message in full instead of cut off.
+- Compacting a bot chat that runs on Claude Code now goes to Claude Code instead of answering "Nothing to compact".
 - Launching a sub-agent with a given model and reasoning effort is now one call: the `task` tool and the `delegate_task` bridge tool take `effort` (or `variant`) next to `model`, so no agent file is needed, and an effort the model does not have is refused naming the valid ones.
 - Opening a session while many of its sub-agents write at once no longer waits on them: the daemon stays responsive, and uses less CPU whenever any session streams, in a data directory that has run many sub-agents.
 - Interrupting another session with `threads` now says when that session's queue was left held and that the user must release it; before, the answer said the queue was untouched and the calling session waited for work that did not start. The held queue of the interrupted session names the session that cancelled it instead of saying "your cancel".
@@ -797,7 +811,7 @@ how you work, and the daemon holds less memory while it runs commands.
 - PR reviewer: the verify pass scores each finding from 0 to 10, shown small on the comment; `min_score` in `.mendcode/review.yaml` hides the lower ones and the higher scores come first before `cap` cuts. See [PR reviewer](docs/pr-review.md).
 - PR reviewer: `fallback_models` names models a review moves to when its own model fails or is not available (never for a quota); the review says which model reviewed.
 - PR reviewer: hunks that only delete lines are sent as one line, and a diff too large for one call keeps the repository's main language longest, so reviews read fewer tokens.
-- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing Symbex-1#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
+- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing shop-api#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
 - `/reviews` lists one row per pull request with its earlier runs in the detail, so Failed holds only PRs whose last run failed; running rows show their live phase and time, done ones what they found, and this daemon's own jobs say `this device`.
 
 - With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).

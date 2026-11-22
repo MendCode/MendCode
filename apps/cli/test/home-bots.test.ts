@@ -19,7 +19,7 @@ const bot = (name: string, state: Bot["state"], sessions: Array<{ sessionId?: st
 const report = (bots: Bot[], external: BotListReport["external"] = []): BotListReport => ({ bots, external, problems: [] })
 
 const five = report([
-  bot("mendy", "working"), bot("Aurora", "working"), bot("Kai", "working"), bot("Zed", "working"), bot("Nora", "working"), bot("Lia", "working"), bot("Omar", "working"),
+  bot("scout", "working"), bot("Aurora", "working"), bot("Kai", "working"), bot("Zed", "working"), bot("Nora", "working"), bot("Lia", "working"), bot("Omar", "working"),
   bot("Laura", "waiting"), bot("Hugo", "problem"), bot("Quiet", "idle"),
 ])
 /** A bot's icon: the glyph of its shape, which its name decides. */
@@ -32,7 +32,7 @@ describe("the Bots block", () => {
     console.log(out.map((row) => `|${row}|`).join("\n"))
     expect(out).toHaveLength(4)
     expect(out[0]).toBe("Bots")
-    expect(out[1]).toMatch(new RegExp(`^${G} mendy {2}${G} Aurora {2}${G} Kai.* \\+ \\d more +working$`))
+    expect(out[1]).toMatch(new RegExp(`^${G} scout {2}${G} Aurora {2}${G} Kai.* \\+ \\d more +working$`))
     expect(out[2]).toMatch(new RegExp(`^${G} Laura +waiting$`))
     expect(out[3]).toMatch(new RegExp(`^${G} Hugo +problem$`))
     for (const row of out.slice(1)) expect(textWidth(row)).toBe(54)
@@ -45,7 +45,7 @@ describe("the Bots block", () => {
   })
 
   test("a state nobody is in has no row, and bots of other apps are listed with MendCode's", () => {
-    const mixed = report([bot("mendy", "working")], [{ origin: "hermes", id: "p1", name: "Hermes", state: "waiting" }, { origin: "hermes", id: "p2", name: "Idle one", state: "idle" }])
+    const mixed = report([bot("scout", "working")], [{ origin: "hermes", id: "p1", name: "Hermes", state: "waiting" }, { origin: "hermes", id: "p2", name: "Idle one", state: "idle" }])
     const out = rows({ entries: homeBotEntries(mixed, false), width: 60 })
     expect(out).toHaveLength(3)
     expect(out[1]).toMatch(/working$/)
@@ -55,11 +55,11 @@ describe("the Bots block", () => {
   test("narrow widths drop the names first, then fold the rest into `+N`", () => {
     const narrow = rows({ entries: homeBotEntries(five, false), width: 28 })
     console.log(narrow.map((row) => `|${row}|`).join("\n"))
-    expect(narrow[1]).not.toContain("mendy")
+    expect(narrow[1]).not.toContain("scout")
     // Narrow rows say the state with its mark alone.
     expect(rows({ entries: homeBotEntries(five, false), width: 20 })[1]).toMatch(/ ●$/)
     // Wide enough for two names they stay; one name of many is not worth the icons it hides.
-    expect(rows({ entries: homeBotEntries(five, false), width: 50 })[1]).toContain("mendy")
+    expect(rows({ entries: homeBotEntries(five, false), width: 50 })[1]).toContain("scout")
     for (const row of narrow) expect(textWidth(row)).toBeLessThanOrEqual(28)
     const tiny = rows({ entries: homeBotEntries(five, false), width: 14 })
     for (const row of tiny) expect(textWidth(row)).toBeLessThanOrEqual(14)
@@ -78,7 +78,7 @@ describe("the Bots block", () => {
 
   test("ASCII terminals get ASCII glyphs and marks", () => {
     const out = rows({ entries: homeBotEntries(five, true), width: 60, ascii: true })
-    expect(out[1]).toMatch(/^(\(\)|\[\]|<>|\/\\|\{\}) mendy.* working$/)
+    expect(out[1]).toMatch(/^(\(\)|\[\]|<>|\/\\|\{\}) scout.* working$/)
     expect(out[2]).toMatch(/waiting$/)
     expect(out[3]).toMatch(/problem$/)
     // A narrow ASCII row says the state with an ASCII mark.
@@ -89,15 +89,15 @@ describe("the Bots block", () => {
   test("the bot's cells are hits, and the selected one is highlighted with a theme role", () => {
     const entries = homeBotEntries(five, false)
     const plain = renderHomeBots({ entries, width: 54 })
-    expect(plain.hits.map((hit) => hit.id)).toContain(`${HOME_BOT_PREFIX}mendcode:mendy`)
-    const hit = plain.hits.find((candidate) => candidate.id.endsWith(":mendy"))!
-    expect(text(plain.lines[hit.row]!).slice(hit.from, hit.to)).toMatch(new RegExp(`^${G} mendy$`))
+    expect(plain.hits.map((hit) => hit.id)).toContain(`${HOME_BOT_PREFIX}mendcode:scout`)
+    const hit = plain.hits.find((candidate) => candidate.id.endsWith(":scout"))!
+    expect(text(plain.lines[hit.row]!).slice(hit.from, hit.to)).toMatch(new RegExp(`^${G} scout$`))
     const selected = renderHomeBots({ entries, width: 54, selectedId: hit.id })
-    expect(selected.lines[hit.row]!.some((span) => span.bg === "element" && span.text === "mendy")).toBe(true)
+    expect(selected.lines[hit.row]!.some((span) => span.bg === "element" && span.text === "scout")).toBe(true)
   })
 
   test("a bot's chat is the one at work, else its newest", () => {
-    const chats = report([bot("mendy", "working", [{ sessionId: "ses_old", status: "running", updatedAt: 1 }, { sessionId: "ses_new", status: "idle", updatedAt: 9 }]), bot("lone", "problem", [{ sessionId: "ses_a", status: "failed", updatedAt: 2 }, { sessionId: "ses_b", status: "failed", updatedAt: 5 }]), bot("empty", "waiting")])
+    const chats = report([bot("scout", "working", [{ sessionId: "ses_old", status: "running", updatedAt: 1 }, { sessionId: "ses_new", status: "idle", updatedAt: 9 }]), bot("lone", "problem", [{ sessionId: "ses_a", status: "failed", updatedAt: 2 }, { sessionId: "ses_b", status: "failed", updatedAt: 5 }]), bot("empty", "waiting")])
     const entries = homeBotEntries(chats, false)
     expect(entries.map((entry) => entry.chat)).toEqual(["ses_old", "ses_b", undefined])
   })
@@ -117,8 +117,8 @@ describe("the Bots block inside the home", () => {
     expect(botsAt).toBeGreaterThan(agentAt)
     // The title starts in the Agent View's own column.
     expect(out[botsAt]!.indexOf("Bots")).toBe(out[agentAt]!.indexOf("Completed"))
-    const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
-    expect(out[mendy.row]!.slice(mendy.from, mendy.to)).toMatch(new RegExp(`^${G} mendy$`))
+    const scout = hits.find((hit) => hit.id.endsWith(":scout"))!
+    expect(out[scout.row]!.slice(scout.from, scout.to)).toMatch(new RegExp(`^${G} scout$`))
   })
 
   test("a root or a session title that says `Bots` does not take the block's place: the hits stay on the block", () => {
@@ -126,17 +126,17 @@ describe("the Bots block inside the home", () => {
       let hits: Array<{ row: number; from: number; to: number; id: string }> = []
       const titled = [{ id: "s0", title: "Bots", state: "working" as const, updatedAt: NOW, startedAt: NOW - 1000 }, ...sessions]
       const out = renderHome({ ...base, root: "~/Code/Bots", sessions: titled, width: layout === "split" ? 170 : 100, height: 40, look: { layout }, bots: bots((found) => { hits = found as typeof hits }) }).map(text)
-      const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
-      expect(mendy, layout).toBeDefined()
-      expect(out[mendy.row]!.slice(mendy.from, mendy.to), layout).toMatch(new RegExp(`^${G} mendy$`))
+      const scout = hits.find((hit) => hit.id.endsWith(":scout"))!
+      expect(scout, layout).toBeDefined()
+      expect(out[scout.row]!.slice(scout.from, scout.to), layout).toMatch(new RegExp(`^${G} scout$`))
     }
   })
 
   test("the same block is drawn in the split layout", () => {
     let hits: Array<{ row: number; from: number; to: number; id: string }> = []
     const out = renderHome({ ...base, width: 170, height: 40, look: { layout: "split" }, bots: bots((found) => { hits = found as typeof hits }) }).map(text)
-    const mendy = hits.find((hit) => hit.id.endsWith(":mendy"))!
-    expect(out[mendy.row]!.slice(mendy.from, mendy.to)).toMatch(new RegExp(`^${G} mendy$`))
+    const scout = hits.find((hit) => hit.id.endsWith(":scout"))!
+    expect(out[scout.row]!.slice(scout.from, scout.to)).toMatch(new RegExp(`^${G} scout$`))
   })
 
   test("without a bots block the Agent View is laid out once, not once more to size the block", () => {
@@ -194,7 +194,7 @@ describe("the Bots block on the home screen of the app", () => {
     const hermesChat = ids("session")
     const list: SessionSummary[] = [{ sessionId: current, title: "Fresh", directory: "/work/app", createdAt: NOW, updatedAt: NOW, lastSeq: 0, state: "idle", queued: 0 }]
     const bots = report([
-      bot("mendy", "working", [{ sessionId: chat, status: "running", updatedAt: NOW }]),
+      bot("scout", "working", [{ sessionId: chat, status: "running", updatedAt: NOW }]),
       bot("Laura", "waiting"),
       bot("Hugo", "idle"),
     ], [{ origin: "hermes", id: "p1", name: "Hermes", state: "problem", projects: [{ directory: "/work/app", state: "problem", sessions: [{ sessionId: hermesChat as never, title: "chat", status: "failed", updatedAt: NOW }] }] }])
@@ -229,7 +229,7 @@ describe("the Bots block on the home screen of the app", () => {
     const screen = h.text()
     console.log(screen.filter((row) => row.trim()).join("\n"))
     const joined = screen.join("\n")
-    expect(joined).toMatch(new RegExp(`Bots *\\n[│ ]*${G} mendy +working`))
+    expect(joined).toMatch(new RegExp(`Bots *\\n[│ ]*${G} scout +working`))
     expect(joined).toMatch(new RegExp(`${G} Laura +waiting`))
     expect(joined).toMatch(new RegExp(`${G} Hermes +problem`))
     expect(joined).not.toContain("Hugo")
@@ -248,7 +248,7 @@ describe("the Bots block on the home screen of the app", () => {
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
     h.app.render()
     const after = h.text().join("\n")
-    expect(after).not.toMatch(/mendy +working/)
+    expect(after).not.toMatch(/scout +working/)
     expect(after).toMatch(new RegExp(`${G} Laura +waiting`))
     expect(h.sentOf("bot.list")).toHaveLength(asked)
   })
@@ -272,15 +272,15 @@ describe("the Bots block on the home screen of the app", () => {
     const h = homeApp({ now: () => clock, listFails: true })
     await Bun.sleep(20)
     h.app.render()
-    expect(h.text().join("\n")).not.toContain("mendy")
+    expect(h.text().join("\n")).not.toContain("scout")
     h.down.listing = false
     clock += 1500
-    await until(h, "mendy")
+    await until(h, "scout")
   })
 
   test("Enter on a bot opens its most recent chat", async () => {
     const h = homeApp()
-    await until(h, "mendy")
+    await until(h, "scout")
     // Down enters the list: the first stop is the first bot drawn.
     await h.type("\x1b[B")
     h.app.render()
@@ -291,7 +291,7 @@ describe("the Bots block on the home screen of the app", () => {
   test("Enter on a bot of another app opens the chat it has on its chat model", async () => {
     const h = homeApp()
     await until(h, "Hermes")
-    // Stops in screen order: mendy (working), Laura (waiting), Hermes (problem).
+    // Stops in screen order: scout (working), Laura (waiting), Hermes (problem).
     for (let step = 0; step < 3; step++) await h.type("\x1b[B")
     await h.type("\r")
     expect(h.app.sessionId).toBe(h.hermesChat)
@@ -299,7 +299,7 @@ describe("the Bots block on the home screen of the app", () => {
 
   test("once the left list holds a bot report the home reuses it: a reconnect or a push asks nothing for the home", async () => {
     const h = homeApp({ width: 180 })
-    await until(h, "mendy")
+    await until(h, "scout")
     await Bun.sleep(20)
     h.app.render()
     // The first frame may ask beside the left list (it had no report yet); after that the home takes the list's report.
@@ -308,27 +308,27 @@ describe("the Bots block on the home screen of the app", () => {
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
     await Bun.sleep(5)
     h.app.render()
-    expect(h.text().join("\n")).not.toMatch(/mendy +working/)
+    expect(h.text().join("\n")).not.toMatch(/scout +working/)
     expect(h.sentOf("bot.list").length).toBe(asked)
   })
 
   test("with the left list hidden, the home no longer takes its report: a bot that went idle leaves the working row", async () => {
     const h = homeApp({ width: 180 })
-    await until(h, "mendy")
+    await until(h, "scout")
     await Bun.sleep(20)
     h.app.render()
     await h.type("/sidebar hidden\r")
     h.bots.bots[0]!.state = "idle"
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: h.chat, directory: "/work/app", title: "chat", state: "idle", updatedAt: NOW + 1000 } as never)
     for (let turn = 0; turn < 40; turn++) { await Bun.sleep(5); h.app.render() }
-    expect(h.text().join("\n")).not.toMatch(/mendy +working/)
+    expect(h.text().join("\n")).not.toMatch(/scout +working/)
   })
 
   test("a click on a bot opens its chat", async () => {
     const h = homeApp()
-    await until(h, "mendy")
-    const row = h.text().findIndex((line) => line.includes("mendy"))
-    const col = h.text()[row]!.indexOf("mendy")
+    await until(h, "scout")
+    const row = h.text().findIndex((line) => line.includes("scout"))
+    const col = h.text()[row]!.indexOf("scout")
     await h.type(`\x1b[<0;${col + 1};${row + 1}M\x1b[<0;${col + 1};${row + 1}m`)
     expect(h.app.sessionId).toBe(h.chat)
   })

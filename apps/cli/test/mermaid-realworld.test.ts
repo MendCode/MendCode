@@ -136,7 +136,7 @@ const realistic: Array<{ name: string; source: string; labels: string[] }> = [
         C["Credenciales de proveedores<br/>y API de InstaBox"]
         D["Ejecutor de builds<br/>Cola: 1 trabajo simultáneo"]
         E["Resultados<br/>Artefactos + logs + estado"]
-        P["TerraPredict: producción<br/>Fuera del entorno de desarrollo"]
+        P["WeatherApp: producción<br/>Fuera del entorno de desarrollo"]
         C -->|"Solo procesos autorizados"| B
         B --> D
         E --> B
@@ -155,7 +155,7 @@ const realistic: Array<{ name: string; source: string; labels: string[] }> = [
     M --> N{"¿Eliminación confirmada?"}
     N -->|"Sí"| O["Cerrar trabajo"]
     N -->|"No"| Q["Avisar y dejar limpieza pendiente<br/>No declarar el entorno limpio"]`,
-    labels: ["Laptop ligera", "Tu VPS", "MendCode", "Credenciales", "Ejecutor de builds", "Resultados", "TerraPredict", "SSH cifrado", "InstaBox temporal", "Cerrar trabajo"],
+    labels: ["Laptop ligera", "Tu VPS", "MendCode", "Credenciales", "Ejecutor de builds", "Resultados", "WeatherApp", "SSH cifrado", "InstaBox temporal", "Cerrar trabajo"],
   },
   {
     name: "flowchart with subgraphs and decisions",
@@ -302,9 +302,9 @@ describe("realistic model-style diagrams", () => {
   }
 })
 
-describe("a long-labelled LR flowchart with <br/> (Vorlen pipeline)", () => {
+describe("a long-labelled LR flowchart with <br/> (Scout pipeline)", () => {
   const source = `flowchart LR
-  V[Vorlen: chief of staff<br/>prioridades, cola de tareas] --> P[Planner caro<br/>rol plan: Opus/Astra<br/>escribe la tarea con criterios]
+  V[Scout: chief of staff<br/>prioridades, cola de tareas] --> P[Planner caro<br/>rol plan: Opus/Astra<br/>escribe la tarea con criterios]
   P --> W[Workflow MendCode]
   W --> E1[Worker barato A<br/>worktree]
   W --> E2[Worker barato B<br/>worktree]
@@ -320,14 +320,14 @@ describe("a long-labelled LR flowchart with <br/> (Vorlen pipeline)", () => {
       const rows = draw(source, width)
       for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(width)
       const all = rows.join("\n")
-      for (const word of ["Vorlen:", "prioridades,", "Planner", "Workflow", "MendCode", "contract.checks", "verify", "Auditor", "automático", "Advisor", "momentos"]) expect(all).toContain(word)
+      for (const word of ["Scout:", "prioridades,", "Planner", "Workflow", "MendCode", "contract.checks", "verify", "Auditor", "automático", "Advisor", "momentos"]) expect(all).toContain(word)
       expect(all.match(/Worker barato/g)).toHaveLength(2)
     })
   }
 
   test("a <br/> stays a line break when the labels are wrapped narrower", () => {
     const all = draw(source, 100).join("\n")
-    expect(all).toMatch(/Vorlen: chief of staff\s*│/)
+    expect(all).toMatch(/Scout: chief of staff\s*│/)
     expect(all).toMatch(/prioridades, cola de tareas\s*│/)
   })
 })

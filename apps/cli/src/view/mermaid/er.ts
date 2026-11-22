@@ -82,14 +82,19 @@ export function renderErDiagram(input: string, width: number): string | undefine
   if (currentEntity || (relationDefinitions.length === 0 && attributes.size === 0)) return undefined
   // An alias replaces its id everywhere, unless two entities would end up with one name.
   const taken = new Set([...attributes.keys(), ...relationDefinitions.flatMap((relation) => [relation.from, relation.to])].filter((id) => !aliases.has(id)))
+  const display = new Map<string, string>()
   for (const [id, alias] of aliases) {
     if (taken.has(alias)) continue
     taken.add(alias)
+    display.set(id, alias)
+  }
+  if (display.size) {
+    // Names come from the original ids in one pass: renaming in place would chain a→b→c and merge distinct entities.
     for (const relation of relationDefinitions) {
-      if (relation.from === id) relation.from = alias
-      if (relation.to === id) relation.to = alias
+      relation.from = display.get(relation.from) ?? relation.from
+      relation.to = display.get(relation.to) ?? relation.to
     }
-    const renamed = [...attributes].map(([key, fields]) => [key === id ? alias : key, fields] as const)
+    const renamed = [...attributes].map(([key, fields]) => [display.get(key) ?? key, fields] as const)
     attributes.clear()
     for (const [key, fields] of renamed) attributes.set(key, fields)
   }

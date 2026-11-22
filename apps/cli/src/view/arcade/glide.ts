@@ -86,6 +86,9 @@ export const glide: ArcadeDefinition = {
           grace = CRASH_GRACE
         }
       },
+      settle() {
+        if (crashed && grace > 0) grace--
+      },
       key(key: ArcadeKey) {
         if (key === "restart") return reset()
         if (key !== "space" && key !== "up") return

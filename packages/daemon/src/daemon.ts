@@ -1254,7 +1254,8 @@ export async function startDaemon(options: DaemonOptions) {
       now: () => clock.now(),
       tasks: { get: (id) => tasks.get(id), list: (parent) => tasks.list(parent) },
       events: {
-        tail: (id, limit) => store.readAfter(id, Math.max(0, (store.lastSeq(id) ?? 0) - limit), limit),
+        // Sequence numbers are not dense (streamed deltas are folded out), so the newest events are read by count.
+        tail: (id, limit) => store.readBefore(id, undefined, limit),
         head: (id, limit) => store.readAfter(id, 0, limit),
       },
       ask: async ({ sessionId, system, prompt, signal: outer }) => {
@@ -1570,6 +1571,10 @@ export async function startDaemon(options: DaemonOptions) {
   function pickedModelKey(sessionId: SessionId) {
     return `session.model-picked:${sessionId}`
   }
+  /** A session that inherits the model and the agent of another keeps the pick that made that model win over the agent's. */
+  function inheritPickedModel(from: SessionId, to: SessionId) {
+    if (store.meta.get(pickedModelKey(from))) store.meta.set(pickedModelKey(to), "1")
+  }
   /** What a session without a model of its own follows in its project: the `main` role, else the catalog's default model. */
   const followedDefault = (sessionId: SessionId): ModelChoice => {
     const main = rolesFor(store.settings.get(), store.sessionDirectory(sessionId)).main
@@ -1741,8 +1746,11 @@ export async function startDaemon(options: DaemonOptions) {
       } finally { lease?.release() }
     },
     async compact(turn) {
-      const selected = agentModelOf(turn.sessionId, catalog, turn.selection?.agent) ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
+      const agentModel = agentModelOf(turn.sessionId, catalog, turn.selection?.agent)
+      const selected = agentModel ?? turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(selected)) return retiredEngineError
+      // Like a turn, a bot's compaction names the bot's model so the engine router picks the engine its turns ran on, not the session's default.
+      if (agentModel && turn.selection?.model?.model !== agentModel.model) turn = { ...turn, selection: { ...turn.selection, model: agentModel } }
       if (options.info?.engine !== "native") {
         const model = resolveModel({ role: "compaction", roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
         try { await budgets.guard({ model: model.model, signal: turn.signal }) }
@@ -2595,12 +2603,13 @@ export async function startDaemon(options: DaemonOptions) {
     const rule = todayMemoryRule(target.directory, target.category)
     if (rule === "decline") return undefined
     const memoryId = ids("memory")
+    const safe = entry.kind === "archive" ? { text: target.text, count: 0 } : redactSecrets(entry.text)
     store.memories.add({
       memoryId,
       scope: target.scope,
       ...(target.directory ? { directory: target.directory } : {}),
       ...(target.profile ? { profile: target.profile } : {}),
-      text: entry.kind === "archive" ? target.text : redactSecrets(entry.text).text,
+      text: safe.text,
       category: target.category,
       status: "pending",
       source: "agent",
@@ -2609,7 +2618,8 @@ export async function startDaemon(options: DaemonOptions) {
       reason: entry.reason,
     })
     announceMemory(memoryId, "added")
-    if (rule === "accept") decidePendingMemory(memoryId, true)
+    // A revision whose text had a secret redacted waits for the user, as a new proposal does.
+    if (rule === "accept" && !safe.count) decidePendingMemory(memoryId, true)
     return memoryId
   }
 
@@ -3931,7 +3941,7 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
-  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); return snapshot !== undefined && snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
+  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); /* No actor yet: a stored queue is restored held (createSessionActor), so it waits for the user. */ return snapshot === undefined || snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
   const loopControl = async (command: Parameters<ReturnType<typeof import("./loop-control").createLoopControl>>[0]) => {
     const { createLoopControl } = await import("./loop-control")
     return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)
@@ -4214,6 +4224,7 @@ export async function startDaemon(options: DaemonOptions) {
           store.sessionTree.recordFork({ sessionId: id, parentId: command.sessionId })
           store.setSessionModel(id, store.sessionModel(command.sessionId))
           store.setSessionAgent(id, store.sessionAgent(command.sessionId))
+          inheritPickedModel(command.sessionId, id)
           announceSession(id, source.directory)
           const actor = actorFor(id)
           const mode = store.permissionModeOf(command.sessionId)
@@ -4245,6 +4256,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.transcript || command.beforeItemId) {
           store.setSessionModel(id, store.sessionModel(command.sessionId))
           store.setSessionAgent(id, store.sessionAgent(command.sessionId))
+          inheritPickedModel(command.sessionId, id)
         }
         // Claude Code and ACP agents keep their conversation themselves and it is not forked: the fork's first turn on one hands over the copied transcript, within the handoff cap.
         portable.inherit({ parent: command.sessionId, fork: id })
@@ -6474,6 +6486,8 @@ export async function startDaemon(options: DaemonOptions) {
           const mode = livePermission(command.sessionId)
           const target = name === "plan" ? "plan" : mode === "plan" ? "ask" : undefined
           store.setSessionAgent(command.sessionId, name === "plan" ? undefined : name)
+          // Another agent brings its own model again, as `select` does.
+          store.meta.set(pickedModelKey(command.sessionId), "")
           const actor = target && target !== mode ? actorFor(command.sessionId) : undefined
           if (actor && target) await actor.handle({ id: command.id, clientId: command.clientId, type: "session.permission.set", sessionId: command.sessionId, mode: target })
         }

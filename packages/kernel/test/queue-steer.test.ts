@@ -501,6 +501,34 @@ test("send now on a message the engine already took stops the running turn, and 
   expect(s.manual.last().input.text).toBe("while the tool runs")
 })
 
+test("send now on a taken message while paused leaves the running turn alone", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  const queueId = s.queued(await s.submit("while the tool runs"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
+  await s.actor.pause(true)
+  expect(await s.command({ type: "queue.promote", queueId })).toEqual({ ok: true })
+  await flush()
+  expect(input.signal.aborted).toBe(false)
+  expect(s.manual.turns).toHaveLength(1)
+})
+
+test("send now on the second of two taken messages puts it ahead of the first", async () => {
+  const s = setup({ mode: "after-tools" })
+  await s.submit("first")
+  const input = s.manual.last().input
+  await s.submit("taken a")
+  const b = s.queued(await s.submit("taken b"))
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "taken a" })
+  expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "taken b" })
+  await s.command({ type: "queue.promote", queueId: b })
+  await flush()
+  expect(s.manual.turns).toHaveLength(2)
+  expect(s.manual.last().input.text).toBe("taken b")
+  expect(lastQueue(s)).toMatchObject([{ preview: "taken a" }])
+})
+
 test("a message taken while the tools run and not read before a cancel goes back to the queue, held, and goes with the next message", async () => {
   const s = setup({ mode: "after-tools" })
   await s.submit("first")
