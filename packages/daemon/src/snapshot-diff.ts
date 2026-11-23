@@ -24,10 +24,44 @@ export function equalFileStates(a: FileState, b: FileState) {
   return a.state === "absent" || b.state === "content" && a.mode === b.mode && bytes(a).equals(bytes(b))
 }
 
-/** Git's diff algorithm over temporary copies; never reads or writes the project's index. */
-function diffFile(snapshot: FileSnapshot): Omit<ChangedFile, "path" | "status"> {
+type FileDiff = Omit<ChangedFile, "path" | "status">
+/** Diffs kept by content: at most this many, and this much diff text in all. */
+const DIFF_MEMO_ENTRIES = 128
+const DIFF_MEMO_CHARS = 1_000_000
+const diffMemo = new Map<string, FileDiff>()
+let diffMemoChars = 0
+
+/**
+ * `gitDiff` of a pair of contents seen before is the answer given then. A session's changes are asked for again on every chat
+ * switch (the sidebar's file list) and the same pairs come back, and each `git diff` is a process started while the daemon waits:
+ * a session with a few dozen edited files held every client for hundreds of milliseconds per request.
+ */
+function diffFile(snapshot: FileSnapshot): FileDiff {
   const before = bytes(snapshot.before)
   const after = bytes(snapshot.after)
+  const key = `${before.length}:${Bun.hash(before)}:${after.length}:${Bun.hash(after)}`
+  const known = diffMemo.get(key)
+  if (known) {
+    diffMemo.delete(key)
+    diffMemo.set(key, known)
+    return { ...known }
+  }
+  const diff = gitDiff(before, after)
+  // A diff git did not finish (a timeout under load) is asked again next time.
+  if (!diff.truncated && diff.diff.length <= DIFF_MEMO_CHARS / 8) {
+    diffMemo.set(key, diff)
+    diffMemoChars += diff.diff.length
+    for (const [old, entry] of diffMemo) {
+      if (diffMemo.size <= DIFF_MEMO_ENTRIES && diffMemoChars <= DIFF_MEMO_CHARS) break
+      diffMemo.delete(old)
+      diffMemoChars -= entry.diff.length
+    }
+  }
+  return { ...diff }
+}
+
+/** Git's diff algorithm over temporary copies; never reads or writes the project's index. */
+function gitDiff(before: Buffer, after: Buffer): FileDiff {
   const binary = before.subarray(0, 8192).includes(0) || after.subarray(0, 8192).includes(0)
   if (binary) return { binary: true, additions: 0, deletions: 0, diff: "", truncated: false }
   const dir = mkdtempSync(path.join(tmpdir(), "mend-snapshot-diff-"))

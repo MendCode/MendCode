@@ -44,8 +44,19 @@ export function createParityRecords(db: Database) {
       set(id: string) { db.query("INSERT OR IGNORE INTO detached_sessions VALUES (?)").run(id) },
     },
     tasks: {
-      list(): TaskRecord[] {
-        return db.query<{ payload: string }, []>("SELECT payload FROM child_tasks").all().map((row) => TaskRecord.parse(JSON.parse(row.payload)))
+      /**
+       * Every task, or one parent's: a parent's are picked by SQLite, so a session tree or a task list (asked for every node and on
+       * every chat switch) parses and validates only that parent's records, not every task the data directory ever held.
+       */
+      list(parentId?: string): TaskRecord[] {
+        const rows = parentId === undefined
+          ? db.query<{ payload: string }, []>("SELECT payload FROM child_tasks").all()
+          : db.query<{ payload: string }, [string]>("SELECT payload FROM child_tasks WHERE json_extract(payload, '$.parentId') = ?").all(parentId)
+        return rows.map((row) => TaskRecord.parse(JSON.parse(row.payload)))
+      },
+      /** Each task's run number, read without validating whole records (the owner-wake check asks on every delivery round). */
+      generations(): Map<string, number> {
+        return new Map(db.query<{ id: string; generation: number | null }, []>("SELECT id, json_extract(payload, '$.generation') AS generation FROM child_tasks").all().map((row) => [row.id, row.generation ?? 0]))
       },
       /** One task by its id: a lookup made per session event must not read and parse every task the data directory ever held. */
       get(id: string): TaskRecord | undefined {

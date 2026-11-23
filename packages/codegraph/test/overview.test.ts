@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, readdirSync } from "node:fs"
 import { join } from "node:path"
 import { CODEGRAPH_OVERVIEW } from "@mendcode/protocol/wire"
-import { createCodeOverview, createIndexer, fileOverview } from "../src"
+import { createCodeOverview, createIndexer, fileOverview, overviewHostCommand } from "../src"
 import { project, useTempDirs } from "./helpers"
 
 const temp = useTempDirs()
@@ -107,5 +107,36 @@ describe("codegraph.overview for a daemon", () => {
     expect(failed.state === "failed" && failed.reason.startsWith("disk x")).toBe(true)
     mkdirSync(join(home, "empty"))
     expect(await createCodeOverview({ indexer: indexer(temp()), home })({ directory: join(home, "empty"), signal: signal() })).toMatchObject({ state: "ready", files: [], edges: [] })
+  })
+})
+
+describe("the overview drawn by a process of its own", () => {
+  test("a project with an index file the daemon does not hold is drawn by the host, kept while its files are unchanged, and drawn again after an edit", async () => {
+    const root = project({ root: temp(), files: FILES })
+    const cacheDir = temp()
+    // An earlier daemon left the index file; this one holds nothing of the project.
+    await indexer(cacheDir).graph({ cwd: root, signal: signal() })
+    const held = indexer(cacheDir)
+    const overview = createCodeOverview({ indexer: held, host: { command: overviewHostCommand(), cacheDir, maxFiles: 1000 } })
+    const first = await overview({ directory: root, signal: signal() })
+    expect(first).toMatchObject({ state: "ready", total: { files: 4, symbols: 4 } })
+    expect(first.state === "ready" && first.files.map((file) => file.path).slice(0, 3)).toEqual(["src/a.ts", "src/b.ts", "src/hub.ts"])
+    expect(held.peek(root)).toBeUndefined()
+    // Same files on disk: the overview kept from the host answers.
+    expect(await overview({ directory: root, signal: signal() })).toBe(first)
+    await Bun.write(join(root, "src/c.ts"), "import { hub } from \"./hub\"\nexport function c() { return hub() }\n")
+    const second = await overview({ directory: root, signal: signal() })
+    expect(second).toMatchObject({ state: "ready", total: { files: 5 } })
+    expect(held.peek(root)).toBeUndefined()
+  })
+
+  test("a host that cannot start leaves the drawing to the daemon's own indexer", async () => {
+    const root = project({ root: temp(), files: FILES })
+    const cacheDir = temp()
+    await indexer(cacheDir).graph({ cwd: root, signal: signal() })
+    const held = indexer(cacheDir)
+    const report = await createCodeOverview({ indexer: held, host: { command: ["/nonexistent/overview-host"], cacheDir, maxFiles: 1000 } })({ directory: root, signal: signal() })
+    expect(report).toMatchObject({ state: "ready", total: { files: 4 } })
+    expect(held.peek(root)).toBeDefined()
   })
 })

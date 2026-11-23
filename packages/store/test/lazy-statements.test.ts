@@ -46,13 +46,58 @@ test("statements prepare on first use and reuse the native query cache", () => {
     expect(read.all()).toEqual([{ value: "first" }, { value: "second" }])
     expect(read.get()).toEqual({ value: "first" })
     expect(query).toHaveBeenCalledTimes(2)
+    // The same SQL from a new wrapper reuses the native statement the first one prepared.
     db.query("SELECT value FROM items").all()
-    expect(query.mock.results[1]!.value).toBe(query.mock.results[2]!.value)
+    expect(query).toHaveBeenCalledTimes(2)
 
     const rollbackInsert = db.query("INSERT INTO items VALUES ('rolled back')")
     expect(() => db.transaction(() => { rollbackInsert.run(); throw new Error("rollback") })()).toThrow("rollback")
     expect(read.all()).toHaveLength(2)
   } finally { query.mockRestore(); db.close() }
+})
+
+test("past Bun's own cache of 20 texts, each SQL text is still compiled once, and a prepared statement stays the caller's", () => {
+  const dir = tempDir()
+  const { db } = openPrivateDatabase(dir, path.join(dir, "test.db"))
+  db.run("CREATE TABLE items (value TEXT)")
+  const query = spyOn(Database.prototype, "query")
+  try {
+    const texts = Array.from({ length: 60 }, (_, index) => `SELECT value, ${index} AS n FROM items`)
+    for (let round = 0; round < 3; round++) for (const text of texts) db.query(text).all()
+    expect(query).toHaveBeenCalledTimes(texts.length)
+    // `prepare` may be finalized by its caller (a cursor left early): the shared statement of the same text keeps working.
+    const own = db.prepare(texts[0]!)
+    own.all()
+    own.finalize()
+    expect(db.query(texts[0]!).all()).toEqual([])
+  } finally { query.mockRestore(); db.close() }
+})
+
+test("grouped writes commit together, inside a caller's transaction stay in it, and commit before a statement of their own", async () => {
+  const dir = tempDir()
+  const file = path.join(dir, "test.db")
+  const database = openPrivateDatabase(dir, file)
+  const { db } = database
+  try {
+    db.run("CREATE TABLE items (value TEXT)")
+    database.start()
+    database.group()
+    db.query("INSERT INTO items VALUES ('a')").run()
+    database.group()
+    db.query("INSERT INTO items VALUES ('b')").run()
+    // A transaction of the caller's runs as a savepoint of the group; a script run inside it does not end the group under it.
+    db.transaction(() => { db.query("INSERT INTO items VALUES ('c')").run(); db.run("INSERT INTO items VALUES ('d')") })()
+    const other = new Database(file, { readonly: true })
+    expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 })
+    await Bun.sleep(60)
+    expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 4 })
+    database.group()
+    db.query("INSERT INTO items VALUES ('e')").run()
+    // A statement run on the connection (a pragma, a script) commits the group first.
+    db.run("INSERT INTO items VALUES ('f')")
+    expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 6 })
+    other.close()
+  } finally { db.close() }
 })
 
 test("unused and used statements follow privacy connection replacements", () => {
