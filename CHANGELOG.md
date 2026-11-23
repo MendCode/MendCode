@@ -21,6 +21,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A chat reopened or reconnected (after a daemon restart, say) keeps the "took ... · ended ..." line under the last answer even when that turn was long enough to start before the first page of history.
 - `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.
 - When a session's shell is refused a profile change, the message now says to use the `profiles` tool (the user approves on a card) and that enabling or disabling needs no reload or restart.
 - A queued message the engine already holds (read when the running tool ends) shows as delivered, with no drop or edit hint, and ctrl+k or edit on it say why instead of "queued message not found".
