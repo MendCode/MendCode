@@ -19,6 +19,31 @@ export function catalogModel(catalog: ModelCatalog, id: string): ModelInfo | und
 }
 
 /**
+ * A catalog list built at most once per event-loop turn (each `readOnly` form apart). One request or one engine event asks
+ * for it many times in a row (`resolveModel`, `catalogModel`, every node of a session tree, every queued message's steer
+ * check), and each build resolves every provider and reads the settings again; a sub-agent tree made that hundreds of
+ * builds and held the daemon for a third of a second. The kept list is dropped when the turn ends, so a model connected
+ * or turned off shows from the next turn on. Callers get their own array.
+ */
+export function oncePerTurn(build: (readOnly?: boolean) => ModelInfo[]): (readOnly?: boolean) => ModelInfo[] {
+  const built = new Map<boolean, ModelInfo[]>()
+  let dropping = false
+  return (readOnly) => {
+    const key = readOnly === true
+    let list = built.get(key)
+    if (!list) {
+      list = build(readOnly)
+      built.set(key, list)
+      if (!dropping) {
+        dropping = true
+        setImmediate(() => { built.clear(); dropping = false })
+      }
+    }
+    return list.slice()
+  }
+}
+
+/**
  * The catalog id a model wrote for a sub-agent: exact, the reference `mendcode models` prints (`chatgpt/gpt-6.1-terra` is
  * `gpt-6.1-terra`, `claude/claude-opus` is `claude-opus`), or the one id whose model part (after `provider/`) is the given
  * name, case aside (`gpt-6-luna` → `openai/gpt-6-luna`). Two providers with that model stay ambiguous: undefined.

@@ -11,6 +11,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Switching between chats, bots and sub-agents no longer stalls the daemon: a chat's sub-agent tree, file changes and the session lists answer quickly in projects with many sessions and sub-agents, and every client stays responsive while they load.
+- The daemon holds far less memory with the code panel open across projects: a project's code graph for the Galaxy panel is loaded by a short-lived process of its own, and opening the same project again reuses its last overview while its files are unchanged.
+- Streaming replies take less of the daemon's CPU: their deltas are written to the database in small groups instead of one commit each.
 - Switching between sub-agents is faster and the terminal idles lighter while they work: a sub-agent with large tool outputs is kept for the way back like any other chat, the strip and jobs count refresh at a bounded pace, and frames while output streams are capped at 30 a second.
 - `/reload` in a Claude session also ends its idle Claude Code process, so the next message starts one that reads your current plugins and hooks on the same conversation; a running turn or background task is never cut.
 
