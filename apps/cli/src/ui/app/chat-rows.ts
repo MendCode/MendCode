@@ -47,6 +47,7 @@ import type { ImagePlacement } from "../image-layer"
 import { activeTheme, type ColorName, type Line } from "../theme"
 import { subagentColor } from "../../view/agent-color"
 import { mendBeat, mendChatLines } from "../../view/mend-sprite"
+import { promptPetKind, type PromptPetKind } from "./pet-fallback"
 import type { ViewLine } from "../../view/transcript"
 import { CHART_KEY } from "../../view/chart-picture"
 import type { StripTask } from "../../view/agents-strip"
@@ -557,7 +558,7 @@ export function createChatRows(ctx: AppContext, actions: {
       sessions,
       ...(state.homeSelected ?? state.homeHover ? { selectedId: (state.homeSelected ?? state.homeHover)! } : {}),
       spinner: state.spinFrame,
-      look: { ...homeLook(profile), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
+      look: { ...homeLook(profile), ...(mascot?.none ? { logoKind: "wordmark" } : {}), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
@@ -696,13 +697,14 @@ export function createChatRows(ctx: AppContext, actions: {
   }
 
   /** Mend stands beside the prompt when chosen, and in place of a pet that half blocks would draw as noise (no pictures here). */
-  function drawsMend(): boolean {
-    if ((state.tuiProfile.pet || state.settingsNow.pet) === "mend") return true
-    const graphics = input.screen.imageProtocol === undefined ? input.pets?.images : input.screen.imageProtocol !== "off"
-    return !graphics && state.pet !== undefined && !state.pet.halfBlockLegible(state.tuiProfile.petSize)
+  function promptPet(): PromptPetKind {
+    const graphics = input.screen.imageProtocol === undefined ? input.pets?.images === true : input.screen.imageProtocol !== "off"
+    return promptPetKind({ chosen: state.tuiProfile.pet || state.settingsNow.pet || "", graphics, loaded: state.pet !== undefined, halfBlockLegible: state.pet?.halfBlockLegible(state.tuiProfile.petSize) ?? true })
   }
+  const drawsMend = () => promptPet() === "mend"
 
   function petCells(room: number): { cols: number; rows: number } | undefined {
+    if (promptPet() === "none") return undefined
     if (drawsMend()) {
       const picture = mendPictureCells()
       if (picture === "loading") return undefined
@@ -723,6 +725,10 @@ export function createChatRows(ctx: AppContext, actions: {
    */
   function drawPet(at: { rows: Line[]; bottom: number; floor: number; top: number; width: number; shown: boolean }): ImagePlacement[] {
     state.petArea = undefined
+    if (promptPet() === "none") {
+      state.pet?.setVisible(false)
+      return []
+    }
     if (at.shown && drawsMend()) {
       state.pet?.setVisible(false)
       const picture = mendPictureCells()
