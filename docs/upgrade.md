@@ -100,9 +100,17 @@ Releases contain direct binaries `mendcode-<version>-<os>-<arch>` plus `SHA256SU
 
 | Asset component | Value |
 |---|---|
-| OS | `darwin|linux`, from `process.platform` |
-| Architecture | `arm64|x64`, from `process.arch` |
+| OS | `darwin|linux|windows`, from `process.platform` |
+| Architecture | `arm64|x64`, from `process.arch` (Windows: `x64` only) |
 | Version | Release tag without its leading `v`; a dev tag stays unchanged |
+
+### Windows
+
+The asset is `mendcode-<version>-windows-x64.exe`, checked against the same `SHA256SUMS`, release index and signatures as the others. It does not go to `<data dir>/bin`: the running `mendcode.exe` is replaced where it lives, or, when `upgrade` runs from source, at the `install.ps1` location (`MENDCODE_INSTALL_DIR`, else `%LOCALAPPDATA%\Programs\mendcode\mendcode.exe`).
+
+A running program cannot be overwritten or deleted on Windows, but it can be renamed. The new file is written beside it as `mendcode.exe.new` and its SHA256 is read back from disk; then `mendcode.exe` is renamed to `mendcode.exe.old` and the new file takes its name. If that last step fails, `mendcode.exe.old` is renamed back, so `mendcode.exe` is always a whole program. The next start of MendCode removes `mendcode.exe.old`; while a daemon of the old version still runs from it, it stays, and a later `upgrade` asks you to restart the daemon (`mendcode daemon restart`) first. The installer's receipt (`.mendcode-install`) gets the new digest and keeps its tier.
+
+`--rollback` is not available on Windows: install the version you want with `mendcode upgrade <version> --force`. An architecture other than x64, or no known install location, ends with the `install.ps1` command.
 
 The initial install scripts use the same asset names and checksum contract. Their installed command is `mendcode`, while upgrade retains the paths below.
 
@@ -288,7 +296,7 @@ the daemon. See [automation.md](automation.md#standalone-binary) for build flags
 ## Not done yet
 
 - The first public release is the real canary of the public path: anonymous downloads, GitHub provenance and the installers' `curl | sh` form. The private betas ran the workflow end to end, but the updater and the installers were tested against fakes for every public case.
-- No `PATH` setup for the managed binary. The PowerShell installer supports Windows (it could not be parsed or run where this was written, `pwsh` being unavailable), but upgrade and the complete daemon smoke still support Darwin/Linux only.
+- No `PATH` setup for the managed binary. The PowerShell installer supports Windows (it could not be parsed or run where this was written, `pwsh` being unavailable); upgrade on Windows is exercised by the `windows-smoke` workflow (a Windows runner, on demand and for pull requests), not by the release gate.
 - GitHub/Darwin verification awaits published assets.
 - Only the newest 100 releases of the repository are read.
 

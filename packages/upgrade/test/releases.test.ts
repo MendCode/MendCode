@@ -116,8 +116,14 @@ describe("platform assets", () => {
     expect(platformAsset({ os: "linux", arch: "arm64" }, "dev-abc1234")).toBe("mendcode-dev-abc1234-linux-arm64")
   })
 
+  test("names the Windows x64 binary and tells another Windows architecture to reinstall with install.ps1", () => {
+    expect(platformAsset({ os: "win32", arch: "x64" }, "v1.2.3")).toBe("mendcode-1.2.3-windows-x64.exe")
+    expect(() => platformAsset({ os: "win32", arch: "arm64" }, "v1.2.3")).toThrow("install.ps1")
+    try { platformAsset({ os: "win32", arch: "arm64" }, "v1.2.3") } catch (error) { expect((error as UpgradeError).code).toBe("unsupported-platform") }
+  })
+
   test("refuses platforms the pipeline does not build", () => {
-    for (const platform of [{ os: "win32", arch: "x64" }, { os: "linux", arch: "ia32" }]) {
+    for (const platform of [{ os: "linux", arch: "ia32" }]) {
       try {
         platformAsset(platform, "v1.2.3")
         throw new Error("should have thrown")
