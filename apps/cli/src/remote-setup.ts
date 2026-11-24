@@ -205,7 +205,9 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
   const legacy = legacyTokenFile(command.dir, command.device)
   const ownFile = profile?.tokenFile === file || profile?.tokenFile === legacy
   rmSync(file, { force: true })
-  if (profile?.tokenFile === legacy) rmSync(legacy, { force: true })
+  // The earlier name had no remote in it, so another saved remote may still point at the same file: it stays while one does.
+  const legacyShared = Object.entries(profiles?.remotes ?? {}).some(([name, other]) => name !== remote && other.tokenFile === legacy)
+  if (profile?.tokenFile === legacy && !legacyShared) rmSync(legacy, { force: true })
   if (ownFile) {
     // This machine is the device that was unpaired: its sync token file and the sync setup that uses it go too.
     rmSync(syncTokenFile(command.dir, remote), { force: true })
