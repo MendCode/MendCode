@@ -533,6 +533,8 @@ export const AcpAgentName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const SharedSettings = lazySchema(() => z.strictObject({
   /** settings.set merges entries; null removes one. Backed by the existing ACP config file. */
   acpAgents: z.record(AcpAgentName, AcpAgentSettings).optional(),
+  /** Engines a full-token remote client may run turns on: "pi", "acp" (every ACP agent) or "acp:<agent>". Off by default; set on the host only, never by a remote client. */
+  remoteEngines: z.array(z.string().regex(/^(pi|acp|acp:[A-Za-z0-9][A-Za-z0-9._-]{0,63})$/)).max(32).optional(),
   /** Areas (at most 8, unique names); see `Area`. The older `profiles` key is read as `areas` (store). */
   areas: z
     .array(Area)

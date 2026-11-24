@@ -47,7 +47,7 @@ Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Na
 
 ### Start the daemon
 
-Start a foreground daemon that listens (`daemon start` and the background service stay local-only, so a stray `remote.json` never opens a port on their own):
+Start a foreground daemon that listens (`daemon start` and a background service installed without `--listener` stay local-only, so a stray `remote.json` never opens a port on their own; see [Remote daemon as a service](#remote-daemon-as-a-service)):
 
 ```sh
 mendcode daemon run --dir /srv/mendcode --cwd /srv/project --listen 127.0.0.1:9876
@@ -82,6 +82,36 @@ mendcode --connect server.example:9876 --ca /private/path/ca.pem --token-file /p
 | `--token` | No plain flag exists |
 
 Transport flags also work with automation commands, for example `mendcode --connect server.example:9876 session list --all`.
+
+### Remote daemon as a service
+
+The user service (launchd or systemd-user) is local-only unless it is installed with a listener, so it survives a reboot with its listener:
+
+```sh
+mendcode daemon service install --listener                       # listener from <dir>/remote.json
+mendcode daemon service install --listen 100.64.0.9:9876 --tls-cert /srv/tls/c.pem --tls-key /srv/tls/k.pem
+```
+
+The same checks as `daemon run` happen before anything is written: a non-loopback address needs both PEM files, and a listener that could not start is refused instead of crash-looping under the service manager. The flags are kept in the service binding, so `restart` and `status` keep them; to change them, stop and reinstall. Every other background daemon (`daemon start`, loops, Dream) stays local. Tokens are still created with `remote token create`, and a remote client still cannot change host-local authority settings.
+
+**Tailscale mode.** `remote.json` accepts `"mode": "tailscale"`: the listener binds only a literal Tailscale address (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`; a name or any other address is refused, TLS is still required) and a peer from outside those ranges is rejected before it can authenticate. A certificate from `tailscale cert` works as `tlsCert`/`tlsKey`.
+
+**Certificate renewal.** A daemon that listens with TLS notices when the certificate or key file is rewritten or replaced and serves the new certificate from then on, with no restart; open connections stay. A new pair that does not load is ignored and the previous one keeps serving. A daemon without TLS watches nothing.
+
+### Remote engines
+
+By default a remote client cannot run turns on engines that execute tools on the host (ACP agents, pi). The host can allow them with the local-only `remoteEngines` setting, for example `{ "remoteEngines": ["acp:hermes"] }` (`"acp"` allows every configured ACP agent, `"pi"` pi). Remote clients cannot change it, read-only tokens still cannot submit turns, and opencode and Cursor stay local. Telegram and Discord turns use the daemon's own socket and need no listing.
+
+### Saved remotes and auto-connect
+
+```sh
+mendcode remote add vps vps.example:9876 --token-file /private/path/token --ca /private/path/ca.pem --default
+mendcode remote list | default [NAME|none] [--local-first|--remote-first] | remove NAME
+mendcode                       # connects to the default remote
+mendcode --remote lab          # a named one; --local ignores the saved default
+```
+
+`<data dir>/remotes.json` (mode 0600) holds names, addresses and token-file and CA paths, never a token. An explicit `--connect`, `--server-url` or `--socket` wins. The default applies only to a bare terminal start (`mendcode`, `mendcode --session ID`), never to `daemon`, `session` or other commands. `remote-first` (the default) checks that the remote answers and otherwise starts on this machine with a one-line note; `local-first` uses a local daemon that already runs and goes remote only when none does. `--remote NAME` never falls back. A terminal without `remotes.json` reads nothing and loads nothing extra.
 
 ### Choose a session
 
