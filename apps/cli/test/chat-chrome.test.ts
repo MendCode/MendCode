@@ -66,6 +66,19 @@ describe("UI-1 chat chrome", () => {
     expect(sidebar()).toContain("… Review reconnect")
   })
 
+  test("a chat deleted in another terminal leaves the left list on the push, with no request", async () => {
+    const h = chatApp()
+    await Bun.sleep(5)
+    h.app.render()
+    const sidebar = () => h.text().map((row) => row.slice(0, SIDEBAR_WIDTH)).join("\n")
+    expect(sidebar()).toContain("Client reconnect")
+    const lists = h.sentOf("session.list").length
+    h.app.onGlobal({ type: "session.removed", gseq: 1, at: NOW, sessionId: h.next } as never)
+    expect(sidebar()).not.toContain("Client reconnect")
+    expect(sidebar()).toContain("Chrome")
+    expect(h.sentOf("session.list").length).toBe(lists)
+  })
+
   test("a switch to a listed chat of the same folder asks for its detail once and does not read the session list again", async () => {
     const h = chatApp()
     await Bun.sleep(5)

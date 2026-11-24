@@ -27,6 +27,8 @@ export type DaemonServiceCommand = {
   grace?: number
   /** `run --listen HOST:PORT [--tls-cert F --tls-key F]`: the foreground daemon also accepts remote clients (docs/remote.md). Never the service. */
   listener?: string[]
+  /** `service install --remote [--listen ...]`: the service daemon takes remote clients; the entries are the listener flags (none: `<dir>/remote.json`). */
+  remote?: string[]
 }
 
 /** How long `restart --force` waits for a running command, background task or agent before the stop kills it. */
@@ -61,7 +63,7 @@ export function parseDaemonService(argv: string[]): DaemonServiceCommand | undef
   const action = flags.once ? "tick" : words.shift() ?? (service ? "status" : scheduler ? "run" : "start")
   const allowed = service ? ["plan", "install", "start", "stop", "restart", "status", "logs", "uninstall", "remove"] : ["start", "run", "status", "logs", "stop", "restart", "tick"]
   if (!allowed.includes(action) || words.length) throw new Error("Invalid daemon service action")
-  const booleans = ["json", "help", "force", "once", "execute", "quiet"]
+  const booleans = ["json", "help", "force", "once", "execute", "quiet", "listener"]
   for (const [name, value] of Object.entries(flags)) {
     if (!values.has(name) && !booleans.includes(name)) throw new Error(`Unsupported daemon service flag --${name}`)
     if (values.has(name) && (typeof value !== "string" || !value || value.startsWith("--"))) throw new Error(`--${name} needs a value`)
@@ -79,10 +81,13 @@ export function parseDaemonService(argv: string[]): DaemonServiceCommand | undef
   const grace = flags.grace === undefined ? undefined : Number(flags.grace)
   if (grace !== undefined && (action !== "restart" || !Number.isInteger(grace) || grace < 0 || grace > 3600)) throw new Error("--grace needs restart and 0–3600 seconds")
   const listenerFlags = ["listen", "tls-cert", "tls-key"].filter((name) => flags[name] !== undefined)
-  if (listenerFlags.length && (action !== "run" || service || scheduler)) throw new Error("--listen, --tls-cert and --tls-key go with daemon run (a foreground daemon); the background service stays local")
+  const serviceListener = service && !scheduler && (action === "install" || action === "plan")
+  if (flags.listener && !serviceListener) throw new Error("--listener goes with daemon service install or plan")
+  if (listenerFlags.length && !(action === "run" && !service && !scheduler) && !serviceListener) throw new Error("--listen, --tls-cert and --tls-key go with daemon run (a foreground daemon) or daemon service install; other background daemons stay local")
   if (listenerFlags.length && !flags.listen) throw new Error("--tls-cert and --tls-key need --listen host:port")
+  const forwarded = listenerFlags.flatMap((name) => [`--${name}`, String(flags[name])])
   return {
-    ...(listenerFlags.length ? { listener: listenerFlags.flatMap((name) => [`--${name}`, String(flags[name])]) } : {}),
+    ...(serviceListener && (flags.listener || listenerFlags.length) ? { remote: forwarded } : listenerFlags.length ? { listener: forwarded } : {}),
     action: action === "remove" ? "uninstall" : action as DaemonServiceCommand["action"], service,
     ...(scheduler ? { scheduler } : {}), ...(flags.dir || flags["data-dir"] ? { dir: String(flags["data-dir"] ?? flags.dir) } : {}),
     ...(flags.cwd ? { cwd: String(flags.cwd) } : {}), ...(flags.engine ? { engine: String(flags.engine) } : {}), ...(flags["service-dir"] ? { serviceDir: String(flags["service-dir"]) } : {}),

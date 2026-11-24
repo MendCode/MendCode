@@ -4,7 +4,12 @@ import path from "node:path"
 import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 
 export const REMOTE_TOKENS_FILE = "remote-tokens.json"
-export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number }
+/** `expiresAt` (epoch ms): after it the token no longer authenticates and an open connection drops; absent means it never expires. */
+/**
+ * `scope: "sync"`: the token of a device daemon that syncs sessions with this one (docs/sync.md); it may send only `hello` and
+ * `sync.peer`, nothing else. Absent means the token's usual authority (full, or read-only).
+ */
+export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number; expiresAt?: number; scope?: "sync" }
 type Entry = RemoteTokenInfo & { hash: string }
 const hashToken = (token: string) => createHash("sha256").update(token).digest()
 
@@ -19,7 +24,7 @@ export function remoteTokens(dir: string) {
     }
     let entries: unknown
     try { entries = JSON.parse(text) } catch { throw new Error("invalid remote token store") }
-    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)))) throw new Error("invalid remote token store")
+    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)) || (e.scope !== undefined && (e.scope !== "sync" || e.readOnly)))) throw new Error("invalid remote token store")
     chmodSync(file, 0o600)
     return entries as Entry[]
   }
@@ -44,16 +49,18 @@ export function remoteTokens(dir: string) {
       unlinkSync(lock)
     }
   }
-  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }) })
+  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }), ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }), ...(entry.scope ? { scope: entry.scope } : {}) })
+  const live = (entry: Entry) => entry.expiresAt === undefined || Date.now() < entry.expiresAt
   return {
-    create(input: { name?: string; readOnly?: boolean } = {}) {
+    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number; sync?: boolean } = {}) {
       const name = input.name ?? `token-${randomBytes(4).toString("hex")}`
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("token name must use letters, digits, _ or - (1–64)")
+      if (input.sync && input.readOnly) throw new Error("a sync token cannot also be read-only")
       const token = randomBytes(32).toString("base64url")
       return update((entries) => {
         if (entries.some((e) => e.name === name)) throw new Error("token name already exists")
         if (entries.length >= 1000) throw new Error("remote token limit reached")
-        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex") }
+        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: "sync" as const } : {}) }
         entries.push(entry)
         return { token, ...info(entry) }
       })
@@ -70,14 +77,14 @@ export function remoteTokens(dir: string) {
       const digest = hashToken(token)
       return update((entries) => {
         let matched: Entry | undefined
-        for (const entry of entries) if (timingSafeEqual(digest, Buffer.from(entry.hash, "hex"))) matched = entry
+        for (const entry of entries) if (timingSafeEqual(digest, Buffer.from(entry.hash, "hex")) && live(entry)) matched = entry
         if (!matched) return undefined
         matched.lastUsedAt = Date.now()
         return { ...matched }
       })
     },
-    active(peer: { name: string; hash: string; readOnly: boolean }) {
-      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly)
+    active(peer: { name: string; hash: string; readOnly: boolean; scope?: "sync" }) {
+      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly && e.scope === peer.scope && live(e))
     },
   }
 }
@@ -101,14 +108,29 @@ export function remoteBackoff(now = Date.now) {
   }
 }
 
-export type RemoteListenerOptions = { listen?: string; tlsCert?: string; tlsKey?: string }
+/** `tailscale`: bind only a Tailscale address and accept only peers from the tailnet ranges. */
+export type RemoteMode = "tailscale"
+export type RemoteListenerOptions = { listen?: string; tlsCert?: string; tlsKey?: string; mode?: RemoteMode }
+
+/** Tailscale's ranges: IPv4 100.64.0.0/10 and IPv6 fd7a:115c:a1e0::/48 (also as an IPv4-mapped IPv6 address). */
+export function tailscaleAddress(address: string): boolean {
+  const host = address.replace(/^\[|\]$/g, "").toLowerCase()
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host)?.[1] ?? host
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(mapped)
+  if (v4) {
+    const octets = v4.slice(1).map(Number)
+    return octets.every((n) => n <= 255) && octets[0] === 100 && octets[1]! >= 64 && octets[1]! <= 127
+  }
+  return /^fd7a:115c:a1e0(:|$)/.test(host) && /^[0-9a-f:]+$/.test(host)
+}
+
 /** `<dir>/remote.json` contains listener settings only; flags override it. Validate before opening the store. */
 export function remoteListenerConfig(dir: string, flags: RemoteListenerOptions): RemoteListenerOptions {
   let config: RemoteListenerOptions = {}
   try {
     const value = JSON.parse(readFileSync(path.join(dir, "remote.json"), "utf8"))
-    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !["listen", "tlsCert", "tlsKey", "server"].includes(key)) || Object.entries(value).some(([key, v]) => key !== "server" && typeof v !== "string")) throw new Error("invalid remote.json")
-    config = { ...(value.listen ? { listen: value.listen } : {}), ...(value.tlsCert ? { tlsCert: value.tlsCert } : {}), ...(value.tlsKey ? { tlsKey: value.tlsKey } : {}) }
+    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !["listen", "tlsCert", "tlsKey", "mode", "server"].includes(key)) || Object.entries(value).some(([key, v]) => key !== "server" && typeof v !== "string") || value.mode !== undefined && value.mode !== "tailscale") throw new Error("invalid remote.json")
+    config = { ...(value.listen ? { listen: value.listen } : {}), ...(value.tlsCert ? { tlsCert: value.tlsCert } : {}), ...(value.tlsKey ? { tlsKey: value.tlsKey } : {}), ...(value.mode ? { mode: value.mode as RemoteMode } : {}) }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("invalid remote.json")
   }
@@ -123,5 +145,6 @@ export function validateRemoteListener(options: RemoteListenerOptions) {
   const address = parseRemoteAddress(options.listen)
   if (Boolean(options.tlsCert) !== Boolean(options.tlsKey)) throw new Error("--tls-cert and --tls-key are required together")
   if (!isLoopbackHost(address.hostname) && (!options.tlsCert || !options.tlsKey)) throw new Error("non-loopback --listen requires --tls-cert and --tls-key")
+  if (options.mode === "tailscale" && !tailscaleAddress(address.hostname)) throw new Error("remote mode tailscale listens only on a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48), not a name or another address")
   return { ...address, ...(options.tlsCert && options.tlsKey ? { tls: { cert: readFileSync(options.tlsCert), key: readFileSync(options.tlsKey) } } : {}) }
 }

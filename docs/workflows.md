@@ -280,7 +280,7 @@ Workflow, task and agent restrictions compose; nothing increases the user's gran
 
 Approval-required actions still ask in full mode. In custom mode, side effects outside `approvedActions` ask; approved actions remain subject to session grants and global rules.
 
-Read-only tasks cannot exit plan mode, delegate, send through MCP/custom tools or run host checks. Restrictions also apply to delegated child sessions. No remote read-only command is added.
+Read-only tasks cannot exit plan mode, delegate, send through MCP/custom tools or run host checks; an MCP tool whose server marks it read-only (`readOnlyHint`) is the one exception, and its approval still applies. The session that started a run is told when it completes, fails or blocks. Restrictions also apply to delegated child sessions. No remote read-only command is added.
 
 ### Choose a workspace
 

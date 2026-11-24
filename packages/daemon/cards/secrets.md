@@ -1,5 +1,5 @@
 ---
-summary: API keys, tokens and passwords: markers, the /env vault, chat encryption
+summary: API keys, tokens, passwords: markers, the /env vault, encryption
 docs: secrets, environment-privacy, sandbox
 aliases: secret, credentials, api-key, apikey, token, password, vault, env, privacy, encryption
 ---

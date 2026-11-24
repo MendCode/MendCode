@@ -8,7 +8,8 @@
   },
   "dependencies": {
     "@mendcode/protocol": "workspace:*",
-    "@mendcode/kernel": "workspace:*"
+    "@mendcode/kernel": "workspace:*",
+    "@mendcode/engine-native": "workspace:*"
   },
   "devDependencies": {
     "@mendcode/testkit": "workspace:*"

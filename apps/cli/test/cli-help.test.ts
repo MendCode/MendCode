@@ -6,6 +6,7 @@ import { parsePackageFileCommand } from "../src/package-file-command"
 import { parseDocsCommand } from "../src/docs-args"
 import { parseStartup, STARTUP_USAGE } from "../src/startup"
 import { COMMANDS } from "../src/support-output"
+import { GATEWAY_USAGE } from "../../../packages/gateway/src/cli"
 
 const listed = HELP_GROUPS.flatMap((group) => group.entries)
 const ID = "ses_0123456789ABCDEF"
@@ -18,6 +19,7 @@ function resolves(command: string): boolean {
   if (command === "docs") return parseDocsCommand(["docs"]) !== undefined
   if (command === "daemon") return parseDaemonService(["daemon", "status"]) !== undefined
   if (command === "uninstall") return typeof USAGE.uninstall === "string"
+  if (command === "gateway") return GATEWAY_USAGE.startsWith("usage: mendcode gateway")
   const parsed = parseAutomation([command, "--help"])
   return parsed.ok === true && parsed.command.kind === "help"
 }

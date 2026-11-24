@@ -292,6 +292,17 @@ export function createEvents(ctx: AppContext, actions: {
       askAgentShells()
       return
     }
+    if (event.type === "session.removed") {
+      // Deleted in another terminal (this one's own delete reloads the list): the row goes from every list, with no request.
+      const id = event.sessionId
+      state.sessions = state.sessions.filter((session) => session.sessionId !== id)
+      state.paletteSessions = state.paletteSessions.filter((session) => session.sessionId !== id)
+      state.agentSessions.delete(id)
+      state.sidebarBots?.onRemoved(id)
+      state.homeBots?.onRemoved(id)
+      requestFrame()
+      return
+    }
     if (event.type === "session.activity") {
       // Most pushes of a working session move only its clock and current tool: no frame and no request of their own.
       const shows = activityMemory.changed(event)

@@ -4,7 +4,7 @@ import { readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { daemonCommand, daemonEnvs, ensureDaemon, forgetLeanJit, isDaemonPid, leanClientEnv, ownerListening, terminateDaemon } from "../src/launcher"
+import { daemonCommand, daemonEnvs, ensureDaemon, forgetLeanJit, isDaemonPid, leanClientEnv, ownerListening, startFailureDetail, terminateDaemon } from "../src/launcher"
 import { readFileSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
 import { askHarnessesAndStop, CLAUDE_SHELL_ENV, expectCleanChild, fakeClaude, USER_ENV } from "../../../packages/daemon/test/inherited-env-fixture"
@@ -344,4 +344,15 @@ describe("terminateDaemon asks over the protocol first", () => {
       rmSync(home, { recursive: true, force: true })
     }
   }, 60_000)
+})
+
+test("a daemon that did not start is explained by its exit code and by who the data directory's lock names", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "mend-start-detail-"))
+  try {
+    expect(startFailureDetail(dir, null)).toBe("")
+    expect(startFailureDetail(dir, 1)).toBe("; the daemon exited with code 1")
+    writeFileSync(path.join(dir, "mendd.lock"), "4242")
+    const detail = startFailureDetail(dir, 1, { alive: () => true, commandOf: () => undefined, self: 1, parent: 1 })
+    expect(detail).toContain("the daemon exited with code 1; mendd.lock: process 4242 is running but its command line cannot be read")
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

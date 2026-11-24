@@ -47,7 +47,9 @@ type Connection = {
   unprompted?: boolean
   capabilities: { loadSession: boolean; image: boolean; http: boolean }
   /** The agent's `model` config option, when it offers one, and the value in force. */
-  modelOption?: { configId: string; current?: string }
+  modelOption?: { configId?: string; current?: string }
+  /** The agent's session modes (ACP `modes`) and the one in force. */
+  modes?: { ids: string[]; current?: string }
   /** The agent's effort option (ACP category `thought_level`) for the model in force, when that model has one: its values and the one in force. */
   effortOption?: { configId: string; values: string[]; current?: string }
   turn?: ActiveTurn
@@ -108,6 +110,18 @@ function permissionDetail(params: Json): string {
  * through the normal approval flow and cancels with `session/cancel`. No file-system or terminal capability is
  * offered, so the agent works in its own sandbox. One process per session stays up between turns.
  */
+/** Session mode ids an agent commonly lists for each MendCode permission mode, first match wins. */
+const MODE_IDS: Partial<Record<PermissionMode, string[]>> = {
+  full: ["dont_ask", "bypassPermissions", "bypass_permissions", "yolo"],
+  edits: ["accept_edits", "acceptEdits"],
+  ask: ["default"],
+}
+
+/** The agent mode id for a MendCode permission mode; undefined when the agent lists none (its mode stays as it is). */
+function modeFor(mode: PermissionMode, listed: string[]): string | undefined {
+  return MODE_IDS[mode]?.find((id) => listed.includes(id))
+}
+
 /** An ACP agent is never told MendCode's mode, so every turn in plan carries a short note; module-wide like the process-per-turn engines of the others. */
 const planNotes = createPlanTurnNotes("reply")
 
@@ -199,9 +213,28 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
     if (model) options.onEfforts?.(connection.agent, model, values.filter((value) => value !== "default"))
   }
 
+  /** Reads the agent's `models` state (availableModels/currentModelId) when it has no `model` config option; switched with `session/set_model`. */
+  function noteModels(connection: Connection, state: unknown) {
+    const body = state as Json | undefined
+    if (connection.modelOption?.configId || !body || !Array.isArray(body.availableModels)) return
+    const models: AcpModelOption[] = body.availableModels.filter((entry: Json) => typeof entry?.modelId === "string" && entry.modelId).map((entry: Json) => ({ value: entry.modelId, name: typeof entry.name === "string" && entry.name ? entry.name : entry.modelId }))
+    if (!models.length) return
+    connection.modelOption = { ...(typeof body.currentModelId === "string" ? { current: body.currentModelId } : {}) }
+    options.onModels?.(connection.agent, models)
+  }
+
+  /** Reads the agent's session modes (`modes`: availableModes/currentModeId). */
+  function noteModes(connection: Connection, state: unknown) {
+    const body = state as Json | undefined
+    if (!body || !Array.isArray(body.availableModes)) return
+    const ids = body.availableModes.flatMap((entry: Json) => (typeof entry?.id === "string" && entry.id ? [entry.id as string] : []))
+    if (ids.length) connection.modes = { ids, ...(typeof body.currentModeId === "string" ? { current: body.currentModeId } : {}) }
+  }
+
   function onNotification(connection: Connection, method: string, params: Json) {
     if (method !== "session/update") return
     if (params.sessionId === connection.acpSessionId && params.update?.sessionUpdate === "config_option_update") noteConfig(connection, params.update.configOptions)
+    if (params.sessionId === connection.acpSessionId && params.update?.sessionUpdate === "current_mode_update" && connection.modes && typeof params.update.currentModeId === "string") connection.modes.current = params.update.currentModeId
     const turn = connection.turn
     if (!turn || params.sessionId !== connection.acpSessionId) return
     turn.touch()
@@ -226,6 +259,8 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         // The agent replays the history as session/update notifications; with no turn running they are dropped.
         const loaded = (await connection.rpc.request("session/load", { sessionId: known, cwd, mcpServers }, { timeoutMs: SESSION_TIMEOUT_MS })) as Json | undefined
         noteConfig(connection, loaded?.configOptions)
+        noteModels(connection, loaded?.models)
+        noteModes(connection, loaded?.modes)
         return known
       } catch (error) {
         if (error instanceof AcpRpcError && error.code === AUTH_REQUIRED) throw error
@@ -237,6 +272,8 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
     connection.acpSessionId = created.sessionId
     connection.unprompted = true
     noteConfig(connection, created.configOptions)
+    noteModels(connection, created.models)
+    noteModes(connection, created.modes)
     options.bindings?.set(sessionId, agent, created.sessionId)
     return created.sessionId
   }
@@ -360,8 +397,10 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
       if (wanted !== undefined && wanted !== connection.modelOption?.current) {
         if (!connection.modelOption) return fail("acp_model", `agent "${agent}" offers no model choice; pick acp:${agent} to use its default`)
         try {
-          const changed = (await connection.rpc.request("session/set_config_option", { sessionId: acpSessionId, configId: connection.modelOption.configId, value: wanted }, { timeoutMs: SESSION_TIMEOUT_MS })) as Json | undefined
-          noteConfig(connection, changed?.configOptions)
+          if (connection.modelOption.configId) {
+            const changed = (await connection.rpc.request("session/set_config_option", { sessionId: acpSessionId, configId: connection.modelOption.configId, value: wanted }, { timeoutMs: SESSION_TIMEOUT_MS })) as Json | undefined
+            noteConfig(connection, changed?.configOptions)
+          } else await connection.rpc.request("session/set_model", { sessionId: acpSessionId, modelId: wanted }, { timeoutMs: SESSION_TIMEOUT_MS })
           connection.modelOption.current = wanted
         } catch (error) {
           return fail("acp_model", `agent "${agent}" did not switch to model "${wanted}": ${error instanceof Error ? error.message : String(error)}`)
@@ -380,6 +419,16 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
           } catch (error) {
             return fail("acp_effort", `agent "${agent}" did not switch to effort "${level}": ${error instanceof Error ? error.message : String(error)}`)
           }
+        }
+      }
+      // The agent's own mode follows MendCode's permission mode when it lists a matching one, so it stops asking what MendCode would answer itself.
+      const modeId = connection.modes ? modeFor(input.permissionMode(), connection.modes.ids) : undefined
+      if (connection.modes && modeId !== undefined && modeId !== connection.modes.current) {
+        try {
+          await connection.rpc.request("session/set_mode", { sessionId: acpSessionId, modeId }, { timeoutMs: SESSION_TIMEOUT_MS })
+          connection.modes.current = modeId
+        } catch {
+          // The mode only saves round trips: approvals are still answered by MendCode.
         }
       }
       const body = await content(input, connection)

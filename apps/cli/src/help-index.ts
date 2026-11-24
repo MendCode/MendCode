@@ -63,8 +63,10 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
   { title: "Setup and services", entries: [
     e("control-plane", "control-plane <area>", "settings by area: ai, system, tui, project"),
     e("daemon", "daemon <command>", "start, stop, status, logs, service"),
+    e("gateway", "gateway <command>", "several people on one server: HTTPS, passkeys"),
     e("console", "console <command>", "MendCode console: setup, login, orgs"),
     e("share", "share <command>", "share a session: link, local file, gist"),
+    e("sync", "sync <command>", "sessions in step with a remote"),
     e("github", "github install|run", "GitHub workflow and action"),
     e("pr", "pr NUMBER | pr setup", "work on a pull request"),
     e("acp", "acp", "Agent Client Protocol on stdio (editors)"),

@@ -194,6 +194,9 @@ importers:
 
   packages/engine-claude:
     dependencies:
+      '@mendcode/engine-native':
+        specifier: workspace:*
+        version: link:../engine-native
       '@mendcode/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -268,6 +271,8 @@ importers:
         version: link:../testkit
 
   packages/extension-api: {}
+
+  packages/gateway: {}
 
   packages/kernel:
     dependencies:

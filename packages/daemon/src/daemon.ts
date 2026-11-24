@@ -70,7 +70,7 @@ import type { ComputerOptions } from "./computer"
 import type { BrowserOptions } from "./browser"
 import { createLazyComputerControl, createLazyBrowserControl } from "./lazy-controls"
 import { parseRemoteAddress } from "@mendcode/protocol/wire"
-import { remoteBackoff, remoteTokens, validateRemoteListener, type RemoteListenerOptions } from "./remote"
+import { remoteBackoff, remoteTokens, tailscaleAddress, validateRemoteListener, type RemoteListenerOptions } from "./remote"
 import { isLoopbackHost, isReadOnlyCommand } from "@mendcode/protocol/wire"
 import type { createHttpAdapter, HttpPeer } from "./http"
 import { httpConfig, type HttpOptions } from "./http-config"
@@ -262,7 +262,7 @@ import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
 import { connectionOrigin, createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
 import { createSessionStarter } from "./session-start"
-import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
+import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteEngineAllowed, remoteEngineRefusal, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
 import { createAgentCommands } from "./agent-commands"
 import { asideTranscript, createAsideStore } from "./aside"
@@ -327,7 +327,7 @@ type Connection = {
   directory?: string
   trace?: boolean
   remoteAddress?: string
-  peer?: { name: string; hash: string; readOnly: boolean }
+  peer?: { name: string; hash: string; readOnly: boolean; scope?: "sync" }
   /** The client was started by a session's own shell: it reads, and works only inside that session's authority (agent-origin.ts). */
   agent?: AgentOrigin | undefined
   /** What `hello` said of the client: its name and whether it runs inside another agent's shell (`caller:agent`). Only ever lowers the origin from `cli` to `agent`; see `connectionOrigin`. */
@@ -389,6 +389,8 @@ export interface McpControl extends Omit<McpContentPort, "getPrompt"> {
 export type EngineExtensions = DaemonExtensions & { hooks: EngineHooks; prompts: PromptFiles; reload(directory: string): Promise<UiReloadReport> }
 
 export type DaemonOptions = RemoteListenerOptions & {
+  /** Session sync timings (tests shorten them): a device's round interval, a lease's length and how long an idle held session waits before it goes back to the hub. */
+  sync?: { tickMs?: number; leaseMs?: number; idleReleaseMs?: number }
   /**
    * `descendants`: every local client that descends from this process is agent-origin unless the user opened its terminal
    * here. On for the real daemon; off by default so a host that starts its own clients (tests, embeddings) is not refused.
@@ -3019,6 +3021,7 @@ export async function startDaemon(options: DaemonOptions) {
     fingerprint: workspaceFingerprint,
     ledger: (workflowId, category, query) => (store.automationLedger.known("workflow", workflowId) ? store.automationLedger.page("workflow", workflowId, category, query) : undefined),
     emit: (event) => void globalSink.append(event),
+    notifyOrigin: (sessionId, text) => { if (store.hasSession(sessionId)) void actorFor(sessionId)?.notify(secrets.mask(sessionId, text), undefined, false, "steer") },
   })
   sessionObservers.push(workflows.observe)
   function workflowContext(sessionId: SessionId) {
@@ -3634,6 +3637,8 @@ export async function startDaemon(options: DaemonOptions) {
     emit: (event) => void sessionSink.append(event),
     steer: async (sessionId, steering) => (await actorFor(sessionId)?.steer(steering)) ?? false,
     prompts: createGoalPrompts({ layersFor, enabled: extensionsEnabled }),
+    waiting: (sessionId) => background.listAll(sessionId).filter((task) => task.status === "running").length,
+    waitMs: () => (store.settings.get().processLimits?.goalWaitMinutes ?? 30) * 60_000,
     log: logLine,
   })
   sessionObservers.push(goals.observe)
@@ -3724,6 +3729,8 @@ export async function startDaemon(options: DaemonOptions) {
     engine.forget?.(sessionId)
     options.onSessionRemoved?.(sessionId)
     store.deleteSession(sessionId)
+    // A blank chat no terminal heard of (`quietEmpties`) is not announced: no list holds it.
+    if (!quietEmpties.has(sessionId)) globalSink.append({ type: "session.removed", sessionId })
     secrets.drop(sessionId)
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
@@ -3851,6 +3858,47 @@ export async function startDaemon(options: DaemonOptions) {
       },
     })
   }
+  /** Session sync (docs/sync.md): loaded at start only when this data dir has `sync.json` or `sync-hub.json`, else by the first `sync.*` command. */
+  let sync: Promise<import("./sync").Sync> | undefined
+  /** Set once sync has loaded: a prompt to a session another machine owns is refused before it is queued, with that machine's name. */
+  let syncGuard: import("./sync").Sync["guard"] | undefined
+  const syncService = () => sync ??= import("./sync").then(({ createSync }) => {
+    const service = createSync(syncPorts())
+    syncGuard = service.guard
+    return service
+  })
+  const syncPorts = (): import("./sync").SyncPorts => ({
+    dir: options.dir, store, now: () => clock.now(), tickMs: options.sync?.tickMs ?? 5_000, leaseMs: options.sync?.leaseMs ?? 60_000, idleReleaseMs: options.sync?.idleReleaseMs ?? 10 * 60_000,
+    busy: (id) => Boolean(actors.get(id)?.snapshot().turnId || store.lastTurnStatus(id) === "running" || store.queueOf(id).length || busyAside(id)),
+    publish: (event) => {
+      for (const connection of connections) {
+        const cursor = connection.subscriptions.get(event.sessionId)
+        if (cursor === undefined || event.seq <= cursor) continue
+        connection.subscriptions.set(event.sessionId, event.seq)
+        send(connection, { v: PROTOCOL_VERSION, kind: "event", body: event })
+      }
+    },
+    changed: (id) => publishActivity(id, "idle", true),
+    release: (id) => {
+      if (actors.get(id)?.snapshot().turnId) return
+      actors.delete(id)
+      sessionScopes.get(id)?.dispose()
+      sessionScopes.delete(id)
+    },
+    deleteSession: (id) => void removeSession(id),
+    applySettings: async (patch) => {
+      const before = store.settings.get()
+      await settingsSaved(before, store.settings.set(patch), patch)
+    },
+    log: (message) => logLine("warn", message),
+  })
+  /** A sync refusal as a reply: a conflict travels as `target_mismatch` (the protocol has no conflict code). */
+  function syncFailure(error: unknown) {
+    const code = (error as { code?: unknown } | undefined)?.code
+    const known: ErrorCode[] = ["forbidden", "busy", "invalid_command", "target_mismatch", "unsupported"]
+    const mapped: ErrorCode = code === "conflict" ? "target_mismatch" : code === "invalid" ? "invalid_command" : known.includes(code as ErrorCode) ? code as ErrorCode : "internal"
+    return { ok: false as const, code: mapped, message: (error instanceof Error ? error.message : String(error)).slice(0, 500) }
+  }
   /** Whether `directory` is, or lies inside, the folder of a session or the daemon's default folder (symlinks resolved, either spelling). */
   function knownProjectDirectory(directory: string): boolean {
     const known = (candidate: string) => store.listSessions({ directory: candidate, limit: 1, roots: false, archived: true }).length > 0
@@ -3868,7 +3916,13 @@ export async function startDaemon(options: DaemonOptions) {
   async function handleOnce(connection: Connection, command: Command) {
     if (connection.rejected) return
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
-    if ((connection.remoteAddress || connection.peer) && command.type.startsWith("memory.")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: memory is local only" })
+    // A device daemon's sync token syncs sessions and nothing else (docs/sync.md).
+    if (connection.peer?.scope === "sync" && command.type !== "hello" && command.type !== "sync.peer") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: a sync token only syncs sessions" })
+    if (syncGuard && command.type === "user.submit") {
+      const refusal = syncGuard(command.sessionId, "queue.added")
+      if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+    }
+    if ((connection.remoteAddress || connection.peer) && command.type.startsWith("memory."))return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: memory is local only" })
     if (command.type.startsWith("bot.")) {
       if ((connection.remoteAddress || connection.peer) && command.type !== "bot.list") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: making, editing and teaching bots is local only" })
       if (!botsOn()) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[BOT]: bots are off: turn them on with /experimental bots on" })
@@ -4523,8 +4577,8 @@ export async function startDaemon(options: DaemonOptions) {
         if (peer && (command.type === "user.submit" || command.type === "session.compact")) {
           const model = command.type === "user.submit" ? command.selection?.model : command.model
           const selected = model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(command.sessionId)), catalog })
-          if (["pi", "opencode", "cursor"].includes(modelEngine(selected, catalog) ?? "")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
-          if (selected.model.startsWith("acp:")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: ACP agents run local tools and are local only" })
+          const refusal = remoteEngineRefusal({ engine: modelEngine(selected, catalog), model: selected.model, allowed: store.settings.get().remoteEngines })
+          if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
         }
         // A retry with the same `clientRequestId` (another command id, e.g. after a reconnect) gets the first answer, never a second queued message.
         const requestKey = command.type === "user.submit" && command.clientRequestId ? `${command.sessionId}:${command.clientRequestId}` : undefined
@@ -4656,7 +4710,8 @@ export async function startDaemon(options: DaemonOptions) {
           const model = agentModelOf(safe.sessionId, catalog, safe.selection?.agent) ?? safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
           const key = modelEngine(model, catalog) ?? options.info?.engine
           // The agent's own model counts, not only the submitted one: an agent set to pi or an ACP agent must not start them for a peer.
-          if (key === "pi" || key === "opencode" || key === "cursor" || model.model.startsWith("acp:") || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
+          const engineRefusal = remoteEngineRefusal({ engine: key, model: model.model, allowed: store.settings.get().remoteEngines })
+          if (engineRefusal || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
           safe = { ...safe, turnOptions: remoteTurnOptions(safe.turnOptions) }
         }
         // Only the submitted text grants resource reads; attached thread/PR/agent context does not.
@@ -6548,7 +6603,7 @@ export async function startDaemon(options: DaemonOptions) {
         const extra = baseCatalog.selectable && !connection.peer?.readOnly ? await extensions.providerModels(sessionId ? store.sessionDirectory(sessionId)! : process.cwd()) : []
         const catalog = extra.length ? { ...baseCatalog, list: () => [...baseCatalog.list().filter((model) => !extra.some((item) => item.id === model.id)), ...extra] } : baseCatalog
         if (command.type === "session.model.set") {
-          if ((connection.remoteAddress || connection.peer) && command.choice && ["pi", "opencode", "cursor"].includes(modelEngine(command.choice, catalog) ?? "")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
+          if ((connection.remoteAddress || connection.peer) && command.choice && ["opencode", "cursor"].includes(modelEngine(command.choice, catalog) ?? "") || (connection.remoteAddress || connection.peer) && command.choice && modelEngine(command.choice, catalog) === "pi" && !remoteEngineAllowed(store.settings.get().remoteEngines, "pi")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
           let problem = command.choice ? invalidChoice(command.choice, catalog) : undefined
           if (problem?.startsWith("unknown model") && baseCatalog.discover) { await baseCatalog.discover(); problem = invalidChoice(command.choice!, catalog) }
           if (problem) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${problem}` })
@@ -6840,6 +6895,17 @@ export async function startDaemon(options: DaemonOptions) {
         try { return reply(connection, command.id, { ok: true, result: await projectControl.run(command.directory, command.input) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: redactSecrets(error instanceof Error ? error.message : String(error)).text.slice(0, 1000) }) }
       }
+      case "sync.peer": {
+        // Another daemon syncing with this one: only over the remote listener, with a sync or full token, never read-only.
+        if (!connection.peer || connection.peer.readOnly || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: session sync needs a remote sync or full token" })
+        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input) }) }
+        catch (error) { return reply(connection, command.id, syncFailure(error)) }
+      }
+      case "sync.control": {
+        if (connection.remoteAddress || connection.peer || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: sync is managed on this machine only" })
+        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).control(command.input) }) }
+        catch (error) { return reply(connection, command.id, syncFailure(error)) }
+      }
       case "project.rest": {
         try { return reply(connection, command.id, { ok: true, result: await (await projectRestService()).run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: error instanceof ProjectRestError ? error.code : "invalid_command", message: error instanceof ProjectRestError ? error.message : "Project operation failed" }) }
@@ -7078,6 +7144,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       if (remote) {
         connection.remoteAddress = socket.remoteAddress ?? "unknown"
+        if (options.mode === "tailscale" && !tailscaleAddress(connection.remoteAddress)) return rejectRemote(connection, "unauthorized")
         if (backoff.blocked(connection.remoteAddress)) return rejectRemote(connection, "rate_limited")
         connection.authTimer = setTimeout(() => {
           backoff.fail(connection.remoteAddress!)
@@ -7137,7 +7204,7 @@ export async function startDaemon(options: DaemonOptions) {
           } else {
             // A command that throws is that command's error, never an unhandled rejection that ends the daemon for every client.
             const command = decoded.frame.body
-            void handleOnce(connection, command).catch((error) => reply(connection, command.id, { ok: false, code: "internal", message: (error instanceof Error ? error.message : String(error)).slice(0, 500) }))
+            void handleOnce(connection, command).catch((error) => reply(connection, command.id, { ok: false, code: error instanceof Error && error.name === "SessionOwnedElsewhere" ? "forbidden" : "internal", message: (error instanceof Error ? error.message : String(error)).slice(0, 500) }))
           }
           newline = connection.buffer.indexOf("\n")
         }
@@ -7224,8 +7291,13 @@ export async function startDaemon(options: DaemonOptions) {
       }
     },
   })
+  // A synced data dir starts sync before any client can write, so a hub's leases and a device's copies are guarded from the first command.
+  const syncHub = existsSync(path.join(options.dir, "sync-hub.json"))
+  if (syncHub || existsSync(path.join(options.dir, "sync.json"))) {
+    try { (await syncService()).boot(syncHub) } catch (error) { logLine("warn", `[SYNC]: not started: ${error instanceof Error ? error.message : String(error)}`) }
+  }
   const tcpListener = localSecret ? Bun.listen<Connection>({ hostname: "127.0.0.1", port: 0, socket: socketHandlers(false, true) }) : undefined
-  const listener = tcpListener ?? Bun.listen<Connection>({ unix: options.socketPath, socket: socketHandlers(false) })
+  const listener = tcpListener ??Bun.listen<Connection>({ unix: options.socketPath, socket: socketHandlers(false) })
   // The store's writer lock makes this the only daemon of the directory: an endpoint file from an earlier tcp run is stale.
   if (!localSecret) rmSync(localEndpointPath(options.dir), { force: true })
   if (localSecret && tcpListener) writeLocalEndpoint(options.dir, { transport: "tcp", hostname: "127.0.0.1", port: tcpListener.port, token: localSecret, pid: process.pid })
@@ -7270,8 +7342,30 @@ export async function startDaemon(options: DaemonOptions) {
   }
   let stopped = false
   let remoteWatch: ReturnType<typeof setInterval> | undefined
+  let tlsWatch: { close(): void } | undefined
   try {
-    if (remoteConfig) remoteListener = Bun.listen<Connection>({ ...remoteConfig, socket: socketHandlers(true) })
+    if (remoteConfig) {
+      remoteListener = Bun.listen<Connection>({ ...remoteConfig, socket: socketHandlers(true) })
+      // A renewed certificate takes effect without a restart: the listener is reopened on its port with the new files, and open connections stay.
+      if (remoteConfig.tls && options.tlsCert && options.tlsKey) {
+        const { readTlsFiles, watchTlsFiles } = await import("./tls-reload")
+        const [certFile, keyFile] = [options.tlsCert, options.tlsKey]
+        type TlsPair = NonNullable<typeof remoteConfig.tls>
+        let current: TlsPair = remoteConfig.tls
+        tlsWatch = watchTlsFiles({ files: [certFile, keyFile], changed() {
+          const read = readTlsFiles(certFile, keyFile)
+          if (!read || !remoteListener || read.cert.equals(current.cert) && read.key.equals(current.key)) return
+          const next = read as TlsPair
+          const previous = remoteListener
+          const reopen = (tls: TlsPair) => Bun.listen<Connection>({ ...remoteConfig, port: previous.port, tls, socket: socketHandlers(true) })
+          previous.stop()
+          try { remoteListener = reopen(next); current = next; logLine("info", "[REMOTE]: TLS certificate reloaded") } catch {
+            try { remoteListener = reopen(current) } catch { logLine("error", "[REMOTE]: TLS reload failed and the listener could not reopen; restart the daemon") }
+            logLine("warn", "[REMOTE]: new TLS certificate or key rejected; keeping the previous one")
+          }
+        } })
+      }
+    }
     if (sessionHttpConfig) sessionHttpListener = Bun.serve({ ...sessionHttpConfig, fetch: sessionHttp, maxRequestBodySize: 80 * 1024, idleTimeout: 0 })
     if (serverConfig.enabled) {
       const { createHttpAdapter } = await import("./http")
@@ -7314,7 +7408,11 @@ export async function startDaemon(options: DaemonOptions) {
           return { receive: (data) => handlers.data?.(socket, Buffer.from(data)), close: () => closeHttp(connection) }
         },
       } })
-      if (options.httpListen !== false) httpListener = Bun.serve({ hostname: serverConfig.hostname, port: serverConfig.port, idleTimeout: 60, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter.fetch, websocket: httpAdapter.websocket })
+      if (options.httpListen !== false && serverConfig.socket) {
+        // A gateway's per-account daemon (docs/gateway.md): a Unix socket in a folder whose group is the gateway's; only a stale socket is replaced.
+        const { bindHttpSocket } = await import("./http-socket")
+        httpListener = bindHttpSocket(serverConfig.socket, (unix) => Bun.serve({ unix, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter!.fetch, websocket: httpAdapter!.websocket }))
+      } else if (options.httpListen !== false) httpListener = Bun.serve({ hostname: serverConfig.hostname, port: serverConfig.port, idleTimeout: 60, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter.fetch, websocket: httpAdapter.websocket })
     }
     if (options.mflowListen) {
       const address = mflowListenerAddress(options.mflowListen)
@@ -7452,6 +7550,7 @@ export async function startDaemon(options: DaemonOptions) {
     mflowListener?.stop(true)
     await channels.stop()
     clearInterval(remoteWatch)
+    tlsWatch?.close()
     clearInterval(idleWatch)
     httpAdapter?.close()
     pty.dispose()
@@ -7477,6 +7576,7 @@ export async function startDaemon(options: DaemonOptions) {
     mflow.stop()
     root.dispose()
     await projectRest?.close()
+    await sync?.then((service) => service.stop(), () => {})
     store.close()
     rmSync(options.socketPath, { force: true })
     if (localSecret) removeLocalEndpoint(options.dir, localSecret)

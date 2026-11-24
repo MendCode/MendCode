@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, transientFailure, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -2780,5 +2780,62 @@ describe("retainAgentTurns", () => {
   test("with every mapper still running, the oldest leaves; under the limit nothing leaves", () => {
     expect(retainAgentTurns(Array.from({ length: 9 }, (_, n) => mapper(`m${n}`, true))).map((entry) => entry.name)).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"])
     expect(retainAgentTurns([mapper("a", false), mapper("b", true)]).map((entry) => entry.name)).toEqual(["a", "b"])
+  })
+})
+
+describe("claude engine network failures", () => {
+  const failed = (text: string) => ({ ...result(), subtype: "success", is_error: true, result: text })
+  const instant = { sleep: async () => {}, probe: async () => true }
+
+  test("a turn that ends on ENOTFOUND is resumed in a fresh process of the same session, with a retrying notice, and then succeeds", async () => {
+    const first = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)")) } })
+    const second = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "done"); api.push(result()) } })
+    const h = engineWith([first, second], instant)
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    expect(turn.events).toContainEqual(expect.objectContaining({ type: "retrying", attempt: 1, offline: true }))
+    expect(h.spawned).toHaveLength(2)
+    expect(h.spawned[1]!.args).toContain("--resume=cc-session-1")
+    expect(second.written.find((message) => message.type === "user").message.content.map((part: any) => part.text).join("")).toContain("Continue exactly where you left off")
+    h.engine.stop()
+  })
+
+  test("a real error (not logged in, invalid request) fails at once without a retry", async () => {
+    const only = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("Not logged in · Please run /login")) } })
+    const h = engineWith([only], instant)
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toMatchObject({ status: "error", code: "claude_turn_failed" })
+    expect(turn.events.some((event) => event.type === "retrying")).toBe(false)
+    expect(h.spawned).toHaveLength(1)
+    h.engine.stop()
+  })
+
+  test("retries are bounded: the last failure is reported", async () => {
+    const fakes = [0, 1, 2].map(() => fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: 503 overloaded")) } }))
+    const h = engineWith(fakes, { ...instant, retries: 2 })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toMatchObject({ status: "error", code: "claude_turn_failed" })
+    expect(h.spawned).toHaveLength(3)
+    expect(turn.events.filter((event) => event.type === "retrying")).toHaveLength(2)
+    h.engine.stop()
+  })
+
+  test("after a failed turn the next message runs in a fresh process that resumes the session", async () => {
+    const first = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: Not logged in")) } })
+    const second = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "back"); api.push(result()) } })
+    const h = engineWith([first, second], instant)
+    const a = turnInput()
+    await h.engine.runTurn(a.input)
+    const b = turnInput({ sessionId: a.input.sessionId, text: "continua" })
+    expect(await h.engine.runTurn(b.input)).toEqual({ status: "ok" })
+    expect(h.spawned).toHaveLength(2)
+    h.engine.stop()
+  })
+
+  test("transientFailure tells network, provider and real errors apart", () => {
+    expect(transientFailure("[CLAUDE]: API Error: Can't reach the API server (ENOTFOUND)")).toBe("network")
+    expect(transientFailure("[CLAUDE]: API Error: 529 overloaded_error")).toBe("transient")
+    expect(transientFailure("[CLAUDE]: API Error: 401 invalid x-api-key")).toBeUndefined()
+    expect(transientFailure("[CLAUDE]: Claude usage limit reached")).toBeUndefined()
   })
 })

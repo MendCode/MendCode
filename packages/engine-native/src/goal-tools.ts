@@ -36,7 +36,7 @@ export const UPDATE_GOAL_TOOL = {
     "Set status `complete` only when the objective has actually been achieved and no required work remains. Do not mark a goal complete because its budget is nearly used or because you are stopping work.",
     "Set status `blocked` only after the same blocking condition has recurred for at least 3 consecutive goal turns and you need the user to change something (a missing credential, an unavailable service, a decision only they can make). A resumed goal starts a fresh audit.",
     "Set status `paused` only when the user explicitly asks you to pause the goal.",
-    "You cannot use this tool to resume a goal, change its budget, or mark it budget-limited or usage-limited: those are controlled by the user and the system.",
+    "You cannot use this tool to resume a goal (tell the user to type /goal resume), change its budget, or mark it budget-limited or usage-limited: those are controlled by the user and the system.",
     "When you mark a goal with a token budget complete, report the final token usage from the result to the user.",
   ].join(" "),
   args: z.object({
@@ -81,6 +81,6 @@ export function runGoalTool(port: GoalPort, name: string, args: unknown): ToolRe
   if (!updated.ok) return fail("update_goal", updated.message)
   const { goal } = updated
   const usage = goal.tokenBudget !== undefined ? ` Report the final token usage to the user: ${goal.tokensUsed} of ${goal.tokenBudget} tokens used.` : ""
-  const message = goal.status === "complete" ? `Goal marked complete.${usage}` : goal.status === "blocked" ? "Goal marked blocked. Tell the user what blocks it and what they must change; continuation stops until they resume it." : "Goal paused."
+  const message = goal.status === "complete" ? `Goal marked complete.${usage}` : goal.status === "blocked" ? "Goal marked blocked. Tell the user what blocks it and what they must change; continuation stops until they type /goal resume." : "Goal paused."
   return done(`goal ${goal.status}`, { goal: facts(goal), message })
 }

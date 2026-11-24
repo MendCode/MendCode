@@ -476,3 +476,30 @@ describe("goals across a daemon restart", () => {
     expect(second.steps.length).toBe(0)
   })
 })
+
+describe("goal waiting on background commands", () => {
+  test("a goal turn that ends with a background command running starts no turn on a timer; the command's end starts one with its result, then the goal goes on", async () => {
+    const h = await boot({ shell: true, steps: [callTool("shell", { command: "sleep 1.5; echo built-ok", background: true }), stop("started it, waiting"), stop("saw it end"), callTool("update_goal", { status: "complete", note: "built" }), stop("done")] })
+    harnesses.push(h)
+    const sessionId = await openSession(h)
+    expect(okResult(await h.client.send({ type: "goal.set", sessionId, objective: "get the build green" })).ok).toBe(true)
+    await until(() => finished(h, sessionId) >= 1)
+    // While the command runs no continuation starts, however long the session sits idle.
+    await settle(700)
+    expect(started(h, sessionId)).toBe(1)
+    expect(h.requests).toHaveLength(2)
+    expect(goalOf(h, sessionId)).toMatchObject({ status: "active" })
+    // Its end is the event: a turn starts and the model sees the result, and only then does the goal continue.
+    await until(() => goalOf(h, sessionId)?.status === "complete", 15_000)
+    expect(lastUser(h.requests[2]!)).toContain("built-ok")
+    expect(started(h, sessionId)).toBe(3)
+  }, 30_000)
+
+  test("with nothing running in the background the goal continues at once, as before", async () => {
+    const h = await start([stop("one"), callTool("update_goal", { status: "complete", note: "ok" }), stop("done")])
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "plain" })
+    await until(() => goalOf(h, sessionId)?.status === "complete")
+    expect(started(h, sessionId)).toBe(2)
+  })
+})

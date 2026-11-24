@@ -1,5 +1,5 @@
 ---
-summary: prompt modes (how much MendCode text each call carries) and model families
+summary: prompt modes (text per call) and model families
 docs: prompt-modes
 aliases: prompt-mode, prompt, modes, mode, families, family, focus
 ---

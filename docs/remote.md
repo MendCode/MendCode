@@ -4,6 +4,8 @@ Attach your terminal to a daemon on another machine using an SSH tunnel, authent
 
 Start with [Setup](#setup) for TCP or [SSH tunnel: simplest safe path](#ssh-tunnel-simplest-safe-path) to forward an existing Unix socket.
 
+For several people on one server with their own domain and passkeys, see the [gateway](gateway.md). Pair a terminal with `remote login URL`, then `attach URL`.
+
 ## Session HTTP bridge (B87)
 
 The daemon's `--http-listen 127.0.0.1:9877` opt-in flag enables four donor-shaped routes; no HTTP listener opens by default.
@@ -36,7 +38,7 @@ mendcode remote token list --dir /srv/mendcode
 mendcode remote token revoke laptop --dir /srv/mendcode
 ```
 
-`create` prints a random token once. Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`.
+`create` prints a random token once; `--expires-days N` makes it stop working after N days (`list` shows when). Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`.
 
 | Command | Result |
 |---|---|
@@ -47,7 +49,7 @@ Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Na
 
 ### Start the daemon
 
-Start a foreground daemon that listens (`daemon start` and the background service stay local-only, so a stray `remote.json` never opens a port on their own):
+Start a foreground daemon that listens (`daemon start` and a background service installed without `--listener` stay local-only, so a stray `remote.json` never opens a port on their own; see [Remote daemon as a service](#remote-daemon-as-a-service)):
 
 ```sh
 mendcode daemon run --dir /srv/mendcode --cwd /srv/project --listen 127.0.0.1:9876
@@ -82,6 +84,98 @@ mendcode --connect server.example:9876 --ca /private/path/ca.pem --token-file /p
 | `--token` | No plain flag exists |
 
 Transport flags also work with automation commands, for example `mendcode --connect server.example:9876 session list --all`.
+
+### Remote daemon as a service
+
+The user service (launchd or systemd-user) is local-only unless it is installed with a listener, so it survives a reboot with its listener:
+
+```sh
+mendcode daemon service install --listener                       # listener from <dir>/remote.json
+mendcode daemon service install --listen 100.64.0.9:9876 --tls-cert /srv/tls/c.pem --tls-key /srv/tls/k.pem
+```
+
+The same checks as `daemon run` happen before anything is written: a non-loopback address needs both PEM files, and a listener that could not start is refused instead of crash-looping under the service manager. The flags are kept in the service binding, so `restart` and `status` keep them; to change them, stop and reinstall. Every other background daemon (`daemon start`, loops, Dream) stays local. Tokens are still created with `remote token create`, and a remote client still cannot change host-local authority settings.
+
+**Tailscale mode.** `remote.json` accepts `"mode": "tailscale"`: the listener binds only a literal Tailscale address (`100.64.0.0/10` or `fd7a:115c:a1e0::/48`; a name or any other address is refused, TLS is still required) and a peer from outside those ranges is rejected before it can authenticate. A certificate from `tailscale cert` works as `tlsCert`/`tlsKey`.
+
+**Certificate renewal.** A daemon that listens with TLS notices when the certificate or key file is rewritten or replaced and serves the new certificate from then on, with no restart; open connections stay. A new pair that does not load is ignored and the previous one keeps serving. A daemon without TLS watches nothing.
+
+### Remote engines
+
+By default a remote client cannot run turns on engines that execute tools on the host (ACP agents, pi). The host can allow them with the local-only `remoteEngines` setting, for example `{ "remoteEngines": ["acp:hermes"] }` (`"acp"` allows every configured ACP agent, `"pi"` pi). Remote clients cannot change it, read-only tokens still cannot submit turns, and opencode and Cursor stay local. Telegram and Discord turns use the daemon's own socket and need no listing.
+
+### Saved remotes and auto-connect
+
+```sh
+mendcode remote add vps vps.example:9876 --token-file /private/path/token --ca /private/path/ca.pem --default
+mendcode remote list | default [NAME|none] [--local-first|--remote-first] | remove NAME
+mendcode                       # connects to the default remote
+mendcode --remote lab          # a named one; --local ignores the saved default
+```
+
+`<data dir>/remotes.json` (mode 0600) holds names, addresses and token-file and CA paths, never a token. An explicit `--connect`, `--server-url` or `--socket` wins. The default applies only to a bare terminal start (`mendcode`, `mendcode --session ID`), never to `daemon`, `session` or other commands. `remote-first` (the default) checks that the remote answers and otherwise starts on this machine with a one-line note; `local-first` uses a local daemon that already runs and goes remote only when none does. `--remote NAME` never falls back. A terminal without `remotes.json` reads nothing and loads nothing extra.
+
+### One command for a VPS (`remote setup`)
+
+For a Linux VPS with systemd and Tailscale (MagicDNS and HTTPS certificates enabled for the tailnet), where `ssh USER@HOST` already works without a password prompt:
+
+```sh
+mendcode remote setup vps.tailnet.ts.net --ssh user@vps --dry-run     # prints the plan; opens no connection
+mendcode remote setup vps.tailnet.ts.net --ssh user@vps               # does it
+mendcode                                                              # now connects to the VPS
+```
+
+HOST is the host's Tailscale name; the host must report the same name. The steps, each skipped when the host already has the result:
+
+1. Check the host over SSH (read-only): Linux, systemd, Tailscale running.
+2. Install MendCode with the official `install.sh` (https only, `--installer-url` to change it). The installer checks the binary's SHA256 and the signature when cosign is present. An installed version is kept; `--upgrade` replaces it, `--channel` picks stable, beta or nightly.
+3. `tailscale cert` into `<remote dir>/tls` (default `~/.mendcode`, `--remote-dir`) and a systemd user timer `mendcode-cert.timer` that renews it every 30 days; the daemon reloads it without a restart. If `tailscale cert` needs permission, run `sudo tailscale set --operator=$USER` on the host once.
+4. Write `remote.json` (`"mode": "tailscale"`, the host's tailnet address, port 9876 or `--port`; other keys already there are kept).
+5. Create a token named after this device (`--device`, `--expires-days N` to make it expire) in the host's token store and save it to `<data dir>/remote/<device>.token` (mode 0600). It is never printed or logged; `--rotate` replaces it.
+6. `daemon service install --listener` and start (`--reinstall-service` to force; it stops a running service first, which refuses while a turn runs).
+7. Save the remote (named after the host, `--name`) as the default (`--no-default` to skip) and check that it answers over the tailnet.
+
+An SSH, Tailscale or certificate failure stops with the cause and what to do. Run the same command again to continue: finished steps are detected on the host or in the ledger `<data dir>/remote-setup/NAME.json` (mode 0600, no secrets).
+
+**Another device** (needs SSH to the host): `mendcode remote pair vps.tailnet.ts.net --ssh user@vps --device tablet` creates that device's own token and saves the remote. `mendcode remote unpair tablet --remote vps` revokes it on the host (connected clients drop within a second) and removes this machine's token file. Tokens never expire unless created with `--expires-days`; an expired token fails like a revoked one. There is no shared token: one name per device.
+
+**Migrating** (all optional and previewable with `--dry-run`; credentials never travel):
+
+| Flag | What moves |
+|---|---|
+| `--migrate-settings` | This machine's [config bundle](config-bundle.md) is imported on the host with `--rewrite-home` and `--on-conflict keep`: skills, commands, themes, preference settings. Provider credentials, tokens, `environment.enc`, keys and authority settings (permissions, tier, models) are left out or wait for approval on the host. Once per saved remote. |
+| `--acp-agents` | ACP agents of this machine whose command is a plain program name found on the host's PATH, as command and args only. No `env` values, no credentials; sign in on the host. Agents already there are kept. To use one from this machine, the host lists it in `remoteEngines`. Hermes and other agents can run on both machines. |
+| `--migrate-sessions` | Up to `--session-limit` (default 100) newest sessions of all projects, as transcripts imported on the host as new sessions (the host owns them afterwards; there is no offline merge). A project is matched by its normalized git remote plus the path inside the repo, after any `--path-map LOCAL=REMOTE` prefix rules; clones are looked for under `~/code`, `~/src`, `~/projects`, `~/work`, `~/dev`, `~/repos`, `~/git` and each `--search-root`. `--clone-missing` clones a repository the host lacks into `~/code` (the host needs git access). Sessions whose project is not on the host are skipped with the reason, and a later run moves them once it is. Exports are bounded (the `export` limit), and a cut one is noted. Attachment files and engine-side state (ACP session ids) do not move. |
+
+**Keeping sessions in step:** `--sync` (on `setup` or `pair`) also creates a sync-only token and turns on [session sync](sync.md): the host's sessions show here as read-only mirrors, `mendcode sync take ID` continues one on this machine, and `mendcode sync handoff ID` gives the host a session made here.
+
+Not done yet: the device-key challenge that would replace the bearer token and approval-code pairing without SSH.
+
+### Code between machines (`remote code`)
+
+Sessions move with `remote setup --migrate-sessions`; the code moves with git. Nothing here runs unless you type it, and none of it loads at start-up.
+
+```sh
+mendcode remote code handoff [PROJECT] [--git-remote origin] [--dry-run]   # on the machine you leave
+mendcode remote code receive [PROJECT] [--git-remote origin] [--branch mend/wip-...] [--into DIR]   # on the machine you arrive at
+mendcode remote code clone GIT_URL [--root DIR] [--search-root DIR] [--dry-run]
+```
+
+**Handoff.** It takes a snapshot of the working tree with a temporary index: tracked changes (including deletions and files staged as new) plus new files that are not ignored. The snapshot is committed on top of HEAD and pushed to a new branch `mend/wip-<branch>-<time>-<commit>` of the git remote (`origin` unless `--git-remote`). The push is never forced and the branch name is new each time. Your branch, index, files, stash and worktrees are not touched; `--dry-run` lists the changed files and pushes nothing. New files that look like credentials (`.env`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`, ...) or are over 5 MiB are left out and named; more than 5,000 new files stops it (add the build output to `.gitignore`). A clean tree has nothing to hand off. The git remote must already be reachable with your own credentials (it never asks for a password).
+
+**Receive.** It fetches `mend/wip-*` into remote-tracking refs only, picks the newest (or `--branch`), and checks it out with `git worktree add` in `<data dir>/remote-code/worktrees/` (or `--into`) on a local branch of the same name. It never changes your checkout, never resets or deletes a branch, and a second run reports the worktree that already exists. To bring the changes into your own checkout, `git cherry-pick --no-commit <commit>` (printed). Old `mend/wip-*` branches stay on the git remote until you delete them.
+
+**Clone here.** `clone` looks under `--root` (default `~/code`), `--search-root` and `~/code`, `~/src`, `~/projects`, `~/work`, `~/dev`, `~/repos`, `~/git` for a clone with the same normalized git remote (the same matching as `--migrate-sessions`) and clones only when none exists.
+
+**Live two-way sync (opt-in, per project).** Needs [Mutagen](https://mutagen.io) installed by you (MendCode does not bundle or install it).
+
+```sh
+mendcode remote code live enable [PROJECT] --ssh USER@HOST [--remote-path /abs/dir | --path-map LOCAL=REMOTE] [--ignore PATTERN] [--include-env]
+mendcode remote code live status|resume|disable [PROJECT] [--name N]
+mendcode remote code live list
+```
+
+`enable` finds the clone on the host by git remote (or uses `--remote-path` / `--path-map`) and refuses unless both clones are the same repository, on the same branch, at the same commit. It then runs `mutagen sync create` in `two-way-safe` mode, which keeps conflicts instead of overwriting either side. The `.git` folder, `node_modules`, `dist`, `build`, `.next`, `target`, `.venv`, `*.log` and `.env` / `.env.*` (unless `--include-env`) are never synced. After that each side commits on its own; fetch on the side that is behind. `live status` compares the branches over SSH and pauses the session when they differ (`live resume` checks again before resuming) and shows Mutagen's state, conflicts and last error. `disable` terminates only sessions this command created (recorded in a ledger under `<data dir>/remote-code/`, mode 0600, no secrets) and leaves the files as they are. Without Mutagen, `enable` says so and does nothing.
 
 ### Choose a session
 

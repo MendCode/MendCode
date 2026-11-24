@@ -7,7 +7,8 @@ import { connectHttpSocket } from "./http-socket"
 import { connectLoopback, type LoopbackAttach } from "./loopback-socket"
 
 export type LocalTcpTarget = { hostname: "127.0.0.1"; port: number; token: string }
-export type RemoteTransport = { hostname: string; port: number; token: string; tls?: boolean; ca?: string; httpUrl?: string; username?: string; directory?: string }
+/** `freshToken`: a short-lived token asked for before each HTTP connection (a gateway device, docs/gateway.md); `token` is then unused. */
+export type RemoteTransport = { hostname: string; port: number; token: string; tls?: boolean; ca?: string; httpUrl?: string; username?: string; directory?: string; freshToken?: () => Promise<string> }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never
 export type CommandInput = DistributiveOmit<Exclude<Command, { type: "hello" }>, "id" | "clientId">

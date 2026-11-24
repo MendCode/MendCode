@@ -726,9 +726,12 @@ export function createNativeEngine(options: {
   const advisorMeta = (trigger: AdvisorTrigger, consultation: AdvisorConsultation) => ({ advisorTrigger: trigger, ...(consultation.model ? { advisorModel: consultation.model } : {}), ...(consultation.account ? { advisorAccount: consultation.account } : {}), ...(consultation.usage ? { advisorInputTokens: consultation.usage.input, advisorOutputTokens: consultation.usage.output } : {}) })
   const advisorFailed = (consultation: AdvisorConsultation) => consultation.verdict.fallback !== undefined && consultation.verdict.fallback !== "unparsable"
 
+  /** Project tools that declare they change nothing: a read-only workflow task keeps them (see `workflowToolDenied`). */
+  const hintedReadOnly = new Set<string>()
   /** Adds project tools to a base toolset for one turn; built-in names win on collision unless the tool says `override`. */
   function withProjectTools(base: Toolset, extra: ProjectTool[]): Toolset {
     extra = extra.filter((tool) => tool.name !== CODE_TOOL.name)
+    for (const tool of extra) void (tool.readOnlyHint ? hintedReadOnly.add(tool.name) : hintedReadOnly.delete(tool.name))
     const specOf = (tool: ProjectTool): ToolSpec => ({ name: tool.name, description: tool.description, parameters: tool.jsonSchema ?? toSpec(tool).parameters })
     const replacing = new Map(extra.filter((tool) => tool.override && base.tools.has(tool.name)).map((tool) => [tool.name, tool] as const))
     const added = extra.filter((tool) => !base.tools.has(tool.name))
@@ -1079,7 +1082,7 @@ export function createNativeEngine(options: {
     const elsewhere = choice ? options.foreignModel?.(choice.model) : undefined
     if (elsewhere) throw new Error(`${choice!.model} runs on ${elsewhere}, not on MendCode's own engine; send the message again to run it there, or pick another model with /model`)
     if (role === "main" && textKind === "agent_message" && !override) turnModels.set(input.sessionId, { choice: selected })
-    callTools = callTools.filter((tool) => !workflowToolDenied(input.workflow?.execution, tool.name))
+    callTools = callTools.filter((tool) => !workflowToolDenied(input.workflow?.execution, tool.name, undefined, hintedReadOnly.has(tool.name)))
     /** Answer text already shown when the connection dropped; the next attempt continues it in the same item. */
     let carried: { itemId: ItemId; text: string } | undefined
     /**
@@ -1448,7 +1451,7 @@ export function createNativeEngine(options: {
     const denied = rulePatterns.some((pattern) => matchingRule(permissionName(tool.name), pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (denied) return settle({ kind: "deny", by: "rule", reason: `permission rule denies ${tool.name}` }, "deterministic", "Permission rule denies the action")
     // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: its refusal says nothing of plans.
-    if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId) ? READ_ONLY_RUN_REFUSAL : "plan mode is read-only; investigate, then propose the plan with plan_submit" }
+    if (mode === "plan" && tool.permission !== "read" && !(tool.readOnlyHint && input.workflow?.execution.readOnly)) return { kind: "deny", by: "rule", reason: input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId) ? READ_ONLY_RUN_REFUSAL : "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
     const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...botFor(input.sessionId, tool.name) }).catch(() => undefined)
@@ -1648,7 +1651,7 @@ export function createNativeEngine(options: {
       return { result, stop }
     }
     const special = PLAN_TOOL_NAMES.has(call.name) || call.name === TASK_TOOL.name || call.name === SECRETS_TOOL.name || GOAL_TOOL_NAMES.has(call.name) || call.name === CODE_TOOL.name || call.name === ADVISOR_TOOL.name
-    const workflowDenial = workflowToolDenied(input.workflow?.execution, call.name, toolset.tools.get(call.name)?.permission)
+    const workflowDenial = workflowToolDenied(input.workflow?.execution, call.name, toolset.tools.get(call.name)?.permission, toolset.tools.get(call.name)?.readOnlyHint === true)
     if (workflowDenial) return finish({ output: workflowDenial, truncated: false, title: call.name, isError: true })
     if (special && workflowToolAsks(input.workflow?.execution, call.name, "execute")) {
       const patterns = permissionPatterns(call.name, call.args, options.cwdFor(input.sessionId))

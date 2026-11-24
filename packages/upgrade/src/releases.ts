@@ -22,6 +22,8 @@ const NIGHTLY_ASSET = /^mendcode-(\d{1,9}\.\d{1,9}\.\d{1,9}-nightly\.\d{8}\.[1-9
 const API_ASSET_URL = /^https:\/\/api\.github\.com\/repos\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases\/assets\/\d+$/
 const OS_NAMES = ["darwin", "linux"]
 const ARCH_NAMES = ["arm64", "x64"]
+/** What a Windows user runs when `mendcode upgrade` cannot replace the executable (the release ships install.ps1 and mendcode-<version>-windows-x64.exe). */
+export const WINDOWS_REINSTALL = "irm https://github.com/MendCode/MendCode/releases/latest/download/install.ps1 | iex"
 
 /** `1.2.3`, `v1.2.3` or `1.2.3-beta.4`; anything else (for example the checkout's `0.0.1-dev`) has no comparable version. */
 export function parseVersion(text: string): Semver | undefined {
@@ -108,9 +110,10 @@ export function decide({ current, release, channel }: { current: string; release
 
 /** Direct binary assets; the version is the tag without its leading `v`. */
 export function platformAsset({ os, arch }: Platform, tag: string) {
-  if (!OS_NAMES.includes(os) || !ARCH_NAMES.includes(arch)) throw new UpgradeError("unsupported-platform", `no release binary for ${os}-${arch} (built: ${OS_NAMES.join("|")} x ${ARCH_NAMES.join("|")})`)
+  if (os === "win32" && arch !== "x64") throw new UpgradeError("unsupported-platform", `no release binary for windows-${arch} (built: windows-x64); reinstall the newest release instead: ${WINDOWS_REINSTALL}`)
+  if (os !== "win32" && (!OS_NAMES.includes(os) || !ARCH_NAMES.includes(arch))) throw new UpgradeError("unsupported-platform", `no release binary for ${os}-${arch} (built: ${OS_NAMES.join("|")} x ${ARCH_NAMES.join("|")}, windows-x64)`)
   if (!STABLE_TAG.test(tag) && !BETA_TAG.test(tag) && !DEV_TAG.test(tag) && !NIGHTLY_TAG.test(tag)) throw new UpgradeError("bad-response", `unsupported release tag: ${tag}`)
-  return `${BINARY_PREFIX}-${tag.replace(/^v/, "")}-${os}-${arch}`
+  return os === "win32" ? `${BINARY_PREFIX}-${tag.replace(/^v/, "")}-windows-x64.exe` : `${BINARY_PREFIX}-${tag.replace(/^v/, "")}-${os}-${arch}`
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)

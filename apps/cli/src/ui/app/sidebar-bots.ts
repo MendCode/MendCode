@@ -295,6 +295,13 @@ export function createSidebarBots(ctx: AppContext) {
     }
   }
 
+  /** A session was deleted (anywhere): it leaves the other folders' list at once, and the bot list is asked again when it was a bot's chat. */
+  function onRemoved(sessionId: string) {
+    if (!live()) return
+    others = others.filter((session) => session.sessionId !== sessionId)
+    if (botsOn() && botOfSession.delete(sessionId)) { if (shown()) wantBots(); else stale = true }
+  }
+
   /** The connection came back: events may have been missed, so the next pass asks for both lists whole. */
   function resync() {
     if (!live()) return
@@ -768,5 +775,5 @@ export function createSidebarBots(ctx: AppContext) {
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
   // The report is kept current only while the list is on screen (hidden, a push sets a flag and patches nothing), so no one else reads it then.
-  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, newChat, newChatAnywhere: (deps: SidebarDeps) => pickFolder(undefined, deps), pointer, refresh, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, newChat, newChatAnywhere: (deps: SidebarDeps) => pickFolder(undefined, deps), pointer, refresh, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, onRemoved, resync, noteActivity: () => wantBots(false) }
 }

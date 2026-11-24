@@ -12,10 +12,10 @@ import { defaultBranch, projectGit, projectGitRoot, ProjectRestError } from "./p
 import { createRestWorktrees } from "./worktree-rest"
 import { createWorktreeGc, type WorktreeScope } from "./worktree-gc"
 import { normalizeReplay } from "./sync-replay"
+import { createBlobStaging } from "./sync-blobs"
 
-/** A session a replay may continue stays bounded: at most this many events, and four blobs mid-upload. */
+/** A session a replay may continue stays bounded: at most this many events (blobs mid-upload: sync-blobs.ts). */
 const MAX_REPLAY_EVENTS = 50_000
-const MAX_STAGED_BLOBS = 4
 
 type Catalog = { version: 1; projects: ProjectRestInfo[]; workspaces: RestWorkspaceInfo[] }
 const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24)
@@ -248,31 +248,8 @@ export function createProjectRest(input: {
     const file = input.store.blobPath(ref.sha256)
     if (!existsSync(file) || input.store.readBlob(ref.sha256).length !== ref.bytes) fail("invalid_command", `Event references blob ${ref.sha256.slice(0, 12)}, which was not uploaded; send it with the blob route first`)
   }
-  /** Staged chunks of blobs being uploaded, in memory and bounded; runs are serialized, so no locking. */
-  const staging = new Map<string, { bytes: number; mime: string; chunks: Buffer[]; received: number }>()
-  function putBlob(request: Extract<ProjectRestInput, { operation: "sync-blob-put" }>["input"]) {
-    const chunk = Buffer.from(request.data, "base64")
-    if (!chunk.byteLength || chunk.byteLength > MAX_SYNC_BLOB_CHUNK_BYTES || chunk.toString("base64") !== request.data) fail("invalid_command", "Blob chunk is not valid base64 of at most 128 KiB")
-    const file = input.store.blobPath(request.sha256)
-    if (existsSync(file) && input.store.readBlob(request.sha256).length === request.bytes) { staging.delete(request.sha256); return { sha256: request.sha256, bytes: request.bytes, received: request.bytes, stored: true } }
-    let entry = staging.get(request.sha256)
-    if (request.offset === 0) {
-      staging.delete(request.sha256)
-      while (staging.size >= MAX_STAGED_BLOBS) staging.delete(staging.keys().next().value!)
-      entry = { bytes: request.bytes, mime: request.mime, chunks: [], received: 0 }
-      staging.set(request.sha256, entry)
-    }
-    if (!entry || entry.received !== request.offset || entry.bytes !== request.bytes) fail("busy", `Blob chunk out of order; expected offset ${entry?.received ?? 0}`)
-    if (entry.received + chunk.byteLength > entry.bytes) fail("invalid_command", "Blob chunk exceeds the declared size")
-    entry.chunks.push(chunk)
-    entry.received += chunk.byteLength
-    if (entry.received < entry.bytes) return { sha256: request.sha256, bytes: entry.bytes, received: entry.received, stored: false }
-    staging.delete(request.sha256)
-    const bytes = Buffer.concat(entry.chunks)
-    if (createHash("sha256").update(bytes).digest("hex") !== request.sha256) fail("invalid_command", "Blob content does not match its hash")
-    input.store.putBlob(bytes, entry.mime)
-    return { sha256: request.sha256, bytes: entry.bytes, received: entry.received, stored: true }
-  }
+  const staging = createBlobStaging(input.store)
+  const putBlob = (request: Extract<ProjectRestInput, { operation: "sync-blob-put" }>["input"]) => staging.put(request)
   async function readBlob(project: ProjectRestInfo, directory: string, request: Extract<ProjectRestInput, { operation: "sync-blob-read" }>["input"], signal: AbortSignal) {
     const info = input.store.projectSync.blobInfo(await directories(project, directory, signal), request.sha256)
     const file = input.store.blobPath(request.sha256)

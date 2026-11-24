@@ -9,8 +9,8 @@ import type { AppContext } from "./context"
 /** `homeMascot` values that are a pet of the pet system (`pets/manifest.ts`); `mend` is the ASCII mascot. */
 export const isPetMascot = (value: string) => /^(user|codex|package|builtin):/.test(value)
 
-/** How many times its own pixels the built-in Mend is drawn at each `mascotSize`. */
-const MEND_SCALES = { small: 1, medium: 2, large: 3 } as const
+/** How many times its own pixels the built-in Mend is drawn in half blocks at each `mascotSize`: the default medium is the compact 13 x 7 robot. */
+export const MEND_SCALES = { small: 1, medium: 1, large: 2 } as const
 
 /** Blank rows of a box: under a picture the image layer places, and the pet's place while it loads. */
 const blankCells = (cols: number, rows: number) => Array.from({ length: rows }, () => [{ text: " ".repeat(cols) }])
@@ -116,8 +116,10 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
         }
         return builtInMend({ textOnly, title })
       }
-      if (!wanted()) return undefined
-      const reserved = (): HomeMascot | undefined => (textOnly ? {} : {
+      // A chosen pet that cannot be shown (not installed, feature off, no pictures or colors here) leaves the slot empty: the default Mend stays for those who chose it.
+      const none: HomeMascot = { none: true }
+      if (!wanted()) return isPetMascot(state.tuiProfile.homeMascot) ? none : undefined
+      const reserved = (): HomeMascot | undefined => (textOnly ? none : {
         pixel: { boxes: reservedHomePetBoxes(state.tuiProfile.mascotSize), lines: blankCells },
         title,
         // Where the place was kept: the prompt's pet stays away as it does from the picture. Nothing moves yet, so no timer starts.
@@ -136,10 +138,10 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       const dirs = input.pets!
       pet ??= module.createHomePet({ dirs: dirs.dirs, cacheDir: dirs.cacheDir, now, moving, onChange: requestFrame })
       void pet.choose(state.tuiProfile.homeMascot)
-      if (pet.missing) return undefined
+      if (pet.missing) return none
       if (!pet.ready) return reserved()
       const shown = pet
-      if (textOnly) return {}
+      if (textOnly) return none
       shown.setWorking(options.working())
       const picture = graphics()
       return {

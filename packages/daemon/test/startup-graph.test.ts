@@ -47,6 +47,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     // Experimental bots (off by default): the service loads with the first bot command, the memory reader with the first turn that runs with the flag on.
     // bot-learn (its notes, skills and schedules) loads with the same first turn; bot-tools stays plain schemas.
     "bot-service", "bot-memory", "bot-recall", "bot-learn",
+    // Session sync (off by default) loads only with sync.json or sync-hub.json in the data dir, or the first sync command.
+    "sync/index", "sync/device", "sync/hub", "sync/ingest", "sync/config", "sync/projects", "sync/memories", "sync-blobs", "project-identity",
     // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
     "bot-hermes",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
@@ -57,7 +59,13 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   // The bots sidebar (all projects, bots section, icons column, a bot's page) loads with the first frame that needs it.
   for (const file of ["apps/cli/src/ui/app/sidebar-bots.ts", "apps/cli/src/view/sidebar-multi.ts", "apps/cli/src/view/bot-icon.ts", "apps/cli/src/view/bot-look.ts", "apps/cli/src/view/bot-card-page.ts"]) expect(inputs.has(file), file).toBe(false)
   // A plain terminal launch never evaluates the headless run, the herdr/tuios reporters (only inside such a pane), the completion script or the session export.
-  for (const file of ["run", "herdr", "support-output", "export", "automation"]) expect(inputs.has(`apps/cli/src/${file}.ts`), file).toBe(false)
+  for (const file of ["run", "herdr", "support-output", "export", "automation", "remote-setup", "remote-setup-projects", "sync-automation", "remote-code"]) expect(inputs.has(`apps/cli/src/${file}.ts`), file).toBe(false)
+  expect(inputs.has("packages/store/src/sync-state.ts")).toBe(false)
+  // Domain mode (off by default): the gateway package loads only for `gateway …`, device pairing for `remote login|logout`
+  // or an HTTPS attach with a saved pairing, and the daemon's HTTP Unix socket only with `--unix-socket`.
+  for (const file of ["cli", "server", "webauthn", "cbor", "setup", "units", "page", "device-key", "state", "audit"]) expect(inputs.has(`packages/gateway/src/${file}.ts`), file).toBe(false)
+  expect(inputs.has("apps/cli/src/gateway-login.ts")).toBe(false)
+  expect(inputs.has("packages/daemon/src/http-socket.ts")).toBe(false)
   // The prompt's vim layer loads with the first frame or key that has the vimMode setting on.
   expect(inputs.has("apps/cli/src/view/vim.ts")).toBe(false)
   expect(inputs.has("apps/cli/src/ui/app/vim-lazy.ts") || inputs.has("apps/cli/src/view/vim-lazy.ts")).toBe(true)

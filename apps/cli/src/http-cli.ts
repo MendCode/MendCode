@@ -2,11 +2,12 @@ import { PROGRAM_NAME } from "@mendcode/program"
 export const HTTP_USAGE = [
   `${PROGRAM_NAME} serve|web --dir DATA [--cwd PROJECT] [--port N] [--hostname 127.0.0.1|::1]`,
   "  --cors ORIGIN (repeatable) · web: --no-open · --pty (opt-in) · --edit (opt-in browser file saves)",
+  "  --unix-socket PATH: listen on a Unix socket instead (behind a gateway, docs gateway)",
   `${PROGRAM_NAME} attach URL [--dir PROJECT] [--continue | --session ID] [--fork] [--diagnostics]`,
   "  --token-file FILE or MENDCODE_TOKEN · --password TOKEN · --username NAME (default mendcode)",
 ].join("\n") + "\n"
 
-const VALUES = new Set(["--dir", "--data-dir", "--cwd", "--project", "--engine", "--session", "--model", "--agent", "--prompt", "--initial-message", "--variant", "--effort", "--token-file", "--ca", "--connect", "--server-url", "--socket", "--password", "--username", "-p", "-u", "--port", "--hostname", "--cors", "--mdns-domain"])
+const VALUES = new Set(["--dir", "--data-dir", "--cwd", "--project", "--engine", "--session", "--model", "--agent", "--prompt", "--initial-message", "--variant", "--effort", "--token-file", "--ca", "--connect", "--server-url", "--socket", "--password", "--username", "-p", "-u", "--port", "--hostname", "--cors", "--mdns-domain", "--unix-socket"])
 export function commandIndex(argv: string[]) {
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!
@@ -16,7 +17,7 @@ export function commandIndex(argv: string[]) {
   return -1
 }
 
-export type ServerCommand = { kind: "serve" | "web"; dir?: string; cwd?: string; engine?: string; port?: number; hostname?: string; cors: string[]; open: boolean; help: boolean; pty?: boolean; edit?: boolean }
+export type ServerCommand = { kind: "serve" | "web"; dir?: string; cwd?: string; engine?: string; port?: number; hostname?: string; cors: string[]; open: boolean; help: boolean; pty?: boolean; edit?: boolean; socket?: string }
 export function parseServerCommand(argv: string[]): ServerCommand | undefined {
   const at = commandIndex(argv)
   const kind = argv[at]
@@ -33,10 +34,14 @@ export function parseServerCommand(argv: string[]): ServerCommand | undefined {
       else if (name === "--edit" || name === "--no-edit") result.edit = name === "--edit"
       continue
     }
-    if (!["--dir", "--data-dir", "--cwd", "--project", "--engine", "--port", "--hostname", "--cors"].includes(name!)) throw new Error(`unknown server flag ${name?.startsWith("-") ? name : "(positional argument)"}`)
+    if (!["--dir", "--data-dir", "--cwd", "--project", "--engine", "--port", "--hostname", "--cors", "--unix-socket"].includes(name!)) throw new Error(`unknown server flag ${name?.startsWith("-") ? name : "(positional argument)"}`)
     const value = inline ?? args[++i]
     if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`)
-    if (name === "--dir" || name === "--data-dir") result.dir = value
+    if (name === "--unix-socket") {
+      if (!value.startsWith("/") || value.length > 100) throw new Error("--unix-socket needs an absolute path of at most 100 characters")
+      result.socket = value
+      result.open = false
+    } else if (name === "--dir" || name === "--data-dir") result.dir = value
     else if (name === "--cwd" || name === "--project") result.cwd = value
     else if (name === "--engine") result.engine = value
     else if (name === "--hostname") {
