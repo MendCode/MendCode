@@ -17,6 +17,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The workflow tools say that a single task is a sub-agent call, not a workflow.
+- `mendcode upgrade` works on Windows: it checks the SHA256 of the release's `mendcode-<version>-windows-x64.exe`, replaces the running `mendcode.exe` where it is installed, and removes the previous file the next time it starts. If the new file cannot take its place, the old one stays. `--rollback` is not available there.
+
+### Fixed
+
+- Windows: after a restart or a killed daemon, starting MendCode no longer fails with "daemon did not start" when the number of the old daemon's process now belongs to another program. A start that still fails says how the daemon exited and who holds the data directory.
 
 - Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
 

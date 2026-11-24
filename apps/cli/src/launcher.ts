@@ -148,6 +148,7 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
   // closing this terminal (no SIGHUP) and its children (e.g. codex app-server) can never compete with
   // the client's raw-mode TTY or be stopped by terminal job control.
   const deadline = Date.now() + (options.timeoutMs ?? 5_000)
+  let lastExit: number | null = null
   // A Claude Code shell's session variables stay with this command: the daemon and everything its sessions start never see them.
   const dropped = droppedEnvArgs(hostSessionEnvNames(process.env))
   for (const env of daemonEnvs({ ...withoutHostSessionEnv(process.env), ...(options.trace === undefined ? {} : { MENDCODE_TRACE: options.trace ? "1" : "0" }) })) {
@@ -161,12 +162,20 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
       await Bun.sleep(20)
     }
     if (child.exitCode === null) break
+    lastExit = child.exitCode
     // It lost the data directory to another daemon (a terminal handing its daemon off, a second terminal opened at the same
     // instant) that holds the lock but does not listen yet: that one is the daemon to attach to.
     const owner = await ownerListening(dir, deadline)
     if (owner) return { ...owner, started: false }
   }
-  throw new Error(`[CLI]: daemon did not start within ${options.timeoutMs ?? 5_000} ms (dir ${dir})`)
+  throw new Error(`[CLI]: daemon did not start within ${options.timeoutMs ?? 5_000} ms (dir ${dir})${startFailureDetail(dir, lastExit)}`)
+}
+
+/** What explains a daemon that did not come up: that it exited (and with what), and who the data directory's lock names. */
+export function startFailureDetail(dir: string, exitCode: number | null, probe?: OwnerProbe) {
+  const lock = inspectLockOwner({ dir, ...(probe ? { probe } : {}) })
+  const parts = [exitCode === null ? undefined : `the daemon exited with code ${exitCode}`, lock.state === "none" ? undefined : `mendd.lock: ${lock.detail}`].filter(Boolean)
+  return parts.length ? `; ${parts.join("; ")}` : ""
 }
 
 type Shutdownable = {

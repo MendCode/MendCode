@@ -4,7 +4,7 @@ import type { UpgradePorts } from "./ports"
 import type { Channel, Platform } from "./releases"
 import { CHANNELS, UPGRADE_EXIT, UPGRADE_SCHEMA } from "./settings"
 import { resolveRepo, runUpgrade, type UpgradeResult } from "./upgrade"
-import { resolveDataDir, binPaths } from "./install"
+import { resolveDataDir, binPaths, windowsInstallPath } from "./install"
 import { readState, writeState } from "./state"
 import { readRecovery, verifyRecovery } from "./recovery"
 import { PROGRAM_NAME } from "@mendcode/program"
@@ -132,6 +132,8 @@ export type UpgradeCommandDeps = {
   defaultDir: string
   currentVersion: string
   platform: Platform
+  /** The running program when it is the compiled `mendcode.exe` (Windows replaces it where it lives); undefined when run from source. */
+  runningBinary?: string
 }
 
 const RESTART_NOTE = `restart ${PROGRAM_NAME} to use it; the background daemon is replaced on the next launch once it is idle (\`${PROGRAM_NAME} --restart-daemon\` does it now)`
@@ -200,6 +202,7 @@ export async function runUpgradeCommand(command: UpgradeCommand, deps: UpgradeCo
         ...(command.requireSignature ? { requireSignature: true } : {}),
         currentVersion: deps.currentVersion,
         platform: deps.platform,
+        ...(deps.platform.os === "win32" ? (() => { const installPath = windowsInstallPath({ runningBinary: deps.runningBinary, env: deps.env }); return installPath ? { installPath } : {} })() : {}),
       },
       deps.ports,
     )

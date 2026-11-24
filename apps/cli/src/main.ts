@@ -37,6 +37,8 @@ import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 const CLI_VERSION = packageJson.version
 // Features that are on by default only in some release channels (graph_autopilot) read the channel of this binary.
 setBuildChannel((await import("@mendcode/upgrade/releases")).buildChannelOf(CLI_VERSION))
+// Windows: `upgrade` renames the running program to `mendcode.exe.old`; the next start, once nothing runs from it any more, removes it.
+if (process.platform === "win32" && /^[A-Za-z]:[\\/]~BUN[\\/]/.test(Bun.main)) { try { (await import("node:fs")).rmSync(`${process.execPath}.old`, { force: true }) } catch { /* an older program is still running from it */ } }
 
 let globalOptions: ReturnType<typeof parseGlobalOptions>
 try { globalOptions = parseGlobalOptions(process.argv.slice(2)) } catch (error) {
@@ -259,6 +261,7 @@ if (upgrade?.isUpgradeCommand(argv)) {
       defaultDir: DEFAULT_DIR,
       currentVersion: CLI_VERSION,
       platform: { os: process.platform, arch: process.arch },
+      ...(/^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun.main) ? { runningBinary: process.execPath } : {}),
     }),
   )
 }
