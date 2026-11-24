@@ -240,7 +240,8 @@ test("both logo remains composed in every welcome mode at 100x30", async () => {
     if (homeLayout === "centered") {
       // The wordmark's own letters (the website's title), the same as Logo kind wordmark draws.
       for (const row of LOGO_TITLE) expect(text).toContain(row.trim())
-      expect(mendRowIn(h.frames.at(-1)!, "running", 2)).toBeGreaterThan(0)
+      // The default (medium) text Mend is the compact 13x7 robot: the sprite at scale 1.
+      expect(mendRowIn(h.frames.at(-1)!, "running", 1)).toBeGreaterThan(0)
     } else for (const row of homeIdentity({ logoKind: "both" }).filter((row) => row.trim())) expect(text).toContain(row)
     await h.app.onKey("\x03")
   }

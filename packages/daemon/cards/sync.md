@@ -1,5 +1,5 @@
 ---
-summary: keep sessions in step with an always-on host (VPS): mirrors, take, handoff
+summary: sessions in step with a VPS: mirrors, take, handoff
 docs: sync
 aliases: session-sync, mirror, sync-handoff, sync-take, lease, hub, vps-sync, two-way
 ---

@@ -1,5 +1,5 @@
 ---
-summary: which tool and key changes what: window, model, theme, title, permissions
+summary: which tool and key changes what: window, model, theme, permissions
 docs: customize, compaction, tiers
 aliases: map, where, how-to, change-setting, settings-map, which-key
 ---

@@ -1,5 +1,5 @@
 ---
-summary: the built-in slash commands, hide/pin/alias them; add a custom command
+summary: built-in slash commands, hide/pin/alias them; custom commands
 docs: commands, customize, resources-config
 aliases: command, slash, slash-commands, prompts, aliases
 ---

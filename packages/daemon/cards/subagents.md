@@ -1,5 +1,5 @@
 ---
-summary: run sub-agents in parallel or background; continue, list, pause, stop
+summary: sub-agents in parallel or background; continue, list, pause, stop
 docs: agents, advanced-config, tiers
 aliases: subagent, sub-agents, teams, parallel, delegate, children, task
 ---

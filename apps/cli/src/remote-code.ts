@@ -124,23 +124,17 @@ const scrub = (text: string) => text.replace(/[A-Za-z0-9_-]{32,}/g, "***").repla
 const shq = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`
 
 export const runGit: GitRunner = async (cwd, args, options = {}) => {
-  const child = Bun.spawn(["git", "-C", cwd, ...args], {
-    stdout: "pipe", stderr: "pipe", stdin: options.input === undefined ? "ignore" : "pipe",
+  const { runProcess } = await import("@mendcode/upgrade/process")
+  return runProcess(["git", "-C", cwd, ...args], {
+    ...(options.input === undefined ? {} : { input: options.input }),
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0", ...process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: "ssh -o BatchMode=yes" }, ...options.env },
   })
-  if (options.input !== undefined) {
-    child.stdin!.write(options.input)
-    await child.stdin!.end()
-  }
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-  return { code, stdout, stderr }
 }
 
 export const runMutagen: MutagenRunner = async (args) => {
-  let child: ReturnType<typeof Bun.spawn>
-  try { child = Bun.spawn(["mutagen", ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" }) } catch { return { code: 127, stdout: "", stderr: "mutagen not found" } }
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout as ReadableStream).text(), new Response(child.stderr as ReadableStream).text(), child.exited])
-  return { code, stdout, stderr }
+  const { runProcess } = await import("@mendcode/upgrade/process")
+  const done = await runProcess(["mutagen", ...args])
+  return done.code === 127 ? { code: 127, stdout: "", stderr: "mutagen not found" } : done
 }
 
 async function must(result: Promise<RunResult>, message: string) {

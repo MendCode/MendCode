@@ -1,5 +1,5 @@
 {
- "revision": "05be81320b66469d",
+ "revision": "75dabd114801908f",
  "cards": [
   {
    "topic": "agents",
@@ -15,7 +15,7 @@
   },
   {
    "topic": "attachments",
-   "summary": "images, PDFs and files in a message; read images; generate images; voice",
+   "summary": "images, PDFs and files in a message; generate images; voice",
    "aliases": [
     "attach",
     "attachment",
@@ -33,7 +33,7 @@
   },
   {
    "topic": "automation",
-   "summary": "run MendCode headless: scripts, CI, JSON output, GitHub, editors, HTTP",
+   "summary": "run MendCode headless: scripts, CI, JSON, GitHub, editors, HTTP",
    "aliases": [
     "headless",
     "ci",
@@ -97,7 +97,7 @@
   },
   {
    "topic": "cache-ttl",
-   "summary": "how long Anthropic keeps the prompt cache: 5m or 1h, and Claude Code's",
+   "summary": "how long Anthropic keeps the prompt cache: 5m or 1h",
    "aliases": [
     "ttl",
     "cache-lifetime",
@@ -108,7 +108,7 @@
   },
   {
    "topic": "change",
-   "summary": "which tool and key changes what: window, model, theme, title, permissions",
+   "summary": "which tool and key changes what: window, model, theme, permissions",
    "aliases": [
     "map",
     "where",
@@ -139,7 +139,7 @@
   },
   {
    "topic": "commands",
-   "summary": "the built-in slash commands, hide/pin/alias them; add a custom command",
+   "summary": "built-in slash commands, hide/pin/alias them; custom commands",
    "aliases": [
     "command",
     "slash",
@@ -249,7 +249,7 @@
   },
   {
    "topic": "extend-session",
-   "summary": "extensions that set model or tools, send messages, ask, add flags or MCP",
+   "summary": "extensions that set model or tools, send messages, ask, add MCP",
    "aliases": [
     "set-model",
     "active-tools",
@@ -321,7 +321,7 @@
   },
   {
    "topic": "git",
-   "summary": "review changes, commit, push, pull requests, worktrees (the Git page)",
+   "summary": "review changes, commit, push, pull requests, worktrees",
    "aliases": [
     "worktree",
     "worktrees",
@@ -338,7 +338,7 @@
   },
   {
    "topic": "goals",
-   "summary": "finish a task step by step: /goal, plan mode and plan review, todo lists",
+   "summary": "finish a task step by step: /goal, plan mode, plan review, todos",
    "aliases": [
     "goal",
     "plan",
@@ -349,8 +349,8 @@
     "until-done",
     "ultraplan"
    ],
-   "text": "For: \"work until all tests pass\", \"keep going until it is done\", \"show me a plan before touching anything\", \"track the steps\".\n\nGoal (one standing objective per session; the daemon starts each next turn itself until it ends):\n  The user types /goal <objective> (optional --budget 50k tokens), /goal pause | resume | clear | edit | budget <n|off>. A goal ends complete, blocked, over budget, paused, or stopped by a provider usage limit.\n  Model tools (main agent, no approval): get_goal; create_goal {objective, token_budget?} only when the user explicitly asked for a goal; update_goal {status: complete|blocked|paused, note?}. complete only when every requirement is achieved and verified; blocked only after the same blocker held for 3 goal turns in a row; paused only if the user asked. You cannot resume or lift a budget. On a budgeted goal report \"X of Y tokens used\" at the end. Engines without these tools end their last message with GOAL_STATUS: complete or GOAL_STATUS: blocked - why.\n  The objective beats an earlier conflicting request in the session (a stop rule, a quota floor). Remaining usage is no reason to stop or to check quota unless the objective sets a limit: a turn that hits the real limit fails and MendCode pauses the goal.\n  Not a loop: a loop recurs on a trigger in fresh sessions ({{program}} docs loops).\n\nTodo: todo {items: [{text, status: pending|in_progress|done|cancelled, priority?}]} replaces the whole list ([] clears, max 50); keep one item in_progress; use it for 3+ steps. Pinned above the prompt (visible_plan), whole in the dock (ctrl+t); Claude Code, Codex and ACP lists too. No todo in minimalist. Goal tools: listed while a goal is unfinished, else tool_search or /tier plan_tools on.\n\nPlan mode (read-only until approved): the user types /plan (/ultraplan plans and critiques without edits). The model calls plan_review {title?, markdown, phase?} (or plan_submit {plan}) with goal, steps with files, risks and how it will verify; plan_exit applies the reviewed plan. The user applies (enter), accepts without implementing (a), edits (e), comments (c) or rejects with a reason (r); /plan-review reopens saved decisions. Never edit files before approval. phase: \"plan\" means acceptance only. planExitAgent picks the agent that implements after approval (planExitAgent; build when unset).\n\nLimits: one goal per session (an unfinished one needs the user's yes to be replaced); objective up to 60,000 characters (over 4,000 it is saved to a file and the goal reads it); the newest 20 goals per session are kept; a goal stalls, still active, after a failed or cancelled turn, two turns with no output, three turns with no progress (no successful tool call new to the goal; re-running a check for the same answer is no progress) or 100 goal turns in a row without the user, and restarts when the user sends a message or types /goal resume.\n\nCheck: get_goal returns status and tokens; the status row shows the goal indicator. Say when you cannot see it.",
-   "terms": "50k above accept acceptance achiev acp active after agent answer anyth apply approv approval ask beat before block blocker budget build call cancell cannot character check claude clear code codex comment complete conflict create create_goal critique ctrl daemon decision doc dock done earlier edit else end engine enter exit explicitly fail file finish floor fresh get_goal goal goal_status going held hit implement in_progress indicator item itself keep kept last lift limit list loop main markdown max mean mendcode message minimalist mode model need never new newest next note objective optional output pass paus pause pend phase pick pinn plan plan-review plan_exit plan_review plan_submit plan_tool planexitagent priority program progress prompt provider quota re-runn read read-only real reason recur reject remain reopen replac replace report request requirement restart resume return review risk row rule runn same sav say search see send session set show stall stand start status step still stop todo token tool turn type unfinish until usage user whole without"
+   "text": "Goal (one standing objective per session; the daemon keeps starting turns until it ends):\n  The user types /goal <objective> (optional --budget 50k tokens), /goal pause | resume | clear | edit | budget <n|off>. A goal ends complete, blocked, over budget, paused, or at a provider usage limit. The user reopens a blocked or paused goal with /goal resume.\n  Model tools (main agent, no approval): get_goal; create_goal {objective, token_budget?} only when the user explicitly asked for a goal; update_goal {status: complete|blocked|paused, note?}. complete only when every requirement is verified; blocked only after the same blocker held for 3 goal turns in a row; paused only if the user asked. You cannot resume or lift a budget. On a budgeted goal report \"X of Y tokens used\" at the end. Engines without these tools end with GOAL_STATUS: complete or GOAL_STATUS: blocked - why.\n  The objective beats a conflicting earlier request (a stop rule, a quota floor). Remaining usage is no reason to stop or check quota unless the objective sets a limit; a real limit fails the turn and MendCode pauses the goal.\n  Not a loop: a loop recurs on a trigger in fresh sessions ({{program}} docs loops).\n\nTodo: todo {items: [{text, status: pending|in_progress|done|cancelled, priority?}]} replaces the whole list ([] clears, max 50); keep one item in_progress; use it for 3+ steps. Pinned above the prompt (visible_plan), whole in the dock (ctrl+t); Claude Code, Codex and ACP lists too. No todo in minimalist. Goal tools: listed while a goal is unfinished, else tool_search or /tier plan_tools on.\n\nPlan mode (read-only until approved): the user types /plan (/ultraplan: critique, no edits). The model calls plan_review {title?, markdown, phase?} (or plan_submit {plan}) with goal, steps with files, risks and how it will verify; plan_exit applies the reviewed plan. The user applies (enter), accepts without implementing (a), edits (e), comments (c) or rejects with a reason (r); /plan-review reopens saved decisions. Never edit files before approval. phase: \"plan\" means acceptance only. planExitAgent (planExitAgent; build when unset) picks the implementing agent.\n\nLimits: one goal per session (replacing an unfinished one needs the user's yes); objective up to 60,000 characters (over 4,000 it is saved to a file the goal reads); the newest 20 goals per session are kept; a goal stalls, still active, after a failed or cancelled turn, two turns with no output, three turns with no progress (no new successful tool call; a repeated check is no progress) or 100 goal turns in a row without the user, and restarts when the user sends a message or types /goal resume.\n\nCheck: get_goal returns status and tokens; the status row shows the goal indicator. Say when you cannot see it.",
+   "terms": "50k above accept acceptance acp active after agent apply approv approval ask beat before block blocker budget build call cancell cannot character check claude clear code codex comment complete conflict create create_goal critique ctrl daemon decision doc dock done earlier edit else end engine enter exit explicitly fail file finish floor fresh get_goal goal goal_status held implement in_progress indicator item keep kept lift limit list loop main markdown max mean mendcode message minimalist mode model need never new newest note objective optional output paus pause pend phase pick pinn plan plan-review plan_exit plan_review plan_submit plan_tool planexitagent priority program progress prompt provider quota read read-only real reason recur reject remain reopen repeat replac replace report request requirement restart resume return review risk row rule same sav say search see send session set show stall stand start status step still stop submit successful task text three tier title todo token token_budget too tool tool_search turn type unfinish until usage user whole without"
   },
   {
    "topic": "hooks",
@@ -386,7 +386,7 @@
   },
   {
    "topic": "layout",
-   "summary": "terminal layout: session list, right panel, widths, breakpoints, density",
+   "summary": "terminal layout: session list, right panel, widths, density",
    "aliases": [
     "panel",
     "sidebar",
@@ -400,7 +400,7 @@
   },
   {
    "topic": "loops",
-   "summary": "recurring work: every N minutes, daily, on an external trigger (loops)",
+   "summary": "recurring work: every N minutes, daily, on an external trigger",
    "aliases": [
     "loop",
     "schedule",
@@ -519,7 +519,7 @@
   },
   {
    "topic": "profiles",
-   "summary": "profiles = packages = plugins: install, turn on or off, make your own",
+   "summary": "profiles = packages = plugins: install, turn on/off, make your own",
    "aliases": [
     "profile",
     "package",
@@ -534,7 +534,7 @@
   },
   {
    "topic": "prompt-modes",
-   "summary": "prompt modes (how much MendCode text each call carries) and model families",
+   "summary": "prompt modes (text per call) and model families",
    "aliases": [
     "prompt-mode",
     "prompt",
@@ -545,7 +545,7 @@
     "focus"
    ],
    "text": "A prompt mode picks how much MendCode text rides in every model call: minimal, focus, guide, full, custom.\n  minimal: a small boundary, the one-line pointer to these cards, the user's instructions and memories\n  focus (default): adds the native coding harness, the skill catalog and a one-line note for the model family\n  guide: adds the shared working basics and a longer guide for the family, plus model notes (more tokens on every call)\n  full: adds the operator note about MendCode itself and the family's context files\n  custom: reads <project>/.mendcode/prompts/custom.md (a regular file, up to 32 KiB, {{cwd}} expands) and inherits nothing else\nThe family is auto, codex, claude, gemini, kimi, deepseek, mistral, glm, minimax, grok, local; auto follows the session's model on every call, naming one overrides it. A family changes guidance only, never provider, model, permissions or budgets. Instruction files (AGENTS.md, CLAUDE.md) ride in every mode.\nThe user chooses with /prompt-mode: Up/Down select, Tab swaps modes and families, Enter applies. The choice is saved per project in <data dir>/prompt-context.json and applies from the next call.\nCLI: {{program}} prompt mode [<mode>] [--focus <family>] reads or saves it for the project; {{program}} prompt cycle-mode (saving and cycling: the user's terminal, refused from your shell); {{program}} prompt build --mode full --show-full previews the exact text without a provider call (also shows each mode's cost in tokens per call); {{program}} prompt sources.\nProse style is separate: the user's /output-style default|explanatory|learning|terse|caveman saves outputStyle (you can propose it with mendcode_settings; it saves on the user's Apply). The prompt mode itself is not a daemon setting. caveman (feature caveman, balanced) is opt-in compression of prose that keeps code, paths, quantities and uncertainty exact; no savings percentage is claimed.\nReply language: language unset or auto = the language of the user's latest message, or a name (Español) held whatever the conversation is in; one short line restates it with each user message (all engines but ACP), never in the transcript. The user's /language [auto|name|next] or /customize Chat row Reply language; you propose {\"language\":\"Español\"} (null = auto) with mendcode_settings.\nA tier applies a mode once ({{program}} docs tiers). Do not confuse prompt modes with tiers, permission modes or the process mode.",
-   "terms": "acp add agent apply auto balanc basic boundary budget build call card carry catalog caveman change chat choice choose claim claude cli cod code codex compression confuse context conversation cost custom customize cwd cycl cycle cycle-mode daemon data deepseek default dir doc down else engine enter espa exact expand explanatory family feature file focus follow full gemini glm grok guidance guide harness held inherit instruction itself json keep kib kimi language latest learn line local longer memory mendcode mendcode_sett message minimal minimax mistral mode model much nam name native never next note noth null once one-line operator opt opt-in output output-style outputstyle override path percentage permission pick plus pointer preview process program project prompt prompt-context prompt-mode propose prose provider quantity read refus regular reply restate ride row sav save select separate session sett shar shell short show show-full skill small source style swap tab terminal terse text tier token transcript uncertainty unset user whatever without work"
+   "terms": "acp add agent apply auto balanc basic boundary budget build call card catalog caveman change chat choice choose claim claude cli cod code codex compression confuse context conversation cost custom customize cwd cycl cycle cycle-mode daemon data deepseek default dir doc down else engine enter espa exact expand explanatory family feature file focus follow full gemini glm grok guidance guide harness held inherit instruction itself json keep kib kimi language latest learn line local longer memory mendcode mendcode_sett message minimal minimax mistral mode model much nam name native never next note noth null once one-line operator opt opt-in output output-style outputstyle override path percentage permission pick plus pointer preview process program project prompt prompt-context prompt-mode propose prose provider quantity read refus regular reply restate ride row sav save select separate session sett shar shell short show show-full skill small source style swap tab terminal terse text tier token transcript uncertainty unset user whatever without work"
   },
   {
    "topic": "reasoning",
@@ -563,7 +563,7 @@
   },
   {
    "topic": "remote",
-   "summary": "drive MendCode from a phone or another machine; share a session; editors",
+   "summary": "drive MendCode from a phone or another machine; share; editors",
    "aliases": [
     "telegram",
     "phone",
@@ -581,8 +581,8 @@
     "herdr",
     "tuios"
    ],
-   "text": "For: \"control it from my phone\", \"attach to the daemon on my server\", \"send someone a link to this session\", \"connect my editor\". Each is off until the user turns it on; none starts by itself.\n\nPhone (Telegram): the user creates a bot with @BotFather and gives the daemon the token as MENDCODE_TELEGRAM_TOKEN or a mode-600 file <data dir>/telegram-token (never through a slash command or flag, never in chat). Then /remote-control on, /remote-control pair (an 8-character code valid 10 minutes); in a private chat the user sends the bot \"pair CODE\". /remote-control shows state, off stops it, unpair removes chats. State is <data dir>/channels.json (mode 0600; paired chats, never the token); Console state is console.json.\nAnother machine (token create and revoke, console setup and share are the user's; refused from your shell): on the server {{program}} remote token create --dir DATA --name laptop (the token prints once; list and revoke exist), run mendcode daemon run --dir DATA --listen 127.0.0.1:9876 (foreground; daemon start stays local) (a non-loopback host needs --tls-cert and --tls-key; there is no insecure switch), then on the client {{program}} --connect HOST:PORT --token-file PATH. Read-only tokens are refused for writes. No listener by default; {{program}} daemon service install --listener keeps one across reboots (remote.json; \"mode\": \"tailscale\" binds only a tailnet address). Remote and peer clients cannot change permissions, ACP agents or other host-local settings; they run ACP or pi turns only for engines the host lists in remoteEngines. One command for a Linux VPS with Tailscale (the user runs it): {{program}} remote setup HOST --ssh USER@VPS [--dry-run] [--migrate-settings|--migrate-sessions|--acp-agents]; another device: remote pair HOST --ssh USER@VPS; remote unpair DEVICE. Or by hand: remote add NAME HOST:PORT --token-file PATH --default (remotes.json, no tokens): plain mendcode connects, --remote NAME picks one, --local skips it.\n\nShare a session (Console, off by default): /share (Enter creates or syncs, u unshares), /unshare, policy disabled|manual|auto in the same page (share). A link holds user and assistant text with credentials redacted; no local paths, attachments, reasoning or tool output. Needs a Console origin and token file ({{program}} console setup URL --token-file PATH); /org switches organization; /console manages accounts. \nEditors: /ide on reads the open file, cursor and selection from Zed. JetBrains or Zed as an agent host: point them at `mendcode acp` (no JetBrains plugin).\n\nRooms and terminals: /mflow (rooms, peers, file leases), /tsm (cmux, kitty, ghostty, wezterm adapter); opt-in.\n\nIf a feature is off, tell the user the switch above; never edit remote.json, tokens or Console settings yourself. Check: /remote-control, /share; {{program}} remote token list.\n\nherdr and tuios: their pane sidebar shows the session working, blocked or idle with its resume command; MENDCODE_HERDR=0 turns it off.",
-   "terms": "8-character above account acp acp-agent across adapter add address agent another assistant attach attachment auto bind block bot botfather cannot cert change channel character chat check client cmux code command connect console control create credential cursor daemon data default device dir disabl drive dry dry-run edit editor engine enter exist feature file flag foreground ghostty give hand herdr hold host host-local ide idle insecure install itself jetbrain json keep key kitty laptop lease link linux list listen listener local loopback machine manage manual mendcode mendcode_herdr mendcode_telegram_token mflow migrate migrate-session migrate-sett minute mode mode-600 name need never non non-loopback none once open opt opt-in org organization origin other output page pair pane path peer permission phone pick plain plugin point policy port print private program read read-only reason reboot redact refus remote remote-control remoteengine remove resume revoke room run send server session sett setup share show ssh start state switch tailscale telegram tls token token-file turn unpair unshare user vps zed"
+   "text": "For: \"control it from my phone\", \"attach to the daemon on my server\", \"send someone a link to this session\", \"connect my editor\". Each is off until the user turns it on; none starts by itself.\n\nPhone (Telegram): the user creates a bot with @BotFather and gives the daemon the token as MENDCODE_TELEGRAM_TOKEN or a mode-600 file <data dir>/telegram-token (never by slash command, flag or chat). Then /remote-control on, /remote-control pair (8-character code, 10 minutes); in a private chat they send the bot \"pair CODE\". /remote-control shows state, off stops it, unpair removes chats. State: <data dir>/channels.json (paired chats, never the token); Console: console.json.\nAnother machine (token, console setup and share commands are the user's; refused from your shell): on the server {{program}} remote token create --dir DATA --name laptop (prints once), run mendcode daemon run --dir DATA --listen 127.0.0.1:9876 (foreground; a non-loopback host needs --tls-cert and --tls-key), then on the client {{program}} --connect HOST:PORT --token-file PATH. Read-only tokens are refused for writes. No listener by default; {{program}} daemon service install --listener keeps one across reboots (remote.json; \"mode\": \"tailscale\" binds only a tailnet address). Remote clients cannot change permissions, ACP agents or other host-local settings; they run ACP or pi turns only for engines listed in remoteEngines. One command for a Linux VPS with Tailscale (the user runs it): {{program}} remote setup HOST --ssh USER@VPS [--dry-run] [--migrate-settings|--migrate-sessions|--acp-agents]; another device: remote pair HOST --ssh USER@VPS; remote unpair DEVICE. By hand: remote add NAME HOST:PORT --token-file PATH --default (remotes.json); --remote NAME picks one, --local skips it.\n\nShare a session (Console, off by default): /share (Enter creates or syncs, u unshares), /unshare, policy disabled|manual|auto in the same page (share). A link holds user and assistant text with credentials redacted, no paths, attachments or tool output. Needs {{program}} console setup URL --token-file PATH; /org switches organization; /console manages accounts.\nEditors: /ide on reads Zed's open file and selection; JetBrains or Zed as agent host: `mendcode acp`. Rooms /mflow, terminals /tsm: opt-in.\n\nCode between machines (the user runs it): {{program}} remote code handoff pushes the working tree to a new mend/wip-* branch (never forced, their branch untouched); remote code receive on the other machine checks it out in a worktree; remote code clone URL. Opt-in live sync needs Mutagen: remote code live enable --ssh USER@HOST (same branch and commit on both; live status|resume|disable|list).\n\nIf a feature is off, tell the user the switch above; never edit remote.json, tokens or Console settings yourself. Check: /remote-control, /share; {{program}} remote token list.\nherdr and tuios: their pane sidebar shows the session state and resume command; MENDCODE_HERDR=0 turns it off.",
+   "terms": "8-character above account acp acp-agent across add address agent another assistant attach attachment auto between bind bot botfather both branch cannot cert change channel character chat check client clone code command commit connect console control create credential daemon data default device dir disabl disable drive dry dry-run edit editor enable engine enter feature file flag forc foreground give hand handoff herdr hold host host-local ide install itself jetbrain json keep key laptop link linux list listen listener live local loopback machine manage manual mend mendcode mendcode_herdr mendcode_telegram_token mflow migrate migrate-session migrate-sett minute mode mode-600 mutagen name need never new non non-loopback none once open opt opt-in org organization other output page pair pane path permission phone pick policy port print private program push read read-only reboot receive redact refus remote remote-control remoteengine remove resume room run same send server session sett setup share show ssh state switch sync tailscale telegram tls token token-file turn unpair unshare url user vps zed"
   },
   {
    "topic": "screen-parts",
@@ -602,7 +602,7 @@
   },
   {
    "topic": "secrets",
-   "summary": "API keys, tokens and passwords: markers, the /env vault, chat encryption",
+   "summary": "API keys, tokens, passwords: markers, the /env vault, encryption",
    "aliases": [
     "secret",
     "credentials",
@@ -676,7 +676,7 @@
   },
   {
    "topic": "subagents",
-   "summary": "run sub-agents in parallel or background; continue, list, pause, stop",
+   "summary": "sub-agents in parallel or background; continue, list, pause, stop",
    "aliases": [
     "subagent",
     "sub-agents",
@@ -691,7 +691,7 @@
   },
   {
    "topic": "sync",
-   "summary": "keep sessions in step with an always-on host (VPS): mirrors, take, handoff",
+   "summary": "sessions in step with a VPS: mirrors, take, handoff",
    "aliases": [
     "session-sync",
     "mirror",
@@ -703,7 +703,7 @@
     "two-way"
    ],
    "text": "For: \"see my VPS sessions on my laptop\", \"continue that session here\", \"move this session to the server\", \"why can't I write this session\".\n\nOff by default; the user turns it on: {{program}} remote setup HOST --ssh USER@VPS --sync (or remote pair HOST --ssh USER@VPS --sync), or {{program}} sync enable REMOTE --sync-token-file F [--path-map LOCAL=HUB] [--no-memories] [--no-settings]; sync disable turns it off. The host is the hub and owns sessions; this machine is a device. Never edit sync.json, sync-hub.json or tokens yourself.\n\nWho writes: one machine per session. A hub session is a read-only mirror here; a prompt to it is refused with the owner's name. {{program}} sync take ID writes it here under a lease (the hub then refuses prompts, naming this machine); sync release ID hands it back (also after 10 idle minutes); sync handoff ID gives the hub a session made here. None moves a session while a turn runs. If this machine dies, its lease ends and the hub writes again; turns that never reached the hub stay here as a \"diverged\" copy, never merged.\n\nWhat syncs: session events at the same seqs (no duplicates), title/archive/pin, attachments up to 8 MiB (bigger ones stay, with a note), memories (newest edit wins, deletes travel) and preference settings. Never: credentials, tokens, environment.enc, keys, engine bindings, authority or machine settings.\n\nProjects match by git remote plus the path in the repo; pathMap rules cover the rest. A handoff to a hub without the project is refused: clone it there.\n\nCheck: {{program}} sync status (owner and state of each session), sync now (one round now). Files: sync.json (device: remote, token file, pathMap), sync-hub.json (this machine is a hub), remote/REMOTE.sync-token.",
-   "terms": "after again alway always-on archive attachment authority back bigger bind check clone continue copy cover credential default delete device die disable diverg duplicate edit enable enc end engine environment event file git give hand handoff host hub idle json keep key laptop lease local machine map match memory merg mib minute mirror move nam name never newest no-memory no-sett none note now one own owner pair path path-map pathmap pin plus preference program project prompt reach read read-only refus refuse release remote repo rest round rule run same see seq server session sett setup ssh state status stay step sync sync-hub sync-token sync-token-file take title token travel turn under user vps while win without write yourself"
+   "terms": "after again archive attachment authority back bigger bind check clone continue copy cover credential default delete device die disable diverg duplicate edit enable enc end engine environment event file git give hand handoff host hub idle json key laptop lease local machine map match memory merg mib minute mirror move nam name never newest no-memory no-sett none note now one own owner pair path path-map pathmap pin plus preference program project prompt reach read read-only refus refuse release remote repo rest round rule run same see seq server session sett setup ssh state status stay step sync sync-hub sync-token sync-token-file take title token travel turn under user vps while win without write yourself"
   },
   {
    "topic": "theme",
@@ -762,7 +762,7 @@
   },
   {
    "topic": "transcript",
-   "summary": "how the chat is drawn: tool output, density, markdown, reasoning, scroll",
+   "summary": "how the chat is drawn: tool output, density, markdown, scroll",
    "aliases": [
     "tool-output",
     "chat",
@@ -875,8 +875,8 @@
     "dag",
     "multi-agent"
    ],
-   "text": "For: \"split this into stages, two in parallel, then check\", \"review every file with its own agent\", \"try this with three models and compare\", \"run the tests as a gate\".\n\nA workflow is a plan of tasks run in dependency order, each agent task in its own child session, then a completion contract (checks plus an optional read-only auditor) decides whether it is done. Simple or one-off delegation is cheaper as task calls ({{program}} docs subagents).\n\nModel tools (tier balanced; the live line says if on):\n  workflow_start {name, objective, tasks: [{kind: agent|check|human, id, prompt|command, needs, mode: read|work}], contract, permission, maxConcurrent}: a static plan. It asks for approval and shows every check command verbatim; checks run outside the permission system. Put tests in contract.checks, not in prompts. Only one work task runs per directory at a time. Task prompts must be self-contained.\n  workflow_script {script | name, args?, help?}: JavaScript that decides at run time which agents to start (agent, parallel, pipeline, phase, merge). Declare meta.budget.agents above 10 calls (200 is the hard limit). It asks with the source and its hash, except in full access; help: true returns the API without asking. Find it with tool_search.\n  workflow_status {workflowId?}, workflow_control {workflowId, action: pause|resume|stop|retry|delete}, workflow_save: follow and steer a run, keep a plan. After starting, do not poll: tell the user it runs in /workflows. verify and accept are the user's (accept declares the work done despite the contract).\nA cap never kills a run: it pauses with the reason; the user raises it (/workflows budget <id> agents=80 usd=5) and resume pays only for unfinished calls. A cost cap on an unpriced model pauses the run rather than spend blind.\n\nThe user: /workflows (alias /wf): run <file.js|name> [key=value] [--yes], new <name>, convert <plan.json>, budget, update, resume; keys p pause, x stop, t retry, v verify, a accept, d delete, b evidence ledger. CLI (the user's; from your shell only list and show): {{program}} workflow run|start|list|show|pause|resume|stop|approve|reject ... --wait. Saved scripts: workflows/<name>.js in the data dir (a project's need /tools trust).\n\nCompare models: /fanout \"prompt\" modelA modelB ... (2 to 8 models; full tier, /tier fanout on) runs each in its own worktree and keeps the branches; /fanout compare, open N, changes N review them. It never commits or merges for the user. /compound is a read-only inspector for single, cascade and critic runs configured in ai.json (off when the file is absent).\n\nNot possible: a workflow outliving a daemon restart without the user resuming it (interrupted tasks restart, at most 3 starts); a model approving its own human gate; running a project's saved script before the project is trusted.\n\nCheck: workflow_status lists tasks, phase and caps in use; /workflows shows the same. Say when a run is paused or blocked and why; do not call it finished.",
-   "terms": "above absent accept access action after agent alia api approv approval approve arg ask auditor balanc before blind block branch budget call cap cascade change cheaper check child cli command commit compare completion compound concurrent configur contain contract control convert cost critic daemon data decide declare delegation delete dependency despite dir directory doc done evidence except fanout file find finish follow full gate hard hash help human inspector interrupt javascript json keep key kill kind ledger limit line list live max maxconcurrent merge meta mode model modela modelb multi multi-agent must name need never new objective one-off open optional order outliv outside own parallel paus pause pay permission phase pipeline plan plus poll possible program project prompt put raise rather read read-only reason reject restart resum resume retry return review run runn same sav save say script search self self-contain session shell show stage start status stop task test tier time tool trust user verify without work workflow workflow_status workflowid"
+   "text": "For: \"split this into stages, two in parallel, then check\", \"review every file with its own agent\", \"try this with three models and compare\", \"run the tests as a gate\".\n\nA workflow is a plan of tasks run in dependency order, each agent task in its own child session, then a completion contract (checks plus an optional read-only auditor) decides whether it is done. Simple or one-off delegation is cheaper as task calls ({{program}} docs subagents).\n\nModel tools (tier balanced; the live line says if on):\n  workflow_start {name, objective, tasks: [{kind: agent|check|human, id, prompt|command, needs, mode: read|work}], contract, permission, maxConcurrent}: a static plan. It asks for approval and shows every check command verbatim; checks run outside the permission system. Put tests in contract.checks, not in prompts. Only one work task runs per directory at a time. Task prompts must be self-contained.\n  workflow_script {script | name, args?, help?}: JavaScript that decides at run time which agents to start (agent, parallel, pipeline, phase, merge). Declare meta.budget.agents above 10 calls (200 is the hard limit). It asks with the source and its hash, except in full access; help: true returns the API without asking. Find it with tool_search.\n  workflow_status {workflowId?}, workflow_control {workflowId, action: pause|resume|stop|retry|delete}, workflow_save: follow and steer a run, keep a plan. After starting, do not poll (you are told when it ends); say it runs in /workflows. verify and accept are the user's (accept declares the work done despite the contract).\nA cap never kills a run: it pauses with the reason; the user raises it (/workflows budget <id> agents=80 usd=5) and resume pays only for unfinished calls. A cost cap on an unpriced model pauses the run rather than spend blind.\n\nThe user: /workflows (alias /wf): run <file.js|name> [key=value] [--yes], new <name>, convert <plan.json>, budget, update, resume; keys p pause, x stop, t retry, v verify, a accept, d delete, b evidence ledger. CLI (the user's; from your shell only list and show): {{program}} workflow run|start|list|show|pause|resume|stop|approve|reject ... --wait. Saved scripts: workflows/<name>.js in the data dir (a project's need /tools trust).\n\nCompare models: /fanout \"prompt\" modelA modelB ... (2 to 8 models; full tier, /tier fanout on) runs each in its own worktree and keeps the branches; /fanout compare, open N, changes N review them. It never commits or merges for the user. /compound is a read-only inspector for single, cascade and critic runs configured in ai.json (off when the file is absent).\n\nNot possible: a workflow outliving a daemon restart without the user resuming it (interrupted tasks restart, at most 3 starts); a model approving its own human gate; running a project's saved script before the project is trusted.\n\nCheck: workflow_status lists tasks, phase and caps in use; /workflows shows the same. Say when a run is paused or blocked and why; do not call it finished.",
+   "terms": "above absent accept access action after agent alia api approv approval approve arg ask auditor balanc before blind block branch budget call cap cascade change cheaper check child cli command commit compare completion compound concurrent configur contain contract control convert cost critic daemon data decide declare delegation delete dependency despite dir directory doc done end evidence except fanout file find finish follow full gate hard hash help human inspector interrupt javascript json keep key kill kind ledger limit line list live max maxconcurrent merge meta mode model modela modelb multi multi-agent must name need never new objective one-off open optional order outliv outside own parallel paus pause pay permission phase pipeline plan plus poll possible program project prompt put raise rather read read-only reason reject restart resum resume retry return review run runn same sav save say script search self self-contain session show stage start status stop task test tier time tool trust user verify without work workflow workflow_status workflowid"
   }
  ]
 }

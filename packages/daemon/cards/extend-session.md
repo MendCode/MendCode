@@ -1,5 +1,5 @@
 ---
-summary: extensions that set model or tools, send messages, ask, add flags or MCP
+summary: extensions that set model or tools, send messages, ask, add MCP
 docs: extensions
 aliases: set-model, active-tools, send-message, append-entry, extension-events, extension-flags, register-flag, extension-dialogs, virtual-model, register-mcp
 ---
