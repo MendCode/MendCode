@@ -1,6 +1,6 @@
 ---
 summary: drive MendCode from a phone or another machine; share; editors
-docs: remote, channels, console, mflow, tsm, editor, automation, herdr
+docs: remote, vps, channels, console, mflow, tsm, editor, automation, herdr
 aliases: telegram, phone, remote-control, tailscale, share-link, ssh, ide, zed, jetbrains, console, org, rooms, multiplexer, herdr, tuios
 ---
 For: "control it from my phone", "attach to the daemon on my server", "send someone a link to this session", "connect my editor". Each is off until the user turns it on; none starts by itself.
