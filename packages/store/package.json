@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./sync-state": "./src/sync-state.ts"
   },
   "dependencies": {
     "@mendcode/protocol": "workspace:*",

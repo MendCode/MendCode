@@ -5,7 +5,11 @@ import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 
 export const REMOTE_TOKENS_FILE = "remote-tokens.json"
 /** `expiresAt` (epoch ms): after it the token no longer authenticates and an open connection drops; absent means it never expires. */
-export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number; expiresAt?: number }
+/**
+ * `scope: "sync"`: the token of a device daemon that syncs sessions with this one (docs/sync.md); it may send only `hello` and
+ * `sync.peer`, nothing else. Absent means the token's usual authority (full, or read-only).
+ */
+export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number; expiresAt?: number; scope?: "sync" }
 type Entry = RemoteTokenInfo & { hash: string }
 const hashToken = (token: string) => createHash("sha256").update(token).digest()
 
@@ -20,7 +24,7 @@ export function remoteTokens(dir: string) {
     }
     let entries: unknown
     try { entries = JSON.parse(text) } catch { throw new Error("invalid remote token store") }
-    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)))) throw new Error("invalid remote token store")
+    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)) || (e.scope !== undefined && (e.scope !== "sync" || e.readOnly)))) throw new Error("invalid remote token store")
     chmodSync(file, 0o600)
     return entries as Entry[]
   }
@@ -45,17 +49,18 @@ export function remoteTokens(dir: string) {
       unlinkSync(lock)
     }
   }
-  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }), ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }) })
+  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }), ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }), ...(entry.scope ? { scope: entry.scope } : {}) })
   const live = (entry: Entry) => entry.expiresAt === undefined || Date.now() < entry.expiresAt
   return {
-    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number } = {}) {
+    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number; sync?: boolean } = {}) {
       const name = input.name ?? `token-${randomBytes(4).toString("hex")}`
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("token name must use letters, digits, _ or - (1–64)")
+      if (input.sync && input.readOnly) throw new Error("a sync token cannot also be read-only")
       const token = randomBytes(32).toString("base64url")
       return update((entries) => {
         if (entries.some((e) => e.name === name)) throw new Error("token name already exists")
         if (entries.length >= 1000) throw new Error("remote token limit reached")
-        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}) }
+        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: "sync" as const } : {}) }
         entries.push(entry)
         return { token, ...info(entry) }
       })
@@ -78,8 +83,8 @@ export function remoteTokens(dir: string) {
         return { ...matched }
       })
     },
-    active(peer: { name: string; hash: string; readOnly: boolean }) {
-      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly && live(e))
+    active(peer: { name: string; hash: string; readOnly: boolean; scope?: "sync" }) {
+      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly && e.scope === peer.scope && live(e))
     },
   }
 }

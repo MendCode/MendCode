@@ -1,5 +1,7 @@
 export * from "./store"
 export * from "./writer-lock"
+export { SessionOwnedElsewhere } from "./session-owned"
+export type { SyncState, SyncSessionRow, SyncLease, SyncChange } from "./sync-state"
 export type { MemoryReviewRow } from "./parity-records"
 export type { PendingResume } from "./restart-resume"
 export { isRefusedEnvironmentName } from "./environment"

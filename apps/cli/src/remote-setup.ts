@@ -15,11 +15,11 @@ const DEFAULT_PORT = 9876
 export type SetupCommand = Provision | Unpair
 type Unpair = { action: "unpair"; dir: string; device: string; remote?: string; ssh?: string; remoteDir: string; dryRun: boolean }
 type Provision =
-  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number }
+  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number; sync: boolean }
 
 const VALUE_FLAGS = ["--dir", "--ssh", "--name", "--device", "--port", "--remote-dir", "--channel", "--installer-url", "--expires-days", "--path-map", "--search-root", "--session-limit", "--remote"]
-const BOOLEAN_FLAGS = ["--upgrade", "--dry-run", "--migrate-settings", "--migrate-sessions", "--acp-agents", "--clone-missing", "--no-default", "--rotate", "--reinstall-service"]
-export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
+const BOOLEAN_FLAGS = ["--upgrade", "--dry-run", "--migrate-settings", "--migrate-sessions", "--acp-agents", "--clone-missing", "--no-default", "--rotate", "--reinstall-service", "--sync"]
+export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--sync [--path-map LOCAL=REMOTE]] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default] [--sync]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
 
 const HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,251}$/
 const SSH_TARGET = /^[A-Za-z0-9_][A-Za-z0-9._@:[\]-]{0,252}$/
@@ -58,7 +58,7 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
   const device = one("--device") ?? (hostName().split(".")[0] ?? "device").toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60)
   if (!NAME.test(device)) throw new Error("--device uses 1–64 letters, digits, _ or -")
   if (action === "unpair") {
-    const unpairOnly = ["--migrate-settings", "--migrate-sessions", "--acp-agents", "--upgrade", "--clone-missing", "--rotate", "--reinstall-service", "--no-default"].find((flag) => flags.has(flag))
+    const unpairOnly = ["--migrate-settings", "--migrate-sessions", "--acp-agents", "--upgrade", "--clone-missing", "--rotate", "--reinstall-service", "--no-default", "--sync"].find((flag) => flags.has(flag))
     if (unpairOnly) throw new Error(`${unpairOnly} does not apply to remote unpair`)
     const target = words[2]!
     if (!NAME.test(target)) throw new Error("device name uses 1–64 letters, digits, _ or -")
@@ -77,13 +77,15 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
   const limit = one("--session-limit") === undefined ? 100 : Number(one("--session-limit"))
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("--session-limit needs 1–500")
   const migrateSessions = flags.has("--migrate-sessions")
-  if (!migrateSessions && (values.has("--path-map") || values.has("--search-root") || values.has("--session-limit") || flags.has("--clone-missing"))) throw new Error("--path-map, --search-root, --session-limit and --clone-missing need --migrate-sessions")
+  if (!migrateSessions && values.has("--path-map") && !flags.has("--sync")) throw new Error("--path-map needs --migrate-sessions or --sync")
+  if (!migrateSessions && (values.has("--search-root") || values.has("--session-limit") || flags.has("--clone-missing"))) throw new Error("--path-map, --search-root, --session-limit and --clone-missing need --migrate-sessions")
   if (action === "pair" && (migrateSessions || flags.has("--migrate-settings") || flags.has("--acp-agents") || flags.has("--upgrade") || values.has("--port") || values.has("--channel"))) throw new Error("remote pair only adds this device; migration, upgrades and the port belong to remote setup")
   return {
     action, dir, host, ssh: sshTarget ?? host, name, device, ...(port ? { port } : {}), remoteDir, upgrade: flags.has("--upgrade"), ...(channel ? { channel } : {}), installerUrl,
     makeDefault: !flags.has("--no-default"), ...(expiresDays ? { expiresDays } : {}), rotate: flags.has("--rotate"), reinstallService: flags.has("--reinstall-service"), dryRun: flags.has("--dry-run"),
     migrateSettings: flags.has("--migrate-settings"), migrateSessions, acpAgents: flags.has("--acp-agents"), pathMaps: (values.get("--path-map") ?? []).map(parsePathRule),
     cloneMissing: flags.has("--clone-missing"), searchRoots: (values.get("--search-root") ?? []).map((root) => checkRemotePath(root, "--search-root")), sessionLimit: limit,
+    sync: flags.has("--sync"),
   }
 }
 
@@ -134,7 +136,9 @@ export function setupPlan(command: SetupCommand): string[] {
   } else lines.push(`read ${command.remoteDir}/remote.json on the host for the address and port`)
   lines.push(`create the token ${command.device}${command.expiresDays ? ` (expires in ${command.expiresDays} days)` : ""} on the host and save it to ${path.join(command.dir, "remote", `${command.device}.token`)} (mode 0600, never printed)`)
   if (command.action === "setup") lines.push(`install the daemon service with a listener (\`daemon service install --listener\`) and start it${command.reinstallService ? " (reinstalling)" : ""}`)
+  if (command.sync) lines.push(`create the sync token ${command.device}-sync (it may only sync sessions) on the host and save it to ${syncTokenFile(command.dir, command.name)}`)
   lines.push(`save the remote ${command.name} (${command.host}:${command.port ?? DEFAULT_PORT}) in ${path.join(command.dir, "remotes.json")}${command.makeDefault ? " as the default, so a bare mendcode connects" : ""}`, "check that the host answers over the tailnet")
+  if (command.sync) lines.push(`turn on session sync with ${command.name} (${path.join(command.dir, "sync.json")}): the host's sessions appear here, \`mendcode sync take ID\` continues one on this machine`)
   if (command.action === "setup") {
     if (command.migrateSettings) lines.push("export this machine's settings bundle and import it on the host with --rewrite-home (credentials, tokens and authority settings never travel; those wait for approval there)")
     if (command.acpAgents) lines.push("add the ACP agents of this machine that are on the host's PATH (command and args only; no env values, no credentials)")
@@ -166,6 +170,8 @@ export async function runSetup(command: SetupCommand, deps: SetupDeps): Promise<
 }
 
 function tokenFile(dir: string, device: string) { return path.join(dir, "remote", `${device}.token`) }
+/** Where `--sync` keeps the sync-scoped token; `mendcode sync enable NAME` looks there too. */
+function syncTokenFile(dir: string, remote: string) { return path.join(dir, "remote", `${remote}.sync-token`) }
 
 function writePrivate(file: string, text: string) {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
@@ -326,6 +332,18 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
     writePrivate(file, `${created}\n`)
     say(`  saved ${file}`)
   }
+  if (command.sync) {
+    const syncName = `${command.device}-sync`
+    const syncFile = syncTokenFile(command.dir, command.name)
+    if (listed.includes(syncName) && existsSync(syncFile) && !command.rotate) say(`  sync token ${syncName} already exists`)
+    else {
+      if (listed.includes(syncName)) await must("could not revoke the old sync token", `"$MC" remote token revoke ${shq(syncName)} --dir "$D"`)
+      const created = (await must("could not create the sync token", `"$MC" remote token create --sync --dir "$D" --name ${shq(syncName)}${command.expiresDays ? ` --expires-days ${command.expiresDays}` : ""}`)).trim()
+      if (!/^[A-Za-z0-9_-]{20,}$/.test(created)) throw new SetupError("the host returned something that is not a token")
+      writePrivate(syncFile, `${created}\n`)
+      say(`  saved ${syncFile}`)
+    }
+  }
 
   if (command.action === "setup") {
     begin("daemon service")
@@ -356,6 +374,11 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
   }
   if (!up) throw new SetupError(`${address} does not answer from this machine. Check that Tailscale is connected here (tailscale status) and that the service runs on the host (mendcode daemon service status). The remote ${command.name} is saved; run the same command again to continue.`)
   say(`  ${address} answers · saved as ${command.name}${command.makeDefault ? " (default)" : ""}`)
+  if (command.sync) {
+    const { writeSyncConfig } = await import("@mendcode/daemon/sync-config")
+    writeSyncConfig(command.dir, { remote: command.name, tokenFile: syncTokenFile(command.dir, command.name), pathMap: command.pathMaps, memories: true, settings: true })
+    say(`  session sync on with ${command.name}: it starts with this machine's daemon, or now with \`mendcode sync now\``)
+  }
 
   if (command.action === "setup") await migrate(command, deps, remote, must, say, address)
   say(command.makeDefault ? `Done. Run \`mendcode\` to use ${command.name}, or \`mendcode --remote ${command.name}\`. \`mendcode --local\` stays on this machine.` : `Done. Run \`mendcode --remote ${command.name}\`.`)
@@ -464,8 +487,11 @@ async function migrateSessions(command: Provision,deps: SetupDeps, remote: Remot
     const out = await remote(`T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 cat > "$T/session.json"
 cd ${shellPath(mapping.directory)} && "$MC" import "$T/session.json" --from mendcode --dir "$D" --json`, exported.text)
-    if (out.code !== 0) { say(`  failed "${session.title.slice(0, 60)}": ${scrub(out.stderr || out.stdout)}`); skipped++; continue }
-    const remoteId = /"sessionId"\s*:\s*"([A-Za-z0-9_-]+)"/.exec(out.stdout)?.[1]
+    let remoteId: string
+    try {
+      if (out.code !== 0) throw new SetupError(scrub(out.stderr || out.stdout))
+      remoteId = parseImportResult(out.stdout)
+    } catch (error) { say(`  failed "${session.title.slice(0, 60)}": ${error instanceof Error ? error.message : String(error)}`); skipped++; continue }
     ledger.sessions[session.id] = { at: now(), directory: mapping.directory, ...(remoteId ? { remoteId } : {}), ...(exported.truncated ? { truncated: true } : {}) }
     save()
     moved++
@@ -520,7 +546,7 @@ export function defaultLocalPort(dataDir: string): LocalPort {
     async exportSession(id) {
       const result = await self(["export", id, "--format", "json", "--dir", dataDir])
       if (result.code !== 0 || !result.stdout.trim()) throw new SetupError(`exporting session ${id} failed: ${scrub(result.stderr || result.stdout)}`)
-      return { text: result.stdout, truncated: /truncated/i.test(result.stderr) }
+      return { text: result.stdout, truncated: result.stderr.includes(EXPORT_TRUNCATED_NOTE) }
     },
     async identity(directory) {
       const top = await git(directory, ["rev-parse", "--show-toplevel"])
@@ -536,18 +562,39 @@ export function defaultLocalPort(dataDir: string): LocalPort {
   }
 }
 
-/** `session list --json` prints the sessions at the top level or inside the result envelope. */
-export function parseSessionList(text: string): LocalSession[] {
+/**
+ * The one line a `--json` CLI command prints (automation.ts `result`/`fail`): `{"schema":"mendcode.cli","kind":"result",
+ * "command":NAME,"data":{…}}`, or `kind: "error"` with `error.message`. Anything else is refused.
+ */
+function cliResult(text: string, command: string, what: string): Record<string, unknown> {
   let value: unknown
-  try { value = JSON.parse(text) } catch { throw new SetupError("the session list was not JSON") }
-  const root = value as { sessions?: unknown; data?: { sessions?: unknown }; result?: { sessions?: unknown } }
-  const list = root.sessions ?? root.data?.sessions ?? root.result?.sessions
-  if (!Array.isArray(list)) throw new SetupError("the session list had no sessions")
-  return list.flatMap((entry: { sessionId?: unknown; id?: unknown; title?: unknown; directory?: unknown }) => {
-    const id = typeof entry.sessionId === "string" ? entry.sessionId : typeof entry.id === "string" ? entry.id : undefined
-    return id && typeof entry.directory === "string" ? [{ id, title: typeof entry.title === "string" ? entry.title : id, directory: entry.directory }] : []
+  try { value = JSON.parse(text.trim()) } catch { throw new SetupError(`${what} was not JSON`) }
+  const line = value as { schema?: unknown; kind?: unknown; command?: unknown; data?: unknown; error?: { message?: unknown } }
+  if (!line || typeof line !== "object" || line.schema !== "mendcode.cli" || line.command !== command) throw new SetupError(`${what} was not the ${command} result`)
+  if (line.kind === "error") throw new SetupError(`${what} failed: ${typeof line.error?.message === "string" ? scrub(line.error.message) : "unknown error"}`)
+  if (line.kind !== "result" || !line.data || typeof line.data !== "object" || Array.isArray(line.data)) throw new SetupError(`${what} was not the ${command} result`)
+  return line.data as Record<string, unknown>
+}
+
+/** `session list --all-projects --json`: `data.sessions` holds session summaries (`sessionId`, `title`, `directory`). */
+export function parseSessionList(text: string): LocalSession[] {
+  const data = cliResult(text, "session.list", "the session list")
+  if (!Array.isArray(data.sessions)) throw new SetupError("the session list had no sessions")
+  return data.sessions.map((entry: { sessionId?: unknown; title?: unknown; directory?: unknown }) => {
+    if (typeof entry?.sessionId !== "string" || typeof entry.directory !== "string" || typeof entry.title !== "string") throw new SetupError("the session list had an entry without sessionId, title and directory")
+    return { id: entry.sessionId, title: entry.title || entry.sessionId, directory: entry.directory }
   })
 }
+
+/** `import FILE --from mendcode --json` on the host: `data.sessionId` is the session it made there. */
+export function parseImportResult(text: string): string {
+  const data = cliResult(text, "session.import", "the import on the host")
+  if (typeof data.sessionId !== "string" || !/^[A-Za-z0-9_-]+$/.test(data.sessionId)) throw new SetupError("the import on the host returned no session ID")
+  return data.sessionId
+}
+
+/** What raw `export ID --format json` writes to stderr when the transcript was cut to the export limits (session-transfer-automation.ts). */
+export const EXPORT_TRUNCATED_NOTE = "Export truncated to transcript/frame limits"
 
 export async function runSetupCommand(command: SetupCommand, out: { write(text: string): unknown }): Promise<number> {
   const { code } = await runSetup(command, { ssh: sshRunner, local: defaultLocalPort(command.dir), out })
