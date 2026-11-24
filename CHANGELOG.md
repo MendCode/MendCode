@@ -25,6 +25,13 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - A pet you chose that the terminal cannot show (no pictures, an image too small for text) now shows no pet, instead of the default robot taking its place; the robot in text mode is smaller by default (13 x 7 cells, was 26 x 14).
 - A goal no longer keeps continuing on its own while background commands are still running: it waits until one ends or prints a watched line, you write, or 30 minutes pass (`processLimits.goalWaitMinutes`), and the goal prompt tells the agent to end its turn instead of sleeping in the foreground.
+### New
+
+- ACP agents that list their models (`models`, switched with `session/set_model`) now show them in `/model` as `acp:<agent>/<model>`, and an agent's session mode follows MendCode's permission mode.
+
+### Changed
+
+- Docs: ACP usage is shown when the agent reports it.
 - Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
 
 - Switching between chats, bots and sub-agents no longer stalls the daemon: a chat's sub-agent tree, file changes and the session lists answer quickly in projects with many sessions and sub-agents, and every client stays responsive while they load.
