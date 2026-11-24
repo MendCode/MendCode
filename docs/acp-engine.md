@@ -115,7 +115,7 @@ Catalog presets use no npx/uvx runner, so they do not implicitly download packag
 
 The `acp.registry` command (`operation: list|add`, `agentId` for add) is lazy-validated, local-only, safe-mode disabled and excluded from read-only remote commands.
 
-Remote/peer clients cannot edit `acpAgents` or submit ACP turns.
+Remote/peer clients cannot edit `acpAgents`. A full-token remote client can run ACP turns only when the host lists the agent in the local-only `remoteEngines` setting (`["acp:<agent>"]`, or `["acp"]` for every configured agent; `"pi"` does the same for pi). Nothing is listed by default, read-only tokens never run turns, and a remote client cannot change the setting. See [remote.md](remote.md#remote-engines).
 
 ## Agent transport
 

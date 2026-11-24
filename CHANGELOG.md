@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - A read-only workflow task keeps the MCP tools their server marks read-only, so an agent that only needs to look at a device or service can use them.
 - The session that started a workflow is told when it completes, fails or blocks, with the reason, and can react.
+### New
+
+- Remote daemon: a full-token remote client can run turns on an ACP agent or pi when the host lists it in `remoteEngines` (off by default), `daemon service install --listener` keeps a listening daemon across reboots, `remote.json` accepts `"mode": "tailscale"`, and a renewed TLS certificate is served without a restart.
+- Saved remotes: `mendcode remote add NAME HOST:PORT`, `--remote NAME`, `--local` and a default remote, so typing `mendcode` connects to your daemon on another machine (falls back to this machine when it is unreachable).
 
 ### Changed
 

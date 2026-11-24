@@ -101,14 +101,29 @@ export function remoteBackoff(now = Date.now) {
   }
 }
 
-export type RemoteListenerOptions = { listen?: string; tlsCert?: string; tlsKey?: string }
+/** `tailscale`: bind only a Tailscale address and accept only peers from the tailnet ranges. */
+export type RemoteMode = "tailscale"
+export type RemoteListenerOptions = { listen?: string; tlsCert?: string; tlsKey?: string; mode?: RemoteMode }
+
+/** Tailscale's ranges: IPv4 100.64.0.0/10 and IPv6 fd7a:115c:a1e0::/48 (also as an IPv4-mapped IPv6 address). */
+export function tailscaleAddress(address: string): boolean {
+  const host = address.replace(/^\[|\]$/g, "").toLowerCase()
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host)?.[1] ?? host
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(mapped)
+  if (v4) {
+    const octets = v4.slice(1).map(Number)
+    return octets.every((n) => n <= 255) && octets[0] === 100 && octets[1]! >= 64 && octets[1]! <= 127
+  }
+  return /^fd7a:115c:a1e0(:|$)/.test(host) && /^[0-9a-f:]+$/.test(host)
+}
+
 /** `<dir>/remote.json` contains listener settings only; flags override it. Validate before opening the store. */
 export function remoteListenerConfig(dir: string, flags: RemoteListenerOptions): RemoteListenerOptions {
   let config: RemoteListenerOptions = {}
   try {
     const value = JSON.parse(readFileSync(path.join(dir, "remote.json"), "utf8"))
-    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !["listen", "tlsCert", "tlsKey", "server"].includes(key)) || Object.entries(value).some(([key, v]) => key !== "server" && typeof v !== "string")) throw new Error("invalid remote.json")
-    config = { ...(value.listen ? { listen: value.listen } : {}), ...(value.tlsCert ? { tlsCert: value.tlsCert } : {}), ...(value.tlsKey ? { tlsKey: value.tlsKey } : {}) }
+    if (!value || typeof value !== "object" || Object.keys(value).some((key) => !["listen", "tlsCert", "tlsKey", "mode", "server"].includes(key)) || Object.entries(value).some(([key, v]) => key !== "server" && typeof v !== "string") || value.mode !== undefined && value.mode !== "tailscale") throw new Error("invalid remote.json")
+    config = { ...(value.listen ? { listen: value.listen } : {}), ...(value.tlsCert ? { tlsCert: value.tlsCert } : {}), ...(value.tlsKey ? { tlsKey: value.tlsKey } : {}), ...(value.mode ? { mode: value.mode as RemoteMode } : {}) }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("invalid remote.json")
   }
@@ -123,5 +138,6 @@ export function validateRemoteListener(options: RemoteListenerOptions) {
   const address = parseRemoteAddress(options.listen)
   if (Boolean(options.tlsCert) !== Boolean(options.tlsKey)) throw new Error("--tls-cert and --tls-key are required together")
   if (!isLoopbackHost(address.hostname) && (!options.tlsCert || !options.tlsKey)) throw new Error("non-loopback --listen requires --tls-cert and --tls-key")
+  if (options.mode === "tailscale" && !tailscaleAddress(address.hostname)) throw new Error("remote mode tailscale listens only on a Tailscale address (100.64.0.0/10 or fd7a:115c:a1e0::/48), not a name or another address")
   return { ...address, ...(options.tlsCert && options.tlsKey ? { tls: { cert: readFileSync(options.tlsCert), key: readFileSync(options.tlsKey) } } : {}) }
 }

@@ -70,7 +70,7 @@ import type { ComputerOptions } from "./computer"
 import type { BrowserOptions } from "./browser"
 import { createLazyComputerControl, createLazyBrowserControl } from "./lazy-controls"
 import { parseRemoteAddress } from "@mendcode/protocol/wire"
-import { remoteBackoff, remoteTokens, validateRemoteListener, type RemoteListenerOptions } from "./remote"
+import { remoteBackoff, remoteTokens, tailscaleAddress, validateRemoteListener, type RemoteListenerOptions } from "./remote"
 import { isLoopbackHost, isReadOnlyCommand } from "@mendcode/protocol/wire"
 import type { createHttpAdapter, HttpPeer } from "./http"
 import { httpConfig, type HttpOptions } from "./http-config"
@@ -262,7 +262,7 @@ import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
 import { connectionOrigin, createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
 import { createSessionStarter } from "./session-start"
-import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
+import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteEngineAllowed, remoteEngineRefusal, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
 import { createAgentCommands } from "./agent-commands"
 import { asideTranscript, createAsideStore } from "./aside"
@@ -4528,8 +4528,8 @@ export async function startDaemon(options: DaemonOptions) {
         if (peer && (command.type === "user.submit" || command.type === "session.compact")) {
           const model = command.type === "user.submit" ? command.selection?.model : command.model
           const selected = model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(command.sessionId)), catalog })
-          if (["pi", "opencode", "cursor"].includes(modelEngine(selected, catalog) ?? "")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
-          if (selected.model.startsWith("acp:")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: ACP agents run local tools and are local only" })
+          const refusal = remoteEngineRefusal({ engine: modelEngine(selected, catalog), model: selected.model, allowed: store.settings.get().remoteEngines })
+          if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
         }
         // A retry with the same `clientRequestId` (another command id, e.g. after a reconnect) gets the first answer, never a second queued message.
         const requestKey = command.type === "user.submit" && command.clientRequestId ? `${command.sessionId}:${command.clientRequestId}` : undefined
@@ -4661,7 +4661,8 @@ export async function startDaemon(options: DaemonOptions) {
           const model = agentModelOf(safe.sessionId, catalog, safe.selection?.agent) ?? safe.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(safe.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(safe.sessionId)), catalog })
           const key = modelEngine(model, catalog) ?? options.info?.engine
           // The agent's own model counts, not only the submitted one: an agent set to pi or an ACP agent must not start them for a peer.
-          if (key === "pi" || key === "opencode" || key === "cursor" || model.model.startsWith("acp:") || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
+          const engineRefusal = remoteEngineRefusal({ engine: key, model: model.model, allowed: store.settings.get().remoteEngines })
+          if (engineRefusal || (key === "claude" || key === "codex") && threadMcpEnabled(store.settings.get(), key, options.safeMode)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: local tool engines are local only" })
           safe = { ...safe, turnOptions: remoteTurnOptions(safe.turnOptions) }
         }
         // Only the submitted text grants resource reads; attached thread/PR/agent context does not.
@@ -6553,7 +6554,7 @@ export async function startDaemon(options: DaemonOptions) {
         const extra = baseCatalog.selectable && !connection.peer?.readOnly ? await extensions.providerModels(sessionId ? store.sessionDirectory(sessionId)! : process.cwd()) : []
         const catalog = extra.length ? { ...baseCatalog, list: () => [...baseCatalog.list().filter((model) => !extra.some((item) => item.id === model.id)), ...extra] } : baseCatalog
         if (command.type === "session.model.set") {
-          if ((connection.remoteAddress || connection.peer) && command.choice && ["pi", "opencode", "cursor"].includes(modelEngine(command.choice, catalog) ?? "")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
+          if ((connection.remoteAddress || connection.peer) && command.choice && ["opencode", "cursor"].includes(modelEngine(command.choice, catalog) ?? "") || (connection.remoteAddress || connection.peer) && command.choice && modelEngine(command.choice, catalog) === "pi" && !remoteEngineAllowed(store.settings.get().remoteEngines, "pi")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
           let problem = command.choice ? invalidChoice(command.choice, catalog) : undefined
           if (problem?.startsWith("unknown model") && baseCatalog.discover) { await baseCatalog.discover(); problem = invalidChoice(command.choice!, catalog) }
           if (problem) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${problem}` })
@@ -7083,6 +7084,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       if (remote) {
         connection.remoteAddress = socket.remoteAddress ?? "unknown"
+        if (options.mode === "tailscale" && !tailscaleAddress(connection.remoteAddress)) return rejectRemote(connection, "unauthorized")
         if (backoff.blocked(connection.remoteAddress)) return rejectRemote(connection, "rate_limited")
         connection.authTimer = setTimeout(() => {
           backoff.fail(connection.remoteAddress!)
@@ -7275,8 +7277,30 @@ export async function startDaemon(options: DaemonOptions) {
   }
   let stopped = false
   let remoteWatch: ReturnType<typeof setInterval> | undefined
+  let tlsWatch: { close(): void } | undefined
   try {
-    if (remoteConfig) remoteListener = Bun.listen<Connection>({ ...remoteConfig, socket: socketHandlers(true) })
+    if (remoteConfig) {
+      remoteListener = Bun.listen<Connection>({ ...remoteConfig, socket: socketHandlers(true) })
+      // A renewed certificate takes effect without a restart: the listener is reopened on its port with the new files, and open connections stay.
+      if (remoteConfig.tls && options.tlsCert && options.tlsKey) {
+        const { readTlsFiles, watchTlsFiles } = await import("./tls-reload")
+        const [certFile, keyFile] = [options.tlsCert, options.tlsKey]
+        type TlsPair = NonNullable<typeof remoteConfig.tls>
+        let current: TlsPair = remoteConfig.tls
+        tlsWatch = watchTlsFiles({ files: [certFile, keyFile], changed() {
+          const read = readTlsFiles(certFile, keyFile)
+          if (!read || !remoteListener || read.cert.equals(current.cert) && read.key.equals(current.key)) return
+          const next = read as TlsPair
+          const previous = remoteListener
+          const reopen = (tls: TlsPair) => Bun.listen<Connection>({ ...remoteConfig, port: previous.port, tls, socket: socketHandlers(true) })
+          previous.stop()
+          try { remoteListener = reopen(next); current = next; logLine("info", "[REMOTE]: TLS certificate reloaded") } catch {
+            try { remoteListener = reopen(current) } catch { logLine("error", "[REMOTE]: TLS reload failed and the listener could not reopen; restart the daemon") }
+            logLine("warn", "[REMOTE]: new TLS certificate or key rejected; keeping the previous one")
+          }
+        } })
+      }
+    }
     if (sessionHttpConfig) sessionHttpListener = Bun.serve({ ...sessionHttpConfig, fetch: sessionHttp, maxRequestBodySize: 80 * 1024, idleTimeout: 0 })
     if (serverConfig.enabled) {
       const { createHttpAdapter } = await import("./http")
@@ -7457,6 +7481,7 @@ export async function startDaemon(options: DaemonOptions) {
     mflowListener?.stop(true)
     await channels.stop()
     clearInterval(remoteWatch)
+    tlsWatch?.close()
     clearInterval(idleWatch)
     httpAdapter?.close()
     pty.dispose()

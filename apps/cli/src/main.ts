@@ -7,6 +7,7 @@ import type { ParseResult } from "./automation"
 import { COMPAT, compatEnvelope } from "./compat"
 import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
+import { existsSync } from "node:fs"
 import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { DEFAULT_DIR, runInherited, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
@@ -78,8 +79,17 @@ try {
 }
 let transportFlags: ReturnType<typeof parseRemoteFlags>
 try {
-  // Token administration runs without connecting to or launching a daemon.
+  // Saved remotes (`mendcode remote add`): read only when the file exists or a flag names one.
+  const profileDir = (() => { const at = rawArgv.indexOf("--dir"); return path.resolve(at >= 0 && rawArgv[at + 1] ? rawArgv[at + 1]! : envDataDir()) })()
+  // Token and saved-remote administration run without connecting to or launching a daemon.
   if (rawArgv.includes("remote")) {
+    const { parseProfileCommand, runProfileCommand } = await import("./remote-profiles")
+    const profileCommand = parseProfileCommand(rawArgv, profileDir)
+    if (profileCommand) {
+      if (profileCommand.action !== "list") refuseFromSession(profileCommand.dir, "changes where this terminal connects")
+      runProfileCommand(profileCommand, process.stdout)
+      process.exit(0)
+    }
     const command = parseTokenCommand(rawArgv)
     if (command) {
       if (command.action !== "list") refuseFromSession(command.dir, "creates or revokes remote access")
@@ -87,7 +97,14 @@ try {
       process.exit(0)
     }
   }
-  transportFlags = parseRemoteFlags(rawArgv)
+  let transportArgs = rawArgv
+  if (rawArgv.some((token) => token === "--local" || token === "--remote" || token.startsWith("--remote=")) || existsSync(path.join(profileDir, "remotes.json"))) {
+    const { chooseRemote, defaultProbes } = await import("./remote-profiles")
+    const choice = await chooseRemote({ args: rawArgv, dir: profileDir, probes: defaultProbes })
+    transportArgs = choice.args
+    if (choice.note) process.stderr.write(`${choice.note}\n`)
+  }
+  transportFlags = parseRemoteFlags(transportArgs)
 } catch (error) {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "remote setup failed"}\n`)
   process.exit(64)
@@ -132,7 +149,16 @@ if (argv.includes("daemon") || argv.includes("service")) {
     const runtime = await import("../../../packages/daemon/src/user-service")
     const command = daemonCommand()
     if (command[0] === "bun") command[0] = process.execPath
-    const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
+    if (daemonService.remote) {
+      // A listener that cannot start would crash-loop under the service manager: refuse here, with the same checks the daemon makes.
+      try {
+        const { remoteListenerConfig, validateRemoteListener } = await import("../../../packages/daemon/src/remote")
+        const flags = daemonService.remote
+        const value = (name: string) => flags[flags.indexOf(name) + 1]
+        validateRemoteListener(remoteListenerConfig(dir, { ...(flags.includes("--listen") ? { listen: value("--listen")! } : {}), ...(flags.includes("--tls-cert") ? { tlsCert: value("--tls-cert")! } : {}), ...(flags.includes("--tls-key") ? { tlsKey: value("--tls-key")! } : {}) }))
+      } catch (error) { process.stderr.write(`error: ${error instanceof Error ? error.message : "invalid listener"}\n`); process.exit(64) }
+    }
+    const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.remote ? { remote: daemonService.remote } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
     const host = runtime.createUserService(options)
     process.exit(await createDaemonServiceCli({
       dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep, lockOwner: () => runtime.daemonLockOwner(dir),
