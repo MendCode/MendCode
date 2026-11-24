@@ -149,6 +149,32 @@ An SSH, Tailscale or certificate failure stops with the cause and what to do. Ru
 
 Not done yet: the device-key challenge that would replace the bearer token and approval-code pairing without SSH.
 
+### Code between machines (`remote code`)
+
+Sessions move with `remote setup --migrate-sessions`; the code moves with git. Nothing here runs unless you type it, and none of it loads at start-up.
+
+```sh
+mendcode remote code handoff [PROJECT] [--git-remote origin] [--dry-run]   # on the machine you leave
+mendcode remote code receive [PROJECT] [--git-remote origin] [--branch mend/wip-...] [--into DIR]   # on the machine you arrive at
+mendcode remote code clone GIT_URL [--root DIR] [--search-root DIR] [--dry-run]
+```
+
+**Handoff.** It takes a snapshot of the working tree with a temporary index: tracked changes (including deletions and files staged as new) plus new files that are not ignored. The snapshot is committed on top of HEAD and pushed to a new branch `mend/wip-<branch>-<time>-<commit>` of the git remote (`origin` unless `--git-remote`). The push is never forced and the branch name is new each time. Your branch, index, files, stash and worktrees are not touched; `--dry-run` lists the changed files and pushes nothing. New files that look like credentials (`.env`, `*.pem`, `*.key`, `id_rsa`, `.npmrc`, ...) or are over 5 MiB are left out and named; more than 5,000 new files stops it (add the build output to `.gitignore`). A clean tree has nothing to hand off. The git remote must already be reachable with your own credentials (it never asks for a password).
+
+**Receive.** It fetches `mend/wip-*` into remote-tracking refs only, picks the newest (or `--branch`), and checks it out with `git worktree add` in `<data dir>/remote-code/worktrees/` (or `--into`) on a local branch of the same name. It never changes your checkout, never resets or deletes a branch, and a second run reports the worktree that already exists. To bring the changes into your own checkout, `git cherry-pick --no-commit <commit>` (printed). Old `mend/wip-*` branches stay on the git remote until you delete them.
+
+**Clone here.** `clone` looks under `--root` (default `~/code`), `--search-root` and `~/code`, `~/src`, `~/projects`, `~/work`, `~/dev`, `~/repos`, `~/git` for a clone with the same normalized git remote (the same matching as `--migrate-sessions`) and clones only when none exists.
+
+**Live two-way sync (opt-in, per project).** Needs [Mutagen](https://mutagen.io) installed by you (MendCode does not bundle or install it).
+
+```sh
+mendcode remote code live enable [PROJECT] --ssh USER@HOST [--remote-path /abs/dir | --path-map LOCAL=REMOTE] [--ignore PATTERN] [--include-env]
+mendcode remote code live status|resume|disable [PROJECT] [--name N]
+mendcode remote code live list
+```
+
+`enable` finds the clone on the host by git remote (or uses `--remote-path` / `--path-map`) and refuses unless both clones are the same repository, on the same branch, at the same commit. It then runs `mutagen sync create` in `two-way-safe` mode, which keeps conflicts instead of overwriting either side. The `.git` folder, `node_modules`, `dist`, `build`, `.next`, `target`, `.venv`, `*.log` and `.env` / `.env.*` (unless `--include-env`) are never synced. After that each side commits on its own; fetch on the side that is behind. `live status` compares the branches over SSH and pauses the session when they differ (`live resume` checks again before resuming) and shows Mutagen's state, conflicts and last error. `disable` terminates only sessions this command created (recorded in a ledger under `<data dir>/remote-code/`, mode 0600, no secrets) and leaves the files as they are. Without Mutagen, `enable` says so and does nothing.
+
 ### Choose a session
 
 The TUI attaches to `--session`, otherwise the newest session. With no sessions a full token creates one in the daemon's reported project directory; a read-only token requires an existing session.

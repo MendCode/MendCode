@@ -59,7 +59,7 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   // The bots sidebar (all projects, bots section, icons column, a bot's page) loads with the first frame that needs it.
   for (const file of ["apps/cli/src/ui/app/sidebar-bots.ts", "apps/cli/src/view/sidebar-multi.ts", "apps/cli/src/view/bot-icon.ts", "apps/cli/src/view/bot-look.ts", "apps/cli/src/view/bot-card-page.ts"]) expect(inputs.has(file), file).toBe(false)
   // A plain terminal launch never evaluates the headless run, the herdr/tuios reporters (only inside such a pane), the completion script or the session export.
-  for (const file of ["run", "herdr", "support-output", "export", "automation", "remote-setup", "remote-setup-projects", "sync-automation"]) expect(inputs.has(`apps/cli/src/${file}.ts`), file).toBe(false)
+  for (const file of ["run", "herdr", "support-output", "export", "automation", "remote-setup", "remote-setup-projects", "sync-automation", "remote-code"]) expect(inputs.has(`apps/cli/src/${file}.ts`), file).toBe(false)
   expect(inputs.has("packages/store/src/sync-state.ts")).toBe(false)
   // The prompt's vim layer loads with the first frame or key that has the vimMode setting on.
   expect(inputs.has("apps/cli/src/view/vim.ts")).toBe(false)
