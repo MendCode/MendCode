@@ -172,6 +172,8 @@ export async function runSetup(command: SetupCommand, deps: SetupDeps): Promise<
 
 /** One file per (remote, device): this machine's device name is the same for every host it sets up, and each host issues its own token. */
 function tokenFile(dir: string, remote: string, device: string) { return path.join(dir, "remote", `${remote}.${device}.token`) }
+/** Profiles saved before token files were per remote point at `<device>.token`; unpair still recognizes and removes that file. */
+function legacyTokenFile(dir: string, device: string) { return path.join(dir, "remote", `${device}.token`) }
 /** Where `--sync` keeps the sync-scoped token; `mendcode sync enable NAME` looks there too. */
 function syncTokenFile(dir: string, remote: string) { return path.join(dir, "remote", `${remote}.sync-token`) }
 
@@ -200,8 +202,11 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
   if (syncResult.code === 0) say(`revoked ${syncName} on the host`)
   if (!remote) return
   const file = tokenFile(command.dir, remote, command.device)
+  const legacy = legacyTokenFile(command.dir, command.device)
+  const ownFile = profile?.tokenFile === file || profile?.tokenFile === legacy
   rmSync(file, { force: true })
-  if (profile?.tokenFile === file) {
+  if (profile?.tokenFile === legacy) rmSync(legacy, { force: true })
+  if (ownFile) {
     // This machine is the device that was unpaired: its sync token file and the sync setup that uses it go too.
     rmSync(syncTokenFile(command.dir, remote), { force: true })
     const { readSyncConfig, writeSyncConfig } = await import("@mendcode/daemon/sync-config")
@@ -212,7 +217,7 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
       say(`turned off session sync with ${remote}`)
     }
   }
-  if (profiles && profile?.tokenFile === file) {
+  if (profiles && ownFile) {
     const next: RemoteProfiles = { ...profiles, remotes: { ...profiles.remotes } }
     delete next.remotes[remote]
     if (next.defaultRemote === remote) delete next.defaultRemote

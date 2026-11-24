@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
@@ -213,6 +213,25 @@ test("unpair revokes on the host and removes the local token file and remote", a
   expect(result.code).toBe(0)
   expect(host.state.tokens.has("my-mac")).toBe(false)
   expect(existsSync(path.join(dir, "remote", "vps.my-mac.token"))).toBe(false)
+  expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))).toEqual({ remotes: {} })
+})
+
+test("unpair still cleans up a profile whose token file uses the earlier <device>.token name", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir, ["--sync"]), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  const current = path.join(dir, "remote", "vps.my-mac.token")
+  const legacy = path.join(dir, "remote", "my-mac.token")
+  renameSync(current, legacy)
+  const profiles = JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))
+  profiles.remotes.vps.tokenFile = legacy
+  writeFileSync(path.join(dir, "remotes.json"), JSON.stringify(profiles))
+  const result = await runSetup(parseSetupCommand(["remote", "unpair", "my-mac", "--dir", dir], dir)!, { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(result.code).toBe(0)
+  expect(host.state.tokens.has("my-mac")).toBe(false)
+  expect(existsSync(legacy)).toBe(false)
+  expect(existsSync(path.join(dir, "remote", "vps.sync-token"))).toBe(false)
+  expect(existsSync(path.join(dir, "sync.json"))).toBe(false)
   expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))).toEqual({ remotes: {} })
 })
 
