@@ -1160,6 +1160,24 @@ export function createClaudeEngine(options: {
         })
       })
     },
+    /**
+     * `/reload`: Claude Code reads its plugins, hooks and settings only when its process starts, so an idle process ends now and the next
+     * message starts one that resumes the same conversation. A running turn or background task is never cut: the process ends once
+     * they do (`reload`).
+     */
+    async refresh(sessionId) {
+      const running = kept.get(sessionId)
+      const own = connections.get(sessionId)
+      const connection = own && !own.closed ? own : undefined
+      const later = running ? await running.refresh?.(sessionId) : undefined
+      if (!connection) return later
+      if (connection.turn || connection.background > 0 || connection.unsolicited) {
+        connection.reload = true
+        return "later"
+      }
+      close(connection, "reloaded")
+      return later ?? "next"
+    },
     async rewind({ sessionId, turnId }) {
       const connection = connections.get(sessionId)
       if (!connection || connection.closed) {

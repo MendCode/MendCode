@@ -1264,6 +1264,63 @@ describe("text appended to Claude Code's system prompt", () => {
   })
 })
 
+describe("/reload refreshes a session's Claude Code process", () => {
+  const answer = (text: string) => ({ onUser(api: FakeApi) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, text); api.push(result()) } })
+
+  test("an idle process ends at once and the next turn starts a new one that resumes the conversation", async () => {
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([fakeClaude(answer("one")), fakeClaude(answer("two"))], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const first = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    expect(await engine.refresh?.(first.input.sessionId)).toBe("next")
+    expect(closes).toEqual(["reloaded"])
+    expect(await engine.runTurn(turnInput({ sessionId: first.input.sessionId, mode: () => "full" }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1]!.args).toContain("--resume=cc-session-1")
+    engine.stop?.()
+  })
+
+  test("a session with no process is left alone", async () => {
+    const { engine, spawned } = engineWith([fakeClaude(answer("one"))])
+    expect(await engine.refresh?.(turnInput().input.sessionId)).toBeUndefined()
+    expect(spawned).toHaveLength(0)
+    engine.stop?.()
+  })
+
+  test("a running turn is not killed: the process ends when the turn does", async () => {
+    let hold: FakeApi | undefined
+    const first = fakeClaude({ onUser(api) { hold = api; api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "working") } })
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([first, fakeClaude(answer("two"))], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const { input } = turnInput({ mode: () => "full" })
+    const running = engine.runTurn(input)
+    await Bun.sleep(10)
+    expect(await engine.refresh?.(input.sessionId)).toBe("later")
+    expect(closes).toEqual([])
+    hold!.push(result())
+    expect(await running).toEqual({ status: "ok" })
+    expect(closes).toEqual(["MCP servers changed"])
+    expect(await engine.runTurn(turnInput({ sessionId: input.sessionId, mode: () => "full" }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1]!.args).toContain("--resume=cc-session-1")
+    engine.stop?.()
+  })
+
+  test("a background agent keeps the process until it ends", async () => {
+    const agent = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Long agent" }] }); streamText(api, 0, "ok"); api.push(result()) } })
+    const closes: string[] = []
+    const { engine } = engineWith([agent], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const { input } = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(await engine.refresh?.(input.sessionId)).toBe("later")
+    expect(closes).toEqual([])
+    agent.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await Bun.sleep(5)
+    expect(closes).toHaveLength(1)
+    engine.stop?.()
+  })
+})
+
 describe("MCP servers changed during a turn", () => {
   test("the process ends with that turn and the next turn starts a new one that resumes the conversation", async () => {
     const adds = fakeClaude({
