@@ -3635,6 +3635,8 @@ export async function startDaemon(options: DaemonOptions) {
     emit: (event) => void sessionSink.append(event),
     steer: async (sessionId, steering) => (await actorFor(sessionId)?.steer(steering)) ?? false,
     prompts: createGoalPrompts({ layersFor, enabled: extensionsEnabled }),
+    waiting: (sessionId) => background.listAll(sessionId).filter((task) => task.status === "running").length,
+    waitMs: () => (store.settings.get().processLimits?.goalWaitMinutes ?? 30) * 60_000,
     log: logLine,
   })
   sessionObservers.push(goals.observe)
