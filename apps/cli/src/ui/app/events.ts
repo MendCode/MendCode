@@ -21,6 +21,7 @@ import { planModeNotice, planModelId } from "../../view/plan-mode-notice"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
+import { paced } from "./paced"
 import { configureKeyLabels } from "../key-labels"
 import { keyboardWanted } from "../keyboard-protocol"
 
@@ -80,6 +81,9 @@ export function createEvents(ctx: AppContext, actions: {
   const { chatWidth, noteSecretMarkers, loadPage, ringTurnBell, footerSegments, loadBranch, loadDiffTotals, loadSidebarMcp, noteActivity, loadAgentShells, loadMcps, loadMemories, loadMemoryGraph, noteLoop, noteWorkflow, loadMemoryCategories, applySettings, loadDreamReport, loadEvolution } = actions
 
   const thresholds = createThresholds()
+  /** Sub-agents at work change their lists many times a second: the strip and the jobs count are asked again at a bounded pace. */
+  const askLiveTasks = paced(() => void refreshLiveTasks(ctx))
+  const askAgentShells = paced(() => void loadAgentShells().then(requestFrame))
   /** Memories whose save just toasted, by id: their follow-up `updated` event stays quiet. */
   const savedToasts = new Map<string, number>()
   /** The memory toast on screen, so the transcript row for the same write (it arrives a moment later) can replace it. */
@@ -274,7 +278,7 @@ export function createEvents(ctx: AppContext, actions: {
       if (state.agentParents.size > AGENT_PARENTS_KEPT) state.agentParents.delete(state.agentParents.keys().next().value!)
       followPet(state)
       if (state.page === "tasks" && event.parentId === state.sessionId) void actions.loadTasks()
-      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) void refreshLiveTasks(ctx)
+      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) askLiveTasks()
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // The agents card and /tree draw the sub-agents' state and model: ask again.
       state.sidebarTreeRev++
@@ -285,7 +289,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "session.background.changed") {
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // An engine's own background tasks (Claude Code's) come and go with this event: the jobs count follows them.
-      void loadAgentShells().then(requestFrame)
+      askAgentShells()
       return
     }
     if (event.type === "session.activity") {
