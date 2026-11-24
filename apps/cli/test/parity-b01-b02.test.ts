@@ -193,10 +193,11 @@ test("last-user navigation fetches the missing user message before placing the v
   const sessionId = (await import("./session-ui-harness")).ids("session")
   const events: import("@mendcode/protocol").SessionEvent[] = []
   // Opening a chat pages back until it fills two screens, so the opening window must already be longer than that to miss the prompt.
+  // The window stops before the turn's end: a window that ended the turn without its start is read back to the start (turn closing line).
   const point = conversation(sessionId, (event) => events.push(event)).exchange("Paged prompt", "Long answer\n\n".repeat(60))
   const loads: number[] = []
   const h = parityHarness({ sessionId, dataDir, reply: (command) => command.type === "session.timeline" ? { ok: true, result: { entries: [{ ...point, at: 1, preview: "Paged prompt", reverted: false }] } } : undefined, events: {
-    loadWindow: async () => ({ ok: true, window: { events: events.slice(-4), firstSeq: 3, lastSeq: 6, sessionLastSeq: 6, more: true } }),
+    loadWindow: async () => ({ ok: true, window: { events: events.slice(-4, -1), firstSeq: 3, lastSeq: 5, sessionLastSeq: 6, more: true } }),
     loadBefore: async (_id, seq) => { loads.push(seq); return { ok: true, window: { events: events.slice(0, 2), firstSeq: 1, lastSeq: 2, sessionLastSeq: 6, more: false } } },
   } })
   await h.app.start()
