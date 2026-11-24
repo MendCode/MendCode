@@ -43,7 +43,7 @@ export function readRemoteProfiles(dir: string): RemoteProfiles | undefined {
   }
 }
 
-function writeRemoteProfiles(dir: string, profiles: RemoteProfiles) {
+export function writeRemoteProfiles(dir: string, profiles: RemoteProfiles) {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   const file = path.join(dir, REMOTES_FILE)
   const temporary = `${file}.${process.pid}.tmp`
