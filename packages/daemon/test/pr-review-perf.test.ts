@@ -268,3 +268,65 @@ describe("a measured rise on a later head", () => {
     expect(prompts.some((prompt) => prompt.includes("second reviewer"))).toBe(false)
   })
 })
+
+/** The reviewer's performance findings must not rest on one noisy measurement (docs/pr-review.md, "A rise blocks only when it reproduces"). */
+describe("a rise needs a second measurement", () => {
+  /** A runner that answers each call from `answers` in turn, the last one for any further call. */
+  function scripted(answers: Array<Partial<PerfRunResult>>) {
+    const calls: PerfRunInput[] = []
+    return { calls, run: async (input: PerfRunInput): Promise<PerfRunResult> => { calls.push(input); return { code: 0, out: "", err: "", timedOut: false, ...answers[Math.min(calls.length - 1, answers.length - 1)] } } }
+  }
+  const rise = { code: 1, out: TABLE(RISE) }
+  const flat = { code: 0, out: TABLE(SAME) }
+
+  test("a rise the second measurement reproduces is confirmed, and blocks as a critical finding", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const fake = scripted([rise, rise])
+    const outcome = await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), run: fake.run, rounds: 7 } })
+    expect(outcome).toMatchObject({ status: "measured", rose: true, confirmed: true })
+    expect(fake.calls).toHaveLength(2)
+    expect(fake.calls.map((call) => call.rounds)).toEqual([7, 7])
+    const run = await review(repo, { dir: temp(), run: scripted([rise, rise]).run }, child())
+    const finding = run.outcome?.result.findings.find((item) => item.category === "performance")
+    expect(finding).toMatchObject({ severity: "critical", verdict: "confirmed" })
+  })
+
+  test("a rise the second measurement does not reproduce is noise: no finding, and the details say so", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const run = await review(repo, { dir: temp(), run: scripted([rise, flat]).run }, child())
+    expect(run.outcome?.result.findings.filter((item) => item.category === "performance")).toEqual([])
+    expect(run.info?.perf).toContain("did not reproduce the rise")
+  })
+
+  test("a rise whose second measurement cannot finish is possible noise: minor, plausible, never blocking", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const run = await review(repo, { dir: temp(), run: scripted([rise, { code: null, timedOut: true }]).run }, child())
+    const finding = run.outcome?.result.findings.find((item) => item.category === "performance")
+    expect(finding).toMatchObject({ severity: "minor", verdict: "plausible" })
+    expect(finding?.detail).toContain("possible noise")
+  })
+
+  test("a measurement without a rise runs once", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const fake = scripted([flat])
+    await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), run: fake.run } })
+    expect(fake.calls).toHaveLength(1)
+  })
+
+  test("an incremental review measures its own increment; while a measured rise is open it measures the whole pull request", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const first = await review(repo, { dir: temp(), run: scripted([rise]).run }, child())
+    const open = first.outcome!.result.findings.find((item) => item.category === "performance")!
+    writeFileSync(path.join(repo.dir, "apps/cli/src/b.ts"), "export const b = 1\n")
+    await git(repo.dir, "add", "-A")
+    await git(repo.dir, "commit", "-q", "-m", "increment")
+    const head = await git(repo.dir, "rev-parse", "HEAD")
+    const measure = async (published: Record<string, { commentId: number; finding: typeof open }>) => {
+      const fake = scripted([flat])
+      await runPrReview({ repo: "MendCode/MendCode", number: 7, directory: repo.dir, base: repo.base, head, publish: false, sessionFactory: child().factory, state: { version: 1, lastHead: repo.head, published }, perf: { dir: temp(), run: fake.run } } as Parameters<typeof runPrReview>[0])
+      return fake.calls[0]
+    }
+    expect((await measure({}))?.base).toBe(repo.head)
+    expect((await measure({ [open.id]: { commentId: 1, finding: open } }))?.base).toBe(repo.base)
+  })
+})

@@ -16,6 +16,8 @@ mendcode                                                             # now conne
 
 Setup installs MendCode, gets a TLS certificate, runs the daemon as a service, creates a token for this device and saves the VPS as your default remote. If it stops, run the same command again; finished steps are skipped.
 
+**Tailscale without root (userspace).** If Tailscale on the VPS runs as your own user (`tailscaled --tun=userspace-networking`), setup finds it in `~/.local/bin` and its socket under `~/.local/state/tailscale/`, and the daemon listens on `127.0.0.1` with TLS while Tailscale forwards the tailnet port to it. Use `--tailscale PATH` and `--tailscale-socket PATH` when they live elsewhere ([remote.md](remote.md#one-command-for-a-vps-remote-setup)).
+
 Each other device needs its own token. Run this on that device; it needs SSH to the VPS:
 
 ```sh

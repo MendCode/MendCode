@@ -106,3 +106,62 @@ describe("perf-attrib verdict", () => {
     expect(toMarkdown({ base: "a", cand: "b", rounds: 1, rows, noise })).toContain("**perf-attrib: sube")
   })
 })
+
+describe("perf-attrib trustworthy flags", () => {
+  const noise: Noise = { schema: SCHEMA_VERSION, runs: 18, measuredAt: "2026-11-07", build: "x", range: { "tui.rest.fp_mb": 1.2, "tui.cpu_ms.rest": 139, "tui.cpu_ms.after": 1029, "disk.bytes_per_session": 17 } }
+  const runs = (name: string, values: number[], extra: Flat = {}): Flat[] => values.map((value) => ({ [name]: value, ...extra }))
+  const same = [350, 360, 355, 350, 352]
+
+  test("one outlier sample on either side moves no median and flags nothing", () => {
+    expect(verdict(compare(runs("tui.rest.fp_mb", [63, 63, 63, 63, 63]), runs("tui.rest.fp_mb", [63, 71, 63, 63, 63]), noise)).word).toBe("igual")
+    expect(verdict(compare(runs("tui.rest.fp_mb", [63, 70, 63, 63, 63]), runs("tui.rest.fp_mb", [63, 63, 63, 63, 63]), noise)).word).toBe("igual")
+    expect(verdict(compare(runs("tui.cpu_ms.after", [1800, 1840, 1800, 1830, 1810]), runs("tui.cpu_ms.after", [1820, 5200, 1800, 1790, 1815]), noise)).word).toBe("igual")
+  })
+
+  test("a sustained rise above the base's range and the floor is a sube", () => {
+    expect(verdict(compare(runs("tui.rest.fp_mb", [63, 63, 63, 63, 63]), runs("tui.rest.fp_mb", [67, 67, 66.5, 67, 67.5]), noise)).word).toBe("sube")
+    expect(verdict(compare(runs("tui.cpu_ms.rest", same), runs("tui.cpu_ms.rest", [1500, 1480, 1510, 1490, 1500]), noise)).word).toBe("sube")
+    expect(verdict(compare(runs("disk.bytes_per_session", [2600, 2610, 2600, 2605, 2600]), runs("disk.bytes_per_session", [4700, 4700, 4710, 4700, 4690]), noise)).word).toBe("sube")
+  })
+
+  test("a median inside the base's own min..max, or under the floor, is the same however consistent", () => {
+    // 64 against a base that itself ranged 60..66: the cand never left the base's range.
+    expect(verdict(compare(runs("tui.rest.fp_mb", [60, 66, 62, 66, 60]), runs("tui.rest.fp_mb", [64, 64, 64, 64, 64]), noise)).word).toBe("igual")
+    // +2 MB, +100 ms, +76 B: above the base's range but under each floor.
+    expect(verdict(compare(runs("tui.rest.fp_mb", [63, 63, 63, 63, 63]), runs("tui.rest.fp_mb", [65, 65, 65, 65, 65]), noise)).word).toBe("igual")
+    expect(verdict(compare(runs("tui.cpu_ms.rest", same), runs("tui.cpu_ms.rest", [450, 452, 455, 450, 451]), noise)).word).toBe("igual")
+    expect(verdict(compare(runs("disk.bytes_per_session", [2600, 2600, 2600, 2600, 2600]), runs("disk.bytes_per_session", [2676, 2676, 2676, 2676, 2676]), noise)).word).toBe("igual")
+  })
+
+  test("the CPU floor is 15% of the base when that is larger than 150 ms", () => {
+    const base = runs("tui.cpu_ms.after", [8000, 8010, 8000, 8005, 8000])
+    // Between the 15% floor (1200 ms) and 1.5 times the calibrated range (1543 ms) of this phase: the larger one decides.
+    expect(compare(base, runs("tui.cpu_ms.after", [9400, 9400, 9400, 9400, 9400]), noise)[0]!.status).toBe("same")
+    expect(compare(base, runs("tui.cpu_ms.after", [9800, 9800, 9800, 9800, 9800]), noise)[0]!.status).toBe("up")
+    const quiet: Noise = { ...noise, range: { ...noise.range, "tui.cpu_ms.after": 10 } }
+    expect(compare(base, runs("tui.cpu_ms.after", [9100, 9100, 9100, 9100, 9100]), quiet)[0]!.status).toBe("same")
+    expect(compare(base, runs("tui.cpu_ms.after", [9250, 9250, 9250, 9250, 9250]), quiet)[0]!.status).toBe("up")
+  })
+
+  test("a rise whose causes are orders of magnitude smaller is possible noise, not a finding", () => {
+    const base = runs("tui.rest.fp_mb", [63, 63, 63, 63, 63], { "tui.rest.ctor.Blob.bytes": 1000 })
+    const rows = compare(base, runs("tui.rest.fp_mb", [68.8, 68.8, 68.8, 68.8, 68.8], { "tui.rest.ctor.Blob.bytes": 11000 }), noise)
+    expect(rows.find((row) => row.name === "tui.rest.fp_mb")!.status).toBe("up")
+    const v = verdict(rows)
+    expect(v.word).toBe("nota")
+    expect(v.text).toContain("possible noise")
+  })
+
+  test("a rise that its causes explain stays a sube", () => {
+    const rows = compare(runs("tui.rest.fp_mb", [63, 63, 63, 63, 63], { "tui.rest.region.WebKit_Malloc": 20 }), runs("tui.rest.fp_mb", [68, 68, 68, 68, 68], { "tui.rest.region.WebKit_Malloc": 24 }), noise)
+    expect(verdict(rows).word).toBe("sube")
+  })
+
+  test("CPU with a few KB of cause and the same start-up modules is possible noise; with changed modules it is a sube", () => {
+    const rows = compare(runs("tui.cpu_ms.rest", same, { "tui.rest.ctor.ModuleRecord.bytes": 2000 }), runs("tui.cpu_ms.rest", [1480, 1490, 1500, 1485, 1495], { "tui.rest.ctor.ModuleRecord.bytes": 12000 }), noise)
+    const unchanged = { baseCount: 300, candCount: 300, baseBytes: 9_000_000, candBytes: 9_000_000, addedChunkSizes: [], removedChunkSizes: [] }
+    expect(verdict(rows, unchanged).word).toBe("nota")
+    expect(verdict(rows, { ...unchanged, candBytes: 9_040_000, addedChunkSizes: [40_000] }).word).toBe("sube")
+    expect(verdict(rows).word).toBe("sube")
+  })
+})

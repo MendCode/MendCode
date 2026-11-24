@@ -16,17 +16,24 @@ const HOST = "vps.example.ts.net"
 const TOKEN = "T".repeat(8) + "0123456789abcdefghijklmnopqrstuvwxyz"
 
 /** A pretend Linux host: it answers the scripts of a setup run from its own small state and records what ran. */
-function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; certFails?: string; repos?: string; missing?: string[] } = {}) {
-  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, localOnly: false, acp: "", calls: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
+function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; userspace?: boolean; noHttps?: boolean; noOpenssl?: boolean; tsPath?: string; tsSocket?: string; certFails?: string; repos?: string; missing?: string[] } = {}) {
+  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, localOnly: false, acp: "", calls: [] as string[], timers: 0, scripts: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" })
   const run: SshRunner = async ({ script, input }) => {
     state.inputs.push(input)
-    if (script.includes('echo "os=')) { state.calls.push("probe"); return ok(`os=${options.os ?? "Linux"}\narch=x86_64\nhome=/home/u\nsystemd=yes\ntailscale=${options.tailscale === false ? "no" : "yes"}\nmendcode=${state.version ?? "none"}\n`) }
-    if (script.includes("tailscale status --json")) return ok(JSON.stringify({ BackendState: "Running", Self: { DNSName: `${options.dns ?? HOST}.`, TailscaleIPs: ["100.64.0.9", "fd7a:115c:a1e0::9"] } }))
+    state.scripts.push(script)
+    if (script.includes('echo "os=')) { state.calls.push("probe"); return ok(`os=${options.os ?? "Linux"}\narch=x86_64\nhome=/home/u\nsystemd=yes\ntailscale=${options.tailscale === false ? "no" : "yes"}\ntailscale_path=${options.tsPath ?? "/usr/bin/tailscale"}\ntailscale_socket=${options.tsSocket ?? ""}\nmendcode=${state.version ?? "none"}\n`) }
+    if (script.includes("iface=yes")) return ok(`iface=${options.userspace ? "no" : "yes"}\n`)
+    if (script.includes("ts status --json")) return ok(JSON.stringify({ BackendState: "Running", Self: { DNSName: `${options.dns ?? HOST}.`, TailscaleIPs: ["100.64.0.9", "fd7a:115c:a1e0::9"] } }))
     if (script.includes("curl -fsSL")) { state.calls.push("install"); state.version = "1.2.3 (stable)"; return ok() }
     if (script.endsWith('"$MC" --version')) return ok(`${state.version}\n`)
-    if (script.includes("tailscale cert")) {
+    if (script.includes("mendcode-cert.service")) { state.timers++; return ok() }
+    if (script.includes("openssl genpkey")) { state.calls.push("private-ca"); return options.noOpenssl ? { code: 127, stdout: "", stderr: "openssl is not installed on the host" } : ok("abs=/home/u/.mendcode\nexpires=Feb  3 10:00:00 2029 GMT\n") }
+    if (script.includes("openssl is not installed")) { state.calls.push("private-ca"); return { code: 127, stdout: "", stderr: "openssl is not installed on the host" } }
+    if (script.includes('cat "$D/tls/ca.pem"')) return ok("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+    if (script.includes("ts cert")) {
       state.calls.push("cert")
+      if (options.noHttps) return { code: 1, stdout: "", stderr: "500 Internal Server Error: your Tailscale account does not support getting TLS certs" }
       return options.certFails ? { code: 1, stdout: "", stderr: options.certFails } : ok("abs=/home/u/.mendcode\n")
     }
     if (script.includes('cat "$D/remote.json" 2>/dev/null')) return ok(state.remoteJson)
@@ -42,7 +49,7 @@ function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; cer
     if (script.includes("config-bundle import")) { state.calls.push("bundle"); return ok("import imp_1 applied\ncomparison with the bundle: 3 match\n") }
     if (script.includes('cat "$D/acp-agents.json"')) return ok(state.acp || "{}")
     if (script.includes("acp-agents.json.tmp")) { state.calls.push("acp-write"); state.acp = String(input); return ok() }
-    if (script.startsWith("set -eu\nMC=") && script.includes("command -v 'hermes'")) return { code: 0, stdout: "", stderr: "" }
+    if (script.startsWith("set -eu\n") && script.includes("command -v 'hermes'")) return { code: 0, stdout: "", stderr: "" }
     if (script.includes("command -v 'missing-agent'")) return { code: 1, stdout: "", stderr: "" }
     if (script.includes("find ")) return ok(options.repos ?? "")
     if (script.includes("[ -d ")) return ok((options.missing ?? []).join("\n"))
@@ -114,6 +121,81 @@ test("setup installs, certifies, writes the listener, creates a private token, s
   expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))).toEqual({ defaultRemote: "vps", remotes: { vps: { connect: `${HOST}:9876`, tokenFile: file, tls: true } } })
   expect(out.text()).not.toContain(TOKEN)
   expect(JSON.stringify(host.state.calls)).not.toContain(TOKEN)
+})
+
+test("system Tailscale keeps the tailnet listener and a PATH prelude with ~/.local/bin on every script", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(host.state.scripts.every((script) => script.includes('$HOME/.local/bin'))).toBe(true)
+  expect(host.state.scripts.some((script) => script.includes("--socket \"$SOCK\""))).toBe(true)
+  expect(host.state.scripts.find((script) => script.includes("ts cert"))).toContain("TS='/usr/bin/tailscale'; SOCK=''")
+  expect(JSON.parse(host.state.remoteJson).mode).toBe("tailscale")
+})
+
+test("userspace Tailscale from ~/.local/bin listens on 127.0.0.1 with TLS, without mode tailscale, and the remote keeps the tailnet name", async () => {
+  const dir = temp()
+  const host = fakeHost({ userspace: true, tsPath: "/home/u/.local/bin/tailscale", tsSocket: "/home/u/.local/state/tailscale/tailscaled.sock" })
+  const out = output()
+  const result = await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out })
+  expect(result.code).toBe(0)
+  expect(JSON.parse(host.state.remoteJson)).toEqual({ listen: "127.0.0.1:9876", tlsCert: "/home/u/.mendcode/tls/cert.pem", tlsKey: "/home/u/.mendcode/tls/key.pem" })
+  expect(out.text()).toContain("userspace networking")
+  const cert = host.state.scripts.find((script) => script.includes("ts cert"))!
+  expect(cert).toContain("TS='/home/u/.local/bin/tailscale'; SOCK='/home/u/.local/state/tailscale/tailscaled.sock'")
+  const timer = host.state.scripts.find((script) => script.includes("mendcode-cert.service"))!
+  expect(timer).toContain("TS='/home/u/.local/bin/tailscale'; SOCK='/home/u/.local/state/tailscale/tailscaled.sock'")
+  expect(timer).toContain('ExecStart=$TSX cert --cert-file')
+  expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8")).remotes.vps).toMatchObject({ connect: `${HOST}:9876`, tls: true })
+  // switching an earlier system-mode file drops the mode
+  host.state.remoteJson = JSON.stringify({ listen: "100.64.0.9:9876", tlsCert: "/home/u/.mendcode/tls/cert.pem", tlsKey: "/home/u/.mendcode/tls/key.pem", mode: "tailscale" })
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(JSON.parse(host.state.remoteJson).mode).toBeUndefined()
+})
+
+test("--tailscale and --tailscale-socket reach the probe, and bad values are refused", async () => {
+  const dir = temp()
+  const parsed = command(dir, ["--tailscale", "~/bin/tailscale", "--tailscale-socket", "/run/ts/sock"])
+  expect(parsed).toMatchObject({ tailscale: "~/bin/tailscale", tailscaleSocket: "/run/ts/sock" })
+  const host = fakeHost({ tsPath: "/home/u/bin/tailscale", tsSocket: "/run/ts/sock" })
+  await runSetup(parsed, { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  const probe = host.state.scripts.find((script) => script.includes('echo "os='))!
+  expect(probe).toContain('TS="$HOME"/bin/tailscale')
+  expect(probe).toContain('SOCK="/run/ts/sock"')
+  expect(setupPlan(parsed).join("\n")).toContain("userspace")
+  for (const bad of [["--tailscale", "a;b"], ["--tailscale-socket", "../x"]]) expect(() => parseSetupCommand(["remote", "setup", HOST, ...bad], dir)).toThrow()
+  expect(() => parseSetupCommand(["remote", "unpair", "phone", "--tailscale", "/x"], dir)).toThrow("does not apply")
+})
+
+test("a tailnet without HTTPS certificates falls back to a private CA made on the host, saved as the remote's ca, with no renewal timer", async () => {
+  const dir = temp()
+  const host = fakeHost({ noHttps: true })
+  const out = output()
+  const result = await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out })
+  expect(result.code).toBe(0)
+  expect(host.state.calls).toContain("private-ca")
+  expect(host.state.timers).toBe(0)
+  const script = host.state.scripts.find((entry) => entry.includes("openssl genpkey"))!
+  expect(script).toContain("ec_paramgen_curve:P-256")
+  expect(script).toContain("DNS:vps.example.ts.net,DNS:vps,IP:100.64.0.9,IP:127.0.0.1")
+  expect(script).toContain("-days 825")
+  expect(script).toContain("chmod 600 ca.key")
+  const caFile = path.join(dir, "remote", "vps.ca.pem")
+  expect(readFileSync(caFile, "utf8")).toContain("BEGIN CERTIFICATE")
+  expect(statSync(caFile).mode & 0o777).toBe(0o600)
+  expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8")).remotes.vps).toMatchObject({ connect: `${HOST}:9876`, ca: caFile, tls: true })
+  expect(out.text()).toContain("valid until Feb  3 10:00:00 2029 GMT")
+  expect(out.text()).toContain("run the same `remote setup` command again")
+  expect(out.text()).toContain("enable HTTPS certificates in the Tailscale admin console")
+})
+
+test("without HTTPS certificates and without openssl, setup stops and says to enable HTTPS certificates", async () => {
+  const dir = temp()
+  const out = output()
+  const result = await runSetup(command(dir), { ssh: () => fakeHost({ noHttps: true, noOpenssl: true }).run, local: fakeLocal(dir), out })
+  expect(result.code).toBe(1)
+  expect(out.text()).toContain("Enable HTTPS certificates for the tailnet in the Tailscale admin console")
+  expect(existsSync(path.join(dir, "remotes.json"))).toBe(false)
 })
 
 test("a repeated setup changes nothing on the host", async () => {

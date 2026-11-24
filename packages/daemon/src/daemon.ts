@@ -303,6 +303,8 @@ const REPLAY_PAGE = 500
 const RECENT_COMMANDS = 1_000
 /** `storage.clean` without an age and without the retentionDays setting. */
 const DEFAULT_RETENTION_DAYS = 90
+/** Minutes a background sub-agent's approval waits for the user before it is rejected as timed out (`subagentApprovalTimeout`; 0 never). */
+const DEFAULT_SUBAGENT_APPROVAL_TIMEOUT_MINUTES = 10
 /** `storage.clean` with `compact`: sessions idle this long lose the streaming deltas of their finished messages. */
 const DEFAULT_DELTA_IDLE_DAYS = 3
 /** How long a settled session waits, with the daemon idle, before its superseded foreground and queue snapshots are deleted. */
@@ -962,6 +964,7 @@ export async function startDaemon(options: DaemonOptions) {
         requestId: () => ids("request"),
         turnId: () => ids("turn"),
         queueId: () => ids("queue"),
+        timeoutMinutes: () => store.settings.get().subagentApprovalTimeout ?? DEFAULT_SUBAGENT_APPROVAL_TIMEOUT_MINUTES,
         emit: (draft) => void sessionSink.append(draft),
         mask: (sessionId, text) => secrets.mask(sessionId, text),
         notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
@@ -1185,7 +1188,7 @@ export async function startDaemon(options: DaemonOptions) {
   })
 
   /** "Approve for this session" grants: the engine reads them, `permissions.list` and `permissions.revoke` manage them. */
-  const grants = createGrantStore(() => clock.now(), store.permissionRecords)
+  const grants = createGrantStore(() => clock.now(), store.permissionRecords, (id) => store.sessionInfo(id)?.parentId as SessionId | undefined)
   /** Per-session permission rules set through REST `permission`: the engine reads them, they die with the session. */
   const sessionPermissions = createSessionPermissionRules({ dir: options.dir, parentOf: (id) => store.sessionInfo(id)?.parentId as SessionId | undefined })
 
@@ -3911,7 +3914,8 @@ export async function startDaemon(options: DaemonOptions) {
 
   const peerOrigin = createPeerOrigin({ descendants: options.agentOrigin?.descendants === true })
   const agentGate = createAgentGate({ modeOf: (sessionId) => (store.hasSession(sessionId) ? livePermission(sessionId) : undefined), launchers: store.launchers })
-  launcherOf = agentGate.launcherOf
+  // A sub-agent running in the background is "launched" by its parent: nobody watches it, so its approvals reach the parent and the user like a shell-started child's.
+  launcherOf = (child) => agentGate.launcherOf(child) ?? (tasks.get(child)?.background ? tasks.get(child)!.parentId : undefined)
 
   async function handleOnce(connection: Connection, command: Command) {
     if (connection.rejected) return
