@@ -1,4 +1,6 @@
 import { createProjectSyncRecords } from "./project-sync"
+import { SessionOwnedElsewhere } from "./session-owned"
+import type { createSyncState } from "./sync-state"
 import { createLimitCheckpoints } from "./limit-checkpoints"
 import { createContinuityRecords } from "./continuity"
 import { createMemorySharingRecords, sharedMemoryRevision } from "./memory-sharing"
@@ -720,10 +722,21 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     promptHistory.record(event.sessionId, event.shell && event.local ? `!${typed}` : typed, event.at, kind)
   }
 
-  const appendSession = db.transaction((draft: SessionEventDraft, importedAt?: number) => {
+  /** Session sync (sync-state.ts): refuses a write to a session another machine owns. Unset unless sync is on. */
+  let writeGuard: ((sessionId: SessionId, type: string) => string | undefined) | undefined
+  /**
+   * `ingest`: an event copied from the machine that owns the session, stored at its own `seq` (gaps allowed, never at or below
+   * the stored end) and kept out of this machine's usage statistics.
+   */
+  const appendSession = db.transaction((draft: SessionEventDraft, importedAt?: number, ingest?: { seq: number }) => {
     const row = q.lastSeq.get(draft.sessionId)
     if (!row) throw new RangeError(`[STORE]: unknown session ${draft.sessionId}`)
-    const event = SessionEvent.parse({ ...draft, seq: row.last_seq + 1, at: importedAt ?? now() })
+    if (writeGuard && !ingest) {
+      const refusal = writeGuard(draft.sessionId, draft.type)
+      if (refusal) throw new SessionOwnedElsewhere(refusal)
+    }
+    if (ingest && ingest.seq <= row.last_seq) throw new RangeError(`[STORE]: synced event ${ingest.seq} is not after the stored end ${row.last_seq}`)
+    const event = SessionEvent.parse({ ...draft, seq: ingest?.seq ?? row.last_seq + 1, at: importedAt ?? now() })
     if (event.type === "item.completed" && event.meta?.firstDeltaAt === undefined && Object.keys(event.meta ?? {}).length < 16) {
       const firstDeltaAt = deltaFold.firstAt(event.sessionId, event.itemId)
       if (firstDeltaAt !== undefined) event.meta = { ...event.meta, firstDeltaAt }
@@ -748,7 +761,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     if (event.type === "item.completed") {
       const items = openItems.get(event.sessionId)
       const started = items?.get(event.itemId)
-      if (started) {
+      if (started && ingest) items!.delete(event.itemId)
+      else if (started) {
         items!.delete(event.itemId)
         const ms = Math.max(0, event.at - started.at)
         const day = dayOf(event.at)
@@ -764,7 +778,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     if (event.type === "queue.added") {
       q.queueInsert.run(event.sessionId, event.queueId, event.text, JSON.stringify(event.attachments), event.compact ? "compact" : event.notice ? "notice" : event.shell ? "shell" : "message", event.authorityText ?? null)
       // A queued /compact or system notice is not a prompt: it neither counts as usage nor titles the session.
-      if (!event.compact && !event.notice) {
+      if (!event.compact && !event.notice && ingest) q.autoTitle.run(titleFrom(event.text), event.sessionId)
+      else if (!event.compact && !event.notice) {
         q.bumpPrompt.run(dayOf(event.at), wordCount(event.text))
         q.autoTitle.run(titleFrom(event.text), event.sessionId)
         if (event.origin === "tui") q.markHuman.run(event.at, event.sessionId)
@@ -785,14 +800,16 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       q.setActiveTurn.run(null, event.sessionId)
       openItems.delete(event.sessionId)
     }
-    if (event.type === "usage.recorded") {
+    if (event.type === "usage.recorded" && !ingest) {
       const day = dayOf(event.at)
       q.upsertUsage.run(day, event.provider, event.model, event.input, event.output, event.reasoning, event.cacheRead, event.cacheWrite, event.costMicros ?? 0, event.costMicros === undefined ? 1 : 0)
       if (q.sessionDay.run(day, event.sessionId).changes === 1) q.bumpDaySessions.run(day)
     }
-    insights.record(event)
-    usageScopes.record(event)
-    usageCalls.record(event)
+    if (!ingest) {
+      insights.record(event)
+      usageScopes.record(event)
+      usageCalls.record(event)
+    }
     turns.record(event)
     messages.record(event)
     for (const ref of blobRefsOf(event)) {
@@ -928,6 +945,15 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       },
     },
     projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold, sealedTurns),
+    /**
+     * Session sync's own tables, opened only by the lazily loaded sync module (it passes the factory, so nothing of it loads with
+     * the store). Installs the write guard that keeps one writer per session.
+     */
+    openSyncState(factory: typeof createSyncState, guard: (sessionId: SessionId, type: string) => string | undefined) {
+      writeGuard = guard
+      return factory(db, now)
+    },
+    closeSyncState() { writeGuard = undefined },
     automationLedger,
     messages,
     /** Revision, model history and history marks commit together; no half-edited conversation. */

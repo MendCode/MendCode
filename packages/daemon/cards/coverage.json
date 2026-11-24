@@ -43,6 +43,7 @@
     "subagents": "feature:subagents feature:task_worktree feature:task_fork feature:task_bare feature:cheap_subagents setting:subagentCatalog setting:agentMentions feature:orchestration_receipts feature:panel_orbit command:scratch command:tasks command:pause command:unpause command:stop command:relaunch setting:subagentDepth setting:subagentMaxChildren setting:subagentMaxDescendants setting:subagentOwnerWake tool:task tool:task_status file:agent-mentions.json",
     "theme": "command:theme setting:theme setting:projectThemes",
     "threads": "feature:threads feature:handoff flag:thread_tools command:handoff command:btw tool:tell tool:threads",
+    "sync": "file:sync.json file:sync-hub.json",
     "tiers": "feature:script_workflows feature:aux_tools feature:harness_tools feature:codex_engine command:tier setting:features",
     "tools": "feature:code_mode feature:output_filters feature:tool_discovery feature:lean_tools feature:find_tools feature:ui_tool flag:tool_discovery flag:code_mode command:tools setting:tools setting:tool_output tool:code tool:notebook_edit tool:tool_define",
     "usage": "feature:quota_refresh",

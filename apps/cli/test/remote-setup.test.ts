@@ -1,8 +1,12 @@
 import { afterEach, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { parseSessionList, parseSetupCommand, runSetup, setupPlan, type LocalPort, type SetupCommand, type SshRunner } from "../src/remote-setup"
+import { createClient } from "@mendcode/client"
+import { startDaemon } from "@mendcode/daemon"
+import { createFauxEngine } from "@mendcode/engine-faux"
+import { parseAutomation, runAutomation, type AutomationDeps } from "../src/automation"
+import { EXPORT_TRUNCATED_NOTE, parseImportResult, parseSessionList, parseSetupCommand, runSetup, setupPlan, type LocalPort, type SetupCommand, type SshRunner } from "../src/remote-setup"
 import { applyPathRule, mapProject, normalizeGitRemote, parsePathRule } from "../src/remote-setup-projects"
 
 const dirs: string[] = []
@@ -44,7 +48,7 @@ function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; cer
     if (script.includes('"$MC" import ')) {
       state.calls.push("session-import")
       state.imports.push(script)
-      return ok(`{"sessionId":"ses_remote${state.imports.length}"}`)
+      return ok(`${JSON.stringify({ schema: "mendcode.cli", kind: "result", command: "session.import", data: { sessionId: `ses_remote${state.imports.length}`, from: "mendcode" } })}\n`)
     }
     return { code: 1, stdout: "", stderr: `unexpected script: ${script.slice(0, 80)}` }
   }
@@ -180,6 +184,25 @@ test("pair adds a device to a set-up host without touching its listener or servi
   expect(out.text()).toContain("run `remote setup` from the first device")
 })
 
+test("pair --sync adds a sync-only token beside the device token and turns sync on here, with the path rules", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  const second = temp()
+  const scripts: string[] = []
+  const pair = parseSetupCommand(["remote", "pair", HOST, "--ssh", "user@vps", "--dir", second, "--device", "laptop", "--sync", "--path-map", "/Users/me/code=/home/u/code"], second)!
+  expect(setupPlan(pair).join("\n")).toContain("sync token laptop-sync")
+  const result = await runSetup(pair, { ssh: () => async (call) => { scripts.push(call.script); return host.run(call) }, local: fakeLocal(second), out: output() })
+  expect(result.code).toBe(0)
+  expect(scripts.some((script) => script.includes("remote token create --sync") && script.includes("'laptop-sync'"))).toBe(true)
+  expect(host.state.tokens.has("laptop-sync")).toBe(true)
+  const tokenFile = path.join(second, "remote", "vps.sync-token")
+  expect(statSync(tokenFile).mode & 0o777).toBe(0o600)
+  const sync = JSON.parse(readFileSync(path.join(second, "sync.json"), "utf8"))
+  expect(sync).toMatchObject({ remote: "vps", tokenFile, pathMap: [expect.anything()] })
+  expect(() => parseSetupCommand(["remote", "pair", HOST, "--path-map", "/a=/b"], second)).toThrow("--sync")
+})
+
 test("unpair revokes on the host and removes the local token file and remote", async () => {
   const dir = temp()
   const host = fakeHost()
@@ -275,9 +298,67 @@ test("project matching helpers", () => {
   expect(mapProject({ project: { directory: "/p", rel: "" }, rules: [], repos: [], cloneMissing: true, cloneRoot: "~/code" })).toMatchObject({ reason: expect.stringContaining("--path-map") })
 })
 
-test("the local session list is read from the top level or the result envelope", () => {
+test("the session list and the import result are read only from the CLI's own --json line", () => {
   const entry = { sessionId: "ses_1", title: "t", directory: "/p" }
-  expect(parseSessionList(JSON.stringify({ sessions: [entry] }))).toEqual([{ id: "ses_1", title: "t", directory: "/p" }])
-  expect(parseSessionList(JSON.stringify({ data: { sessions: [entry, { title: "no id" }] } }))).toHaveLength(1)
+  const line = (command: string, data: unknown) => JSON.stringify({ schema: "mendcode.cli", kind: "result", command, data })
+  expect(parseSessionList(line("session.list", { sessions: [entry] }))).toEqual([{ id: "ses_1", title: "t", directory: "/p" }])
+  // Other shapes are refused, not guessed at.
+  expect(() => parseSessionList(JSON.stringify({ sessions: [entry] }))).toThrow()
+  expect(() => parseSessionList(line("session.get", { sessions: [entry] }))).toThrow()
+  expect(() => parseSessionList(line("session.list", { sessions: [{ title: "no id", directory: "/p" }] }))).toThrow()
   expect(() => parseSessionList("nope")).toThrow()
+  expect(() => parseSessionList(JSON.stringify({ schema: "mendcode.cli", kind: "error", command: "session.list", error: { code: "failed", message: "daemon down" } }))).toThrow("daemon down")
+  expect(parseImportResult(line("session.import", { sessionId: "ses_9" }))).toBe("ses_9")
+  expect(() => parseImportResult(`{"sessionId":"ses_9"}`)).toThrow()
 })
+
+test("against the real commands in process: session list --json parses, and raw export --format json imports on another machine", async () => {
+  const machine = async (label: string) => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), `mendcode-setup-${label}-`)))
+    dirs.push(dir)
+    const project = path.join(dir, "project")
+    mkdirSync(project)
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "d.sock"), log: () => {}, engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
+    const client = createClient({ socketPath: daemon.socketPath, name: `setup-${label}`, reconnect: false })
+    await client.connect()
+    const out: string[] = [], err: string[] = []
+    const deps: AutomationDeps = { cwd: project, client, listen() {}, out: { write: (text) => out.push(text) }, err: { write: (text) => err.push(text) }, now: () => Date.now(), onInterrupt() {}, env: {} }
+    const run = async (...argv: string[]) => {
+      out.length = 0; err.length = 0
+      const parsed = parseAutomation(argv)
+      if (parsed.ok !== true) throw new Error(JSON.stringify(parsed))
+      return { code: await runAutomation(parsed.command, deps), out: out.join(""), err: err.join("") }
+    }
+    return { project, client, daemon, run, stop: async () => { client.close(); await daemon.stop() } }
+  }
+  const local = await machine("local")
+  const host = await machine("host")
+  try {
+    const created = await local.client.send({ type: "session.create", directory: local.project, title: "moved" })
+    if (!created.ok) throw new Error("session.create failed")
+    const id = created.result!.sessionId as string
+    expect((await local.client.send({ type: "user.submit", sessionId: id as never, text: "hello", attachments: [] })).ok).toBe(true)
+    const deadline = Date.now() + 5_000
+    const ended = () => local.daemon.store.readExactAfter(id as never, 0, 1000).some((event) => event.type === "turn.completed") && local.daemon.store.lastTurnStatus(id as never) !== "running"
+    while (!ended() && Date.now() < deadline) await Bun.sleep(10)
+    expect(ended()).toBe(true)
+
+    // The same arguments `remote setup` passes (defaultLocalPort), minus --dir: this test's client already names the daemon.
+    const listed = await local.run("session", "list", "--all-projects", "--limit", "100", "--json")
+    expect(listed.code).toBe(0)
+    expect(parseSessionList(listed.out)).toEqual([{ id, title: "moved", directory: local.project }])
+
+    const exported = await local.run("export", id, "--format", "json")
+    expect(exported.code).toBe(0)
+    expect(exported.err.includes(EXPORT_TRUNCATED_NOTE)).toBe(false)
+    const file = path.join(host.project, "session.json")
+    writeFileSync(file, exported.out)
+    const imported = await host.run("import", file, "--from", "mendcode", "--json")
+    expect(imported.code).toBe(0)
+    const remoteId = parseImportResult(imported.out)
+    expect(host.daemon.store.sessionInfo(remoteId as never)).toMatchObject({ directory: host.project })
+  } finally {
+    await local.stop()
+    await host.stop()
+  }
+}, 30_000)

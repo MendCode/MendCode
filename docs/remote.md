@@ -145,7 +145,9 @@ An SSH, Tailscale or certificate failure stops with the cause and what to do. Ru
 | `--acp-agents` | ACP agents of this machine whose command is a plain program name found on the host's PATH, as command and args only. No `env` values, no credentials; sign in on the host. Agents already there are kept. To use one from this machine, the host lists it in `remoteEngines`. Hermes and other agents can run on both machines. |
 | `--migrate-sessions` | Up to `--session-limit` (default 100) newest sessions of all projects, as transcripts imported on the host as new sessions (the host owns them afterwards; there is no offline merge). A project is matched by its normalized git remote plus the path inside the repo, after any `--path-map LOCAL=REMOTE` prefix rules; clones are looked for under `~/code`, `~/src`, `~/projects`, `~/work`, `~/dev`, `~/repos`, `~/git` and each `--search-root`. `--clone-missing` clones a repository the host lacks into `~/code` (the host needs git access). Sessions whose project is not on the host are skipped with the reason, and a later run moves them once it is. Exports are bounded (the `export` limit), and a cut one is noted. Attachment files and engine-side state (ACP session ids) do not move. |
 
-Not done yet: the device-key challenge that would replace the bearer token, approval-code pairing without SSH, and continuous two-way sync (planned as a later slice).
+**Keeping sessions in step:** `--sync` (on `setup` or `pair`) also creates a sync-only token and turns on [session sync](sync.md): the host's sessions show here as read-only mirrors, `mendcode sync take ID` continues one on this machine, and `mendcode sync handoff ID` gives the host a session made here.
+
+Not done yet: the device-key challenge that would replace the bearer token and approval-code pairing without SSH.
 
 ### Choose a session
 

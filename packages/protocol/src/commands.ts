@@ -1,5 +1,6 @@
 import { ConsoleUrl } from "./console"
 import { ProjectRestInput } from "./project-rest"
+import { SyncControlInput, SyncPeerInput } from "./sync-peer"
 import { ProjectControlInput } from "./project"
 import { ProviderOptions } from "./model-config"
 import { BudgetPolicy, SetupPreset } from "./setup"
@@ -2018,6 +2019,10 @@ export const SessionUnshare = lazySchema(() => z.strictObject({ ...base, type: z
 export const SessionShareStatic = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.share.static"), sessionId: SessionId, target: z.enum(["local", "gist"]), action: z.enum(["create", "status", "remove"]), confirm: z.boolean().optional() }))
 
 export const ProjectRest = lazySchema(() => z.strictObject({ ...base, type: z.literal("project.rest"), directory: z.string().min(1).max(4096), input: ProjectRestInput }))
+/** Hub side of session sync: a remote `sync` or full token only (docs/sync.md). */
+export const SyncPeer = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.peer"), input: SyncPeerInput }))
+/** This machine's own sync: local clients only. */
+export const SyncControl = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.control"), input: SyncControlInput }))
 
 export const WorkflowPermissions = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.permissions"), workflowId: WorkflowId, mode: z.enum(["report-only", "normal", "custom"]).optional(), sessionPermission: z.enum(["ask", "edits", "full"]).nullable().optional(), reason: z.string().max(500).optional() }))
 export const WorkflowRetryPhase = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.retry-phase"), workflowId: WorkflowId, phaseId: WorkflowSlug, reason: z.string().max(500).optional() }))
@@ -2457,6 +2462,8 @@ export const COMMAND_SCHEMAS = {
   "tui.control.next": TuiControlNext,
   "tui.control.response": TuiControlResponse,
   "project.rest": ProjectRest,
+  "sync.peer": SyncPeer,
+  "sync.control": SyncControl,
   "workflow.permissions": WorkflowPermissions,
   "workflow.retry-phase": WorkflowRetryPhase,
   "workflow.script": WorkflowScriptCommand,
