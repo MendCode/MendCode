@@ -21,6 +21,7 @@ import {
   MAX_TEXT,
   mergeSettingsArgs,
   resultOutcome,
+  transientFailure,
   signInHint,
   userMessage,
   type ClaudeMessage,
@@ -28,6 +29,7 @@ import {
   type ClaudeSpend,
   type QuotaDraft,
 } from "./protocol"
+import { backoffMs, probeUrl, waitToRetry } from "@mendcode/engine-native/network-wait"
 import { spawnClaude, type ClaudeTransport } from "./transport"
 import { createClaudePlan, type ClaudePlan } from "./plan"
 import { claudePlanFile } from "./plan-file"
@@ -52,6 +54,18 @@ const MAX_AGENT_TASKS = 256
 const MAX_LAUNCHES = 32
 const LAUNCH_TOOLS = new Set(["Bash", "Monitor", "Agent", "Task"])
 const CONTROL_TIMEOUT_MS = 30_000
+/** Automatic resumes of one turn after a network or provider failure; the backoff reaches 30 s, so this waits about ten minutes. */
+export const DEFAULT_NETWORK_RETRIES = 20
+const ANTHROPIC_HOST = "https://api.anthropic.com"
+/** Sent to Claude Code, in the same session, after the connection dropped mid-turn. */
+const NETWORK_RESUME_TEXT = "The connection to the API dropped while you were working. Continue exactly where you left off; do not restart or repeat finished work."
+function defaultSleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve() }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener("abort", done, { once: true })
+  })
+}
 /** Esc gives Claude Code this long to stop a turn on its own; then the turn ends here and what it still sends is dropped. */
 export const CANCEL_GRACE_MS = 3_000
 /** The longest the rest of a cancelled turn is waited for; a `result` that never came stops being waited for here. */
@@ -324,6 +338,12 @@ export function createClaudeEngine(options: {
   onClose?(sessionId: SessionId, reason: string, background: number): void
   /** What a background agent does after the turn that started it ended: items under that turn (the agent's thread). */
   onAgentEvent?(sessionId: SessionId, turnId: TurnId, event: EngineEvent): void
+  /** Most automatic resumes of one turn Claude Code ended on a network or provider failure (the native engine's backoff); default `DEFAULT_NETWORK_RETRIES`. */
+  retries?: number
+  /** Waits between those resumes (a test passes an instant one). */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+  /** Whether the provider's host answers again, so a wait ends early; defaults to a HEAD request to the Anthropic API. */
+  probe?: () => Promise<boolean>
 }): EnginePort & { stop(reason?: string): void; busy(): boolean } {
   const clock = options.clock ?? realClock
   const idleMs = options.idleMs
@@ -1245,6 +1265,27 @@ export function createClaudeEngine(options: {
       kept.clear()
       for (const connection of [...connections.values()]) each(() => close(connection, reason))
     },
+  }
+  // A turn Claude Code ended on a network or provider failure is resumed in the same session after the native engine's backoff.
+  const runOnce = port.runTurn.bind(port)
+  const retries = options.retries ?? DEFAULT_NETWORK_RETRIES
+  const sleep = options.sleep ?? defaultSleep
+  const probe = options.probe ?? (() => probeUrl({ url: ANTHROPIC_HOST }))
+  port.runTurn = async (input) => {
+    let current = input
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await runOnce(current)
+      if (outcome.status !== "error" || outcome.code !== "claude_turn_failed") return outcome
+      // The process that reported the failure may hold a half-ended exchange: the next message starts a fresh one that resumes the session.
+      const failed = connections.get(input.sessionId)
+      if (failed && !failed.closed && !failed.turn && failed.background === 0 && !failed.unsolicited) close(failed, "turn failed")
+      const kind = transientFailure(outcome.message)
+      if (!kind || attempt >= retries || input.signal.aborted) return outcome
+      const delayMs = backoffMs(attempt)
+      input.emit({ type: "retrying", attempt: attempt + 1, delayMs, message: outcome.message.replace(/^\[CLAUDE\]:\s*/, "").slice(0, 300), ...(kind === "network" ? { offline: true } : {}) })
+      if ((await waitToRetry({ delayMs, kind, signal: input.signal, sleep, probe })) === "cancelled") return { status: "ok" }
+      current = { ...input, text: NETWORK_RESUME_TEXT, attachments: [], authority: { sourceId: input.turnId, text: NETWORK_RESUME_TEXT, synthetic: true } }
+    }
   }
   return port
 }

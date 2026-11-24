@@ -122,6 +122,7 @@
       "name": "@mendcode/engine-claude",
       "version": "0.0.0",
       "dependencies": {
+        "@mendcode/engine-native": "workspace:*",
         "@mendcode/kernel": "workspace:*",
         "@mendcode/protocol": "workspace:*",
       },

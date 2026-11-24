@@ -825,7 +825,7 @@ export function createTurnMapper(rawInput: { newItemId(): ItemId; emit(event: En
         const event = usage(message)
         if (event) { reported = true; input.emit(event) }
         if (silent && resultOutcome(message).status === "ok" && message.terminal_reason !== "aborted_streaming" && message.terminal_reason !== "aborted_tools") {
-          const reason = typeof message.result === "string" ? message.result.trim() : ""
+          const reason = (typeof message.result === "string" ? message.result.trim() : "") || (typeof message.terminal_reason === "string" ? message.terminal_reason : "")
           say(`Claude Code ended the turn without an answer${reason ? `: ${reason}` : "."}`)
         }
         return message
@@ -843,6 +843,17 @@ export function resultOutcome(result: ClaudeMessage): { status: "ok" } | { statu
   const errors = Array.isArray(result.errors) ? result.errors.filter((error: unknown) => typeof error === "string" && error).join("\n") : ""
   const message = errors || (typeof result.result === "string" && result.result) || String(result.subtype ?? "error")
   return { status: "error", code: "claude_turn_failed", message: `[CLAUDE]: ${message.slice(0, 2000)}` }
+}
+
+/**
+ * Whether a failed turn's message is a failure worth resuming: `network` (no route to the API: DNS, reset, timeout), `transient` (the
+ * provider answered 5xx, 408/429 without a quota marker, or "overloaded"). Auth, invalid request, quota and everything else fail at once.
+ */
+export function transientFailure(message: string): "network" | "transient" | undefined {
+  if (/not logged in|unauthori[sz]ed|\b40[13]\b|invalid[_ ]request|usage limit|quota|credit balance|prompt is too long|rate_limit_error.*(weekly|monthly)/i.test(message)) return undefined
+  if (/ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|ENETDOWN|can'?t reach the api server|unable to connect|socket (hang up|connection was closed)|network connection was lost|fetch failed|connection error/i.test(message)) return "network"
+  if (/overloaded|\bAPI Error: (5\d\d|408|429)\b|\b(500|502|503|504|529)\b|internal server error|bad gateway|service unavailable|gateway time-?out|request timed out/i.test(message)) return "transient"
+  return undefined
 }
 
 /**
