@@ -30,7 +30,7 @@ export function parsePackageFileCommand(argv: string[]): PackageFileCommand | un
     } else words.push(token)
   }
   const [command, action, target, extra] = words
-  if (!["profile", "package", "packages"].includes(command ?? "") || (action !== "new" && action !== "check")) return undefined
+  if (!["profile", "package", "packages", "plugins", "plugin"].includes(command ?? "") || (action !== "new" && action !== "check")) return undefined
   if (action === "new" && (!target || extra)) return { help, action, ...(dir ? { dir } : {}), error: error ?? "profile new needs one name" }
   if (action === "check" && extra) return { help, action, ...(target ? { target } : {}), error: error ?? "profile check takes one folder" }
   if (clean && action !== "new") error ??= "--clean is for profile new"

@@ -182,3 +182,32 @@ test("send now still reports a failure other than the message having left the qu
   await h.app.onKey("\x13")
   expect(h.text().join("\n")).toContain("queue is busy")
 })
+
+test("a message the engine already holds is shown as delivered: no drop or edit hint, no request, and a plain reason instead of a raw error", async () => {
+  const h = b51Harness(120, 30, "after-tools")
+  const handed = ids("queue")
+  h.chat.emit({ type: "queue.changed", queue: [{ queueId: handed, preview: "No, use the other branch", attachments: 0, delivery: "steer", handed: true }] })
+  const shown = h.text().join("\n")
+  expect(shown).toContain("DELIVERED")
+  expect(shown).toContain("the model reads it when the tool ends")
+  expect(shown).not.toContain("ctrl+k drop")
+  expect(shown).not.toContain("edit")
+  await h.app.onKey("\x0b")
+  await h.app.onKey("\x1b[1;3A")
+  expect(h.sentOf("queue.remove")).toHaveLength(0)
+  expect(h.app.editor.text).toBe("")
+  const after = h.text().join("\n")
+  expect(after).toContain("already handed to the model")
+  expect(after).not.toContain("queued message not found")
+})
+
+test("with a handed message and a plain one queued, drop and edit take the plain one", async () => {
+  const h = b51Harness(120, 30, "after-tools")
+  const handed = ids("queue"), plain = ids("queue")
+  h.chat.emit({ type: "queue.changed", queue: [
+    { queueId: handed, preview: "Handed over", attachments: 0, delivery: "steer", handed: true },
+    { queueId: plain, preview: "Still queued", attachments: 0 },
+  ] })
+  await h.app.onKey("\x0b")
+  expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: plain })
+})

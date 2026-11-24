@@ -1,6 +1,6 @@
-import { readFileSync, renameSync, writeFileSync } from "node:fs"
+import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { AcpAgentName, AcpAgentSettings, type Settings } from "@mendcode/protocol"
+import { AcpAgentName, AcpAgentSettings, fileSignature, type Settings } from "@mendcode/protocol"
 
 type Config = { command: string; args?: string[]; env?: Record<string, string> }
 
@@ -30,20 +30,33 @@ export function createAcpSettings(dir: string) {
     }
     return result
   }
-  /** The agents of the last text read, so the settings reads of a turn validate the file only when it changed. */
-  let view: { text: string | undefined; agents: NonNullable<Settings["acpAgents"]> } | undefined
+  /**
+   * The agents of the last version read. Every settings read asks for them (thousands a second while sessions stream), so the
+   * file is read again only when its signature (inode, size, times) changed; one stat instead of open, read and decode.
+   */
+  let view: { signature: string; agents: NonNullable<Settings["acpAgents"]> } | undefined
+  function signature(): string | undefined {
+    // An optional file that cannot be inspected (a permission error, a symlink loop) reads as no agents, as an unreadable one always did.
+    try {
+      const info = statSync(file, { throwIfNoEntry: false })
+      return info ? fileSignature(info) : "missing"
+    } catch { return undefined }
+  }
   function text(): string | undefined {
     try { return readFileSync(file, "utf8") } catch { return undefined }
   }
   return {
     get(): NonNullable<Settings["acpAgents"]> {
-      const current = text()
-      if (!view || view.text !== current) {
+      const current = signature()
+      if (current === undefined) { view = undefined; return {} }
+      if (!view || view.signature !== current) {
+        const content = current === "missing" ? undefined : text()
         let agents: NonNullable<Settings["acpAgents"]> = {}
-        try { agents = current === undefined ? {} : metadata(parsed(current)) } catch { /* An invalid file reads as no agents, as before. */ }
-        view = { text: current, agents }
+        try { agents = content === undefined ? {} : metadata(parsed(content)) } catch { /* An invalid file reads as no agents, as before. */ }
+        view = { signature: current, agents }
       }
-      return structuredClone(view.agents)
+      for (const _ in view.agents) return structuredClone(view.agents)
+      return {}
     },
     prepare(patch: unknown) {
       // null resets the key like any other setting: no agents. One agent goes with `{ "<name>": null }`.

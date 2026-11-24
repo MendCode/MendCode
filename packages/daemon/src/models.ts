@@ -19,6 +19,31 @@ export function catalogModel(catalog: ModelCatalog, id: string): ModelInfo | und
 }
 
 /**
+ * A catalog list built at most once per event-loop turn (each `readOnly` form apart). One request or one engine event asks
+ * for it many times in a row (`resolveModel`, `catalogModel`, every node of a session tree, every queued message's steer
+ * check), and each build resolves every provider and reads the settings again; a sub-agent tree made that hundreds of
+ * builds and held the daemon for a third of a second. The kept list is dropped when the turn ends, so a model connected
+ * or turned off shows from the next turn on. Callers get their own array.
+ */
+export function oncePerTurn(build: (readOnly?: boolean) => ModelInfo[]): (readOnly?: boolean) => ModelInfo[] {
+  const built = new Map<boolean, ModelInfo[]>()
+  let dropping = false
+  return (readOnly) => {
+    const key = readOnly === true
+    let list = built.get(key)
+    if (!list) {
+      list = build(readOnly)
+      built.set(key, list)
+      if (!dropping) {
+        dropping = true
+        setImmediate(() => { built.clear(); dropping = false })
+      }
+    }
+    return list.slice()
+  }
+}
+
+/**
  * The catalog id a model wrote for a sub-agent: exact, the reference `mendcode models` prints (`chatgpt/gpt-6.1-terra` is
  * `gpt-6.1-terra`, `claude/claude-opus` is `claude-opus`), or the one id whose model part (after `provider/`) is the given
  * name, case aside (`gpt-6-luna` → `openai/gpt-6-luna`). Two providers with that model stay ambiguous: undefined.
@@ -118,8 +143,8 @@ export function usableEffort(asked: ModelChoice, catalog: ModelCatalog): ModelCh
   const info = catalogModel(catalog, asked.model)
   if (!info) return asked
   const chosen = info.id === asked.model ? asked : { ...asked, model: info.id }
-  // An external engine's model has no provider variants: a variant naming one of its efforts is that effort.
-  if (info.engine && chosen.variant) {
+  // An external engine's model has no provider variants, and a native one may not define this variant: a variant naming one of its efforts is that effort.
+  if (chosen.variant && (info.engine || (!info.variants?.[chosen.variant] && info.efforts.includes(chosen.variant as never)))) {
     const { variant: named, ...rest } = chosen
     const effort = info.efforts.includes(named as never) ? (named as ModelChoice["effort"]) : chosen.effort
     return usableEffort({ ...rest, ...(effort ? { effort } : {}) }, catalog)
@@ -197,8 +222,8 @@ export function invalidChoice(choice: ModelChoice, catalog: ModelCatalog, role: 
     // Claude Code has no provider variants; a variant naming one of its efforts means that effort.
     if (choice.parameters) return `${choice.model} does not support provider variants`
     if (choice.variant && !info.efforts.includes(choice.variant as never)) return info.efforts.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${info.efforts.join(", ")}` : `${choice.model} does not support provider variants`
-  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) {
-    const valid = Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name)
+  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled) && !(!info.variants?.[choice.variant] && info.efforts.includes(choice.variant as never))) {
+    const valid = [...Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name), ...info.efforts.filter((effort) => !info.variants?.[effort])]
     return valid.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${valid.join(", ")}` : `unknown variant ${choice.variant} for ${choice.model}`
   }
   // A sub-agent on an engine model goes through task's `engine`; the refusal says how, so a model does not fall back to another provider's copy.

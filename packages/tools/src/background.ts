@@ -307,9 +307,11 @@ export function createBackgroundTasks(options: {
     }
     const dropped = Math.max(0, entry.base - entry.cursor)
     const output = entry.buffer.slice(Math.max(0, entry.cursor - entry.base))
-    entry.cursor = entry.base + entry.buffer.length
-    // A cancelled call's result never reaches the model, so its exit is not counted as shown.
-    if (ended() && !input.signal.aborted) entry.exitShown = true
+    // A cancelled or interrupted call's result never reaches the model: what it printed stays unread for the next read, and its exit is not counted as shown.
+    if (!input.signal.aborted) {
+      entry.cursor = entry.base + entry.buffer.length
+      if (ended()) entry.exitShown = true
+    }
     return { task: { ...entry.info }, output, dropped }
   }
 

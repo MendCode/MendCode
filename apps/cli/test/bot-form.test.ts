@@ -6,7 +6,7 @@ import { activeTheme } from "../src/ui/theme"
 import type { FaceCapability } from "../src/view/bot-face"
 import { botFormKey, botFormProblems, botFormRows, botPromptOf, botSaveFields, deleteBotForm, editBotForm, newBotForm, renderBotForm, type BotFormAction, type BotFormState } from "../src/view/bot-form"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
-import { SIDEBAR_WIDTH } from "../src/view/sidebar"
+import { SIDEBAR_GAP, SIDEBAR_WIDTH } from "../src/view/sidebar"
 import { appHarness, cleanTemps, conversation, ids, NOW, plain, tempDir } from "./session-ui-harness"
 
 afterAll(cleanTemps)
@@ -275,7 +275,7 @@ describe("in the app", () => {
   function app({ editor, extra, bots = [calm], env }: { editor?: string; extra?: (command: CommandInput) => CommandReply | undefined; bots?: BotInfo[]; env?: Record<string, string> } = {}) {
     const current = ids("session")
     const h = appHarness({
-      mode: "balanced", width: 120, height: 34, sessionId: current, dataDir: dataDir(), directory: "/work/app", inspectProject: async () => ({ git: true }),
+      mode: "balanced", width: 160, height: 34, sessionId: current, dataDir: dataDir(), directory: "/work/app", inspectProject: async () => ({ git: true }),
       env: { ...(editor ? { EDITOR: editor } : {}), ...env },
       reply: (command) => {
         const mine = extra?.(command)
@@ -328,7 +328,8 @@ describe("in the app", () => {
     const form = () => { h.app.render(); return h.placements.at(-1)!.filter((placement) => placement.slot === "bot-form") }
     const first = form()
     expect(first).toHaveLength(1)
-    expect(first[0]).toMatchObject({ row: 4, col: 2, cols: 9, rows: 4 })
+    // The page is drawn beside the session list, so its columns start after it.
+    expect(first[0]).toMatchObject({ row: 4, col: 2 + SIDEBAR_WIDTH + SIDEBAR_GAP, cols: 9, rows: 4 })
     expect(form()[0]!.key).toBe(first[0]!.key)
     await h.type("\t\x1b[C")
     const square = form()

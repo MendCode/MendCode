@@ -125,7 +125,7 @@ test("a stale weather reply cannot resurrect disabled weather", async () => {
 })
 
 test("all ten widgets render real scoped state in a full-width grid with no empty bottom band", async () => {
-  const h = harness({ width: 180, height: 50, profile: { usageWidgets: [...USAGE_WIDGET_IDS], usageWeatherEnabled: true, usageWeatherRegion: "Example City" } })
+  const h = harness({ width: 180, height: 50, profile: { sidebar: "hidden", usageWidgets: [...USAGE_WIDGET_IDS], usageWeatherEnabled: true, usageWeatherRegion: "Example City" } })
   await h.type("/usage\r")
   for (const label of ["Token mix", "Response load", "Subscription usage", "Peak pressure", "Clock", "Weather", "Status", "Outcome signals", "Most used tools", "Agents & models", "14 changed files", "6 sessions with changes", "Retained snapshots only", "42 turns"]) expect(all(h)).toContain(label)
   expect(h.text().at(-2)!.trimEnd()).toEndWith("┘")

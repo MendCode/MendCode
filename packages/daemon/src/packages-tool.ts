@@ -6,7 +6,7 @@ export const packageMutation = (action: string) => !["list", "info", "search", "
 export const packagesTool = defineTool({
   name: "profiles",
   tier: "balanced",
-  description: "Manage MendCode profiles: list, info (contents, capabilities, precedence and overlays), search configured sources, install, enable, disable, switch-look, remove to Trash, new scaffold, check. Local only. Use exact installed key or configured sourceId/name. Mutations always need approval; project mutations require trust. Skill profiles coexist; switch-look explicitly replaces the scope's look.",
+  description: "Manage MendCode profiles (also called packages or plugins; this is how a session turns one on or off, the shell command is refused to it): list, info (contents, capabilities, precedence and overlays), search configured sources, install, enable, disable, switch-look, remove to Trash, new scaffold, check. Local only. Use exact installed key or configured sourceId/name. Mutations always need approval; project mutations require trust. Skill profiles coexist; switch-look explicitly replaces the scope's look. Enable and disable apply at once: no /reload or restart.",
   permission: "write",
   args: z.strictObject({
     action: z.enum(["list", "info", "search", "install", "enable", "disable", "switch-look", "remove", "new", "check"]),

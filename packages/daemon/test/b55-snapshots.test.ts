@@ -100,3 +100,19 @@ test("B55 diffs redact secret bytes and bound escaped paths/content below one pr
   expect(huge.omittedFiles).toBeGreaterThan(0)
   expect(isReadOnlyCommand("session.changes")).toBe(false)
 })
+
+test("a pair of contents diffed before answers as it did, for any path, without git; a changed pair is diffed again", () => {
+  const pair = (path: string, after: string): FileSnapshot => ({ path, before: { state: "content", mode: 0o644, content: Buffer.from("one\ntwo\n") }, after: { state: "content", mode: 0o644, content: Buffer.from(after) } })
+  const first = summarizeSnapshots("/repo", [pair("/repo/a.txt", "one\nthree\n")], true).files[0]!
+  expect(first).toMatchObject({ path: "a.txt", additions: 1, deletions: 1 })
+  // With no git to start, only the kept answer can give the diff.
+  const path = process.env.PATH
+  process.env.PATH = ""
+  let again: ReturnType<typeof summarizeSnapshots>["files"][number]
+  try { again = summarizeSnapshots("/repo", [pair("/repo/b.txt", "one\nthree\n")], true).files[0]! } finally { process.env.PATH = path }
+  expect(again).toEqual({ ...first, path: "b.txt" })
+  // The answer is a copy: changing one leaves the next the same.
+  again.diff = "changed"
+  expect(summarizeSnapshots("/repo", [pair("/repo/a.txt", "one\nthree\n")], true).files[0]).toEqual(first)
+  expect(summarizeSnapshots("/repo", [pair("/repo/a.txt", "one\ntwo\nthree\n")], true).files[0]).toMatchObject({ additions: 1, deletions: 0 })
+})

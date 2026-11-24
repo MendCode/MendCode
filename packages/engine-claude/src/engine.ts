@@ -21,6 +21,7 @@ import {
   MAX_TEXT,
   mergeSettingsArgs,
   resultOutcome,
+  transientFailure,
   signInHint,
   userMessage,
   type ClaudeMessage,
@@ -28,6 +29,7 @@ import {
   type ClaudeSpend,
   type QuotaDraft,
 } from "./protocol"
+import { backoffMs, probeUrl, waitToRetry } from "@mendcode/engine-native/network-wait"
 import { spawnClaude, type ClaudeTransport } from "./transport"
 import { createClaudePlan, type ClaudePlan } from "./plan"
 import { claudePlanFile } from "./plan-file"
@@ -52,6 +54,18 @@ const MAX_AGENT_TASKS = 256
 const MAX_LAUNCHES = 32
 const LAUNCH_TOOLS = new Set(["Bash", "Monitor", "Agent", "Task"])
 const CONTROL_TIMEOUT_MS = 30_000
+/** Automatic resumes of one turn after a network or provider failure; the backoff reaches 30 s, so this waits about ten minutes. */
+export const DEFAULT_NETWORK_RETRIES = 20
+const ANTHROPIC_HOST = "https://api.anthropic.com"
+/** Sent to Claude Code, in the same session, after the connection dropped mid-turn. */
+const NETWORK_RESUME_TEXT = "The connection to the API dropped while you were working. Continue exactly where you left off; do not restart or repeat finished work."
+function defaultSleep(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    const done = () => { clearTimeout(timer); signal.removeEventListener("abort", done); resolve() }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener("abort", done, { once: true })
+  })
+}
 /** Esc gives Claude Code this long to stop a turn on its own; then the turn ends here and what it still sends is dropped. */
 export const CANCEL_GRACE_MS = 3_000
 /** The longest the rest of a cancelled turn is waited for; a `result` that never came stops being waited for here. */
@@ -324,11 +338,19 @@ export function createClaudeEngine(options: {
   onClose?(sessionId: SessionId, reason: string, background: number): void
   /** What a background agent does after the turn that started it ended: items under that turn (the agent's thread). */
   onAgentEvent?(sessionId: SessionId, turnId: TurnId, event: EngineEvent): void
+  /** Most automatic resumes of one turn Claude Code ended on a network or provider failure (the native engine's backoff); default `DEFAULT_NETWORK_RETRIES`. */
+  retries?: number
+  /** Waits between those resumes (a test passes an instant one). */
+  sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+  /** Whether the provider's host answers again, so a wait ends early; defaults to a HEAD request to the Anthropic API. */
+  probe?: () => Promise<boolean>
 }): EnginePort & { stop(reason?: string): void; busy(): boolean } {
   const clock = options.clock ?? realClock
   const idleMs = options.idleMs
   const processIdleMs = options.processIdleMs ?? DEFAULT_PROCESS_IDLE_MS
   const connections = new Map<SessionId, Connection>()
+  /** Turns that took a session's process (or are starting it, or reading their attachments) and have not installed `connection.turn` yet: the process is not idle. */
+  const preparing = new Map<SessionId, number>()
   const isolatedEngines = new Set<ReturnType<typeof createClaudeEngine>>()
   /**
    * A bridged turn's own process (`externalMcp`) that still runs background agents when its turn ended, by session. It is kept, so
@@ -602,7 +624,8 @@ export function createClaudeEngine(options: {
       })
       if (tasks.length) connection.idle?.cancel()
       // An MCP, effort, fast or advisor change waited for the background tasks; with none left and no turn open, the process restarts now.
-      else if (!connection.turn && connection.reload) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
+      // A response Claude Code is giving on its own (unsolicited) is not cut: the turn that adopts it ends the process (`finish`).
+      else if (!connection.turn && connection.reload && !connection.unsolicited && !preparing.has(connection.sessionId)) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
       else if (!connection.turn) keepIdle(connection)
       return
     }
@@ -916,7 +939,7 @@ export function createClaudeEngine(options: {
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.
     // An MCP change that waited for background tasks is made before a turn once none runs.
-    if (connection && ((bridged && !sameModel(connection.model, model)) || (connection.background === 0 && (!sameModel(connection.model, model) || connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
+    if (connection && ((bridged && !sameModel(connection.model, model)) || (connection.background === 0 && (!sameModel(connection.model, model) || (connection.reload && connection.unsolicited === undefined) || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
       close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }) ? "compaction point changed" : "credentials changed")
       connection = undefined
     }
@@ -1018,7 +1041,8 @@ export function createClaudeEngine(options: {
         const { trace: _trace, ...processOptions } = options
         const sessionId = input.sessionId
         // Its background agents ending is when a process kept for them stops.
-        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
+        // `retries: 0`: this engine's wrapper owns the network retries of a bridged turn, so the budget is spent once, not once per layer.
+        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, retries: 0, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
           onBackground: (id, tasks, stop) => { options.onBackground?.(id, tasks, stop); if (!tasks.length) queueMicrotask(() => settle(sessionId, isolated)) } })
         isolatedEngines.add(isolated)
         bridges.set(isolated, bridge)
@@ -1030,11 +1054,22 @@ export function createClaudeEngine(options: {
         finally { turn.flushProcessMcp(); inTurn.delete(isolated); settle(sessionId, isolated) }
       }
       let connection: Connection
+      // Until this turn is the connection's `turn`, `refresh` must not read the process as idle: starting it, or reading attachments, takes awaits.
+      preparing.set(input.sessionId, (preparing.get(input.sessionId) ?? 0) + 1)
+      let prepared = false
+      const installed = () => {
+        if (prepared) return
+        prepared = true
+        const left = (preparing.get(input.sessionId) ?? 1) - 1
+        if (left > 0) preparing.set(input.sessionId, left)
+        else preparing.delete(input.sessionId)
+      }
       try {
         const started = await unlessCancelled(connectionFor(input), input.signal)
-        if (!started) return { status: "ok" }
+        if (!started) { installed(); return { status: "ok" } }
         connection = started
       } catch (error) {
+        installed()
         const message = error instanceof Error ? error.message : String(error)
         // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
         const unstarted = !message.startsWith("[CLAUDE]") && /ENOENT|Executable not found|not found in \$PATH/i.test(message)
@@ -1042,12 +1077,13 @@ export function createClaudeEngine(options: {
           ? { status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." }
           : { status: "error", code: "claude_start", message: message.startsWith("[CLAUDE]") ? message : `[CLAUDE]: ${message}` }
       }
-      const body = await content(input)
+      const body = await content(input).catch((error: unknown) => { installed(); throw error })
       // A slash command (Claude Code's own `/compact`) is sent as typed.
       const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the process started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
+        installed()
         keepIdle(connection)
         return { status: "ok" }
       }
@@ -1089,6 +1125,7 @@ export function createClaudeEngine(options: {
           },
         }
         connection.turn = turn
+        installed()
         turn.touch()
         // The notice of a turn Claude Code already started on its own: that turn is shown (what it has said so far, then the rest live) and nothing is sent.
         const pending = connection.unsolicited
@@ -1133,7 +1170,8 @@ export function createClaudeEngine(options: {
           },
           { once: true },
         )
-        if (!adopted) write(connection, userMessage(body, messageUuid(input.turnId)))
+        // Only MendCode's own `/compact` (synthetic) is a command for Claude Code; whatever the user typed is text.
+        if (!adopted) write(connection, userMessage(body, messageUuid(input.turnId), input.authority?.synthetic === true && /^\/compact(\s|$)/.test(input.text)))
         // "Send now": the message goes into this turn as Claude Code's own send-now does (`interrupt` with `send_now`), which ends the
         // step at hand without stopping the background agents a plain interrupt stops. Claude Code closes this turn and answers the
         // message as its next one; those records wait as an unsolicited turn whose notice is the message, and its MendCode turn adopts them.
@@ -1158,6 +1196,24 @@ export function createClaudeEngine(options: {
           return true
         })
       })
+    },
+    /**
+     * `/reload`: Claude Code reads its plugins, hooks and settings only when its process starts, so an idle process ends now and the next
+     * message starts one that resumes the same conversation. A running turn or background task is never cut: the process ends once
+     * they do (`reload`).
+     */
+    async refresh(sessionId) {
+      const running = kept.get(sessionId)
+      const own = connections.get(sessionId)
+      const connection = own && !own.closed ? own : undefined
+      const later = running ? await running.refresh?.(sessionId) : undefined
+      if (!connection) return later
+      if (connection.turn || connection.background > 0 || connection.unsolicited || preparing.has(sessionId)) {
+        connection.reload = true
+        return "later"
+      }
+      close(connection, "reloaded")
+      return later ?? "next"
     },
     async rewind({ sessionId, turnId }) {
       const connection = connections.get(sessionId)
@@ -1189,7 +1245,8 @@ export function createClaudeEngine(options: {
       // The summary is what the next turns read most: it is written in the user's language, so they do not drift into English.
       const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, "")).catch(() => undefined)
       const text = `/compact ${[input.instructions?.trim(), language ? `Write the summary in the user's language. ${language}` : undefined].filter(Boolean).join("\n\n")}`.trimEnd()
-      const outcome = await port.runTurn({
+      // `runOnce`, not `port.runTurn`: a network retry resumes the conversation with a message of its own, and a compaction must stay a compaction.
+      const outcome = await runOnce({
         sessionId: input.sessionId,
         turnId: input.turnId,
         text,
@@ -1226,6 +1283,27 @@ export function createClaudeEngine(options: {
       kept.clear()
       for (const connection of [...connections.values()]) each(() => close(connection, reason))
     },
+  }
+  // A turn Claude Code ended on a network or provider failure is resumed in the same session after the native engine's backoff.
+  const runOnce = port.runTurn.bind(port)
+  const retries = options.retries ?? DEFAULT_NETWORK_RETRIES
+  const sleep = options.sleep ?? defaultSleep
+  const probe = options.probe ?? (() => probeUrl({ url: ANTHROPIC_HOST }))
+  port.runTurn = async (input) => {
+    let current = input
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await runOnce(current)
+      if (outcome.status !== "error" || outcome.code !== "claude_turn_failed") return outcome
+      // The process that reported the failure may hold a half-ended exchange: the next message starts a fresh one that resumes the session.
+      const failed = connections.get(input.sessionId)
+      if (failed && !failed.closed && !failed.turn && failed.background === 0 && !failed.unsolicited) close(failed, "turn failed")
+      const kind = transientFailure(outcome.message)
+      if (!kind || attempt >= retries || input.signal.aborted) return outcome
+      const delayMs = backoffMs(attempt)
+      input.emit({ type: "retrying", attempt: attempt + 1, delayMs, message: outcome.message.replace(/^\[CLAUDE\]:\s*/, "").slice(0, 300), ...(kind === "network" ? { offline: true } : {}) })
+      if ((await waitToRetry({ delayMs, kind, signal: input.signal, sleep, probe })) === "cancelled") return { status: "ok" }
+      current = { ...input, text: NETWORK_RESUME_TEXT, attachments: [], authority: { sourceId: input.turnId, text: NETWORK_RESUME_TEXT, synthetic: true } }
+    }
   }
   return port
 }

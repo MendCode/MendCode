@@ -81,6 +81,12 @@ export function createHomeBots(ctx: AppContext) {
     }
   }
 
+  /** A session was deleted (anywhere): when it was a bot's chat the next frame asks for the list again. */
+  function onRemoved(sessionId: string) {
+    // A list on its way may still hold the chat (and a first one has no mapping yet): it is asked again after it.
+    if (on() && (botOfSession.delete(sessionId) || loading)) { stale = true; requestFrame() }
+  }
+
   /** The connection came back: pushes may have been missed. */
   function resync() {
     stale = true
@@ -113,5 +119,5 @@ export function createHomeBots(ctx: AppContext) {
     return state.sidebarBots.openNamed(entry.name, deps)
   }
 
-  return { view, onActivity, resync, open }
+  return { view, onActivity, onRemoved, resync, open }
 }

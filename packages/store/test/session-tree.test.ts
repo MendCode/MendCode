@@ -93,3 +93,28 @@ test("a recap is served only while the session has not grown", () => {
   store.sessionTree.putRecap(id, 6, "Goal: y")
   expect(store.sessionTree.recap(id, 6)).toMatchObject({ text: "Goal: y" })
 })
+
+test("one read of the lineage gives each session's children as the per-session scan does, and a parent's tasks are only its own", () => {
+  const store = open(temp())
+  const root = session(store, "root")
+  const children = [1, 2, 3].map((n) => {
+    const id = ids("session")
+    store.createSession({ id, directory: "/repo", title: `child ${n}`, parentId: root })
+    return id
+  })
+  const grandchild = ids("session")
+  store.createSession({ id: grandchild, directory: "/repo", title: "grandchild", parentId: children[0]! })
+  const childrenOf = store.sessionChildIndex()
+  for (const id of [root, ...children, grandchild]) expect(childrenOf(id)).toEqual(store.sessionChildren(id))
+  expect(childrenOf(root).sort()).toEqual([...children].sort())
+  expect(childrenOf(grandchild)).toEqual([])
+  const task = (taskId: typeof root, parentId: typeof root, generation: number) => ({ taskId, parentId, rootId: root, depth: 1, generation, description: "scan", agent: "explore", background: true, state: "completed" as const, result: "", createdAt: 1, updatedAt: 2 })
+  store.tasks.put(task(children[0]!, root, 1))
+  store.tasks.put(task(children[1]!, root, 3))
+  store.tasks.put(task(grandchild, children[0]!, 2))
+  expect(store.tasks.list(root).map((record) => record.taskId).sort()).toEqual([children[0]!, children[1]!].sort())
+  expect(store.tasks.list(children[0]!).map((record) => record.taskId)).toEqual([grandchild])
+  expect(store.tasks.list(children[2]!)).toEqual([])
+  expect(store.tasks.list()).toHaveLength(3)
+  expect(store.tasks.generations()).toEqual(new Map([[children[0]!, 1], [children[1]!, 3], [grandchild, 2]]))
+})

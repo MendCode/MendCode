@@ -3,12 +3,17 @@ import { realpathSync } from "node:fs"
 import { HTTP_WEB } from "./http-web"
 
 /** Invoked lazily by CLI factories; process execution and server runtime stay in the daemon package. */
-export async function launchHttpServer(input: { kind: "serve" | "web"; dir: string; cwd?: string; engine?: string; port?: number; hostname?: string; cors: string[]; open: boolean; logLevel?: string; pty?: boolean; edit?: boolean }) {
+export async function launchHttpServer(input: { kind: "serve" | "web"; dir: string; cwd?: string; engine?: string; port?: number; hostname?: string; cors: string[]; open: boolean; logLevel?: string; pty?: boolean; edit?: boolean; socket?: string }) {
   const directory = realpathSync(input.cwd ?? process.cwd())
-  const http = { enabled: true, ...(input.port !== undefined ? { port: input.port } : {}), ...(input.hostname ? { hostname: input.hostname } : {}), ...(input.cors.length ? { cors: input.cors } : {}) }
+  const http = { enabled: true, ...(input.port !== undefined ? { port: input.port } : {}), ...(input.hostname ? { hostname: input.hostname } : {}), ...(input.cors.length ? { cors: input.cors } : {}), ...(input.socket ? { socket: path.resolve(input.socket) } : {}) }
   Object.assign(http, input.pty === undefined ? {} : { pty: input.pty }, input.edit === undefined ? {} : { edit: input.edit })
   process.argv = [process.execPath, "__daemon", "--dir", path.resolve(input.dir), "--cwd", directory, "--http-server", JSON.stringify(http), ...(input.kind === "web" ? ["--web"] : []), ...(input.engine ? ["--engine", input.engine] : []), ...(input.logLevel ? ["--log-level", input.logLevel] : [])]
   const { daemon } = await import("./main")
+  if (input.socket) {
+    // Behind a gateway: nothing to open in a browser here, the gateway serves the page.
+    process.stdout.write(`MendCode server listening on unix:${path.resolve(input.socket)}\n`)
+    return daemon
+  }
   const url = daemon.httpUrl!
   process.stdout.write(`MendCode server listening on ${url}\n`)
   if (input.open) {

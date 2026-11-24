@@ -95,7 +95,7 @@ describe("/connect: OpenCode (free)", () => {
 
   test("Enter adds the opencode ACP agent with no form or key, then the row counts the models it offered", async () => {
     let added = false
-    const h = providersHarness({ width: 120, height: 70, reply: (command) => {
+    const h = providersHarness({ width: 160, height: 70, reply: (command) => {
       if (command.type === "settings.set") return (added = true), { ok: true, result: { settings: { acpAgents: { opencode: { command: "opencode", args: ["acp"], envKeys: [] } } } } }
       if (command.type === "models.list") return withOpencode(added ? ["acp:opencode", "acp:opencode/opencode/big-pickle", "acp:opencode/opencode/glm-5.3-flash-free"] : [])
       return undefined

@@ -32,7 +32,7 @@ test("/label bookmarks the latest message and clears with no text; /timeline ^L 
   const one = { turnId: ids("turn"), itemId: ids("item"), at: NOW, preview: "first", reverted: false }
   const two = { turnId: ids("turn"), itemId: ids("item"), at: NOW, preview: "second", reverted: false }
   const gone = { turnId: ids("turn"), itemId: ids("item"), at: NOW, preview: "undone", reverted: true }
-  const h = appHarness({ sessionId, dataDir: tempDir(), reply: (command) => {
+  const h = appHarness({ sessionId, dataDir: tempDir(), profile: { sidebar: "hidden" }, reply: (command) => {
     if (command.type === "session.timeline") return { ok: true, result: { entries: [one, two, gone] } }
     if (command.type === "session.label") return { ok: true, result: { itemId: command.itemId, ...(command.label ? { label: command.label.trim() } : {}) } }
   } })

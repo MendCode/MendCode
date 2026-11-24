@@ -89,6 +89,8 @@ export function createSidebarBots(ctx: AppContext) {
   let botsLoaded = false
   let othersLoaded = false
   let loadingBots = false
+  /** A chat was deleted while a bot list was being asked for: the answer may still hold it, so the list is asked again. */
+  let removedWhileLoading = false
   /** Pushes that came while a bot list was being asked for, in order (at most `DURING_MAX`): the answer may predate them. */
   const during: ActivityEvent[] = []
   let loadingOthers = false
@@ -218,6 +220,7 @@ export function createSidebarBots(ctx: AppContext) {
         while (classified.size > CLASSIFIED_MAX) classified.delete(classified.values().next().value!)
       }
     } finally { loadingBots = false; during.length = 0 }
+    if (removedWhileLoading) { removedWhileLoading = false; if (shown()) wantBots(); else stale = true }
     requestFrame()
   }
   async function loadOthers() {
@@ -293,6 +296,16 @@ export function createSidebarBots(ctx: AppContext) {
       unknown.add(event.sessionId)
       wantBots()
     }
+  }
+
+  /** A session was deleted (anywhere): it leaves the other folders' list at once, and the bot list is asked again when it was a bot's chat. */
+  function onRemoved(sessionId: string) {
+    if (!live()) return
+    others = others.filter((session) => session.sessionId !== sessionId)
+    if (!botsOn()) return
+    // A list on its way may still hold the chat, and a first one has no mapping yet: it is asked again once it has arrived.
+    if (loadingBots) removedWhileLoading = true
+    if (botOfSession.delete(sessionId)) { if (shown()) wantBots(); else stale = true }
   }
 
   /** The connection came back: events may have been missed, so the next pass asks for both lists whole. */
@@ -768,5 +781,5 @@ export function createSidebarBots(ctx: AppContext) {
   const searchSources = () => ({ others, bots: botsOn() ? report : undefined })
 
   // The report is kept current only while the list is on screen (hidden, a push sets a flag and patches nothing), so no one else reads it then.
-  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, newChat, newChatAnywhere: (deps: SidebarDeps) => pickFolder(undefined, deps), pointer, refresh, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, resync, noteActivity: () => wantBots(false) }
+  return { live, releaseChat, report: () => (shown() ? report : undefined), sessions, searchSources, draw, stops, sectionStarts, firstBot, activate, newChat, newChatAnywhere: (deps: SidebarDeps) => pickFolder(undefined, deps), pointer, refresh, chatLook, foldState, toggleFold, openPage, hideProject, openNamed, isBot: (id: string) => isBotId(id) || isExternalBotId(id), holdsArrows, moving, onActivity, onRemoved, resync, noteActivity: () => wantBots(false) }
 }

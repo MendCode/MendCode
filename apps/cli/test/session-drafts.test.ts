@@ -422,7 +422,7 @@ describe("the other places a session is named", () => {
     const d = boot()
     const other = d.createSession()
     d.store.drafts.set(other, "port the importer")
-    const t = await terminal(d)
+    const t = await terminal(d, { profile: { sidebar: "hidden" } })
     await t.h.type("/sessions")
     await t.h.type("\r")
     await Bun.sleep(20)

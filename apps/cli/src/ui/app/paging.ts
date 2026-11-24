@@ -11,6 +11,25 @@ const FILL_SCREENS = 2
 const FILL_PAGES = 6
 /** Pages read back while the chat still shows nothing at all: a session is never opened on a blank screen while it has history. */
 const EMPTY_PAGES = 400
+/** Pages read back for the start of a turn the opening window cut in two (its closing line needs when it began). */
+const CUT_TURN_PAGES = 8
+const TURN_ENDS: ReadonlySet<string> = new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
+
+/**
+ * The newest turn when it ends in these events without having started in them (a window of the newest events can begin in the
+ * middle of a long turn): its closing line sits under the answer on screen. An older cut turn is above the fold and is
+ * completed when its page is read.
+ */
+function newestTurnCut(events: readonly SessionEvent[]): Set<string> {
+  const started = new Set<string>()
+  let newest: string | undefined
+  for (const event of events) {
+    if (!("turnId" in event) || !event.turnId) continue
+    if (event.type === "turn.started") started.add(event.turnId)
+    else if (TURN_ENDS.has(event.type)) newest = event.turnId
+  }
+  return new Set(newest && !started.has(newest) ? [newest] : [])
+}
 /** The screen height assumed before the first frame has measured one. */
 const MIN_SCREEN = 10
 /** Screens above the viewport a release always keeps, besides the screen itself. */
@@ -36,6 +55,7 @@ export function createPaging(ctx: AppContext, actions: {
     const paging: AppContext["state"]["paging"] = input.events ? { firstSeq: 0, more: true, loading: true, ready: false, loadedEarlier: false, held: [], loaded: 0 } : undefined
     state.paging = paging
     let afterSeq = 0
+    let cutTurns = new Set<string>()
     if (input.events && paging) {
       requestFrame()
       try {
@@ -54,6 +74,7 @@ export function createPaging(ctx: AppContext, actions: {
         paging.loaded = reply.window.events.length
         paging.ready = true
         afterSeq = reply.window.lastSeq
+        cutTurns = newestTurnCut(reply.window.events)
       } catch (error) {
         if (state.transcript === transcript) fail(error instanceof Error ? error.message : String(error))
         return
@@ -74,7 +95,23 @@ export function createPaging(ctx: AppContext, actions: {
     void continuity.load()
     followPet(state)
     requestFrame()
+    await readCutTurns(transcript, cutTurns)
     await fillScreen(transcript)
+  }
+
+  /**
+   * A turn of many events can begin before the opening window: its answer shows but its closing line (how long it took) needs the
+   * `turn.started` that was left out. The pages before are read until the start is among them, a few at most.
+   */
+  async function readCutTurns(transcript: typeof state.transcript, cut: Set<string>) {
+    for (let page = 0; page < CUT_TURN_PAGES && cut.size; page++) {
+      const paging = state.paging
+      if (state.transcript !== transcript || !paging?.ready || !paging.more) return
+      const first = paging.firstSeq
+      await loadEarlier()
+      if (state.transcript !== transcript || state.paging?.firstSeq === first) return
+      for (const turnId of lastPageStarts) cut.delete(turnId)
+    }
   }
 
   /**
@@ -164,6 +201,8 @@ export function createPaging(ctx: AppContext, actions: {
     }
   }
 
+  let lastPageStarts: string[] = []
+
   async function loadEarlier() {
     const paging = state.paging
     if (!input.events || !paging?.ready || paging.loading || !paging.more) return
@@ -187,6 +226,7 @@ export function createPaging(ctx: AppContext, actions: {
       // The scroll belongs to whatever is on screen: with a thread open, the session's rows are not what the reader looks at.
       const anchor = !state.agentRoot && line?.itemId !== undefined && line.row !== undefined ? { itemId: line.itemId, row: line.row, screenRow } : undefined
       transcript.prepend(reply.window.events)
+      lastPageStarts = reply.window.events.flatMap((event) => (event.type === "turn.started" ? [event.turnId] : []))
       if (!local.follow && anchor) {
         const offset = transcript.offsetForAnchor(anchor, width, height)
         if (offset !== undefined) local.offset = offset

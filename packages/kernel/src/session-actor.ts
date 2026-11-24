@@ -62,7 +62,7 @@ type ActiveTurn = {
   /** The engine's way to take a promoted message without a cancel (`TurnInput.onSendNow`). */
   sendNow?: (message: Pick<TurnInput, "text" | "attachments">) => boolean
   /** The engine's ear for a message queued during the turn (`TurnInput.onQueued`). */
-  queued?: () => void
+  queued?: (queued?: { notice: boolean }) => void
   /** Set once a promoted message was handed to the engine: another promotion then waits for this turn to end. */
   handedOff?: boolean
   /** When the current run of network failures began; cleared by the next item event. */
@@ -226,22 +226,23 @@ export function createSessionActor(options: SessionActorOptions) {
     emit({
       type: "queue.changed",
       sessionId,
-      queue: [...sent.map((each) => ({ ...each.entry, delivery: "steer" as const })), ...queue].map((entry) => ({
+      queue: [...sent.map((each) => ({ entry: { ...each.entry, delivery: "steer" as const }, handed: true })), ...queue.map((entry) => ({ entry, handed: false }))].map(({ entry, handed }) => ({
         queueId: entry.queueId,
         preview: entry.compact ? "compact context" : (entry.displayText ?? entry.text).slice(0, PREVIEW_CHARS),
         attachments: entry.attachments.length,
         kind: kindOf(entry),
         ...(entry.delivery ? { delivery: entry.delivery } : {}),
+        ...(handed ? { handed: true as const } : {}),
       })),
     })
   }
 
   /** Notices whose news the model already read another way leave the queue unread, before anything is taken from it. */
   /** Tells the running turn's engine that a message entered the queue; it asks for it the usual way (`takeQueued`). */
-  function tellEngineQueued() {
+  function tellEngineQueued(queued?: { notice: boolean }) {
     if (!steerable() || held) return
     try {
-      active?.queued?.()
+      active?.queued?.(queued)
     } catch {
       // The engine's ear failing changes nothing: the message is taken at its next boundary.
     }
@@ -685,7 +686,7 @@ export function createSessionActor(options: SessionActorOptions) {
         emitQueue()
         const interrupts = delivery === "restart" || (delivery === undefined && options.queueMode?.() === "immediate")
         if (interrupts && !paused && active && !active.cancelBy && !active.interruptReason) cancel(active, "promotion")
-        else tellEngineQueued()
+        else tellEngineQueued({ notice: false })
         settleIdle()
         return { ok: true, result: { queueId, ...(command.delivery ? { delivery: delivery ?? command.delivery, steered: delivery === "steer" } : {}) } }
       }
@@ -785,7 +786,7 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "queue.list":
         return { ok: true, result: { held, paused, entries: [
-          ...sent.map(({ entry }) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: false, delivery: "steer" as const })),
+          ...sent.map(({ entry }) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: false, delivery: "steer" as const, handed: true as const })),
           ...queue.map((entry) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.compact ? "" : entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: editable(entry), ...(entry.delivery ? { delivery: entry.delivery } : {}) })),
         ] } }
       case "turn.cancel": {
@@ -952,7 +953,7 @@ export function createSessionActor(options: SessionActorOptions) {
         else queue.push(entry)
         emit({ type: "queue.added", sessionId, queueId, text: message.text, attachments: [], notice: true, ...recorded })
         emitQueue()
-        tellEngineQueued()
+        tellEngineQueued({ notice: true })
         settleIdle()
         return message.reply(queueId)
       }

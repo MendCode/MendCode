@@ -5,7 +5,7 @@ import { readableText } from "./reply-comments"
 import { wrap } from "./wrap"
 
 export type QueueRowKind = "message" | "shell" | "compact" | "notice"
-export type QueueRow = { queueId: string; kind: QueueRowKind; text: string; displayText?: string; attachments: number; editable: boolean; delivery?: "queue" | "steer" | "restart" }
+export type QueueRow = { queueId: string; kind: QueueRowKind; text: string; displayText?: string; attachments: number; editable: boolean; delivery?: "queue" | "steer" | "restart"; /** The engine already holds it: it cannot be moved, edited or dropped. */ handed?: true }
 export type QueueEdit = { queueId: string; text: string; cursor: number }
 export type QueuePageState = {
   selected: number
@@ -24,7 +24,7 @@ export type QueuePageState = {
 export const createQueuePageState = (mode: string): QueuePageState => ({ selected: 0, rows: [], held: false, paused: false, mode, loaded: false })
 
 const label = (row: QueueRow) => row.kind === "compact" ? "compact context" : readableText(row.displayText ?? row.text, { quotes: false }).replace(/\s+/g, " ").trim() || "(empty)"
-const chip = (row: QueueRow) => (row.delivery === "steer" ? "STEER" : row.delivery === "queue" ? "WAIT" : row.delivery === "restart" ? "NEXT" : "")
+const chip = (row: QueueRow) => (row.handed ? "DELIVERED" : row.delivery === "steer" ? "STEER" : row.delivery === "queue" ? "WAIT" : row.delivery === "restart" ? "NEXT" : "")
 
 /** The session's queue as a manageable list: order, delivery and the full text of the selected message. */
 export function renderQueuePage(state: QueuePageState, width: number, height: number): Line[] {
@@ -61,8 +61,8 @@ export function renderQueuePage(state: QueuePageState, width: number, height: nu
       const text = selected.kind === "compact" ? "Compacts the context before the next message." : readableText(selected.text)
       const notes = [
         ...(selected.attachments ? [`${selected.attachments} attached`] : []),
-        ...(selected.delivery === "steer" ? ["Joins the running turn after its next tool result"] : selected.delivery === "queue" ? ["Waits for the response to finish"] : selected.delivery === "restart" ? ["Interrupts the running turn"] : []),
-        ...(!selected.editable && selected.kind !== "compact" ? [selected.kind === "notice" ? "System notice: not editable" : "Expanded by a command or mention: not editable"] : []),
+        ...(selected.handed ? ["Delivered: the model reads it when the running tool ends"] : selected.delivery === "steer" ? ["Joins the running turn after its next tool result"] : selected.delivery === "queue" ? ["Waits for the response to finish"] : selected.delivery === "restart" ? ["Interrupts the running turn"] : []),
+        ...(!selected.editable && !selected.handed && selected.kind !== "compact" ? [selected.kind === "notice" ? "System notice: not editable" : "Expanded by a command or mention: not editable"] : []),
       ]
       return [
         ...text.split("\n").flatMap((part) => wrap(part, Math.max(1, w)).map((line): Line => [{ text: line, fg: "body" }])),

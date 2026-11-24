@@ -246,6 +246,35 @@ describe("the lists follow pushes without asking", () => {
   })
 })
 
+describe("a chat deleted while the bot list is on its way", () => {
+  test("the answer may still hold it: the list is asked again after it, so the deleted chat does not stay listed", async () => {
+    const clock = { at: NOW }
+    let hold = false
+    let release: (() => void) | undefined
+    const h = chatApp({ clock, height: 60, extra: (command) => command.type === "bot.list" && hold ? new Promise<CommandReply>((resolve) => { release = () => resolve(reply({ bots: [], external: [], problems: [] })) }) : undefined })
+    await until(h, "Bots")
+    await Bun.sleep(10)
+    const frame = async () => { h.app.render(); await Bun.sleep(5) }
+    hold = true
+    h.app.onGlobal({ type: "session.activity", gseq: 1, at: clock.at, sessionId: "ses_01M7C3T9P0JHRKM9", directory: "/work/app", title: "New", state: "idle", updatedAt: clock.at } as never)
+    clock.at += 3000
+    await frame()
+    await frame()
+    expect(release).toBeDefined()
+    const asked = h.sentOf("bot.list").length
+    h.app.onGlobal({ type: "session.removed", gseq: 2, at: clock.at, sessionId: h.ids.docs } as never)
+    hold = false
+    release!()
+    await Bun.sleep(10)
+    clock.at += 3000
+    await frame()
+    await frame()
+    await Bun.sleep(30)
+    await frame()
+    expect(h.sentOf("bot.list").length).toBeGreaterThan(asked)
+  })
+})
+
 describe("a folder used today stays after the opened folder moves on", () => {
   test("the new folder and its chat are still listed after the switch and after the refresh that follows it", async () => {
     const clock = { at: NOW }

@@ -1,6 +1,8 @@
 import path from "node:path"
 import { realpathSync } from "node:fs"
+import { sha256Hex } from "./checksum"
 import { UpgradeError } from "./errors"
+import { INSTALL_RECEIPT, LEGACY_INSTALL_RECEIPT, parseInstallReceipt } from "./install-receipt"
 import type { UpgradeFs } from "./ports"
 import { BIN_NAME, EXECUTABLE_MODE } from "./settings"
 import { PROGRAM_NAME } from "@mendcode/program"
@@ -74,6 +76,67 @@ export async function installBinary({ fs, dataDir, bytes }: { fs: UpgradeFs; dat
     throw error
   }
   return paths.current
+}
+
+/** What `install.ps1` calls the program: the executable is `<install dir>\mendcode.exe` and the replaced one waits beside it as `mendcode.exe.old`. */
+export const WINDOWS_EXE = "mendcode.exe"
+export const replacedExecutable = (executable: string) => `${executable}.old`
+
+/**
+ * The executable `upgrade` replaces on Windows: the running program when it is the compiled `mendcode.exe`, else the install
+ * directory of `install.ps1` (`MENDCODE_INSTALL_DIR`, else `%LOCALAPPDATA%\Programs\mendcode`). Undefined when neither is known.
+ */
+export function windowsInstallPath({ runningBinary, env }: { runningBinary?: string | undefined; env: Record<string, string | undefined> }) {
+  if (runningBinary) return runningBinary
+  const dir = env.MENDCODE_INSTALL_DIR || (env.LOCALAPPDATA ? path.win32.join(env.LOCALAPPDATA, "Programs", "mendcode") : undefined)
+  return dir ? path.win32.join(dir, WINDOWS_EXE) : undefined
+}
+
+/**
+ * Replaces `target` with `bytes` the way Windows allows while the program runs: a running executable can be renamed but not
+ * overwritten or deleted. The new file is staged beside it and its digest read back, the running one is renamed to `.old`
+ * (removed at the next start of the new program), then the staged file takes its name. When the second rename fails the
+ * first is undone, so `target` is always a complete program.
+ */
+export async function installWindowsBinary({ fs, target, bytes, sha256 }: { fs: UpgradeFs; target: string; bytes: Uint8Array; sha256: string }) {
+  const staged = `${target}.new`
+  const old = replacedExecutable(target)
+  let aside = false
+  try {
+    await guarded("cannot create the install directory", () => fs.mkdir(path.dirname(target)))
+    await guarded("cannot stage the new executable", () => fs.writeFile(staged, bytes))
+    const onDisk = await guarded("cannot read back the staged executable", () => fs.readBytes(staged))
+    if (sha256Hex(onDisk) !== sha256) throw new UpgradeError("checksum-mismatch", `the staged ${path.basename(target)} does not match the verified SHA256; nothing was replaced`)
+    if (await fs.exists(target)) {
+      await guarded(`cannot clear ${old}: a program replaced earlier is still running, close it and run upgrade again`, () => fs.remove(old))
+      await guarded(`cannot move ${target} aside`, () => fs.rename(target, old))
+      aside = true
+    }
+    await guarded("cannot put the new executable in place", () => fs.rename(staged, target))
+  } catch (error) {
+    if (aside) {
+      try { await fs.rename(old, target) } catch (restore) {
+        throw new UpgradeError("io", `${error instanceof Error ? error.message : String(error)}; restoring the previous program failed too (${restore instanceof Error ? restore.message : String(restore)}): it is at ${old}`)
+      }
+    }
+    await fs.remove(staged).catch(() => undefined)
+    throw error
+  }
+  return target
+}
+
+/** The installer's receipt beside `target` names the digest of the program; `uninstall` checks it, so a replaced program gets its new one (the tier stays). */
+export async function refreshInstallReceipt({ fs, target, sha256 }: { fs: UpgradeFs; target: string; sha256: string }) {
+  const dir = path.dirname(target)
+  const current = path.join(dir, INSTALL_RECEIPT)
+  const legacy = path.join(dir, LEGACY_INSTALL_RECEIPT)
+  const text = (await fs.readText(current)) ?? (await fs.readText(legacy))
+  const receipt = text === undefined ? undefined : parseInstallReceipt(text)
+  if (!receipt || receipt.binary !== WINDOWS_EXE) return false
+  await fs.writeFile(`${current}.tmp`, new TextEncoder().encode(`schema=mendcode.install.v1\nbinary=${WINDOWS_EXE}\nsha256=${sha256}\n${receipt.tier ? `tier=${receipt.tier}\n` : ""}`))
+  await fs.rename(`${current}.tmp`, current)
+  await fs.remove(legacy)
+  return true
 }
 
 /** Swaps `mendcode` and `.prev`, so a second rollback goes forward again. */

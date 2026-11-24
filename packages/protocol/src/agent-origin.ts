@@ -84,6 +84,15 @@ export const AGENT_ORIGIN_CAPABILITY = "origin:agent"
 export const AGENT_LIMIT_CAPABILITY = "limit:"
 
 /** One wording for every layer, so the model reads the same thing wherever it is stopped. */
-export function agentRefusal({ what, ask }: { what: string; ask?: string | undefined }) {
-  return `refused: ${what}. A session cannot change permissions, global settings or another session's authority from its own shell; only the user can. Do not look for another way in the shell. Ask the user to ${ask ?? "run it from their own terminal, or to change it in the TUI (/settings, /permissions)"}. For a daemon setting you may instead propose the exact change with the mendcode_settings tool (find it with tool_search); the user approves it on a card.`
+export function agentRefusal({ what, ask, instead }: { what: string; ask?: string | undefined; instead?: string | undefined }) {
+  return `refused: ${what}. A session cannot change permissions, global settings or another session's authority from its own shell; only the user can. Do not look for another way in the shell. Ask the user to ${ask ?? "run it from their own terminal, or to change it in the TUI (/settings, /permissions)"}. ${instead ?? "For a daemon setting you may instead propose the exact change with the mendcode_settings tool (find it with tool_search); the user approves it on a card."}`
 }
+
+/**
+ * Installed profiles (also called packages or plugins) are changed from a session with the `profiles` tool, which asks the user to
+ * approve on a card; the shell command is refused. The refusal names that way so it is not a dead end.
+ */
+export const PROFILES_INSTEAD = "To do it now, call the profiles tool (find it with tool_search; actions: list, enable, disable, remove, install): the user approves on a card and only their Approve applies it, in every permission mode. Enabling or disabling applies at once: no /reload and no restart. If the tool is not offered, tell the user to open /profiles."
+export const PROFILES_ASK = "approve the change on the profiles tool's card, or to run it from their own terminal or /profiles"
+/** The refusal text parts for a daemon command type: the profiles way for `profiles.*`, the default otherwise. */
+export const agentRefusalFor = (type: string): { ask?: string; instead?: string } => type.startsWith("profiles.") ? { ask: PROFILES_ASK, instead: PROFILES_INSTEAD } : {}

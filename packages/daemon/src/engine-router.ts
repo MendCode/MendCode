@@ -44,6 +44,8 @@ export function createEngineRouter(input: { primary: EnginePort; claude: () => P
       const engine = await claudeEngine().catch(() => undefined)
       return (await engine?.rewind?.(rewind)) ?? false
     },
+    // Only a Claude Code process is kept per session; the engine is not created just to be told to reload.
+    refresh: async (sessionId) => (claude ? (await claude.catch(() => undefined))?.refresh?.(sessionId) : undefined),
     ...(primary.release ? { release: primary.release.bind(primary) } : {}),
     ...(primary.forget ? { forget: primary.forget.bind(primary) } : {}),
     ...(primary.debugAgent ? { debugAgent: primary.debugAgent.bind(primary) } : {}),

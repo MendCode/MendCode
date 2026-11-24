@@ -122,6 +122,7 @@
       "name": "@mendcode/engine-claude",
       "version": "0.0.0",
       "dependencies": {
+        "@mendcode/engine-native": "workspace:*",
         "@mendcode/kernel": "workspace:*",
         "@mendcode/protocol": "workspace:*",
       },
@@ -175,6 +176,10 @@
     },
     "packages/extension-api": {
       "name": "@mendcode/extension-api",
+      "version": "0.0.0",
+    },
+    "packages/gateway": {
+      "name": "@mendcode/gateway",
       "version": "0.0.0",
     },
     "packages/kernel": {
@@ -325,6 +330,8 @@
     "@mendcode/engine-pi": ["@mendcode/engine-pi@workspace:packages/engine-pi"],
 
     "@mendcode/extension-api": ["@mendcode/extension-api@workspace:packages/extension-api"],
+
+    "@mendcode/gateway": ["@mendcode/gateway@workspace:packages/gateway"],
 
     "@mendcode/kernel": ["@mendcode/kernel@workspace:packages/kernel"],
 

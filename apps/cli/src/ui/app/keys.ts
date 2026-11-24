@@ -33,7 +33,7 @@ import { createOptionKeys } from "./option-keys"
 import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
-import { queuePolicy, userQueue } from "./queue-policy"
+import { HANDED_OVER, queuePolicy, takeableQueue, userQueue } from "./queue-policy"
 import { fastStep, wheelStep } from "./page-wheel"
 
 /** The arrows of a terminal in application-cursor mode, as the list reads them. */
@@ -76,6 +76,8 @@ export function createKeys(ctx: AppContext, actions: {
   chatWidth: () => number
   /** Whether the left list shows at this width (the search draws in it). */
   sidebarShown: (width: number) => boolean
+  /** The columns the left list takes, without the gap. */
+  sidebarCells: (width: number) => number
   /** The columns the transcript's text is laid out in (the chat column less the scrollbar's). */
   transcriptWidth: () => number
   pickApproval: (index: number) => Promise<void>
@@ -194,8 +196,9 @@ export function createKeys(ctx: AppContext, actions: {
     const rightWanted = panelWanted(state) || fileInSlot(state)
     const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
     const rightWidth = rightCells ? rightCells + 1 : 0
-    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
-    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
+    // On a page the list is beside it and nothing else is: the right panel is the chat's.
+    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : actions.sidebarShown(width) ? actions.sidebarCells(width) + SIDEBAR_GAP : 0
+    const onRight = (state.page !== "chat" || !rightWidth) && state.tuiProfile.sidebarSide === "right"
     return { width, rightWidth, sideWidth, onRight, offset: onRight ? 0 : sideWidth }
   }
 
@@ -334,7 +337,9 @@ export function createKeys(ctx: AppContext, actions: {
     // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
     // Every mouse report says whether the pointer is over the list: the list holds still while it is (ui/app/sidebar-bots.ts).
     if (pointer) state.sidebarBots?.pointer(overSidebar(pointer.col, sidebarGeometry()))
-    if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {
+    // The list drawn beside a page takes the wheel at its own columns too; the rest of a page's wheel is the page's.
+    const listPointer = pointer ?? (wheel !== undefined ? pointerOf(key) : undefined)
+    if (wheel !== undefined && listPointer && overSidebar(listPointer.col, sidebarGeometry())) {
       state.selection = undefined
       // The rows the wheel moves are the user's own doing: the click guard lets the next click through.
       state.sidebarInputAt = now()
@@ -429,7 +434,7 @@ export function createKeys(ctx: AppContext, actions: {
       }
     }
     const screenClick = clickOf(key)
-    if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
+    if (screenClick && sideWidth > 0 && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       // A line whose row changed a moment ago without the user's doing: the click was aimed at the row that was there, so it is dropped.
       if (hit && !sidebarClickAllowed(state.sidebarGuard, screenClick.row, now())) return requestFrame()
@@ -556,11 +561,10 @@ export function createKeys(ctx: AppContext, actions: {
       if (await actions.limitClick(click.row, click.col)) return
     }
     // The Changes page is the one page with clickable parts (a file opens in the viewer); every other page ignores the mouse.
-    const pageClick = state.page === "changes" ? clickOf(key) : undefined
+    const pageClick = state.page === "changes" ? click : undefined
     // Inside the Git page the first row is the tabs row; the rows below it are the Changes page, one row lower than it draws itself.
     if (state.page === "changes" || state.page === "git-commit" || state.page === "git-pr" || state.page === "git-init" || state.page === "worktrees" || state.page === "warp") {
-      const tabClick = clickOf(key)
-      if (tabClick && await actions.gitClick(tabClick)) return
+      if (click && await actions.gitClick(click)) return
     }
     if (pageClick && actions.changesClick(pageClick)) return
     if (MOUSE_SGR.test(key)) return
@@ -902,10 +906,13 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** The newest queued message is removed (ctrl+k on an empty prompt). */
   async function dropLastQueued() {
-    const last = userQueue(state.transcript.queue).at(-1)
-    if (!last) return
+    const last = takeableQueue(state.transcript.queue).at(-1)
+    if (!last) return userQueue(state.transcript.queue).length ? say(HANDED_OVER, "warning") : undefined
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
-    if (!reply.ok) fail(reply.error.message)
+    if (!reply.ok) {
+      if (reply.error.code === "target_mismatch") say("that message already started", "warning")
+      else fail(reply.error.message)
+    }
     requestFrame()
   }
 

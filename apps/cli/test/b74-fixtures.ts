@@ -8,7 +8,7 @@ export function b74Harness(options: { width?: number; height?: number; enabled?:
   ], switchableOrgCount: options.enabled === false ? 0 : 2, consoleManagedProviders: ["local-models"], activeOrgName: "Engineering", quota: { used: 42, limit: 100, resetAt: NOW + 86400000 }, billingUrl: "http://127.0.0.1:8788/billing" }
   let share: SessionShare = { sessionId: "", policy: "disabled", pending: false }
   let fail = false
-  const h = appHarness({ ...options, directory: "/work/mendcode", reply: (command) => {
+  const h = appHarness({ profile: { sidebar: "hidden" }, ...options, directory: "/work/mendcode", reply: (command) => {
     if (fail && /^(console\.|session\.share|session\.unshare)/.test(command.type)) { fail = false; return { ok: false, error: { code: "invalid_command", message: "Console returned HTTP 503" } } }
     let result: unknown
     if (command.type === "console.get" || command.type === "console.accounts") result = structuredClone(report)

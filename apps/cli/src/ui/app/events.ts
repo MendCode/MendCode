@@ -21,6 +21,7 @@ import { planModeNotice, planModelId } from "../../view/plan-mode-notice"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
+import { paced } from "./paced"
 import { configureKeyLabels } from "../key-labels"
 import { keyboardWanted } from "../keyboard-protocol"
 
@@ -80,6 +81,9 @@ export function createEvents(ctx: AppContext, actions: {
   const { chatWidth, noteSecretMarkers, loadPage, ringTurnBell, footerSegments, loadBranch, loadDiffTotals, loadSidebarMcp, noteActivity, loadAgentShells, loadMcps, loadMemories, loadMemoryGraph, noteLoop, noteWorkflow, loadMemoryCategories, applySettings, loadDreamReport, loadEvolution } = actions
 
   const thresholds = createThresholds()
+  /** Sub-agents at work change their lists many times a second: the strip and the jobs count are asked again at a bounded pace. */
+  const askLiveTasks = paced(() => void refreshLiveTasks(ctx))
+  const askAgentShells = paced(() => void loadAgentShells().then(requestFrame))
   /** Memories whose save just toasted, by id: their follow-up `updated` event stays quiet. */
   const savedToasts = new Map<string, number>()
   /** The memory toast on screen, so the transcript row for the same write (it arrives a moment later) can replace it. */
@@ -241,6 +245,7 @@ export function createEvents(ctx: AppContext, actions: {
           // (the agent that built it is working there); every other terminal keeps it as shown or hidden.
           const own = state.sessionLook.get(state.sessionId)
           state.panelSpec = (reply.result?.widgets ?? []) as typeof state.tuiProfile.sidebarWidgets
+          state.panelSpecDirectory = directory
           if (own?.sidebarWidgets) return
           // A preset the session chose follows the profile's version of it: editing the custom galaxy changes the session's galaxy too.
           const widgets = own?.panelPreset ? resolvePanel(own.panelPreset, profilePanel(state)).widgets : state.panelSpec
@@ -274,7 +279,7 @@ export function createEvents(ctx: AppContext, actions: {
       if (state.agentParents.size > AGENT_PARENTS_KEPT) state.agentParents.delete(state.agentParents.keys().next().value!)
       followPet(state)
       if (state.page === "tasks" && event.parentId === state.sessionId) void actions.loadTasks()
-      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) void refreshLiveTasks(ctx)
+      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) askLiveTasks()
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // The agents card and /tree draw the sub-agents' state and model: ask again.
       state.sidebarTreeRev++
@@ -285,7 +290,20 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "session.background.changed") {
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // An engine's own background tasks (Claude Code's) come and go with this event: the jobs count follows them.
-      void loadAgentShells().then(requestFrame)
+      askAgentShells()
+      return
+    }
+    if (event.type === "session.removed") {
+      // Deleted in another terminal (this one's own delete reloads the list): the row goes from every list, with no request.
+      const id = event.sessionId
+      state.sessions = state.sessions.filter((session) => session.sessionId !== id)
+      state.paletteSessions = state.paletteSessions.filter((session) => session.sessionId !== id)
+      // /sessions merges its search results back into the list: a deleted chat must not stay selectable there.
+      if (state.sessionList.found) state.sessionList.found = state.sessionList.found.filter((session) => session.sessionId !== id)
+      state.agentSessions.delete(id)
+      state.sidebarBots?.onRemoved(id)
+      state.homeBots?.onRemoved(id)
+      requestFrame()
       return
     }
     if (event.type === "session.activity") {
@@ -342,6 +360,12 @@ export function createEvents(ctx: AppContext, actions: {
       const run = event.workflow
       noteWorkflow(run, event.deleted === true)
       if (run.state === "completed" && !event.deleted) state.pet?.cheer("jumping")
+      // The lists the page draws before the daemon answers follow the live updates too, or a reopened page would show the older runs.
+      for (const scope of ["project", "all"] as const) {
+        const seen = state.workflowsSeen[scope]
+        if (!seen || scope === "project" && !inProject(run.directory, input.directory)) continue
+        state.workflowsSeen[scope] = event.deleted ? seen.filter((entry) => entry.workflowId !== run.workflowId) : seen.some((entry) => entry.workflowId === run.workflowId) ? seen.map((entry) => (entry.workflowId === run.workflowId ? run : entry)) : [run, ...seen]
+      }
       if (state.page !== "workflows" || !state.workflowsLoaded) return requestFrame()
       if (state.workflowsState.scope === "project" && !inProject(run.directory, input.directory)) return
       const known = state.workflows.some((entry) => entry.workflowId === run.workflowId)

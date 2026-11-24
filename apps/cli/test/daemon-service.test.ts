@@ -75,8 +75,17 @@ describe("daemon lifecycle CLI", () => {
     expect(parsed("daemon", "run", "--listen", "127.0.0.1:9876").listener).toEqual(["--listen", "127.0.0.1:9876"])
     expect(parsed("daemon", "run", "--listen", "0.0.0.0:9876", "--tls-cert", "/c.pem", "--tls-key", "/k.pem").listener).toEqual(["--listen", "0.0.0.0:9876", "--tls-cert", "/c.pem", "--tls-key", "/k.pem"])
     expect(() => parsed("daemon", "start", "--listen", "127.0.0.1:9876")).toThrow("daemon run")
-    expect(() => parsed("daemon", "service", "install", "--listen", "127.0.0.1:9876")).toThrow("daemon run")
+    // The background service takes a listener only when it is installed with one (docs/remote.md, "Remote daemon as a service").
+    expect(parsed("daemon", "service", "install", "--listen", "127.0.0.1:9876").remote).toEqual(["--listen", "127.0.0.1:9876"])
+    expect(parsed("daemon", "service", "install", "--listener").remote).toEqual([])
+    expect(parsed("daemon", "service", "install").remote).toBeUndefined()
+    expect(parsed("daemon", "service", "install", "--listen", "100.64.0.9:9876", "--tls-cert", "/c.pem", "--tls-key", "/k.pem").listener).toBeUndefined()
+    expect(() => parsed("daemon", "service", "restart", "--listen", "127.0.0.1:9876")).toThrow("daemon service install")
+    expect(() => parsed("daemon", "run", "--listener")).toThrow("--listener goes with")
+    expect(() => parsed("daemon", "service", "install", "--tls-cert", "/c.pem")).toThrow("need --listen")
     expect(() => parsed("daemon", "run", "--tls-cert", "/c.pem")).toThrow("need --listen")
+    // Relative certificate paths are the installer's, not the service's --cwd: they are saved absolute.
+    expect(parsed("daemon", "service", "install", "--cwd", "/srv/project", "--listen", "100.64.0.9:9876", "--tls-cert", "cert.pem", "--tls-key=keys/key.pem").remote).toEqual(["--listen", "100.64.0.9:9876", "--tls-cert", path.resolve("cert.pem"), "--tls-key", path.resolve("keys/key.pem")])
     expect(parsed("daemon", "run").listener).toBeUndefined()
     expect(parseDaemonService(["run", "hello"])).toBeUndefined()
     expect(parseDaemonService(["memory", "dream", "status"])).toBeUndefined()

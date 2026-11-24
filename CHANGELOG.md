@@ -9,6 +9,78 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.20 - 2026-11-24
+
+Run MendCode on a server of your own and use it from anywhere: one command prepares a Linux VPS, saved remotes connect to it, sessions and code move between machines, and a domain mode serves several people with passkeys. Switching between chats, bots and sub-agents is faster and the daemon holds less memory. A Claude Code turn cut by a network failure resumes by itself, goals wait for background commands, ACP agents show their models in `/model`, `mendcode upgrade` works on Windows, and workflows tell the session that started them how they ended.
+
+### Upgrade notes
+
+- Same code as v0.0.20-beta.1.
+
+## v0.0.20-beta.1 - 2026-11-24
+
+Run MendCode on a server of your own and use it from anywhere: one command prepares a Linux VPS, saved remotes connect to it, sessions and code move between machines, and a domain mode serves several people with passkeys. Switching between chats, bots and sub-agents is faster and the daemon holds less memory. A Claude Code turn cut by a network failure resumes by itself, goals wait for background commands, ACP agents show their models in `/model`, `mendcode upgrade` works on Windows, and workflows tell the session that started them how they ended.
+
+### Fixed
+
+- A read-only workflow task keeps the MCP tools their server marks read-only, so an agent that only needs to look at a device or service can use them.
+- The session that started a workflow is told when it completes, fails or blocks, with the reason, and can react.
+### New
+
+- Remote daemon: a full-token remote client can run turns on an ACP agent or pi when the host lists it in `remoteEngines` (off by default), `daemon service install --listener` keeps a listening daemon across reboots, `remote.json` accepts `"mode": "tailscale"`, and a renewed TLS certificate is served without a restart.
+- One-command remote: `mendcode remote setup HOST --ssh USER@VPS` prepares a Linux VPS with Tailscale (installs MendCode with checksum verification, gets the TLS certificate with a renewal timer, creates a token for this device, starts the daemon service with its listener and saves the remote so `mendcode` connects). `--dry-run` prints the plan, a repeated or interrupted run continues where it stopped, `--migrate-settings`, `--acp-agents` and `--migrate-sessions` (projects matched by git remote and path in the repo, `--path-map`, `--clone-missing`) are opt-in and never move credentials. `remote pair` adds another device, `remote unpair` removes one, and `remote token create --expires-days N` makes a token expire.
+- Session sync with a VPS (off by default): `remote setup|pair --sync` or `mendcode sync enable REMOTE` shows the host's sessions here as read-only mirrors, `mendcode sync take ID` continues one on this machine and `sync handoff ID` gives the host a session made here. One machine writes a session at a time, and a refused prompt names the one that owns it; if this machine drops off, the host takes the session back and anything not yet sent stays here as a separate, diverged copy. Memories and preference settings sync too; credentials, tokens and authority settings never do.
+- Code between machines: `mendcode remote code handoff` pushes your working tree (tracked changes and new files, without credentials or huge files) to a new `mend/wip-*` branch without touching your branch, `remote code receive` checks it out in its own worktree on the other machine, and `remote code clone` clones a project only if it is missing. `remote code live enable --ssh USER@HOST` is an opt-in two-way sync of one project through your own Mutagen install, refused unless both clones are on the same branch and commit; `live status` pauses it when they differ (nothing watches the branches in between).
+- Domain mode (off by default): `mendcode gateway setup --domain NAME` turns a Linux VPS into a MendCode server for several people on your own domain with free automatic HTTPS (Caddy and Let's Encrypt), or on a free `*.ts.net` address with `--funnel`. Each person has their own Linux user, daemon, data and keys, signs in with a passkey (no passwords), and pairs a terminal with `mendcode remote login URL`. Accounts come only from `mendcode gateway invite`. `--dry-run` shows the plan and a re-run is safe.
+- `serve`/`web --unix-socket PATH` listens on a Unix socket instead of a loopback port.
+- Saved remotes: `mendcode remote add NAME HOST:PORT`, `--remote NAME`, `--local` and a default remote, so typing `mendcode` connects to your daemon on another machine (falls back to this machine when it is unreachable).
+
+### Changed
+
+- The workflow tools say that a single task is a sub-agent call, not a workflow.
+- `mendcode upgrade` works on Windows: it checks the SHA256 of the release's `mendcode-<version>-windows-x64.exe`, replaces the running `mendcode.exe` where it is installed, and removes the previous file the next time it starts. If the new file cannot take its place, the old one stays. `--rollback` is not available there.
+
+### Fixed
+
+- Windows: after a restart or a killed daemon, starting MendCode no longer fails with "daemon did not start" when the number of the old daemon's process now belongs to another program. A start that still fails says how the daemon exited and who holds the data directory.
+
+- A pet you chose that the terminal cannot show (no pictures, an image too small for text) now shows no pet, instead of the default robot taking its place; the robot in text mode is smaller by default (13 x 7 cells, was 26 x 14).
+- A goal no longer keeps continuing on its own while background commands are still running: it waits until one ends or prints a watched line, you write, or 30 minutes pass (`processLimits.goalWaitMinutes`), and the goal prompt tells the agent to end its turn instead of sleeping in the foreground.
+### New
+
+- ACP agents that list their models (`models`, switched with `session/set_model`) now show them in `/model` as `acp:<agent>/<model>`, and an agent's session mode follows MendCode's permission mode.
+
+### Changed
+
+- Docs: ACP usage is shown when the agent reports it.
+- Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
+
+- Switching between chats, bots and sub-agents no longer stalls the daemon: a chat's sub-agent tree, file changes and the session lists answer quickly in projects with many sessions and sub-agents, and every client stays responsive while they load.
+- The daemon holds far less memory with the code panel open across projects: a project's code graph for the Galaxy panel is loaded by a short-lived process of its own, and opening the same project again reuses its last overview while its files are unchanged.
+- Streaming replies take less of the daemon's CPU: their deltas are written to the database in small groups instead of one commit each.
+- Switching between sub-agents is faster and the terminal idles lighter while they work: a sub-agent with large tool outputs is kept for the way back like any other chat, the strip and jobs count refresh at a bounded pace, and frames while output streams are capped at 30 a second.
+- `/reload` in a Claude session also ends its idle Claude Code process, so the next message starts one that reads your current plugins and hooks on the same conversation; a running turn or background task is never cut.
+
+### Fixed
+
+- A Claude Code turn cut by a network or provider failure (no connection, overloaded, 5xx) now waits and resumes by itself instead of ending as failed, and the next message after any failed turn starts on a fresh Claude Code process.
+- When a goal is blocked, the agent tells you to reopen it with `/goal resume`.
+- When the daemon is slow to start, the terminal keeps waiting for it; when it cannot start, it prints one readable error and where its logs are instead of a code dump.
+
+- A chat deleted in one MendCode window now leaves the left list of every other window at once.
+- A chat reopened or reconnected (after a daemon restart, say) keeps the "took ... · ended ..." line under the last answer even when that turn was long enough to start before the first page of history.
+- `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.
+- When a session's shell is refused a profile change, the message now says to use the `profiles` tool (the user approves on a card) and that enabling or disabling needs no reload or restart.
+- A queued message the engine already holds (read when the running tool ends) shows as delivered, with no drop or edit hint, and ctrl+k or edit on it say why instead of "queued message not found".
+- In a Claude session, a message that starts with `/` is read as your text instead of running a Claude Code command and vanishing; a turn that ends with no answer now says so.
+- A sub-agent started with an effort on a model that lists it (`high` on GPT-6.2-Astra) runs at that effort instead of being refused or dropping to the default.
+- A message you send while a turn waits for a command that moved to the background is read at once; the command keeps running.
+- The right panel, shown or hidden with `/panel`, stays that way in every session, bot chats included.
+- The workflows page draws its list at once, the last one it had, while the daemon sends the new one.
+- Switching sessions draws the right panel at once and asks the daemon for less.
+- The session list stays beside every page you open when it is on, and a click on a chat in it works there.
+- A model you pick in a bot's chat stays for that chat, including when it was picked before the first message and after a plan is applied.
+
 ## v0.0.19 - 2026-11-21
 
 Everything since v0.0.17 comes to stable, v0.0.18 included. Bots (`experimental.bots`) with a face, a page, memory, skills and schedules, Hermes Agent bots, and a model you pick in a bot's chat that runs there. The sessions list starts a chat in any folder with `+`, orders by what you sent and holds still under the pointer. `/today` is one chat per day that sorts memories with you. Long chats scroll and switch faster with less memory. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when started again. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, and the compaction arcade has more games.

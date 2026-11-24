@@ -1,4 +1,6 @@
 import { createProjectSyncRecords } from "./project-sync"
+import { SessionOwnedElsewhere } from "./session-owned"
+import type { createSyncState } from "./sync-state"
 import { createLimitCheckpoints } from "./limit-checkpoints"
 import { createContinuityRecords } from "./continuity"
 import { createMemorySharingRecords, sharedMemoryRevision } from "./memory-sharing"
@@ -480,7 +482,7 @@ function blobRefsOf(event: SessionEvent): BlobRef[] {
  * assigns `seq`, validates, persists and updates projections in one transaction, so pages read
  * precomputed rows instead of scanning history (A8).
  */
-export function openStore(options: { dir: string; warn?: (message: string) => void; now?: () => number; dayOf?: (at: number) => string; /** false writes the uncompressed legacy forms (how the "before" size is measured); reading handles both. */ compress?: boolean; /** Page size of a database created now (an existing file keeps its own); 4096 was the size before 16384. */ pageSize?: number }) {
+export function openStore(options: { dir: string; warn?: (message: string) => void; now?: () => number; dayOf?: (at: number) => string; /** Streamed deltas share commits (private-database.ts, `group`): the daemon, the only writer of its data directory while it runs. */ groupCommits?: boolean; /** false writes the uncompressed legacy forms (how the "before" size is measured); reading handles both. */ compress?: boolean; /** Page size of a database created now (an existing file keeps its own); 4096 was the size before 16384. */ pageSize?: number }) {
   mkdirSync(options.dir, { recursive: true })
   const now = options.now ?? Date.now
   const dayOf = options.dayOf ?? localDay
@@ -686,9 +688,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   /**
    * The validated view of the saved settings text. The daemon reads settings over a thousand times between start and the
    * end of a first turn, and parsing and validating every key each time made tens of MB of garbage per turn. The row is
-   * still read on every call, so a write from any process is seen at once.
+   * still read on every call, so a write from any process is seen at once. Each caller gets its own copy, made from the clean
+   * view's JSON text: the values are plain JSON, and parsing the text is a third of the cost of `structuredClone`.
    */
-  let settingsView: { payload: string | undefined; clean: Record<string, unknown> } | undefined
+  let settingsView: { payload: string | undefined; json: string } | undefined
   /** `current` with `patch` merged (`null` removes a key) and validated; `saveAcp` writes the ACP part, which lives in its own file. */
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
@@ -719,10 +722,21 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     promptHistory.record(event.sessionId, event.shell && event.local ? `!${typed}` : typed, event.at, kind)
   }
 
-  const appendSession = db.transaction((draft: SessionEventDraft, importedAt?: number) => {
+  /** Session sync (sync-state.ts): refuses a write to a session another machine owns. Unset unless sync is on. */
+  let writeGuard: ((sessionId: SessionId, type: string) => string | undefined) | undefined
+  /**
+   * `ingest`: an event copied from the machine that owns the session, stored at its own `seq` (gaps allowed, never at or below
+   * the stored end) and kept out of this machine's usage statistics.
+   */
+  const appendSession = db.transaction((draft: SessionEventDraft, importedAt?: number, ingest?: { seq: number }) => {
     const row = q.lastSeq.get(draft.sessionId)
     if (!row) throw new RangeError(`[STORE]: unknown session ${draft.sessionId}`)
-    const event = SessionEvent.parse({ ...draft, seq: row.last_seq + 1, at: importedAt ?? now() })
+    if (writeGuard && !ingest) {
+      const refusal = writeGuard(draft.sessionId, draft.type)
+      if (refusal) throw new SessionOwnedElsewhere(refusal)
+    }
+    if (ingest && ingest.seq <= row.last_seq) throw new RangeError(`[STORE]: synced event ${ingest.seq} is not after the stored end ${row.last_seq}`)
+    const event = SessionEvent.parse({ ...draft, seq: ingest?.seq ?? row.last_seq + 1, at: importedAt ?? now() })
     if (event.type === "item.completed" && event.meta?.firstDeltaAt === undefined && Object.keys(event.meta ?? {}).length < 16) {
       const firstDeltaAt = deltaFold.firstAt(event.sessionId, event.itemId)
       if (firstDeltaAt !== undefined) event.meta = { ...event.meta, firstDeltaAt }
@@ -747,7 +761,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     if (event.type === "item.completed") {
       const items = openItems.get(event.sessionId)
       const started = items?.get(event.itemId)
-      if (started) {
+      if (started && ingest) items!.delete(event.itemId)
+      else if (started) {
         items!.delete(event.itemId)
         const ms = Math.max(0, event.at - started.at)
         const day = dayOf(event.at)
@@ -763,7 +778,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     if (event.type === "queue.added") {
       q.queueInsert.run(event.sessionId, event.queueId, event.text, JSON.stringify(event.attachments), event.compact ? "compact" : event.notice ? "notice" : event.shell ? "shell" : "message", event.authorityText ?? null)
       // A queued /compact or system notice is not a prompt: it neither counts as usage nor titles the session.
-      if (!event.compact && !event.notice) {
+      if (!event.compact && !event.notice && ingest) q.autoTitle.run(titleFrom(event.text), event.sessionId)
+      else if (!event.compact && !event.notice) {
         q.bumpPrompt.run(dayOf(event.at), wordCount(event.text))
         q.autoTitle.run(titleFrom(event.text), event.sessionId)
         if (event.origin === "tui") q.markHuman.run(event.at, event.sessionId)
@@ -778,20 +794,23 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       event.queue.forEach((entry, position) => q.queueKeep.run(position, event.sessionId, entry.queueId))
     }
     if (event.type === "session.workspace.changed") db.query("UPDATE sessions SET directory = ? WHERE id = ?").run(event.directory, event.sessionId)
-    if (event.type === "session.permission") db.query("UPDATE sessions SET permission_mode = ? WHERE id = ?").run(event.mode, event.sessionId)
+    // A copied session keeps this machine's permission mode: the other machine's choice is authority this one never granted.
+    if (event.type === "session.permission" && !ingest) db.query("UPDATE sessions SET permission_mode = ? WHERE id = ?").run(event.mode, event.sessionId)
     if (event.type === "turn.started") q.setActiveTurn.run(event.turnId, event.sessionId)
     else if (TERMINAL_TURN_EVENTS.has(event.type)) {
       q.setActiveTurn.run(null, event.sessionId)
       openItems.delete(event.sessionId)
     }
-    if (event.type === "usage.recorded") {
+    if (event.type === "usage.recorded" && !ingest) {
       const day = dayOf(event.at)
       q.upsertUsage.run(day, event.provider, event.model, event.input, event.output, event.reasoning, event.cacheRead, event.cacheWrite, event.costMicros ?? 0, event.costMicros === undefined ? 1 : 0)
       if (q.sessionDay.run(day, event.sessionId).changes === 1) q.bumpDaySessions.run(day)
     }
-    insights.record(event)
-    usageScopes.record(event)
-    usageCalls.record(event)
+    if (!ingest) {
+      insights.record(event)
+      usageScopes.record(event)
+      usageCalls.record(event)
+    }
     turns.record(event)
     messages.record(event)
     for (const ref of blobRefsOf(event)) {
@@ -919,8 +938,23 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   privateDb.start()
   convertFiles(true)
   return {
-    sessionSink: { append: (draft: SessionEventDraft) => appendSession(draft) },
+    sessionSink: {
+      append: (draft: SessionEventDraft) => {
+        // A streamed delta shares its commit with the rest of this turn of the event loop (private-database.ts, `group`).
+        if (options.groupCommits && draft.type === "item.delta") privacyDatabase.group()
+        return appendSession(draft)
+      },
+    },
     projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold, sealedTurns),
+    /**
+     * Session sync's own tables, opened only by the lazily loaded sync module (it passes the factory, so nothing of it loads with
+     * the store). Installs the write guard that keeps one writer per session.
+     */
+    openSyncState(factory: typeof createSyncState, guard: (sessionId: SessionId, type: string) => string | undefined) {
+      writeGuard = guard
+      return factory(db, now)
+    },
+    closeSyncState() { writeGuard = undefined },
     automationLedger,
     messages,
     /** Revision, model history and history marks commit together; no half-edited conversation. */
@@ -1403,8 +1437,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       /** Runtime view only; unsupported entries remain in storage for a compatible version. */
       get(): Settings {
         const payload = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()?.payload
-        if (!settingsView || settingsView.payload !== payload) settingsView = { payload, clean: validSettings(payload) }
-        const clean = structuredClone(settingsView.clean)
+        if (!settingsView || settingsView.payload !== payload) settingsView = { payload, json: JSON.stringify(validSettings(payload)) }
+        const clean = JSON.parse(settingsView.json) as Record<string, unknown>
         const acpAgents = acpSettings.get()
         delete clean.acpAgents
         if (Object.keys(acpAgents).length) clean.acpAgents = acpAgents
@@ -1616,6 +1650,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     },
     sessionChildren(sessionId: SessionId): SessionId[] {
       return db.query<{ id: SessionId }, [string]>("SELECT id FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC").all(sessionId).map((row) => row.id)
+    },
+    /**
+     * `sessionChildren` of every session from one read, for a walk over a whole lineage: each `sessionChildren` scans the sessions
+     * (there is no index on the parent), so a sub-agent tree that asked once per node scanned them hundreds of times.
+     */
+    sessionChildIndex(): (sessionId: SessionId) => SessionId[] {
+      const children = new Map<string, SessionId[]>()
+      for (const row of db.query<{ id: SessionId; parent: string }, []>("SELECT id, parent_id AS parent FROM sessions WHERE parent_id IS NOT NULL ORDER BY updated_at DESC").all()) {
+        const list = children.get(row.parent)
+        if (list) list.push(row.id)
+        else children.set(row.parent, [row.id])
+      }
+      return (sessionId) => children.get(sessionId) ?? []
     },
     itemStart(sessionId: SessionId, itemId: string): Extract<SessionEvent, { type: "item.started" }> | undefined {
       const row = sealedTurns.withId(sessionId, "itemId", itemId, ["item.started"])[0]

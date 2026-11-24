@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, plainTextContent, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, transientFailure, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -110,6 +110,33 @@ test("an image with a token in the text goes right after the token: text, image,
   expect(loose.written.find((message) => message.type === "user").message.content.map((block: any) => block.type)).toEqual(["image", "text"])
   h.engine.stop()
   other.engine.stop()
+})
+
+test("a message that starts with a slash reaches Claude Code as text: its last character is a block of its own so no command runs, and the words stay whole", async () => {
+  const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+  const h = engineWith([fake])
+  const first = turnInput({ text: "/some-command no existe, abre los PRs ahora." })
+  await h.engine.runTurn(first.input)
+  const blocks = fake.written.find((message) => message.type === "user").message.content
+  expect(blocks.map((block: any) => block.text).join("")).toBe("/some-command no existe, abre los PRs ahora.")
+  expect(blocks.at(-1).text.startsWith("/")).toBe(false)
+  expect(blocks.length).toBeGreaterThan(1)
+  h.engine.stop()
+})
+
+test("a turn Claude Code answers with its own synthetic message shows that text, and a turn with no output says it ended without an answer", async () => {
+  const own = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push({ type: "assistant", message: { id: "m1", model: "<synthetic>", content: [{ type: "text", text: "Reloaded: 2 plugins" }] } }); api.push(result()) } })
+  const a = engineWith([own])
+  const first = turnInput({ text: "hello" })
+  await a.engine.runTurn(first.input)
+  expect(first.events.filter((event) => event.type === "item.completed")).toContainEqual(expect.objectContaining({ text: "Reloaded: 2 plugins" }))
+  const empty = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-2" }); api.push({ ...result(), result: "Unknown command: /zz" }) } })
+  const b = engineWith([empty])
+  const second = turnInput({ text: "hello" })
+  await b.engine.runTurn(second.input)
+  expect(second.events.filter((event) => event.type === "item.completed")).toContainEqual(expect.objectContaining({ text: "Claude Code ended the turn without an answer: Unknown command: /zz" }))
+  a.engine.stop()
+  b.engine.stop()
 })
 
 test("Claude Code's own sub-agents are told about MendCode's tools through a SubagentStart hook; any other callback gets an empty answer", async () => {
@@ -1233,6 +1260,63 @@ describe("text appended to Claude Code's system prompt", () => {
     const { input } = turnInput({ mode: () => "full" })
     expect(await engine.runTurn(input)).toEqual({ status: "ok" })
     expect(spawned[0]!.args[spawned[0]!.args.indexOf("--append-system-prompt") + 1]).toContain(`for ${input.sessionId}`)
+    engine.stop?.()
+  })
+})
+
+describe("/reload refreshes a session's Claude Code process", () => {
+  const answer = (text: string) => ({ onUser(api: FakeApi) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, text); api.push(result()) } })
+
+  test("an idle process ends at once and the next turn starts a new one that resumes the conversation", async () => {
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([fakeClaude(answer("one")), fakeClaude(answer("two"))], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const first = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    expect(await engine.refresh?.(first.input.sessionId)).toBe("next")
+    expect(closes).toEqual(["reloaded"])
+    expect(await engine.runTurn(turnInput({ sessionId: first.input.sessionId, mode: () => "full" }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1]!.args).toContain("--resume=cc-session-1")
+    engine.stop?.()
+  })
+
+  test("a session with no process is left alone", async () => {
+    const { engine, spawned } = engineWith([fakeClaude(answer("one"))])
+    expect(await engine.refresh?.(turnInput().input.sessionId)).toBeUndefined()
+    expect(spawned).toHaveLength(0)
+    engine.stop?.()
+  })
+
+  test("a running turn is not killed: the process ends when the turn does", async () => {
+    let hold: FakeApi | undefined
+    const first = fakeClaude({ onUser(api) { hold = api; api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "working") } })
+    const closes: string[] = []
+    const { engine, spawned } = engineWith([first, fakeClaude(answer("two"))], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const { input } = turnInput({ mode: () => "full" })
+    const running = engine.runTurn(input)
+    await Bun.sleep(10)
+    expect(await engine.refresh?.(input.sessionId)).toBe("later")
+    expect(closes).toEqual([])
+    hold!.push(result())
+    expect(await running).toEqual({ status: "ok" })
+    expect(closes).toEqual(["MCP servers changed"])
+    expect(await engine.runTurn(turnInput({ sessionId: input.sessionId, mode: () => "full" }).input)).toEqual({ status: "ok" })
+    expect(spawned).toHaveLength(2)
+    expect(spawned[1]!.args).toContain("--resume=cc-session-1")
+    engine.stop?.()
+  })
+
+  test("a background agent keeps the process until it ends", async () => {
+    const agent = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a1", task_type: "local_agent", description: "Long agent" }] }); streamText(api, 0, "ok"); api.push(result()) } })
+    const closes: string[] = []
+    const { engine } = engineWith([agent], { onClose: (_sessionId, reason) => void closes.push(reason) })
+    const { input } = turnInput({ mode: () => "full" })
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(await engine.refresh?.(input.sessionId)).toBe("later")
+    expect(closes).toEqual([])
+    agent.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    await Bun.sleep(5)
+    expect(closes).toHaveLength(1)
     engine.stop?.()
   })
 })
@@ -2645,11 +2729,15 @@ describe("claude engine plan mode note", () => {
     expect(JSON.stringify(decision)).not.toMatch(/plan/i)
   })
 
-  test("a slash command in plan is sent as typed", async () => {
+  test("MendCode's own /compact in plan is sent as typed; the same words from the user are text", async () => {
     const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
     const { engine } = engineWith([fake])
-    await engine.runTurn(turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" }).input)
+    const own = turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" })
+    await engine.runTurn({ ...own.input, authority: { sourceId: "t", text: "/compact", synthetic: true } })
     expect(fake.written.filter((message) => message.type === "user")[0].message.content).toEqual([{ type: "text", text: "/compact" }])
+    await engine.runTurn(turnInput({ sessionId: own.input.sessionId, text: "/compact", mode: () => "plan" }).input)
+    expect(fake.written.filter((message) => message.type === "user")[1].message.content.map((block: any) => block.text).join("")).toBe("/compact")
+    expect(fake.written.filter((message) => message.type === "user")[1].message.content.at(-1).text).toBe("t")
     engine.stop()
   })
 })
@@ -2692,5 +2780,142 @@ describe("retainAgentTurns", () => {
   test("with every mapper still running, the oldest leaves; under the limit nothing leaves", () => {
     expect(retainAgentTurns(Array.from({ length: 9 }, (_, n) => mapper(`m${n}`, true))).map((entry) => entry.name)).toEqual(["m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8"])
     expect(retainAgentTurns([mapper("a", false), mapper("b", true)]).map((entry) => entry.name)).toEqual(["a", "b"])
+  })
+})
+
+describe("claude engine network failures", () => {
+  const failed = (text: string) => ({ ...result(), subtype: "success", is_error: true, result: text })
+  const instant = { sleep: async () => {}, probe: async () => true }
+
+  test("a turn that ends on ENOTFOUND is resumed in a fresh process of the same session, with a retrying notice, and then succeeds", async () => {
+    const first = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: Can't reach the API server — check your internet or DNS (ENOTFOUND)")) } })
+    const second = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "done"); api.push(result()) } })
+    const h = engineWith([first, second], instant)
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    expect(turn.events).toContainEqual(expect.objectContaining({ type: "retrying", attempt: 1, offline: true }))
+    expect(h.spawned).toHaveLength(2)
+    expect(h.spawned[1]!.args).toContain("--resume=cc-session-1")
+    expect(second.written.find((message) => message.type === "user").message.content.map((part: any) => part.text).join("")).toContain("Continue exactly where you left off")
+    h.engine.stop()
+  })
+
+  test("a real error (not logged in, invalid request) fails at once without a retry", async () => {
+    const only = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("Not logged in · Please run /login")) } })
+    const h = engineWith([only], instant)
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toMatchObject({ status: "error", code: "claude_turn_failed" })
+    expect(turn.events.some((event) => event.type === "retrying")).toBe(false)
+    expect(h.spawned).toHaveLength(1)
+    h.engine.stop()
+  })
+
+  test("retries are bounded: the last failure is reported", async () => {
+    const fakes = [0, 1, 2].map(() => fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: 503 overloaded")) } }))
+    const h = engineWith(fakes, { ...instant, retries: 2 })
+    const turn = turnInput()
+    expect(await h.engine.runTurn(turn.input)).toMatchObject({ status: "error", code: "claude_turn_failed" })
+    expect(h.spawned).toHaveLength(3)
+    expect(turn.events.filter((event) => event.type === "retrying")).toHaveLength(2)
+    h.engine.stop()
+  })
+
+  test("a bridged turn spends the retry budget once: retries + 1 attempts, not one budget per layer", async () => {
+    const fakes = Array.from({ length: 12 }, () => fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: 503 overloaded")) } }))
+    const h = engineWith(fakes, { ...instant, retries: 2 })
+    const turn = turnInput()
+    const mcp = { args: ["--mcp-config", "/tmp/test-mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+    expect(await h.engine.runTurn({ ...turn.input, externalMcp: mcp })).toMatchObject({ status: "error", code: "claude_turn_failed" })
+    expect(h.spawned).toHaveLength(3)
+    expect(turn.events.filter((event) => event.type === "retrying")).toHaveLength(2)
+    h.engine.stop()
+  })
+
+  test("a compaction that fails on the network is not retried as a conversation turn", async () => {
+    // The first message is answered; every message after it (the /compact, then anything a retry would send) meets a provider failure.
+    let answered = false
+    const script = { onUser(api: FakeApi) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); if (answered) api.push(failed("API Error: 503 overloaded")); else { answered = true; api.push(result()) } } }
+    const fakes = Array.from({ length: 4 }, () => fakeClaude(script))
+    const h = engineWith(fakes, { ...instant, retries: 2 })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const compacting = turnInput({ sessionId: first.input.sessionId })
+    await h.engine.compact?.({ ...compacting.input, instructions: undefined } as never)
+    const written = fakes.flatMap((fake) => fake.written.filter((message) => message.type === "user")).map((message) => message.message.content.map((part: any) => part.text).join(""))
+    expect(written.some((text) => text.includes("Continue exactly where you left off"))).toBe(false)
+    expect(compacting.events.some((event) => event.type === "retrying")).toBe(false)
+    h.engine.stop()
+  })
+
+  test("after a failed turn the next message runs in a fresh process that resumes the session", async () => {
+    const first = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(failed("API Error: Not logged in")) } })
+    const second = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "back"); api.push(result()) } })
+    const h = engineWith([first, second], instant)
+    const a = turnInput()
+    await h.engine.runTurn(a.input)
+    const b = turnInput({ sessionId: a.input.sessionId, text: "continua" })
+    expect(await h.engine.runTurn(b.input)).toEqual({ status: "ok" })
+    expect(h.spawned).toHaveLength(2)
+    h.engine.stop()
+  })
+
+  test("transientFailure tells network, provider and real errors apart", () => {
+    expect(transientFailure("[CLAUDE]: API Error: Can't reach the API server (ENOTFOUND)")).toBe("network")
+    expect(transientFailure("[CLAUDE]: API Error: 529 overloaded_error")).toBe("transient")
+    expect(transientFailure("[CLAUDE]: API Error: 401 invalid x-api-key")).toBeUndefined()
+    expect(transientFailure("[CLAUDE]: Claude usage limit reached")).toBeUndefined()
+  })
+})
+
+test("a slash message ending in an emoji splits before the whole emoji, never between its two UTF-16 units", () => {
+  const blocks = plainTextContent([{ type: "text", text: "/explain 😀" }]) as Array<{ text: string }>
+  expect(blocks.map((block) => block.text)).toEqual(["/explain ", "😀"])
+  for (const block of blocks) expect(JSON.parse(JSON.stringify(block.text))).toBe(block.text)
+  expect(blocks.map((block) => block.text).join("")).toBe("/explain 😀")
+  expect((plainTextContent([{ type: "text", text: "/😀" }]) as Array<{ text: string }>).map((block) => block.text)).toEqual(["/", "😀"])
+})
+
+describe("/reload while Claude Code is busy in ways no turn shows", () => {
+  test("a response Claude Code gives to a finished background task is not cut by a reload that waited for the tasks", async () => {
+    const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "bl1", task_type: "local_bash", description: "Run sleep" }] }); streamText(api, 0, "started"); api.push(result()) } })
+    const notices: string[] = []
+    const closes: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text), onClose: (_sessionId, reason) => void closes.push(reason) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    expect(await h.engine.refresh?.(first.input.sessionId)).toBe("later")
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "bl1", status: "completed", output_file: "", summary: "Run sleep completed" })
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [] })
+    fake.api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    streamText(fake.api, 0, "It finished.")
+    fake.api.push(result())
+    await Bun.sleep(10)
+    expect(closes).toEqual([])
+    const notice = turnInput({ sessionId: first.input.sessionId, text: notices[0]! })
+    expect(await h.engine.runTurn(notice.input)).toEqual({ status: "ok" })
+    expect(notice.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "It finished.")).toBe(true)
+    expect(closes).toEqual(["MCP servers changed"])
+    h.engine.stop()
+  })
+
+  test("a process whose turn is still reading its attachments is not idle: the reload waits for the turn", async () => {
+    const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); streamText(api, 0, "seen"); api.push(result()) } })
+    const closes: string[] = []
+    let release: () => void = () => {}
+    const slow = new Promise<void>((resolve) => { release = resolve })
+    const h = engineWith([fake, fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })], { readBlob: async () => { await slow; return new Uint8Array([1, 2, 3]) }, onClose: (_sessionId, reason) => void closes.push(reason) })
+    const warm = turnInput()
+    expect(await h.engine.runTurn(warm.input)).toEqual({ status: "ok" })
+    const next = turnInput({ sessionId: warm.input.sessionId, text: "mira [Image #1]" })
+    next.input.attachments = [{ sha256: "a".repeat(64), mime: "image/png", bytes: 3, name: "shot.png", label: "[Image #1]", at: "mira [Image #1]".length } as any]
+    const running = h.engine.runTurn(next.input)
+    await Bun.sleep(10)
+    expect(await h.engine.refresh?.(warm.input.sessionId)).toBe("later")
+    expect(closes).toEqual([])
+    release()
+    expect(await running).toEqual({ status: "ok" })
+    expect(fake.written.filter((message) => message.type === "user")).toHaveLength(2)
+    expect(closes).toEqual(["MCP servers changed"])
+    h.engine.stop()
   })
 })

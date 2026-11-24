@@ -31,6 +31,7 @@ import { THEME_USAGE, parseTheme, type ThemeAutomation } from "./theme-args"
 import { CONFIG_BUNDLE_USAGE, parseConfigBundle, type ConfigBundleAutomation } from "./config-bundle-args"
 import { AGENT_USAGE, BOT_USAGE, parseAgent, type AgentAutomation } from "./agent-args"
 import { parseTransferExport, parseTransferImport, TRANSFER_EXPORT_USAGE, TRANSFER_IMPORT_USAGE, type TransferImport } from "./session-transfer-args"
+import { parseSyncAutomation } from "./sync-automation"
 import { jobAliases } from "./job-aliases"
 import { indexText, tidyHelp } from "./help-index"
 import { BACKLOG_HELP, CONTEXT_HELP, CONTROL_PLANE_HELP, GENERATE_HELP, PLUGIN_HELP, AREA_HELP, CUSTOMIZE_HELP, PROMPT_HELP, RECIPE_HELP, STATS_HELP, STORAGE_HELP, USAGE_HELP } from "./help-text"
@@ -56,13 +57,13 @@ export const SCHEMA = "mendcode.cli"
 /** `denied` is retained for compatibility; `session send` now leaves unapproved requests pending. */
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
-export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
-const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast"])
+export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plugins", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open", "sync"] as const
+const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast", "no-memories", "no-settings"])
 /** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
 const WORKFLOW_LIST_LIMIT = 50
-const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
+const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes", "sync-token-file"])
 /** Flags that may be given several times; their values are collected in order. */
-const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude"])
+const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude", "path-map"])
 const DEFAULT_LIST_LIMIT = 50
 const DEFAULT_USAGE_DAYS = 30
 const NAME_CHARS = 60
@@ -81,7 +82,7 @@ export type Automation = Common &
   (
     | { kind: "help"; topic?: string }
     | { kind: "automation.ledger"; scope: "workflow" | "loop"; id: string; operation: "events" | "artifacts" | "receipt" | "export"; limit?: number; before?: number; run?: number; exportFormat: "json" | "markdown" }
-    | ConsoleAutomation | ShareAutomation
+    | ConsoleAutomation | ShareAutomation | import("./sync-automation").SyncAutomation
     | MemoryAutomation
     | { kind: "tui"; operation: import("@mendcode/protocol/wire").TuiOperation; argument?: string; state: "home" | "session"; dryRun: boolean; session?: string; check?: boolean }
     | SessionAutomation
@@ -295,8 +296,10 @@ export const USAGE: Record<string, string> = {
   profile: [
     `usage: ${PROGRAM_NAME} profile <command> [--project] [--json]`,
     "  (user scope; --project: this directory's .mendcode/packages)",
+    `  (also spelled package, packages or plugins: ${PROGRAM_NAME} plugins disable NAME)`,
+    "  enable and disable apply at once: no /reload and no restart",
     "",
-    "  list                    installed profiles: what each adds, on or off",
+    "  list                  installed profiles: what each adds, on or off",
     "  status                  same as list",
     "  install <source>        folder, npm:name@x.y.z[#sha512-...], github:owner/repo#ref",
     "                          or git:URL; --replace. npm and a full git commit are pinned",
@@ -354,6 +357,9 @@ export const USAGE: Record<string, string> = {
 }
 
 export const HELP = indexText(SCHEMA)
+
+/** First words after `plugin` that mean the profile command of that name, not an extension module. */
+const PLUGIN_PROFILE_WORDS: ReadonlySet<string> = new Set(["list", "status", "enable", "disable", "config", "remove", "restore", "new", "check"])
 
 function tokenize(argv: string[]) {
   const flags = new Map<string, string | true>()
@@ -469,6 +475,12 @@ export function parseAutomation(argv: string[]): ParseResult {
     normalized[normalized.indexOf("workflows")] = "workflow"
     return parseAutomation(normalized)
   }
+  // Users and models call a profile a "plugin": `plugins …`, and `plugin <profile command> …`, run the profile command. `plugin MODULE` still installs an extension.
+  if (name === "plugins" || name === "plugin" && PLUGIN_PROFILE_WORDS.has(sub ?? "")) {
+    const normalized = [...argv]
+    normalized[normalized.indexOf(name)] = "profile"
+    return parseAutomation(normalized)
+  }
   if (flags.get("version") === true && !(name === "control-plane" && sub === "project" && rest[0] === "package-set")) return { ok: true, command: { kind: "version", json: false } }
   if (name === "help" || (!name && flags.has("help"))) return { ok: true, command: { kind: "help", ...(sub ? { topic: sub } : {}), json: false } }
   if (!name || !NAMES.includes(name as never)) return { ok: "none" }
@@ -510,6 +522,10 @@ export function parseAutomation(argv: string[]): ParseResult {
   }
   if (name === "import") {
     const parsed = parseTransferImport(positionals.slice(1), flags)
+    return "error" in parsed ? bad(parsed.error) : ok(parsed)
+  }
+  if (name === "sync") {
+    const parsed = parseSyncAutomation(positionals.slice(1), flags, repeated)
     return "error" in parsed ? bad(parsed.error) : ok(parsed)
   }
   if (name === "control-plane" && sub === "project") {
@@ -933,7 +949,7 @@ export function parseAutomation(argv: string[]): ParseResult {
 export const isPlanFile = (target: string) => target.endsWith(".json") || target.includes("/")
 
 /** Older words for a command that still run it: their help is the help of the current one. */
-const HELP_OF: Readonly<Record<string, string>> = { package: "profile", packages: "profile", profiles: "profile" }
+const HELP_OF: Readonly<Record<string, string>> = { package: "profile", packages: "profile", profiles: "profile", plugins: "profile" }
 
 export function helpText(topic?: string) {
   topic = topic === undefined ? topic : HELP_OF[topic] ?? topic
@@ -1614,6 +1630,11 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       return exit
     }
 
+    case "sync": {
+      const { runSyncAutomation } = await import("./sync-automation")
+      const { envDataDir } = await import("./launcher")
+      return runSyncAutomation(command, { dataDir: path.resolve(command.dir ?? envDataDir()), request: daemon, result, fail })
+    }
     case "session.export": case "session.import": {
       const { createSessionTransferAutomation } = await import("./session-transfer-automation")
       return createSessionTransferAutomation({ ...deps, directory: dir, request: daemon, result, fail })(command)

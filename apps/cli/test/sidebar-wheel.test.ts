@@ -138,3 +138,20 @@ describe("a sideways swipe", () => {
     expect(hidden.app.tuiProfile.sidebar).toBe("hidden")
   })
 })
+
+describe("the wheel over the list drawn beside a page", () => {
+  test("scrolls the list, and the page keeps its place", async () => {
+    const h = chatApp({ multi: false, height: 30 })
+    await settled(h, "chat 00")
+    await h.type("/help\r")
+    h.app.render()
+    expect(h.app.page).not.toBe("chat")
+    const listBefore = side(h)
+    const pageBefore = chatSide(h)
+    expect(listBefore).toContain("more")
+    for (let n = 0; n < 4; n++) await h.app.onKey(down(5, 8))
+    h.app.render()
+    expect(side(h)).not.toBe(listBefore)
+    expect(chatSide(h)).toBe(pageBefore)
+  })
+})

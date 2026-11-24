@@ -1,5 +1,5 @@
 ---
-summary: terminal layout: session list, right panel, widths, breakpoints, density
+summary: terminal layout: session list, right panel, widths, density
 docs: layout, sidebar, customize
 aliases: panel, sidebar, panels, breakpoints, widths, dock
 ---

@@ -149,7 +149,7 @@ export type TurnInput = {
     whileTools?: boolean
   }): Promise<QueuedMessage | undefined>
   /** An engine that takes messages while its tools run (`whileTools`) registers this; it is called when one enters the queue during the turn. */
-  onQueued?(handler: () => void): void
+  onQueued?(handler: (queued?: { notice: boolean }) => void): void
   /**
    * An engine that can take a message mid-turn without stopping what the turn started (Claude Code: a plain interrupt also stops its
    * background agents) registers how. "Send now" then hands it the message: the handler returns true when it took it, and the turn
@@ -205,6 +205,11 @@ export interface EnginePort {
    * conversation, as an undo of that message does to MendCode's own history. True when it did; the next turn sees the cut history.
    */
   rewind?(input: { sessionId: SessionId; turnId: TurnId }): Promise<boolean>
+  /**
+   * `/reload`: an engine that keeps a process for the session (Claude Code) ends it so the next message starts one that reads the current
+   * plugins, hooks and settings. `"next"`: ended now; `"later"`: it ends once the running turn or background tasks do; nothing: none kept.
+   */
+  refresh?(sessionId: SessionId): Promise<"next" | "later" | undefined>
   /** The session is idle and no client shows it: an engine may free what it keeps for it (an external agent's process). */
   release?(sessionId: SessionId): void
   /** The session was deleted: an engine drops everything it still keeps for it (unlike `release`, nothing of it is needed again). */

@@ -4,6 +4,6 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./network-wait": "./src/network-wait.ts" },
   "dependencies": { "@mendcode/protocol": "workspace:*", "@mendcode/kernel": "workspace:*", "@mendcode/tools": "workspace:*", "@mendcode/packages": "workspace:*", "@mendcode/extension-api": "workspace:*", "zod": "4.6.6" }
 }

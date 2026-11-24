@@ -1,5 +1,6 @@
 import { ConsoleUrl } from "./console"
 import { ProjectRestInput } from "./project-rest"
+import { SyncControlInput, SyncPeerInput } from "./sync-peer"
 import { ProjectControlInput } from "./project"
 import { ProviderOptions } from "./model-config"
 import { BudgetPolicy, SetupPreset } from "./setup"
@@ -1201,7 +1202,8 @@ export const HooksList = lazySchema(() => z.strictObject({
   directory: z.string().min(1).max(4096),
 }))
 
-export const ExtensionsReload = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.reload"), directory: z.string().min(1).max(4096) }))
+/** `sessionId` (the `/reload` of a session) also ends that session's idle Claude Code process so its next message reads the current plugins and hooks; the ack then adds `claude`: `"next"` or `"later"` (after the running turn or tasks). */
+export const ExtensionsReload = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.reload"), directory: z.string().min(1).max(4096), sessionId: SessionId.optional() }))
 export const ExtensionsReportUi = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.report"), revision: z.number().int().nonnegative(), errors: z.array(z.string().max(1000)).max(64) }))
 /** Turns an extension off (or on) by name: persisted in `disabledExtensions`, applied at once. Local clients only. Ack: the reload report. */
 export const ExtensionsDisable = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.disable"), directory: z.string().min(1).max(4096), name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/), disabled: z.boolean() }))
@@ -2017,6 +2019,10 @@ export const SessionUnshare = lazySchema(() => z.strictObject({ ...base, type: z
 export const SessionShareStatic = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.share.static"), sessionId: SessionId, target: z.enum(["local", "gist"]), action: z.enum(["create", "status", "remove"]), confirm: z.boolean().optional() }))
 
 export const ProjectRest = lazySchema(() => z.strictObject({ ...base, type: z.literal("project.rest"), directory: z.string().min(1).max(4096), input: ProjectRestInput }))
+/** Hub side of session sync: a remote `sync` or full token only (docs/sync.md). */
+export const SyncPeer = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.peer"), input: SyncPeerInput }))
+/** This machine's own sync: local clients only. */
+export const SyncControl = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.control"), input: SyncControlInput }))
 
 export const WorkflowPermissions = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.permissions"), workflowId: WorkflowId, mode: z.enum(["report-only", "normal", "custom"]).optional(), sessionPermission: z.enum(["ask", "edits", "full"]).nullable().optional(), reason: z.string().max(500).optional() }))
 export const WorkflowRetryPhase = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.retry-phase"), workflowId: WorkflowId, phaseId: WorkflowSlug, reason: z.string().max(500).optional() }))
@@ -2456,6 +2462,8 @@ export const COMMAND_SCHEMAS = {
   "tui.control.next": TuiControlNext,
   "tui.control.response": TuiControlResponse,
   "project.rest": ProjectRest,
+  "sync.peer": SyncPeer,
+  "sync.control": SyncControl,
   "workflow.permissions": WorkflowPermissions,
   "workflow.retry-phase": WorkflowRetryPhase,
   "workflow.script": WorkflowScriptCommand,

@@ -30,3 +30,24 @@ export async function connectPatiently<C extends { connect(): Promise<void>; clo
     }
   }
 }
+
+const SLOW_START = /did not start within/
+
+/** A daemon that is still coming up (a loaded machine, a first start) is waited for again instead of ending the terminal at the first deadline. */
+export async function startPatiently<T>(input: { start: () => Promise<T>; onWait?: (attempt: number) => void; attempts?: number }): Promise<T> {
+  const { start, onWait, attempts = 3 } = input
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await start()
+    } catch (error) {
+      if (attempt >= attempts || !SLOW_START.test(error instanceof Error ? error.message : String(error))) throw error
+      onWait?.(attempt)
+    }
+  }
+}
+
+/** What the terminal prints when its daemon cannot be reached at start: a readable line, never the error's source frame. */
+export function startFailureMessage(error: unknown, dir: string) {
+  const text = (error instanceof Error ? error.message : String(error)).replace(/^(\[(CLI|CLIENT)\]: )+/, "")
+  return `error: ${text}\n${SLOW_START.test(text) ? `The daemon's own output is in ${dir}/logs (mendcode daemon logs); run mendcode again to retry.\n` : ""}`
+}

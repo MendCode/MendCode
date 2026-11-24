@@ -50,15 +50,39 @@ export function openPrivateDatabase(dir: string, file: string) {
     catch (error) { failed = error; throw error }
   }
   const check = () => { if (failed) throw failed }
-  function statement(sql: string, params?: unknown) {
+  /**
+   * Native statements by SQL text, kept after their first use. Bun's own query cache keeps only the first 20 texts a connection
+   * prepares and prepares every other one again on each call; the store has hundreds, so most reads (a session's summary, its last
+   * turn, its pending questions) compiled their SQL every time, a large share of what a session list or a chat switch cost.
+   * Bounded: texts built at run time (lists of placeholders) cannot grow it past `STATEMENTS_KEPT`; the oldest unused goes first.
+   */
+  const STATEMENTS_KEPT = 400
+  const kept = new Map<string, Statement>()
+  let keptGeneration = generation
+  function prepared(sql: string): Statement {
+    if (keptGeneration !== generation) { kept.clear(); keptGeneration = generation }
+    const known = kept.get(sql)
+    if (known) {
+      kept.delete(sql)
+      kept.set(sql, known)
+      return known
+    }
+    const fresh = live.query(sql)
+    kept.set(sql, fresh)
+    if (kept.size > STATEMENTS_KEPT) kept.delete(kept.keys().next().value!)
+    return fresh
+  }
+  /** `own`: `db.prepare`, a statement of the caller's alone (it may finalize it), never one shared with other callers. */
+  function statement(sql: string, params?: unknown, own = false) {
     let version = generation
     // Store modules declare their queries at open, but only the ones actually used need a native statement.
-    // Keep it after first use (Bun's query cache also shares identical SQL); a privacy switch replaces the connection.
+    // Keep it after first use (`prepared` shares identical SQL); a privacy switch replaces the connection.
     let stmt: Statement | undefined
     return new Proxy({}, {
       get(_target, property) {
         if (!stmt || version !== generation) {
-          stmt = params === undefined || version !== generation ? live.query(sql) : live.prepare(sql, params as never)
+          stmt = own ? live.prepare(sql, (version === generation ? params : undefined) as never)
+            : params === undefined || version !== generation ? prepared(sql) : live.prepare(sql, params as never)
           version = generation
         }
         const value = Reflect.get(stmt, property, stmt)
@@ -72,12 +96,42 @@ export function openPrivateDatabase(dir: string, file: string) {
       },
     })
   }
+  /**
+   * Writes of one turn of the event loop share one commit (`group`). A streamed reply is a row per delta, a few hundred a second
+   * with three sessions answering, and every commit of its own wrote the changed pages to the WAL again: the commits were most of
+   * the daemon's CPU while it streamed. The group commits `GROUP_MS` later, and before anything that needs a transaction
+   * of its own (an immediate or exclusive one, a pragma or a script run on the connection, a privacy switch, closing). Inside a
+   * transaction of the caller's the group stays open: that work is a savepoint of it and commits with it.
+   */
+  let grouped = false
+  const GROUP_MS = 25
+  function endGroup() {
+    if (!grouped || depth) return
+    grouped = false
+    // A commit that fails (a full disk) has no caller to tell when the timer runs it: the writes are rolled back and every later
+    // call fails with it, as a failed seal does.
+    if (live.inTransaction) try { live.run("COMMIT") } catch (error) {
+      try { live.run("ROLLBACK") } catch { /* Already rolled back by SQLite. */ }
+      failed = error
+      throw error
+    }
+    persist()
+  }
+  function group() {
+    if (grouped || depth || live.inTransaction) return
+    live.run("BEGIN")
+    grouped = true
+    // The timer has no caller to tell: a failed commit or seal is held in `failed` (every later call throws it), never thrown out of the timer.
+    setTimeout(() => { try { endGroup() } catch { /* Held in `failed`. */ } }, GROUP_MS).unref?.()
+  }
   const db = new Proxy(live, {
     get(_target, property) {
-      if (property === "query" || property === "prepare") return statement
+      if (property === "query") return statement
+      if (property === "prepare") return (sql: string, params?: unknown) => statement(sql, params, true)
       if (property === "transaction") return (fn: (...args: any[]) => any) => {
         const wrap = (mode: "deferred" | "immediate" | "exclusive") => (...args: any[]) => {
           check()
+          if (mode !== "deferred") endGroup()
           depth++
           let ok = false
           try { const result = live.transaction(fn)[mode](...args); ok = true; return result }
@@ -85,19 +139,20 @@ export function openPrivateDatabase(dir: string, file: string) {
         }
         return Object.assign(wrap("deferred"), { deferred: wrap("deferred"), immediate: wrap("immediate"), exclusive: wrap("exclusive") })
       }
-      if (property === "run" || property === "exec") return (...args: any[]) => { check(); const result = (live.run as any)(...args); persist(); return result }
-      if (property === "close") return () => { if (!failed) persist(); live.close() }
+      if (property === "run" || property === "exec") return (...args: any[]) => { check(); endGroup(); const result = (live.run as any)(...args); persist(); return result }
+      if (property === "close") return () => { endGroup(); if (!failed) persist(); live.close() }
       const value = Reflect.get(live, property, live)
       return typeof value === "function" ? value.bind(live) : value
     },
   }) as Database
   return {
-    db, sealed,
+    db, sealed, group,
     start() { ready = true; persist() },
     enabled: () => enabled,
     set(next: boolean) {
       check()
       if (next === enabled) return
+      endGroup()
       if (live.inTransaction) throw new Error("[PRIVACY]: finish the current transaction first")
       if (next) {
         // Checkpoint before serialization, then detach all prepared statements from the disk database.

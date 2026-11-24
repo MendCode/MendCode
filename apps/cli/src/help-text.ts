@@ -66,6 +66,9 @@ export const DAEMON_HELP = text([
   "  service <action>        plan, install, start, stop, restart, status, logs,",
   "                          uninstall (macOS and Linux)",
   "                          --service-dir D --cwd PROJECT --engine ENGINE",
+  "  service install --listener [--listen HOST:PORT --tls-cert F --tls-key F]",
+  "                          the service also takes remote clients (else local",
+  "                          only); with no flags it reads <dir>/remote.json",
   "",
   "Also: [control-plane] loops daemon [--once [--execute]] | service <action>",
   "      [control-plane] memory dream daemon [--once [--execute]] | service",
@@ -256,6 +259,9 @@ export const GENERATE_HELP = text([
 
 export const PLUGIN_HELP = text([
   `usage: ${P} plugin <module|file://path> [options]`,
+  "",
+  `Installed profiles (packages): ${P} plugins list|enable|disable ...`,
+  `is the same as ${P} profile ... (see ${P} profile --help).`,
   "",
   "  --global, -g  --force, -f  --dir D  --json",
   "",

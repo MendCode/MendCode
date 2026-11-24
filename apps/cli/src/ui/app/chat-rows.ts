@@ -40,13 +40,14 @@ import { backgroundRows, backgroundName } from "../../view/background-row"
 import { linkRows } from "../../view/links"
 import { homeLook, renderWelcomeReplacement, type HomeBots } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
-import { createHomeMascot } from "./home-mascot"
+import { createHomeMascot, wordmarkInPlaceOfMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
 import type { HomePrompt, HomeSession } from "../../view/home"
 import type { ImagePlacement } from "../image-layer"
 import { activeTheme, type ColorName, type Line } from "../theme"
 import { subagentColor } from "../../view/agent-color"
 import { mendBeat, mendChatLines } from "../../view/mend-sprite"
+import { promptPetKind, type PromptPetKind } from "./pet-fallback"
 import type { ViewLine } from "../../view/transcript"
 import { CHART_KEY } from "../../view/chart-picture"
 import type { StripTask } from "../../view/agents-strip"
@@ -202,7 +203,7 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Rows the question card takes in the prompt's place, besides the one prompt row the room sums below already count. */
     const cardRows = asking ? Math.max(0, request!.rows.length - 1) : 0
     const shellQueued = new Set(state.transcript.queue.flatMap((entry, index) => (state.turnState.isShellQueued(entry.queueId) ? [index] : [])))
-    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), ...(state.transcript.lastStopBy !== undefined ? { heldBySession: state.transcript.lastStopBy } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (internalQueued(entry) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
+    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), ...(state.transcript.lastStopBy !== undefined ? { heldBySession: state.transcript.lastStopBy } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), internal: state.transcript.queue.flatMap((entry, index) => (internalQueued(entry) ? [index] : [])), handed: state.transcript.queue.flatMap((entry, index) => (entry.handed ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
     const sendHit = queueDrawn.hits.find((hit) => hit.action === "send")
     const queue = { rows: queueDrawn.lines, sendChip: sendHit ? { row: sendHit.row, from: sendHit.from, to: sendHit.to } : undefined }
     // A turn paused by the provider's usage limit: the bar offers Resume at reset and Snooze until reset (docs/usage-limit.md).
@@ -557,7 +558,7 @@ export function createChatRows(ctx: AppContext, actions: {
       sessions,
       ...(state.homeSelected ?? state.homeHover ? { selectedId: (state.homeSelected ?? state.homeHover)! } : {}),
       spinner: state.spinFrame,
-      look: { ...homeLook(profile), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
+      look: { ...homeLook(profile), ...wordmarkInPlaceOfMascot(profile.logoKind, mascot), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
@@ -696,13 +697,14 @@ export function createChatRows(ctx: AppContext, actions: {
   }
 
   /** Mend stands beside the prompt when chosen, and in place of a pet that half blocks would draw as noise (no pictures here). */
-  function drawsMend(): boolean {
-    if ((state.tuiProfile.pet || state.settingsNow.pet) === "mend") return true
-    const graphics = input.screen.imageProtocol === undefined ? input.pets?.images : input.screen.imageProtocol !== "off"
-    return !graphics && state.pet !== undefined && !state.pet.halfBlockLegible(state.tuiProfile.petSize)
+  function promptPet(): PromptPetKind {
+    const graphics = input.screen.imageProtocol === undefined ? input.pets?.images === true : input.screen.imageProtocol !== "off"
+    return promptPetKind({ chosen: state.tuiProfile.pet || state.settingsNow.pet || "", graphics, loaded: state.pet !== undefined, halfBlockLegible: state.pet?.halfBlockLegible(state.tuiProfile.petSize) ?? true })
   }
+  const drawsMend = () => promptPet() === "mend"
 
   function petCells(room: number): { cols: number; rows: number } | undefined {
+    if (promptPet() === "none") return undefined
     if (drawsMend()) {
       const picture = mendPictureCells()
       if (picture === "loading") return undefined
@@ -723,6 +725,10 @@ export function createChatRows(ctx: AppContext, actions: {
    */
   function drawPet(at: { rows: Line[]; bottom: number; floor: number; top: number; width: number; shown: boolean }): ImagePlacement[] {
     state.petArea = undefined
+    if (promptPet() === "none") {
+      state.pet?.setVisible(false)
+      return []
+    }
     if (at.shown && drawsMend()) {
       state.pet?.setVisible(false)
       const picture = mendPictureCells()

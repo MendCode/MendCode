@@ -3,12 +3,12 @@ import type { Transcript } from "../../view/transcript"
 import type { TurnState } from "../../view/turn-state"
 import type { createCompactionFacts } from "../../view/compaction-facts"
 
-/** How many chats left most recently keep what they showed: going back to one reads only the events that came after. */
-export const KEPT_SESSIONS = 3
+/** How many chats left most recently keep what they showed: going back to one reads only the events that came after. A parent and three sub-agents all fit. */
+export const KEPT_SESSIONS = 4
 /** A chat holding more blocks than this (the reader paged far back) is not kept: going back opens its newest window again. */
 export const KEPT_BLOCKS_MAX = 300
-/** Nor one whose blocks hold more text than this many characters. */
-export const KEPT_TEXT_MAX = 150_000
+/** Nor one whose blocks hold more text than this many characters: a daemon page alone can carry 256 KB, so a sub-agent with big tool outputs must fit. */
+export const KEPT_TEXT_MAX = 600_000
 /** Nor one that read more events than this (the transcript holds each one it read, for paging back): about five windows. */
 export const KEPT_EVENTS_MAX = 1_000
 

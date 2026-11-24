@@ -74,7 +74,7 @@ export const QueueAdded = lazySchema(() => z.strictObject({
 export const QueueChanged = lazySchema(() => z.strictObject({
   ...sessionBase,
   type: z.literal("queue.changed"),
-  queue: z.array(z.strictObject({ queueId: QueueId, preview: z.string().max(200), attachments: z.number().int().nonnegative(), kind: QueueEntryKind.optional(), delivery: QueueDelivery.optional() })).max(MAX_QUEUE_ENTRIES),
+  queue: z.array(z.strictObject({ queueId: QueueId, preview: z.string().max(200), attachments: z.number().int().nonnegative(), kind: QueueEntryKind.optional(), delivery: QueueDelivery.optional(), /** Already written to the engine, waiting for its running tool: it can no longer be dropped or edited. */ handed: z.literal(true).optional() })).max(MAX_QUEUE_ENTRIES),
 }))
 
 /** A queued message's text was replaced in place; the entry keeps its place, id and attachments. Persisted, so the edit survives a restart. */
@@ -629,6 +629,8 @@ export const PrReviewActivity = lazySchema(() => z.strictObject({
 export const ReviewChanged =lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("review.changed"), gseq: z.number().int().nonnegative(), sessionId: SessionId, review: ReviewSnapshot, reload: z.boolean().optional() }))
 export const AgentCommandsChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("agent-commands.changed"), sourceSessionId: SessionId, targetSessionId: SessionId }))
 export const SessionBackgroundChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("session.background.changed"), sessionId: SessionId }))
+/** A session was deleted: every terminal takes it out of its lists (the one list change `session.activity` cannot say). */
+export const SessionRemoved = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("session.removed"), sessionId: SessionId }))
 export const ChildTaskChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("task.changed"), sessionId: SessionId, parentId: SessionId }))
 export const ServerLifecycle = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("server.lifecycle"), change: z.enum(["disposed", "upgraded"]), directory: z.string().optional(), version: z.string().optional() }))
 export const ReleaseAvailable = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("release.available"), version: z.string().max(100), channel: z.enum(["stable", "beta", "dev", "nightly"]), installed: z.boolean() }))
@@ -636,7 +638,7 @@ export const MflowWaiting = lazySchema(() => z.strictObject({ ...globalBase, typ
 export const TuiControlRequest = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("tui.control.request"), directory: z.string().max(4096), ...TuiRequest.shape }))
 /** An on-device dictation of this terminal, live: the microphone level (0..1) and the transcript so far. Sent only to the terminal that records. */
 export const VoiceLive = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("voice.live"), level: z.number().min(0).max(1).optional(), text: z.string().max(20_000).optional() }))
-export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, ChildrenWaiting, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, TurnTokens, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, PrReviewActivity, AgentCommandsChanged, SessionBackgroundChanged, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
+export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, ChildrenWaiting, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, TurnTokens, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, PrReviewActivity, AgentCommandsChanged, SessionBackgroundChanged, SessionRemoved, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
 export type GlobalEvent = z.infer<typeof GlobalEvent>
 
 export const ErrorPayload = lazySchema(() => z.strictObject({

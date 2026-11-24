@@ -47,6 +47,7 @@ export async function discoverMcpTools({
       name,
       description: `[mcp:${server}] ${tool.description ?? tool.name}`,
       permission: "execute",
+      ...(tool.readOnly ? { readOnlyHint: true } : {}),
       args: argsSchema,
       jsonSchema: tool.inputSchema,
       async execute(args, context): Promise<ToolResult> {

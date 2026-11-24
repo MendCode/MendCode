@@ -1,5 +1,5 @@
 ---
-summary: review changes, commit, push, pull requests, worktrees (the Git page)
+summary: review changes, commit, push, pull requests, worktrees
 docs: git, changes, worktrees, pr-watch, github
 aliases: worktree, worktrees, pr, commit, branch, push, merge, warp, github
 ---

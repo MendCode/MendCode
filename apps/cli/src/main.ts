@@ -7,6 +7,7 @@ import type { ParseResult } from "./automation"
 import { COMPAT, compatEnvelope } from "./compat"
 import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
+import { existsSync } from "node:fs"
 import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
 import { DEFAULT_DIR, runInherited, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
@@ -19,7 +20,7 @@ import type { PresentationMode } from "./view/transcript"
 import { readTuiProfile } from "./view/tui-profile"
 import packageJson from "../package.json"
 import { parseGlobalOptions, cliLogger } from "./global-options"
-import { HTTP_USAGE, parseServerCommand } from "./http-cli"
+import { commandIndex, dataDirFlag, HTTP_USAGE, parseServerCommand } from "./http-cli"
 import type { DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
 import { clearRestart, markRestart } from "./restart-mark"
@@ -37,6 +38,8 @@ import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 const CLI_VERSION = packageJson.version
 // Features that are on by default only in some release channels (graph_autopilot) read the channel of this binary.
 setBuildChannel((await import("@mendcode/upgrade/releases")).buildChannelOf(CLI_VERSION))
+// Windows: `upgrade` renames the running program to `mendcode.exe.old`; the next start, once nothing runs from it any more, removes it.
+if (process.platform === "win32" && /^[A-Za-z]:[\\/]~BUN[\\/]/.test(Bun.main)) { try { (await import("node:fs")).rmSync(`${process.execPath}.old`, { force: true }) } catch { /* an older program is still running from it */ } }
 
 let globalOptions: ReturnType<typeof parseGlobalOptions>
 try { globalOptions = parseGlobalOptions(process.argv.slice(2)) } catch (error) {
@@ -74,10 +77,53 @@ try {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "HTTP server setup failed"}\n${HTTP_USAGE}`)
   process.exit(64)
 }
+// `gateway …` (Domain mode, docs/gateway.md) runs without a local daemon; the package loads only for this word.
+if (rawArgv[commandIndex(rawArgv)] === "gateway") {
+  const { runGatewayCli } = await import("../../../packages/gateway/src/cli")
+  process.exit(await runGatewayCli(rawArgv.slice(commandIndex(rawArgv) + 1), { out: process.stdout, err: process.stderr }))
+}
 let transportFlags: ReturnType<typeof parseRemoteFlags>
+/** Set when an HTTPS attach has no token and this data dir holds gateway pairings: the attach signs for short tokens instead. */
+let gatewayDataDir: string | undefined
 try {
-  // Token administration runs without connecting to or launching a daemon.
+  // Saved remotes (`mendcode remote add`): read only when the file exists or a flag names one.
+  const profileDir = path.resolve(dataDirFlag(rawArgv) ?? envDataDir())
+  // Token and saved-remote administration run without connecting to or launching a daemon.
   if (rawArgv.includes("remote")) {
+    // `remote login|logout URL`: device pairing with a gateway (passkey approval); loaded only for these words.
+    if (rawArgv.some((token) => token === "login" || token === "logout")) {
+      const { parseLoginCommand, runLoginCommand } = await import("./gateway-login")
+      const login = parseLoginCommand(rawArgv, profileDir)
+      if (login) {
+        refuseFromSession(profileDir, "pairs this machine with a gateway")
+        process.exit(await runLoginCommand(login, process.stdout))
+      }
+    }
+    // `remote setup|pair|unpair`: SSH provisioning of a host; the module loads only for these words.
+    if (rawArgv.some((token) => token === "setup" || token === "pair" || token === "unpair")) {
+      const { parseSetupCommand, runSetupCommand } = await import("./remote-setup")
+      const setup = parseSetupCommand(rawArgv, profileDir)
+      if (setup) {
+        if (!setup.dryRun) refuseFromSession(setup.dir, "provisions a remote host")
+        process.exit(await runSetupCommand(setup, process.stdout))
+      }
+    }
+    // `remote code ...`: git handoff and opt-in live sync of a project; lazy like the setup module.
+    if (rawArgv.includes("code")) {
+      const { parseCodeCommand, runCodeCommand } = await import("./remote-code")
+      const code = parseCodeCommand(rawArgv, profileDir)
+      if (code) {
+        if (!code.dryRun && !(code.action === "live" && (code.sub === "list" || code.sub === "status"))) refuseFromSession(code.dir, "pushes code or syncs files between machines")
+        process.exit(await runCodeCommand(code, process.stdout))
+      }
+    }
+    const { parseProfileCommand, runProfileCommand } = await import("./remote-profiles")
+    const profileCommand = parseProfileCommand(rawArgv, profileDir)
+    if (profileCommand) {
+      if (profileCommand.action !== "list") refuseFromSession(profileCommand.dir, "changes where this terminal connects")
+      runProfileCommand(profileCommand, process.stdout)
+      process.exit(0)
+    }
     const command = parseTokenCommand(rawArgv)
     if (command) {
       if (command.action !== "list") refuseFromSession(command.dir, "creates or revokes remote access")
@@ -85,13 +131,31 @@ try {
       process.exit(0)
     }
   }
-  transportFlags = parseRemoteFlags(rawArgv)
+  let transportArgs = rawArgv
+  if (rawArgv.some((token) => token === "--local" || token === "--remote" || token.startsWith("--remote=")) || existsSync(path.join(profileDir, "remotes.json"))) {
+    const { chooseRemote, defaultProbes } = await import("./remote-profiles")
+    const choice = await chooseRemote({ args: rawArgv, dir: profileDir, probes: defaultProbes })
+    transportArgs = choice.args
+    if (choice.note) process.stderr.write(`${choice.note}\n`)
+  }
+  transportFlags = parseRemoteFlags(transportArgs)
+  const attach = transportFlags.remote
+  if (attach && "httpUrl" in attach && attach.tls && !attach.tokenFile && !("password" in attach && attach.password) && !process.env.MENDCODE_TOKEN && existsSync(path.join(profileDir, "remote", "gateway"))) gatewayDataDir = profileDir
 } catch (error) {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "remote setup failed"}\n`)
   process.exit(64)
 }
 const argv = transportFlags.args
-const remote = transportFlags.remote ? remoteTransport(transportFlags.remote, process.env) : undefined
+const remote = transportFlags.remote ? await gatewayOrToken(transportFlags.remote) : undefined
+async function gatewayOrToken(flags: NonNullable<typeof transportFlags.remote>) {
+  if (gatewayDataDir && "httpUrl" in flags) {
+    const login = await import("./gateway-login")
+    try {
+      if (login.readGatewayProfile(gatewayDataDir, login.gatewayOrigin(flags.httpUrl))) return login.gatewayTransport({ ...flags, ...(flags.caFile ? { ca: (await import("node:fs")).readFileSync(flags.caFile, "utf8") } : {}) }, gatewayDataDir)
+    } catch (error) { process.stderr.write(`error: ${error instanceof Error ? error.message : "gateway attach failed"}\n`); process.exit(64) }
+  }
+  return remoteTransport(flags, process.env)
+}
 const remoteAttach = Boolean(remote || transportFlags.socketPath)
 const traceEnabled = globalOptions.trace ?? process.env.MENDCODE_TRACE === "1"
 if (traceEnabled && remoteAttach) {
@@ -130,7 +194,16 @@ if (argv.includes("daemon") || argv.includes("service")) {
     const runtime = await import("../../../packages/daemon/src/user-service")
     const command = daemonCommand()
     if (command[0] === "bun") command[0] = process.execPath
-    const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
+    if (daemonService.remote) {
+      // A listener that cannot start would crash-loop under the service manager: refuse here, with the same checks the daemon makes.
+      try {
+        const { remoteListenerConfig, validateRemoteListener } = await import("../../../packages/daemon/src/remote")
+        const flags = daemonService.remote
+        const value = (name: string) => flags[flags.indexOf(name) + 1]
+        validateRemoteListener(remoteListenerConfig(dir, { ...(flags.includes("--listen") ? { listen: value("--listen")! } : {}), ...(flags.includes("--tls-cert") ? { tlsCert: value("--tls-cert")! } : {}), ...(flags.includes("--tls-key") ? { tlsKey: value("--tls-key")! } : {}) }))
+      } catch (error) { process.stderr.write(`error: ${error instanceof Error ? error.message : "invalid listener"}\n`); process.exit(64) }
+    }
+    const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.remote ? { remote: daemonService.remote } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
     const host = runtime.createUserService(options)
     process.exit(await createDaemonServiceCli({
       dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep, lockOwner: () => runtime.daemonLockOwner(dir),
@@ -259,6 +332,7 @@ if (upgrade?.isUpgradeCommand(argv)) {
       defaultDir: DEFAULT_DIR,
       currentVersion: CLI_VERSION,
       platform: { os: process.platform, arch: process.arch },
+      ...(/^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun.main) ? { runningBinary: process.execPath } : {}),
     }),
   )
 }
@@ -454,7 +528,10 @@ async function connect() {
   log("DEBUG", "connecting to daemon")
   const hostSolo = soloPending
   soloPending = false
-  const local = transportFlags.socketPath || remote ? undefined : await ensureDaemon({ ...daemonOptions, ...(hostSolo ? { solo: true } : {}) })
+  const local = transportFlags.socketPath || remote ? undefined : await (await import("./connect-patiently")).startPatiently({
+    start: () => ensureDaemon({ ...daemonOptions, ...(hostSolo ? { solo: true } : {}) }),
+    onWait: () => process.stderr.write("mendcode: the daemon is slow to start; still waiting…\n"),
+  })
   if (local?.host) soloHost = local.host
   const socketPath = transportFlags.socketPath ?? local?.socketPath ?? ""
   const build = () => createClient({
@@ -498,12 +575,17 @@ async function connect() {
 }
 
 // A remote daemon that is not there (nothing listening, wrong port, TLS refused) is a plain error, never Bun's dump of the bundle.
-let { client, socketPath } = await connect().catch((error: unknown) => {
-  if (!remote) throw error
+const connectOrExit = () => connect().catch(async (error: unknown) => {
+  if (!remote) {
+    // No daemon and none could start: a readable line before the terminal was touched (no raw mode, no alternate screen yet), not the bundle's source frame.
+    process.stderr.write((await import("./connect-patiently")).startFailureMessage(error, daemonDataDir ?? envDataDir()))
+    process.exit(69)
+  }
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   process.stderr.write(`error: cannot reach the MendCode daemon at ${remote.hostname}:${remote.port}${code ? ` (${code})` : ""}: ${error instanceof Error ? error.message.replace(/^\[CLIENT\]: /, "") : String(error)}. On that machine it must run with mendcode daemon run --listen HOST:PORT.\n`)
   process.exit(69)
 })
+let { client, socketPath } = await connectOrExit()
 let startupNotice = ""
 // This process is the new build an open terminal restarted into (relaunch.ts): said once, and not passed on to anything it starts.
 const relaunched = process.env.MENDCODE_RELAUNCHED
@@ -521,7 +603,7 @@ if (freshness === "stopped") {
   client.close()
   await waitForSocketGone(socketPath)
   // Said to nobody: an idle daemon replaced by the build that is starting is housekeeping, with nothing for the user to do.
-  ;({ client, socketPath } = await connect())
+  ;({ client, socketPath } = await connectOrExit())
 } else if (freshness === "busy") daemonOlder = true
 else if (freshness === "legacy") startupNotice = "daemon outdated; run with --restart-daemon"
 

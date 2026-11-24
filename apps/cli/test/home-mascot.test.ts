@@ -13,7 +13,8 @@ import { createHomePet, gradientSpans, HOME_PET_SIZES } from "../src/pets/home-p
 import { listPets } from "../src/pets/manifest"
 import { createPetSlot, petChoices, PET_BOX, PET_HALF_BLOCK_SIZES, PET_SIZES } from "../src/pets/pet-slot"
 import { loadSprite } from "../src/pets/sprite"
-import { createHomeMascot, isPetMascot } from "../src/ui/app/home-mascot"
+import { createHomeMascot, isPetMascot, wordmarkInPlaceOfMascot } from "../src/ui/app/home-mascot"
+import { promptPetKind } from "../src/ui/app/pet-fallback"
 import { createTerminalFocus } from "../src/ui/terminal-focus"
 import { setTheme, type Line } from "../src/ui/theme"
 import { customizePageKey, CUSTOMIZE_ROWS, rowShown } from "../src/view/customize-page"
@@ -437,6 +438,17 @@ describe("the start-screen pet", () => {
   })
 })
 
+describe("the prompt's pet where pictures cannot be drawn", () => {
+  const base = { chosen: "user:photo", graphics: false, loaded: true, halfBlockLegible: false }
+  test("a chosen image pet that half blocks would garble shows nothing; Mend only when Mend is chosen", () => {
+    expect(promptPetKind(base)).toBe("none")
+    expect(promptPetKind({ ...base, chosen: "mend" })).toBe("mend")
+    expect(promptPetKind({ ...base, halfBlockLegible: true })).toBe("pet")
+    expect(promptPetKind({ ...base, graphics: true })).toBe("pet")
+    expect(promptPetKind({ ...base, loaded: false })).toBe("pet")
+  })
+})
+
 describe("the terminal's side of the mascot", () => {
   /** The controller over the least state it reads; `frame` plays one render that draws the home or not. */
   async function controller(profile: Partial<TuiProfile> = {}, settings: object = { tier: "full" }, options: { ascii?: boolean; protocol?: string; pets?: boolean } = {}) {
@@ -507,7 +519,8 @@ describe("the terminal's side of the mascot", () => {
   test("it is the full tier's: below it, in the minimal view, for a screen reader, without a pet store or with `mend`, nothing is asked for and nothing loads", async () => {
     for (const c of [await controller({}, { tier: "balanced" }), await controller({}, { tier: "minimalist" }), await controller({ logoKind: "wordmark" }), await controller({}, { tier: "full" }, { pets: false })]) {
       expect(c.made.wanted()).toBe(false)
-      expect(await c.frame()).toBeUndefined()
+      // A chosen pet that cannot be shown leaves the slot empty; the built-in Mend is never drawn in its place.
+      expect(await c.frame()).toEqual({ none: true })
       await Bun.sleep(5)
       expect(c.frames()).toBe(0)
     }
@@ -516,6 +529,10 @@ describe("the terminal's side of the mascot", () => {
     expect(mend.made.wanted()).toBe(false)
     const drawn = (await mend.frame())!
     expect(drawn.pixel!.lines(26, 12)).toEqual(mendSpriteLines("idle", 2))
+    // The default (medium) text Mend is the compact robot: 13 cells by 7 rows, a quarter of the old 26 x 14.
+    expect(drawn.pixel!.boxes).toEqual([{ cols: 13, rows: 7 }])
+    expect(drawn.pixel!.lines(13, 7)).toHaveLength(7)
+    expect((await (await controller({ homeMascot: "mend", mascotSize: "large" })).frame())!.pixel!.boxes).toEqual([{ cols: 26, rows: 14 }, { cols: 13, rows: 7 }])
     await Bun.sleep(5)
     expect(mend.frames()).toBe(0)
     expect(mend.made.animating).toBe(false)
@@ -531,23 +548,23 @@ describe("the terminal's side of the mascot", () => {
 
   test("while it loads: ASCII glyphs keep the ASCII Mend from the first frame, and a pet that turns out not installed gives its place back to it", async () => {
     const ascii = await controller({}, { tier: "full" }, { ascii: true })
-    expect(await ascii.frame()).toEqual({})
+    expect(await ascii.frame()).toEqual({ none: true })
     const gone = await controller({ homeMascot: "user:not-installed" })
     expect((await gone.frame())!.pixel!.boxes[0]).toEqual({ cols: 32, rows: 16 })
     await gone.loaded()
-    expect(await gone.frame()).toBeUndefined()
+    expect(await gone.frame()).toEqual({ none: true })
     expect(gone.made.missing).toBe(true)
   })
 
   test("16 colors and ASCII glyphs get no picture: the home keeps its ASCII mascot, and nothing animates", async () => {
     const ascii = await controller({}, { tier: "full" }, { ascii: true })
     await ascii.loaded()
-    expect(await ascii.frame()).toEqual({})
+    expect(await ascii.frame()).toEqual({ none: true })
     expect(ascii.made.animating).toBe(false)
     setTheme("terminal")
     const c = await controller()
     await c.loaded()
-    expect(await c.frame()).toEqual({})
+    expect(await c.frame()).toEqual({ none: true })
     setTheme("mend")
     expect((await c.frame())!.pixel).toBeDefined()
   })
@@ -668,13 +685,14 @@ describe("a pet mascot in the app", () => {
     for (const input of [{ settings: { tier: "balanced" } }, { env: { MENDCODE_GLYPHS: "ascii" } }]) {
       const fallback = await mascotScene({ store, ref: moving, ...input })
       expect([hasHalfBlocks(fallback.frame()), fallback.h.app.mascotAnimating]).toEqual([false, false])
-      expect(fallback.h.text().join("\n")).toContain("(o o)")
+      // The chosen pet cannot be drawn here: no pet at all, not the default robot.
+      expect(fallback.h.text().join("\n")).not.toContain("(o o)")
     }
     setTheme("terminal")
     const sixteen = await mascotScene({ store, ref: moving })
     setTheme("mend")
     expect(hasHalfBlocks(sixteen.frame())).toBe(false)
-    expect(sixteen.h.text().join("\n")).toContain("(o o)")
+    expect(sixteen.h.text().join("\n")).not.toContain("(o o)")
   })
 
   test("/pet import adds a pet from a PNG without an image call; it is in /pet and in /mascot, and /mascot <name> puts it on the start screen", async () => {
@@ -860,8 +878,8 @@ describe("the session pet's size", () => {
       heights.push(petRows(frame()).length)
     }
     // Half blocks here (no image protocol): three quarters of the 24x13 and 36x20 boxes; in the 15x8 one this 64-pixel pet
-    // would be noise, so Mend (7 rows) stands there instead.
-    expect(heights).toEqual([7, 10, 15])
+    // would be noise, so nothing stands there: the default Mend replaces a pet only when Mend is the chosen pet.
+    expect(heights).toEqual([0, 10, 15])
     const { h } = await mascotScene({ store, width: 140, height: 44, profile: { pet: still } })
     const profile = () => readTuiProfile(store.dir)
     await h.type("/pet small\r")
@@ -878,8 +896,8 @@ describe("the session pet's size", () => {
     const both = await mascotScene({ store, ref: still, width: 140, height: 44, profile: { pet: still } })
     expect(petRows(alone.frame()).length).toBeGreaterThan(0)
     expect(petRows(both.frame()).length).toBe(petRows(alone.frame()).length)
-    // Without a pet mascot the prompt's pet keeps its place there.
-    const promptOnly = await mascotScene({ store, width: 140, height: 44, profile: { pet: still } })
+    // Without a pet mascot the prompt's pet keeps its place there, at a size half blocks can draw it.
+    const promptOnly = await mascotScene({ store, width: 140, height: 44, profile: { pet: still, petSize: "medium" } })
     expect(petRows(promptOnly.frame()).length).toBeGreaterThan(0)
   })
 })
@@ -995,4 +1013,10 @@ console.log(JSON.stringify({ atStart, after: ["pets/home-pet", "pets/art", "src/
   const result = Bun.spawnSync(["bun", "-e", script], { cwd: path.join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" })
   expect(result.stderr.toString()).toBe("")
   expect(JSON.parse(result.stdout.toString().trim())).toEqual({ atStart: [], after: ["pets/home-pet", "pets/art", "src/pet-resample", "pets/controller"], never: [], zod: 0, schemas: 0 })
+})
+
+test("a pet that cannot be shown puts the wordmark in its place only for the logo modes that draw a mascot", () => {
+  for (const kind of ["both", "mascot"]) expect(wordmarkInPlaceOfMascot(kind, { none: true })).toEqual({ logoKind: "wordmark" })
+  for (const kind of ["none", "custom", "wordmark"]) expect(wordmarkInPlaceOfMascot(kind, { none: true })).toEqual({})
+  expect(wordmarkInPlaceOfMascot("both", undefined)).toEqual({})
 })

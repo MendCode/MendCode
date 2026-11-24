@@ -24,7 +24,7 @@ export function createTaskOwnerWake(input: {
   let stopped = false
   const records = input.store.sessionBackground.wakes
   type Wake = ReturnType<typeof records.pending>[number]
-  const generations = () => new Map(input.store.tasks.list().map((task) => [task.taskId, task.generation]))
+  const generations = () => input.store.tasks.generations()
   /** Nothing to tell any more: the setting is off, the child is gone or was continued, or the notice is already in the owner's log. Closed here. */
   function settled(wake: Wake, current: Map<string, number>) {
     if (input.store.settings.get().subagentOwnerWake !== false && input.store.hasSession(wake.task.taskId) && (current.get(wake.task.taskId) ?? 0) <= wake.task.generation && !records.queued(wake)) return false

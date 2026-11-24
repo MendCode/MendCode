@@ -26,6 +26,11 @@ const configOptions = () => [
   ...(process.env.FAKE_ACP_EFFORT === "1" && currentModel === "vendor/big" ? [{ id: "effort", name: "Effort", category: "thought_level", type: "select", currentValue: currentEffort, options: EFFORTS.map((value) => ({ value, name: value })) }] : []),
 ]
 
+// FAKE_ACP_STATE=1: like agents that use the `models` / `modes` session state instead of config options; "which mode" answers the mode in force.
+let currentMode = "default"
+const modelState = () => ({ currentModelId: currentModel, availableModels: [{ modelId: "vendor/small", name: "Small" }, { modelId: "vendor/big", name: "Big" }] })
+const modeState = () => ({ currentModeId: currentMode, availableModes: [{ id: "default", name: "Default" }, { id: "accept_edits", name: "Accept edits" }, { id: "dont_ask", name: "Do not ask" }] })
+
 /** A request to the client; resolves with the whole answer message. */
 function ask(method: string, params: unknown): Promise<any> {
   const id = nextRequest++
@@ -50,6 +55,10 @@ async function prompt(id: number, params: any) {
 
   if (said.startsWith("which model")) {
     reply(currentModel)
+    return done("end_turn")
+  }
+  if (said.startsWith("which mode")) {
+    reply(currentMode)
     return done("end_turn")
   }
   if (said.startsWith("which effort")) {
@@ -155,7 +164,20 @@ for await (const chunk of Bun.stdin.stream()) {
     } else if (method === "session/new") {
       mcpServers = params.mcpServers ?? []
       if (process.env.FAKE_ACP_AUTH === "1") send({ jsonrpc: "2.0", id, error: { code: -32000, message: "Authentication required" } })
-      else send({ jsonrpc: "2.0", id, result: { sessionId: `sess-${++counter}`, ...(process.env.FAKE_ACP_MODELS === "1" ? { configOptions: configOptions() } : {}) } })
+      else send({ jsonrpc: "2.0", id, result: { sessionId: `sess-${++counter}`, ...(process.env.FAKE_ACP_MODELS === "1" ? { configOptions: configOptions() } : {}), ...(process.env.FAKE_ACP_STATE === "1" ? { models: modelState(), modes: modeState() } : {}) } })
+    } else if (method === "session/set_model") {
+      if (params.modelId === "vendor/missing") send({ jsonrpc: "2.0", id, error: { code: -32602, message: `no such model: ${params.modelId}` } })
+      else {
+        currentModel = params.modelId
+        send({ jsonrpc: "2.0", id, result: {} })
+      }
+    } else if (method === "session/set_mode") {
+      // FAKE_ACP_MODE_REFUSE=<id>: the agent refuses to enter that mode and stays where it is.
+      if (params.modeId === process.env.FAKE_ACP_MODE_REFUSE) send({ jsonrpc: "2.0", id, error: { code: -32602, message: `cannot enter ${params.modeId}` } })
+      else {
+        currentMode = params.modeId
+        send({ jsonrpc: "2.0", id, result: {} })
+      }
     } else if (method === "session/set_config_option") {
       if (params.configId === "effort" && process.env.FAKE_ACP_EFFORT === "1" && currentModel === "vendor/big" && EFFORTS.includes(params.value)) {
         currentEffort = params.value

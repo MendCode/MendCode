@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { GoalPort } from "@mendcode/engine-native"
-import type { Clock, SessionEventDraft, Steering } from "@mendcode/kernel"
+import type { Clock, SessionEventDraft, Steering, TimerHandle } from "@mendcode/kernel"
 import {
   GOAL_INLINE_OBJECTIVE_CHARS,
   GOAL_TERMINAL_STATUSES,
@@ -39,6 +39,10 @@ export type GoalsOptions = {
   /** Starts a steering turn in the session; false when it could not take one right now (busy, queued messages, held). */
   steer(sessionId: SessionId, steering: Steering): Promise<boolean>
   prompts: GoalPrompts
+  /** How many background commands the session still has running; while any does, an active goal waits for an event instead of continuing. */
+  waiting?(sessionId: SessionId): number
+  /** The longest an active goal waits on background commands before it continues anyway (a safety heartbeat); default `DEFAULT_GOAL_WAIT_MS`. */
+  waitMs?(): number
   log(level: "info" | "warn" | "error", message: string): void
 }
 
@@ -56,6 +60,10 @@ export const MAX_STALE_GOAL_TURNS = 3
  * a loop that changes its calls a little every time, so each one looks new. A long run continues with `/goal resume`.
  */
 export const MAX_UNATTENDED_GOAL_TURNS = 100
+/** How long a goal that waits on background commands sleeps with no event before one turn checks on them. */
+export const DEFAULT_GOAL_WAIT_MS = 30 * 60_000
+/** The longest delay one timer takes (a signed 32-bit count of milliseconds); a longer wait is set in segments. */
+const MAX_TIMER_MS = 2_147_483_647
 /** Call fingerprints kept per goal; the oldest go first. */
 const MAX_SEEN_CALLS = 4_000
 
@@ -94,6 +102,8 @@ type Runtime = {
   steering: boolean
   /** The daemon restarted with this goal active: continue when a client opens the session. */
   resumeOnOpen: boolean
+  /** The safety heartbeat of a goal that waits on background commands: one timer, no polling. */
+  waitTimer?: TimerHandle | undefined
 }
 
 type End = { kind: "completed" } | { kind: "cancelled"; by: "user" | "promotion" } | { kind: "interrupted"; reason: string } | { kind: "failed"; code: string; message: string }
@@ -128,6 +138,38 @@ export function createGoals(options: GoalsOptions) {
     state.emptyStreak = 0
     state.staleStreak = 0
     state.unattended = 0
+  }
+
+  function stopWaiting(state: Runtime) {
+    state.waitTimer?.cancel()
+    state.waitTimer = undefined
+  }
+
+  /**
+   * The goal goes on after a turn, unless background commands are still running: then nothing is sent and the session sleeps
+   * until an event (a command ends or prints a watched line, the user writes) starts a turn, or until the heartbeat. A
+   * foreground wait the agent starts instead of ending its turn would otherwise resend the context every few minutes.
+   */
+  function continueOrWait(sessionId: SessionId) {
+    if ((options.waiting?.(sessionId) ?? 0) <= 0) return void next(sessionId, { force: false })
+    const state = runtime(sessionId)
+    stopWaiting(state)
+    const deadline = clock.now() + Math.max(1, options.waitMs?.() ?? DEFAULT_GOAL_WAIT_MS)
+    // A timer holds at most MAX_TIMER_MS (a longer delay fires at once), so a long wait runs in segments.
+    const arm = (): TimerHandle => {
+      const timer: TimerHandle = clock.setTimer(Math.min(Math.max(1, deadline - clock.now()), MAX_TIMER_MS), () => {
+        if (state.waitTimer !== timer) return
+        if (deadline - clock.now() > 0) {
+          state.waitTimer = arm()
+          return
+        }
+        state.waitTimer = undefined
+        void next(sessionId, { force: false })
+      })
+      timer.unref?.()
+      return timer
+    }
+    state.waitTimer = arm()
   }
 
   /** Whether a successful tool call is new to the goal, remembering it either way. */
@@ -222,6 +264,7 @@ export function createGoals(options: GoalsOptions) {
   }
 
   function onTurnStarted(sessionId: SessionId, event: Extract<SessionEvent, { type: "turn.started" }>) {
+    stopWaiting(runtime(sessionId))
     runtime(sessionId).turn = { turnId: event.turnId, startedAt: event.at, agentItems: new Set(), output: false, tools: new Map(), fresh: false }
   }
 
@@ -322,8 +365,12 @@ export function createGoals(options: GoalsOptions) {
     }
     if (end.kind === "completed" && goalTurn) {
       state.emptyStreak = turn?.output ? 0 : state.emptyStreak + 1
-      state.staleStreak = turn?.fresh ? 0 : state.staleStreak + 1
-      state.unattended += 1
+      // A turn that ends only to wait for background commands (the heartbeat's check, or a quiet command's notice) is
+      // not a no-progress loop: the commands running are the progress, and the heartbeat paces it.
+      const waitingOnly = !turn?.fresh && (options.waiting?.(sessionId) ?? 0) > 0
+      if (turn?.fresh) state.staleStreak = 0
+      else if (!waitingOnly) state.staleStreak += 1
+      if (!waitingOnly) state.unattended += 1
     }
     if (stored.goal.status !== "active") {
       // A budget wrap-up is owed once; every other status waits for the user.
@@ -341,7 +388,7 @@ export function createGoals(options: GoalsOptions) {
     const said = turn?.lastText?.trim() ? `; its last message: ${clip(turn.lastText.trim(), 200)}` : ""
     if (state.staleStreak >= MAX_STALE_GOAL_TURNS) return stall(stored, `no progress in ${MAX_STALE_GOAL_TURNS} goal turns in a row (no tool call that brought a new result)${said}`)
     if (state.unattended >= MAX_UNATTENDED_GOAL_TURNS) return stall(stored, `${MAX_UNATTENDED_GOAL_TURNS} goal turns in a row without you; /goal resume goes on${said}`)
-    void next(sessionId, { force: false })
+    continueOrWait(sessionId)
   }
 
   function process(event: SessionEvent) {
@@ -535,6 +582,7 @@ export function createGoals(options: GoalsOptions) {
     dispose() {
       if (disposed) return
       for (const state of runtimes.values()) {
+        stopWaiting(state)
         if (state.turn) closeAccounting(state.turn, clock.now())
         state.turn = undefined
       }
@@ -543,6 +591,8 @@ export function createGoals(options: GoalsOptions) {
     /** A session is being deleted: the files of its long objectives go with it. */
     forget(sessionId: SessionId) {
       for (const goal of store.goals.history(sessionId, 100)) if (goal.objectiveFile) rmSync(goal.objectiveFile, { force: true })
+      const state = runtimes.get(sessionId)
+      if (state) stopWaiting(state)
       runtimes.delete(sessionId)
     },
   }

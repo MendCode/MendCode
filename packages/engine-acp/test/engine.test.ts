@@ -266,6 +266,61 @@ describe("the agent's own models", () => {
     expect(completedText(third.events, "agent_message")).toEqual(["vendor/big"])
   })
 
+  test("an agent that lists `models` instead of a config option: they are reported and a chosen one is set with session/set_model once", async () => {
+    const offered: AcpModelOption[][] = []
+    const { engine, received } = setup({ env: { FAKE_ACP_STATE: "1" }, modelFor: () => "vendor/big", onModels: (_agent, models) => void offered.push(models) })
+    const sessionId = ids("session")
+    const first = turnInput({ sessionId, text: "which model" })
+    expect(await engine.runTurn(first.input)).toEqual({ status: "ok" })
+    expect(completedText(first.events, "agent_message")).toEqual(["vendor/big"])
+    expect(offered[0]).toEqual([{ value: "vendor/small", name: "Small" }, { value: "vendor/big", name: "Big" }])
+    await engine.runTurn(turnInput({ sessionId, text: "which model" }).input)
+    expect(received().filter((message) => message.method === "session/set_model").map((message) => message.params)).toEqual([{ sessionId: "sess-1", modelId: "vendor/big" }])
+    expect(received().some((message) => message.method === "session/set_config_option")).toBe(false)
+  })
+
+  test("a model refused through session/set_model fails the turn with the agent's reason", async () => {
+    const { engine } = setup({ env: { FAKE_ACP_STATE: "1" }, modelFor: () => "vendor/missing" })
+    expect(await engine.runTurn(turnInput({ text: "hello" }).input)).toMatchObject({ status: "error", code: "acp_model", message: expect.stringContaining("no such model") })
+  })
+
+  test("the agent's session mode follows the permission mode when it lists a matching one, and is set only on a change", async () => {
+    let mode: PermissionMode = "full"
+    const { engine, received } = setup({ env: { FAKE_ACP_STATE: "1" } })
+    const sessionId = ids("session")
+    const modeIn = async (next: PermissionMode) => {
+      mode = next
+      const turn = turnInput({ sessionId, text: "which mode", mode: () => mode })
+      await engine.runTurn(turn.input)
+      return completedText(turn.events, "agent_message")[0]
+    }
+    expect(await modeIn("full")).toBe("dont_ask")
+    expect(await modeIn("full")).toBe("dont_ask")
+    expect(await modeIn("edits")).toBe("accept_edits")
+    // Plan and smart ask like ask does: an agent left in a freer mode would never send the requests MendCode answers.
+    expect(await modeIn("plan")).toBe("default")
+    expect(await modeIn("full")).toBe("dont_ask")
+    expect(await modeIn("smart")).toBe("default")
+    expect(await modeIn("ask")).toBe("default")
+    expect(received().filter((message) => message.method === "session/set_mode").map((message) => message.params.modeId)).toEqual(["dont_ask", "accept_edits", "default", "dont_ask", "default"])
+  })
+
+  test("a refused step down to a mode that asks fails the turn before the prompt; a refused step up does not", async () => {
+    const down = setup({ env: { FAKE_ACP_STATE: "1", FAKE_ACP_MODE_REFUSE: "default" } })
+    const sessionId = ids("session")
+    expect(await down.engine.runTurn(turnInput({ sessionId, text: "which mode", mode: () => "full" }).input)).toMatchObject({ status: "ok" })
+    expect(await down.engine.runTurn(turnInput({ sessionId, text: "which mode", mode: () => "plan" }).input)).toMatchObject({ status: "error", code: "acp_mode" })
+    expect(down.received().filter((message) => message.method === "session/prompt")).toHaveLength(1)
+    const up = setup({ env: { FAKE_ACP_STATE: "1", FAKE_ACP_MODE_REFUSE: "dont_ask" } })
+    expect(await up.engine.runTurn(turnInput({ text: "which mode", mode: () => "full" }).input)).toMatchObject({ status: "ok" })
+  })
+
+  test("an agent with no modes is never sent session/set_mode", async () => {
+    const { engine, received } = setup({ env: { FAKE_ACP_MODELS: "1" } })
+    await engine.runTurn(turnInput({ text: "hello", mode: () => "full" }).input)
+    expect(received().some((message) => message.method === "session/set_mode")).toBe(false)
+  })
+
   test("a model the agent refuses, or an agent with no model option, fails the turn with what to pick instead", async () => {
     const refusing = setup({ env: { FAKE_ACP_MODELS: "1" }, modelFor: () => "vendor/missing" })
     const refused = await refusing.engine.runTurn(turnInput({ text: "hello" }).input)

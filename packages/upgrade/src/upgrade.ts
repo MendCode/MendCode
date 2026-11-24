@@ -1,10 +1,11 @@
+import path from "node:path"
 import { expectedSum, parseSums, verifyChecksum, sha256Hex } from "./checksum"
 import { UpgradeError } from "./errors"
-import { adoptLegacyBin, binPaths, installBinary, resolveDataDir, rollbackBinary } from "./install"
+import { adoptLegacyBin, binPaths, installBinary, installWindowsBinary, refreshInstallReceipt, resolveDataDir, rollbackBinary, WINDOWS_EXE } from "./install"
 import { readRecovery, verifyRecovery, writeRecovery } from "./recovery"
 import { validateReleaseIndex } from "./release-index"
 import type { UpgradePorts } from "./ports"
-import { channelOf, decide, isNightlyTag, type Channel, type Decision, type Platform, type ReleaseAsset, parseReleases, pickRelease, platformAsset } from "./releases"
+import { channelOf, decide, isNightlyTag, type Channel, type Decision, type Platform, type ReleaseAsset, parseReleases, pickRelease, platformAsset, WINDOWS_REINSTALL } from "./releases"
 import { CHECKSUMS_ASSET, GITHUB_API, MAX_BUNDLE_BYTES, MAX_DOWNLOAD_BYTES, PROVENANCE_ASSET, RELEASE_INDEX_ASSET, RELEASES_PER_PAGE, SIGSTORE_SUFFIX, UPGRADE_REPO, UPGRADE_REPO_ENV, UPGRADE_REPO_PLACEHOLDER } from "./settings"
 import { readState, writeState } from "./state"
 
@@ -38,6 +39,8 @@ export type UpgradeRequest = {
   /** The running version: `1.2.3`, `1.2.3-beta.4`, a `dev-<sha>` tag, or anything for a checkout. */
   currentVersion: string
   platform: Platform
+  /** Windows: the executable to replace (the running `mendcode.exe`, else the `install.ps1` location); `windowsInstallPath` finds it. */
+  installPath?: string
 }
 
 export type Verification = "attestation" | "cosign" | "checksum-only"
@@ -91,6 +94,7 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   const base = { channel, current: request.currentVersion, latest: null, downgrade: false, installedTo: null, asset: null }
 
   if (request.rollback) {
+    if (request.platform.os === "win32") throw new UpgradeError("unsupported-platform", `mendcode upgrade --rollback is not available on Windows; install the version you want instead: mendcode upgrade <version> --force, or ${WINDOWS_REINSTALL}`)
     const recovery = await verifyRecovery(fs, dataDir)
     const installedTo = await rollbackBinary({ fs, dataDir })
     await writeRecovery(fs, dataDir, { current: recovery.previous!, previous: recovery.current })
@@ -118,6 +122,8 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
     return { ...found, status: STATUS_OF[decision] }
   }
 
+  const windows = request.platform.os === "win32"
+  if (windows && !request.installPath) throw new UpgradeError("unsupported-platform", `cannot tell where ${WINDOWS_EXE} is installed (no LOCALAPPDATA); reinstall the newest release instead: ${WINDOWS_REINSTALL}`)
   const binary = release.assets.find((asset) => asset.name === assetName)
   const sums = release.assets.find((asset) => asset.name === CHECKSUMS_ASSET)
   if (!binary) throw new UpgradeError("asset-missing", `${release.tag} has no ${assetName} asset`)
@@ -163,6 +169,19 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   else await verifySigned(assetName, bytes, false)
   const verification: Verification = attested ? "attestation" : unsigned ? "checksum-only" : "cosign"
   if (request.beforeActivate && !await request.beforeActivate()) throw new UpgradeError("busy", "automatic activation cancelled by current policy or active work")
+  if (windows) {
+    // The program that runs is replaced where it lives (or where install.ps1 puts it); the data directory keeps only the state files.
+    // One installation is one target whatever data directory each command names: its staging file and rename are serialized by the install directory.
+    const releaseTarget = await fs.lock(path.win32.dirname(request.installPath!), "install.lock")
+    let installedTo: string
+    try {
+      installedTo = await installWindowsBinary({ fs, target: request.installPath!, bytes, sha256: expected })
+      await refreshInstallReceipt({ fs, target: installedTo, sha256: expected })
+    } finally { await releaseTarget() }
+    await writeRecovery(fs, dataDir, { current: { version: release.tag, sha256: expected, schema: index.schema }, previous: null })
+    await save(release.tag)
+    return { ...found, status: "installed", installedTo, downgrade: decision === "ahead", rollbackAvailable: false, verification }
+  }
   const previous = await readRecovery(fs, dataDir)
   const paths = binPaths(dataDir)
   const retained = previous && await fs.exists(paths.current) && sha256Hex(await fs.readBytes(paths.current)) === previous.current.sha256 ? previous.current : null

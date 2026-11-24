@@ -13,6 +13,8 @@ export const HttpServerConfig = lazySchema(() => z.strictObject({
   pty: z.boolean().default(false),
   /** Browser editor saves (`file.edit`); off by default, full tokens only. */
   edit: z.boolean().default(false),
+  /** Listen on this Unix socket (mode 0660, group from its folder) instead of a loopback port: how a gateway reaches a per-account daemon (docs/gateway.md). */
+  socket: z.string().min(2).max(100).regex(/^\/[^\0]*$/).optional(),
 }))
 export type HttpServerConfig = z.infer<typeof HttpServerConfig>
 

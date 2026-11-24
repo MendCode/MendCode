@@ -1,5 +1,5 @@
 ---
-summary: how the chat is drawn: tool output, density, markdown, reasoning, scroll
+summary: how the chat is drawn: tool output, density, markdown, scroll
 docs: customize, customize-keys, layout, accessibility, return
 aliases: tool-output, chat, conversation, rendering, markdown, scrollbar, timestamps, thinking, density-tools, messages
 ---

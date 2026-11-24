@@ -85,7 +85,7 @@ import { sessionMetaTool } from "./session-meta-tool"
 import { todayTool } from "./today-tool"
 import { createLazyCodegraph } from "./lazy-codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
-import { filteredCatalog, modelAllowed } from "./models"
+import { filteredCatalog, modelAllowed, oncePerTurn } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
 import { createOneTree } from "./one-tree"
 import { createSessionTranscripts } from "./session-transcripts"
@@ -200,7 +200,7 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), searchOn: () => featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
+const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), searchOn: () => featureOn(extractionSettings(), "codegraph", { safeMode }), overviewHost: true, log: logLine })
 /** The graph's answer for a text search (docs/code-graph.md, "Graph answers in a text search"); absent with `MENDCODE_CODEGRAPH=0`. */
 const searchHint = graph?.searchHint
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
@@ -352,7 +352,7 @@ const codexHarnessOn = () => engineName === "native" && (featureOn(extractionSet
 const realModels = (readOnly?: boolean): ModelInfo[] => [...codexModels(), ...(engineName === "native" ? providerService.models(readOnly) : []), ...(claudeProbed && claudeDetection.installed() ? claudeModels() : []), ...(engineName === "native" ? acpAgents.models() : []), ...(piEnabled() ? piConfig.models() : []), ...(codexHarnessOn() ? codexModels().map((model) => ({ ...model, id: `codex:${model.id}`, name: `${model.name} · Codex`, engine: "codex" as const })) : [])]
 const modelCatalog: ModelCatalog = filteredCatalog({
   selectable: engineName === "native",
-  list: (readOnly) => { const real = realModels(readOnly); return engineName === "native" ? [...real, ...extensionVirtualModels(real)] : real },
+  list: oncePerTurn((readOnly) => { const real = realModels(readOnly); return engineName === "native" ? [...real, ...extensionVirtualModels(real)] : real }),
   refresh: async () => { await Promise.all([claudeProbed ? claudeDetection.refresh() : undefined, chatgptModels.settle()]) },
   discover: chatgptModels.discover,
   defaults: { model: NATIVE_DEFAULTS.model, effort: NATIVE_DEFAULTS.effort },

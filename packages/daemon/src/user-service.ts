@@ -9,7 +9,20 @@ import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@men
 import { writerLockOwner } from "@mendcode/store"
 
 export type ServiceAction = "plan" | "install" | "start" | "stop" | "restart" | "uninstall" | "status" | "logs"
-export type ServiceOptions = { dir: string; cwd: string; command: string[]; engine?: string; serviceDir?: string; platform?: string; home?: string; uid?: number }
+export type ServiceOptions = { dir: string; cwd: string; command: string[]; engine?: string; /** Present: the service daemon may listen for remote clients. Its entries are `--listen`, `--tls-cert` and `--tls-key` with their values; none reads `<dir>/remote.json`. Absent: local only. */ remote?: string[]; serviceDir?: string; platform?: string; home?: string; uid?: number }
+
+const REMOTE_FLAGS = new Set(["--listen", "--tls-cert", "--tls-key"])
+/** The remote entries of a service: flag/value pairs of the three listener flags, each once. */
+export function validRemoteArgs(value: unknown): value is string[] {
+  if (!Array.isArray(value) || value.length % 2 || value.length > 6) return false
+  const seen = new Set<string>()
+  for (let i = 0; i < value.length; i += 2) {
+    const [flag, text] = [value[i], value[i + 1]]
+    if (typeof flag !== "string" || !REMOTE_FLAGS.has(flag) || seen.has(flag) || typeof text !== "string" || !text || text.startsWith("--")) return false
+    seen.add(flag)
+  }
+  return true
+}
 export type ServicePlan = {
   label: string
   backend: "launchd" | "systemd-user" | "unsupported"
@@ -49,7 +62,8 @@ export function daemonServicePlan(options: ServiceOptions): ServicePlan {
   const serviceDir = options.serviceDir ?? (platform === "darwin" ? path.join(home, "Library", "LaunchAgents") : path.join(home, ".config", "systemd", "user"))
   const dir = path.resolve(options.dir)
   const cwd = path.resolve(options.cwd)
-  const programArguments = [...options.command, "--dir", dir, "--cwd", cwd, "--local-only", ...(options.engine ? ["--engine", options.engine] : [])]
+  const programArguments = [...options.command, "--dir", dir, "--cwd", cwd, ...(options.remote ? options.remote : ["--local-only"]), ...(options.engine ? ["--engine", options.engine] : [])]
+  if (options.remote && !validRemoteArgs(options.remote)) throw new Error("Invalid daemon service listener arguments")
   if (!options.command.length || programArguments.some((arg) => /[\x00-\x1f\x7f]/.test(arg))) throw new Error("Invalid daemon service arguments")
   if (!path.isAbsolute(options.command[0]!)) throw new Error("Daemon service executable must be absolute")
   const definitionPath = path.join(path.resolve(serviceDir), `${LABEL}.${backend === "launchd" ? "plist" : "service"}`)
@@ -125,9 +139,10 @@ export function createUserService(options: ServiceOptions, execute: ServiceExecu
     const text = await readOptional(requested.bindingPath)
     if (!text) return undefined
     const value = JSON.parse(text) as ServiceOptions
-    if (typeof value.dir !== "string" || typeof value.cwd !== "string" || !Array.isArray(value.command) || !value.command.every((item) => typeof item === "string") || (value.engine !== undefined && typeof value.engine !== "string")) throw new Error("Invalid daemon service binding")
+    if (typeof value.dir !== "string" || typeof value.cwd !== "string" || !Array.isArray(value.command) || !value.command.every((item) => typeof item === "string") || (value.engine !== undefined && typeof value.engine !== "string") || (value.remote !== undefined && !validRemoteArgs(value.remote))) throw new Error("Invalid daemon service binding")
     if (requireMatch && !sameDir(value.dir, requested.dataDir)) throw new Error(`User service belongs to ${value.dir}; use that --dir`)
-    return daemonServicePlan({ ...options, dir: value.dir, cwd: value.cwd, command: value.command, ...(value.engine ? { engine: value.engine } : {}) })
+    const { remote: _requested, ...base } = options
+    return daemonServicePlan({ ...base, dir: value.dir, cwd: value.cwd, command: value.command, ...(value.engine ? { engine: value.engine } : {}), ...(value.remote ? { remote: value.remote } : {}) })
   }
   async function status(): Promise<ServiceResult> {
     const plan = await binding(false) ?? requested
@@ -153,7 +168,7 @@ export function createUserService(options: ServiceOptions, execute: ServiceExecu
         await chmod(file, 0o600)
       }
       await writeFile(plan.definitionPath, daemonServiceDefinition(requested), { mode: 0o600 })
-      await writeFile(plan.bindingPath, JSON.stringify({ dir: requested.dataDir, cwd: requested.cwd, command: options.command, ...(options.engine ? { engine: options.engine } : {}) }) + "\n", { mode: 0o600 })
+      await writeFile(plan.bindingPath, JSON.stringify({ dir: requested.dataDir, cwd: requested.cwd, command: options.command, ...(options.engine ? { engine: options.engine } : {}), ...(options.remote ? { remote: options.remote } : {}) }) + "\n", { mode: 0o600 })
       if (plan.backend === "systemd-user") run(["systemctl", "--user", "daemon-reload"])
       run(plan.installCommand)
       return status()

@@ -14,6 +14,8 @@ export function createLazyCodegraph(options: {
   searchOn?(): boolean
   /** What one such answer may take (default: codegraph's `SEARCH_HINT.budgetMs`); tests on a loaded machine give more. */
   searchBudgetMs?: number
+  /** The code panel's overview of a project the daemon does not hold is drawn by a process of its own (codegraph's overview.ts). */
+  overviewHost?: boolean
   log(message: string): void
 }) {
   const gate = createIndexGate()
@@ -21,14 +23,14 @@ export function createLazyCodegraph(options: {
   let loaded: { tools: Tool[]; overview: CodeOverview; autopilot: GraphAutopilot; indexer: Indexer } | undefined
   let loading: Promise<NonNullable<typeof loaded>> | undefined
   let stopped = false
-  const load = () => loading ??= import("@mendcode/codegraph").then(({ createIndexer, scanHostCommand, createCodeGraphTools, createCodeOverview, createGraphAutopilot, pruneCaches }) => {
+  const load = () => loading ??= import("@mendcode/codegraph").then(({ createIndexer, scanHostCommand, overviewHostCommand, MAX_INDEXED_FILES, createCodeGraphTools, createCodeOverview, createGraphAutopilot, pruneCaches }) => {
     const indexer = createIndexer({ cacheDir: options.cacheDir, now: Date.now, onIndex: options.publish, onProgress: options.publish, scanHost: scanHostCommand() })
     const autopilot = createGraphAutopilot({ indexer, gate: gateOf, enabled: () => !stopped && options.enabled(), log: options.log })
     // Caches of folders that are gone (a finished PR review's worktree, a lane) or unused for a month are deleted: once a minute after the
     // graph is first used in this daemon, then daily. Nothing runs in a daemon that never uses the graph.
     const prune = () => { if (!stopped) void pruneCaches({ cacheDir: options.cacheDir, now: Date.now() }).then((result) => { if (result.removed) options.log(`[GRAPH]: pruned ${result.removed} cache file(s) (${result.orphaned} folder gone, ${result.idle} unused, ${result.temporary} temporary)`) }).catch(() => undefined) }
     setTimeout(() => { prune(); setInterval(prune, 86_400_000).unref?.() }, 60_000).unref?.()
-    return loaded = { indexer, autopilot, overview: createCodeOverview({ indexer }), tools: createCodeGraphTools({ cacheDir: options.cacheDir, indexer, gate: gateOf, autopilot }) }
+    return loaded = { indexer, autopilot, overview: createCodeOverview({ indexer, ...(options.overviewHost ? { host: { command: overviewHostCommand(), cacheDir: options.cacheDir, maxFiles: MAX_INDEXED_FILES } } : {}) }), tools: createCodeGraphTools({ cacheDir: options.cacheDir, indexer, gate: gateOf, autopilot }) }
   })
   const autopilot: GraphAutopilot = {
     note(input) {
