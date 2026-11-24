@@ -62,7 +62,7 @@ type ActiveTurn = {
   /** The engine's way to take a promoted message without a cancel (`TurnInput.onSendNow`). */
   sendNow?: (message: Pick<TurnInput, "text" | "attachments">) => boolean
   /** The engine's ear for a message queued during the turn (`TurnInput.onQueued`). */
-  queued?: () => void
+  queued?: (queued?: { notice: boolean }) => void
   /** Set once a promoted message was handed to the engine: another promotion then waits for this turn to end. */
   handedOff?: boolean
   /** When the current run of network failures began; cleared by the next item event. */
@@ -239,10 +239,10 @@ export function createSessionActor(options: SessionActorOptions) {
 
   /** Notices whose news the model already read another way leave the queue unread, before anything is taken from it. */
   /** Tells the running turn's engine that a message entered the queue; it asks for it the usual way (`takeQueued`). */
-  function tellEngineQueued() {
+  function tellEngineQueued(queued?: { notice: boolean }) {
     if (!steerable() || held) return
     try {
-      active?.queued?.()
+      active?.queued?.(queued)
     } catch {
       // The engine's ear failing changes nothing: the message is taken at its next boundary.
     }
@@ -686,7 +686,7 @@ export function createSessionActor(options: SessionActorOptions) {
         emitQueue()
         const interrupts = delivery === "restart" || (delivery === undefined && options.queueMode?.() === "immediate")
         if (interrupts && !paused && active && !active.cancelBy && !active.interruptReason) cancel(active, "promotion")
-        else tellEngineQueued()
+        else tellEngineQueued({ notice: false })
         settleIdle()
         return { ok: true, result: { queueId, ...(command.delivery ? { delivery: delivery ?? command.delivery, steered: delivery === "steer" } : {}) } }
       }
@@ -953,7 +953,7 @@ export function createSessionActor(options: SessionActorOptions) {
         else queue.push(entry)
         emit({ type: "queue.added", sessionId, queueId, text: message.text, attachments: [], notice: true, ...recorded })
         emitQueue()
-        tellEngineQueued()
+        tellEngineQueued({ notice: true })
         settleIdle()
         return message.reply(queueId)
       }

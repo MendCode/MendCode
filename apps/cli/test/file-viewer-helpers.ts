@@ -134,6 +134,8 @@ export type Setup = {
   keybindings?: Record<string, string | null>
   /** The daemon's answers carry no `lex`: the highlighting a window had before the daemon lexed what is above it. */
   stripLex?: boolean
+  /** The titles of the other chats the session list shows (the open one is always there). */
+  others?: string[]
   /** The host the key hints are worded for: a new app words them canonically, so this is set after it starts. */
   platform?: "darwin" | "linux"
 }
@@ -143,6 +145,7 @@ export async function chat(setup: Setup = {}) {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...setup.profile })
   if (setup.keybindings) writeFileSync(path.join(dataDir, "keybindings.json"), JSON.stringify(setup.keybindings))
+  let ownId = ""
   const reply = (command: CommandInput): Promise<CommandReply> | CommandReply | undefined => {
     if (command.type === "file.view") {
       inFlight++
@@ -152,10 +155,16 @@ export async function chat(setup: Setup = {}) {
         .then((result) => ({ ok: true, result: setup.stripLex ? { ...result, lex: undefined } : result }) as CommandReply)
         .catch((error) => ({ ok: false, error: { code: "invalid_command", message: error instanceof FileApiError ? error.message : String(error) } }) as CommandReply)
     }
+    if (setup.others && command.type === "session.list") {
+      const at = Date.now()
+      const row = (sessionId: string, title: string, age: number) => ({ sessionId, title, directory: dir, createdAt: at, updatedAt: at - age, lastSeq: 0, state: "idle", queued: 0 })
+      return { ok: true, result: { sessions: [row(ownId, "Open chat", 0), ...setup.others.map((title, index) => row(`${ownId}-other-${index}`, title, (index + 1) * 60_000))] } } as CommandReply
+    }
     if (command.type === "changes.query") return { ok: true, result: setup.changes?.(dir) ?? { root: dir, files: [], omittedFiles: 0 } } as CommandReply
     return undefined
   }
   const h = appHarness({ dataDir, directory: dir, width: setup.width ?? 160, height: setup.height ?? 45, reply })
+  ownId = h.sessionId
   h.app.applySettings({ onboarded: true, ...(setup.tier === null ? {} : { tier: setup.tier ?? "balanced" }), reducedMotion: true, ...(setup.settings ?? {}) })
   await Bun.sleep(10)
   const talk = conversation(h.sessionId, h.app.onEvent)

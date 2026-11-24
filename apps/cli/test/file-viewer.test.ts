@@ -561,3 +561,20 @@ describe("/open", () => {
     expect(h.sentOf("files.search").length).toBeGreaterThan(0)
   })
 })
+
+describe("the full-page viewer beside the session list", () => {
+  test("with the list on the right, a click on a chat in it opens that chat and never selects in the viewer", async () => {
+    const { h } = await chat({ text: "see src/app.rs:120 now", width: 120, height: 40, others: ["Other work"], profile: { sidebarSide: "right", sidebarWidth: 80 } })
+    for (let turn = 0; turn < 40 && rowOf(h, "Other work") < 0; turn++) { h.app.render(); await Bun.sleep(5) }
+    await click(h, "src/app.rs:120")
+    expect(h.app.page).toBe("file")
+    const row = rowOf(h, "Other work")
+    expect(row).toBeGreaterThanOrEqual(0)
+    const col = h.text()[row]!.indexOf("Other work") + 1
+    expect(col).toBeGreaterThan(60)
+    await h.app.onKey(press(col, row))
+    await h.app.onKey(release(col, row))
+    await settle()
+    expect(h.app.sessionId).not.toBe(h.sessionId)
+  })
+})

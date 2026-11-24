@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test"
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { bareTerminal, chooseRemote, parseProfileCommand, parseRemoteProfiles, runProfileCommand, type RemoteProbes } from "../src/remote-profiles"
+import { dataDirFlag } from "../src/http-cli"
+import { bareTerminal, chooseRemote, parseProfileCommand, parseRemoteProfiles, readRemoteProfiles, runProfileCommand, type RemoteProbes } from "../src/remote-profiles"
 import { parseRemoteFlags } from "../src/remote"
 
 const dirs: string[] = []
@@ -39,6 +40,27 @@ test("remote add/list/default/remove write a private file that holds paths, neve
   expect(() => run("remove", "vps")).toThrow("no saved remote")
   expect(parseProfileCommand(["remote", "token", "create", "--dir", dir], dir)).toBeUndefined()
   expect(parseProfileCommand(["session", "list"], dir)).toBeUndefined()
+})
+
+test("remote add stops at the 64 remotes the reader accepts, so the file stays readable and an existing name can still be replaced", () => {
+  const dir = temp()
+  const run = (...argv: string[]) => { const o = out(); runProfileCommand(parseProfileCommand(["remote", ...argv], dir)!, o); return o.lines.join("") }
+  for (let i = 0; i < 64; i++) run("add", `r${i}`, `h${i}.example:9876`)
+  expect(() => run("add", "r64", "h64.example:9876")).toThrow("at most 64")
+  expect(run("add", "r0", "other.example:9876")).toBe("saved\n")
+  expect(Object.keys(readRemoteProfiles(dir)!.remotes)).toHaveLength(64)
+  expect(run("remove", "r1")).toBe("saved\n")
+})
+
+test("--dir=PATH is read like --dir PATH by the remote commands", () => {
+  expect(parseProfileCommand(["remote", "list", "--dir=/other"], "/default")).toMatchObject({ dir: "/other", action: "list" })
+  expect(dataDirFlag(["--dir=/other", "--remote", "lab"])).toBe("/other")
+  expect(dataDirFlag(["--dir", "/other"])).toBe("/other")
+  expect(dataDirFlag(["--remote", "lab"])).toBeUndefined()
+  // `attach URL --dir X`: X is the project on the server, so the local pairing lives in the default data directory.
+  expect(dataDirFlag(["attach", "https://host.example", "--dir", "/srv/project"])).toBeUndefined()
+  expect(dataDirFlag(["--dir=/srv/project", "attach", "https://host.example"])).toBeUndefined()
+  expect(dataDirFlag(["attach", "S1", "--dir", "/data"])).toBe("/data")
 })
 
 test("--remote NAME turns into the transport flags the existing parser takes", async () => {

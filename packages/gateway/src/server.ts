@@ -91,6 +91,8 @@ export function createGateway(options: GatewayOptions) {
   const codeLock = lockout({ free: 5, baseMs: 60_000, maxMs: 3600_000, memoryMs: 3600_000 }, now)
   const sockets = new Set<Bun.ServerWebSocket<SocketData>>()
   const perAccountSockets = new Map<string, number>()
+  /** Long HTTP responses (event streams) in progress: ended with their sockets when their access goes away. */
+  const streams = new Set<{ identity: Identity; abort(): void }>()
   let sweeper: ReturnType<typeof setInterval> | undefined
 
   const record = (entry: AuditEntry) => audit.write(entry)
@@ -166,15 +168,22 @@ export function createGateway(options: GatewayOptions) {
 
   function closeSockets(match: (identity: Identity) => boolean, reason: string) {
     for (const ws of sockets) if (match(ws.data.identity)) ws.close(1008, reason)
+    for (const stream of streams) if (match(stream.identity)) stream.abort()
   }
   function identityValid(identity: Identity) {
     if (identity.kind === "session") return sessions.get(identity.key) !== undefined && activeAccount(identity.accountId) !== undefined
-    return liveDevice(activeAccount(identity.accountId), identity.deviceId) !== undefined
+    // The access token is what the connection was opened with: when it expires the device signs for a new one and reconnects.
+    return tokens.get(identity.key) !== undefined && liveDevice(activeAccount(identity.accountId), identity.deviceId) !== undefined
   }
-  /** Revocation reaches open connections within a second; the timer runs only while a WebSocket is open. */
+  function watchAccess() {
+    sweeper ??= setInterval(sweep, 1_000)
+    sweeper.unref?.()
+  }
+  /** Revocation reaches open connections within a second; the timer runs only while a WebSocket or an event stream is open. */
   function sweep() {
     for (const ws of sockets) if (!identityValid(ws.data.identity)) ws.close(1008, "access revoked")
-    if (!sockets.size && sweeper) { clearInterval(sweeper); sweeper = undefined }
+    for (const stream of streams) if (!identityValid(stream.identity)) stream.abort()
+    if (!sockets.size && !streams.size && sweeper) { clearInterval(sweeper); sweeper = undefined }
   }
 
   // ---- WebAuthn: invite (or bootstrap) registration, sign-in -------------------------------------------------------
@@ -364,7 +373,9 @@ export function createGateway(options: GatewayOptions) {
       const live = current.devices.filter((device) => device.revokedAt === undefined)
       if (live.length >= 32) return false
       // Revoked devices are kept (for the audit trail) only while there is room.
-      current.devices = [...current.devices.filter((device) => device.revokedAt === undefined), ...current.devices.filter((device) => device.revokedAt !== undefined).slice(-(31 - live.length))]
+      const room = 31 - live.length
+      const revoked = current.devices.filter((device) => device.revokedAt !== undefined)
+      current.devices = [...current.devices.filter((device) => device.revokedAt === undefined), ...(room > 0 ? revoked.slice(-room) : [])]
       current.devices.push({ id: deviceId, name: pending.name, publicKey: pending.publicKey, scope, createdAt: now() } satisfies Device)
       return true
     })
@@ -575,9 +586,10 @@ export function createGateway(options: GatewayOptions) {
     for (const name of FORWARD_REQUEST) { const value = request.headers.get(name); if (value !== null) headers.set(name, value) }
     headers.set("authorization", `Bearer ${target.token}`)
     let upstream: Response
+    const aborter = new AbortController()
     try {
       upstream = await fetch(`http://localhost${url.pathname}${url.search}`, {
-        method: request.method, headers, redirect: "manual", signal: request.signal,
+        method: request.method, headers, redirect: "manual", signal: AbortSignal.any([request.signal, aborter.signal]),
         ...(request.method === "GET" || request.method === "HEAD" ? {} : { body: await request.arrayBuffer() }),
         unix: target.socket,
       } as RequestInit)
@@ -589,6 +601,16 @@ export function createGateway(options: GatewayOptions) {
       const page = (await upstream.text()).replace("<title>", `<meta name="mendcode-gateway-csrf" content="${csrf}"><title>`)
       out["content-security-policy"] = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self' ${config.origin.replace(/^http/, "ws")}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
       return new Response(page, { status: upstream.status, headers: out })
+    }
+    if (out["content-type"]?.startsWith("text/event-stream") && upstream.body) {
+      // An event stream outlives the request that opened it: revoking the device, signing out or disabling the account must end it too.
+      const entry = { identity, abort: () => aborter.abort() }
+      const finish = () => { streams.delete(entry) }
+      streams.add(entry)
+      watchAccess()
+      request.signal.addEventListener("abort", finish, { once: true })
+      aborter.signal.addEventListener("abort", finish, { once: true })
+      return new Response(upstream.body.pipeThrough(new TransformStream({ flush: finish })), { status: upstream.status, headers: out })
     }
     return new Response(upstream.body, { status: upstream.status, headers: out })
   }
@@ -602,8 +624,7 @@ export function createGateway(options: GatewayOptions) {
       sockets.add(ws)
       const accountId = ws.data.identity.accountId
       perAccountSockets.set(accountId, (perAccountSockets.get(accountId) ?? 0) + 1)
-      sweeper ??= setInterval(sweep, 1_000)
-      sweeper.unref?.()
+      watchAccess()
       const Upstream = WebSocket as unknown as { new(url: string, options: { headers: Record<string, string> }): WebSocket }
       const upstream = new Upstream(ws.data.target, { headers: { authorization: `Bearer ${ws.data.token}` } })
       upstream.binaryType = "arraybuffer"
@@ -647,7 +668,7 @@ export function createGateway(options: GatewayOptions) {
     websocket,
     sweep,
     /** Ends every open WebSocket (shutdown). */
-    close() { for (const ws of sockets) ws.close(1001, "gateway stopped"); if (sweeper) clearInterval(sweeper); sweeper = undefined },
+    close() { for (const ws of sockets) ws.close(1001, "gateway stopped"); for (const stream of streams) stream.abort(); if (sweeper) clearInterval(sweeper); sweeper = undefined },
   }
 }
 export type Gateway = ReturnType<typeof createGateway>

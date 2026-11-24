@@ -4,7 +4,7 @@ import path from "node:path"
 import type { ModelEvent, ModelMessage, ModelRequest } from "@mendcode/engine-native"
 import type { Goal, SessionEvent, SessionId } from "@mendcode/protocol"
 import { MAX_UNATTENDED_GOAL_TURNS } from "../src/goals"
-import { answer, boot, callTool, hang, openSession, put, stop, until, type NativeHarness, type Step } from "./native-harness"
+import { answer, boot, callTool, hang, jumpClock, openSession, put, stop, until, type NativeHarness, type Step } from "./native-harness"
 
 const harnesses: NativeHarness[] = []
 afterEach(async () => {
@@ -493,6 +493,42 @@ describe("goal waiting on background commands", () => {
     await until(() => goalOf(h, sessionId)?.status === "complete", 15_000)
     expect(lastUser(h.requests[2]!)).toContain("built-ok")
     expect(started(h, sessionId)).toBe(3)
+  }, 30_000)
+
+  test("heartbeat turns that only check on a running command never stall the goal, however many pass", async () => {
+    const clock = jumpClock()
+    const h = await boot({ clock, shell: true, steps: [callTool("shell", { command: "sleep 120", background: true }), stop("started it"), stop("still running 1"), stop("still running 2"), stop("still running 3"), stop("still running 4")] })
+    harnesses.push(h)
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "wait for the long job" })
+    await until(() => finished(h, sessionId) >= 1)
+    for (let beat = 2; beat <= 5; beat++) {
+      clock.jump(30 * 60_000 + 1_000)
+      await until(() => finished(h, sessionId) >= beat)
+      await settle(50)
+    }
+    // Four heartbeats (one more than the stale bound) later the goal is still active and its heartbeat is armed again.
+    expect(goalOf(h, sessionId)).toMatchObject({ status: "active" })
+    expect(goalOf(h, sessionId)?.stalled).toBeUndefined()
+    expect(started(h, sessionId)).toBe(5)
+  }, 30_000)
+
+  test("a wait longer than one timer holds is set in segments and ends at the requested time, not at once", async () => {
+    const clock = jumpClock()
+    const h = await boot({ clock, shell: true, steps: [callTool("shell", { command: "sleep 120", background: true }), stop("started it"), stop("heartbeat")] })
+    harnesses.push(h)
+    h.store.settings.set({ processLimits: { goalWaitMinutes: 40_000 } })
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "wait a very long time" })
+    await until(() => finished(h, sessionId) >= 1)
+    await settle(300)
+    expect(started(h, sessionId)).toBe(1)
+    clock.jump(36_000 * 60_000)
+    await settle(300)
+    expect(started(h, sessionId)).toBe(1)
+    clock.jump(4_001 * 60_000)
+    await until(() => finished(h, sessionId) >= 2)
+    expect(started(h, sessionId)).toBe(2)
   }, 30_000)
 
   test("with nothing running in the background the goal continues at once, as before", async () => {

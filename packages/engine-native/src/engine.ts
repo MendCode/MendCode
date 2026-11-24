@@ -2016,8 +2016,9 @@ export function createNativeEngine(options: {
     const clean = (text: string) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text
     const parts: string[] = []
     // A message the user sends while the turn waits ends the wait: the commands run on in the background and the message is read now.
+    // A notice (another command ended, watched output) is not the user's: it waits for its own turn and the wait goes on.
     const interrupted = new AbortController()
-    input.onQueued?.(() => interrupted.abort())
+    input.onQueued?.((queued) => { if (!queued?.notice) interrupted.abort() })
     const signal = AbortSignal.any([input.signal, interrupted.signal])
     for (const id of [...ids]) {
       if (interrupted.signal.aborted) break

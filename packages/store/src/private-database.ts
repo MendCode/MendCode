@@ -121,7 +121,8 @@ export function openPrivateDatabase(dir: string, file: string) {
     if (grouped || depth || live.inTransaction) return
     live.run("BEGIN")
     grouped = true
-    setTimeout(endGroup, GROUP_MS).unref?.()
+    // The timer has no caller to tell: a failed commit or seal is held in `failed` (every later call throws it), never thrown out of the timer.
+    setTimeout(() => { try { endGroup() } catch { /* Held in `failed`. */ } }, GROUP_MS).unref?.()
   }
   const db = new Proxy(live, {
     get(_target, property) {

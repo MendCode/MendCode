@@ -794,7 +794,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       event.queue.forEach((entry, position) => q.queueKeep.run(position, event.sessionId, entry.queueId))
     }
     if (event.type === "session.workspace.changed") db.query("UPDATE sessions SET directory = ? WHERE id = ?").run(event.directory, event.sessionId)
-    if (event.type === "session.permission") db.query("UPDATE sessions SET permission_mode = ? WHERE id = ?").run(event.mode, event.sessionId)
+    // A copied session keeps this machine's permission mode: the other machine's choice is authority this one never granted.
+    if (event.type === "session.permission" && !ingest) db.query("UPDATE sessions SET permission_mode = ? WHERE id = ?").run(event.mode, event.sessionId)
     if (event.type === "turn.started") q.setActiveTurn.run(event.turnId, event.sessionId)
     else if (TERMINAL_TURN_EVENTS.has(event.type)) {
       q.setActiveTurn.run(null, event.sessionId)

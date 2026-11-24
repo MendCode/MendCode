@@ -45,6 +45,7 @@ beforeAll(() => {
         const url = new URL(request.url)
         seen.push({ account: name, path: url.pathname, authorization: request.headers.get("authorization"), cookie: request.headers.get("cookie"), origin: request.headers.get("origin"), extra: request.headers.get("x-mendcode-account") })
         if (server.upgrade(request, { data: { account: name } })) return undefined
+        if (url.pathname === "/event") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode("data: hello\n\n")) } }), { headers: { "content-type": "text/event-stream" } })
         if (url.pathname === "/") return new Response("<!doctype html><title>MendCode</title>", { headers: { "content-type": "text/html; charset=utf-8" } })
         return Response.json({ account: name, path: url.pathname, auth: request.headers.get("authorization") }, { headers: { "www-authenticate": 'Basic realm="x"', "set-cookie": "leak=1" } })
       },
@@ -295,6 +296,31 @@ describe("device pairing: code, passkey approval, short tokens", () => {
     expect(issued.response.json.scope).toBe("read-only")
     expect((await call("/session/x", { auth: `Bearer ${issued.response.json.accessToken}` })).json.auth).toBe(`Bearer backend-${ACCOUNTS.alice}-read-only`)
   })
+  test("an open WebSocket of a device ends when the access token it was opened with expires", async () => {
+    const issued = await token()
+    const socket = new (WebSocket as unknown as { new(url: string, options: { headers: Record<string, string> }): WebSocket })(`${base.replace("http", "ws")}/wire`, { headers: { authorization: `Bearer ${issued.response.json.accessToken}`, "x-real-ip": "10.8.8.7" } })
+    const echoed = new Promise<string>((resolve) => { socket.onmessage = (event) => resolve(String(event.data)) })
+    const closed = new Promise<number>((resolve) => { socket.onclose = (event) => resolve(event.code) })
+    await new Promise((resolve) => { socket.onopen = resolve })
+    socket.send("ping")
+    expect(await echoed).toBe("alice:ping")
+    clock += TTL.accessToken + 1
+    expect(await closed).toBe(1008)
+  })
+  test("revoking a device ends its open event stream, not only its WebSockets", async () => {
+    const started = await start("stream")
+    expect((await approve(started.userCode)).status).toBe(200)
+    clock += TTL.devicePoll
+    const id = (await call("/_gw/device/poll", { body: { deviceCode: started.deviceCode }, origin: null })).json.deviceId
+    const issued = await token(id)
+    const response = await fetch(`${base}/event`, { headers: { authorization: `Bearer ${issued.response.json.accessToken}`, "x-real-ip": "10.8.8.6" } })
+    const reader = response.body!.getReader()
+    expect(new TextDecoder().decode((await reader.read()).value)).toBe("data: hello\n\n")
+    const csrf = await csrfOf(alice.cookie)
+    expect((await call("/_gw/devices/revoke", { body: { deviceId: id }, cookie: alice.cookie, csrf })).status).toBe(200)
+    const ended = await Promise.race([reader.read().then((chunk) => (chunk.done ? "done" : "data"), () => "error"), Bun.sleep(2000).then(() => "open")])
+    expect(ended === "done" || ended === "error").toBe(true)
+  })
   test("revoking a device ends its tokens and closes its open WebSocket within a second", async () => {
     const issued = await token()
     const accessToken = issued.response.json.accessToken
@@ -311,6 +337,32 @@ describe("device pairing: code, passkey approval, short tokens", () => {
     expect(Date.now() - started).toBeLessThan(1500)
     expect((await call("/session/x", { auth: `Bearer ${accessToken}` })).status).toBe(401)
     expect((await token()).response.status).toBe(401)
+  })
+})
+
+describe("the device limit", () => {
+  test("a device can replace a revoked one at the limit of 32: the revoked record makes room instead of failing the approval", async () => {
+    const device = generateKeyPairSync("ed25519")
+    const publicKey = (device.publicKey.export({ format: "jwk" }) as { x: string }).x
+    const pair = async (name: string) => {
+      const started = (await call("/_gw/device/start", { body: { name, publicKey }, origin: null, ip: freshIp() })).json as { deviceCode: string; userCode: string }
+      const csrf = await csrfOf(alice.cookie)
+      const options = await call("/_gw/device/approve/options", { body: { userCode: started.userCode }, cookie: alice.cookie, csrf })
+      const approved = await call("/_gw/device/approve", { body: { flowId: options.json.flowId, scope: "full", credential: alice.authenticator.get(options.json.publicKey) }, cookie: alice.cookie, csrf })
+      return { status: approved.status, deviceId: approved.json.deviceId as string | undefined }
+    }
+    const live: string[] = []
+    for (let i = 0; i < 40; i++) {
+      const result = await pair(`fill-${i}`)
+      if (result.status === 409) break
+      expect(result.status).toBe(200)
+      live.push(result.deviceId!)
+    }
+    const full = await pair("one too many")
+    expect(full.status).toBe(409)
+    const csrf = await csrfOf(alice.cookie)
+    expect((await call("/_gw/devices/revoke", { body: { deviceId: live[0] }, cookie: alice.cookie, csrf })).status).toBe(200)
+    expect((await pair("replacement")).status).toBe(200)
   })
 })
 

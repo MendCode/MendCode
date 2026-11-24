@@ -20,7 +20,7 @@ import type { PresentationMode } from "./view/transcript"
 import { readTuiProfile } from "./view/tui-profile"
 import packageJson from "../package.json"
 import { parseGlobalOptions, cliLogger } from "./global-options"
-import { commandIndex, HTTP_USAGE, parseServerCommand } from "./http-cli"
+import { commandIndex, dataDirFlag, HTTP_USAGE, parseServerCommand } from "./http-cli"
 import type { DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
 import { clearRestart, markRestart } from "./restart-mark"
@@ -87,7 +87,7 @@ let transportFlags: ReturnType<typeof parseRemoteFlags>
 let gatewayDataDir: string | undefined
 try {
   // Saved remotes (`mendcode remote add`): read only when the file exists or a flag names one.
-  const profileDir = (() => { const at = rawArgv.indexOf("--dir"); return path.resolve(at >= 0 && rawArgv[at + 1] ? rawArgv[at + 1]! : envDataDir()) })()
+  const profileDir = path.resolve(dataDirFlag(rawArgv) ?? envDataDir())
   // Token and saved-remote administration run without connecting to or launching a daemon.
   if (rawArgv.includes("remote")) {
     // `remote login|logout URL`: device pairing with a gateway (passkey approval); loaded only for these words.

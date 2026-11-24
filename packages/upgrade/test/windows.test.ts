@@ -65,6 +65,20 @@ describe("windows upgrade", () => {
     expect(JSON.parse(text(path.join(box.dataDir, "upgrade.json"))).lastVersion).toBe("v1.1.0")
   })
 
+  test("two upgrades with different data directories do not share the staging file: the second is refused while the first holds the installation", async () => {
+    const box = sandbox()
+    writeFileSync(box.exe, "one")
+    const held = await nodeFs.lock(box.installDir, "install.lock")
+    const refused = await failure(runUpgrade(box.request({ dataDir: path.join(box.dataDir, "other") }), fakePorts([release({ tag: "v1.1.0", binaries: windows("two") })]).ports))
+    expect(refused.code).toBe("busy")
+    expect(text(box.exe)).toBe("one")
+    expect(existsSync(`${box.exe}.new`)).toBe(false)
+    await held()
+    await runUpgrade(box.request(), fakePorts([release({ tag: "v1.1.0", binaries: windows("two") })]).ports)
+    expect(text(box.exe)).toBe("two")
+    expect(existsSync(path.join(box.installDir, "install.lock"))).toBe(false)
+  })
+
   test("a second upgrade replaces the .old of the first", async () => {
     const box = sandbox()
     writeFileSync(box.exe, "one")

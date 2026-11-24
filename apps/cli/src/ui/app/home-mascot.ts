@@ -8,6 +8,8 @@ import type { AppContext } from "./context"
 
 /** `homeMascot` values that are a pet of the pet system (`pets/manifest.ts`); `mend` is the ASCII mascot. */
 export const isPetMascot = (value: string) => /^(user|codex|package|builtin):/.test(value)
+/** A retained pet that cannot be shown puts the wordmark in its place, but only where the logo mode asks for a mascot: a hidden or custom logo stays as chosen. */
+export const wordmarkInPlaceOfMascot = (logoKind: string, mascot: { none?: true } | undefined) => (mascot?.none && (logoKind === "both" || logoKind === "mascot") ? { logoKind: "wordmark" as const } : {})
 
 /** How many times its own pixels the built-in Mend is drawn in half blocks at each `mascotSize`: the default medium is the compact 13 x 7 robot. */
 export const MEND_SCALES = { small: 1, medium: 1, large: 2 } as const

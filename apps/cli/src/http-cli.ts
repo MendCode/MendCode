@@ -17,6 +17,18 @@ export function commandIndex(argv: string[]) {
   return -1
 }
 
+/** The data directory a `--dir PATH` or `--dir=PATH` names; undefined when none, and for `attach URL`, where `--dir` is the server's project, not a local directory. */
+export function dataDirFlag(argv: string[]): string | undefined {
+  const at = commandIndex(argv)
+  if (argv[at] === "attach" && /^https?:\/\//.test(argv[at + 1] ?? "")) return undefined
+  for (let i = 0; i < argv.length; i++) {
+    const token = argv[i]!
+    if (token === "--dir") return argv[i + 1] ? argv[i + 1] : undefined
+    if (token.startsWith("--dir=")) return token.slice("--dir=".length) || undefined
+  }
+  return undefined
+}
+
 export type ServerCommand = { kind: "serve" | "web"; dir?: string; cwd?: string; engine?: string; port?: number; hostname?: string; cors: string[]; open: boolean; help: boolean; pty?: boolean; edit?: boolean; socket?: string }
 export function parseServerCommand(argv: string[]): ServerCommand | undefined {
   const at = commandIndex(argv)

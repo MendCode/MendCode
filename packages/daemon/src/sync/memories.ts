@@ -32,6 +32,11 @@ export async function applyMemory(state: SyncState, row: SyncMemoryRow, projects
     return true
   }
   if (row.text === undefined || !row.scope) return false
+  // A delete made here and not yet sent is newer than an older copy of the row: the copy must not bring the memory back.
+  if (!local) {
+    const pending = state.changeOf("memory", row.id)
+    if (pending?.deleted && pending.at >= row.updatedAt) return false
+  }
   const directory = row.scope === "project" && row.directory ? (await projects.resolve({ directory: row.directory, ...(row.project ? { project: row.project } : {}) })).directory : null
   const next: MemoryRecord = {
     id: row.id, scope: row.scope, directory, text: row.text, category: row.category ?? "", status: row.status === "pending" || row.status === "archived" ? row.status : "saved",
