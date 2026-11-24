@@ -84,6 +84,8 @@ describe("daemon lifecycle CLI", () => {
     expect(() => parsed("daemon", "run", "--listener")).toThrow("--listener goes with")
     expect(() => parsed("daemon", "service", "install", "--tls-cert", "/c.pem")).toThrow("need --listen")
     expect(() => parsed("daemon", "run", "--tls-cert", "/c.pem")).toThrow("need --listen")
+    // Relative certificate paths are the installer's, not the service's --cwd: they are saved absolute.
+    expect(parsed("daemon", "service", "install", "--cwd", "/srv/project", "--listen", "100.64.0.9:9876", "--tls-cert", "cert.pem", "--tls-key=keys/key.pem").remote).toEqual(["--listen", "100.64.0.9:9876", "--tls-cert", path.resolve("cert.pem"), "--tls-key", path.resolve("keys/key.pem")])
     expect(parsed("daemon", "run").listener).toBeUndefined()
     expect(parseDaemonService(["run", "hello"])).toBeUndefined()
     expect(parseDaemonService(["memory", "dream", "status"])).toBeUndefined()

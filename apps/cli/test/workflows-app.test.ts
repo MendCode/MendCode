@@ -158,6 +158,27 @@ describe("workflows in the chat", () => {
     await opening
   })
 
+  test("a run that finished while the page was closed is drawn finished when it reopens, before the daemon answers", async () => {
+    const live = run({ name: "kept-run" })
+    let slow = false
+    let release: () => void = () => {}
+    const { app, text, slash } = harness(async (command) => {
+      if (command.type !== "workflow.list") return undefined
+      if (slow) await new Promise<void>((resolve) => { release = resolve })
+      return { ok: true, result: { workflows: [live] } }
+    })
+    await slash("/workflows")
+    await app.onKey("\x1b")
+    app.onGlobal({ type: "workflow.changed", gseq: 1, at: NOW, workflow: { ...live, state: "completed", tasks: [{ ...live.tasks[0]!, state: "done" }] } } as never)
+    slow = true
+    const opening = slash("/workflows")
+    await Bun.sleep(20)
+    app.render()
+    expect(text().join("\n")).toContain("completed")
+    release()
+    await opening
+  })
+
   test("a list that arrives after the scope changed does not replace the other scope's list", async () => {
     const here = run({ name: "local" })
     const elsewhere = run({ name: "elsewhere", directory: "/elsewhere" })

@@ -297,9 +297,22 @@ describe("the agent's own models", () => {
     expect(await modeIn("full")).toBe("dont_ask")
     expect(await modeIn("full")).toBe("dont_ask")
     expect(await modeIn("edits")).toBe("accept_edits")
-    expect(await modeIn("plan")).toBe("accept_edits")
+    // Plan and smart ask like ask does: an agent left in a freer mode would never send the requests MendCode answers.
+    expect(await modeIn("plan")).toBe("default")
+    expect(await modeIn("full")).toBe("dont_ask")
+    expect(await modeIn("smart")).toBe("default")
     expect(await modeIn("ask")).toBe("default")
-    expect(received().filter((message) => message.method === "session/set_mode").map((message) => message.params.modeId)).toEqual(["dont_ask", "accept_edits", "default"])
+    expect(received().filter((message) => message.method === "session/set_mode").map((message) => message.params.modeId)).toEqual(["dont_ask", "accept_edits", "default", "dont_ask", "default"])
+  })
+
+  test("a refused step down to a mode that asks fails the turn before the prompt; a refused step up does not", async () => {
+    const down = setup({ env: { FAKE_ACP_STATE: "1", FAKE_ACP_MODE_REFUSE: "default" } })
+    const sessionId = ids("session")
+    expect(await down.engine.runTurn(turnInput({ sessionId, text: "which mode", mode: () => "full" }).input)).toMatchObject({ status: "ok" })
+    expect(await down.engine.runTurn(turnInput({ sessionId, text: "which mode", mode: () => "plan" }).input)).toMatchObject({ status: "error", code: "acp_mode" })
+    expect(down.received().filter((message) => message.method === "session/prompt")).toHaveLength(1)
+    const up = setup({ env: { FAKE_ACP_STATE: "1", FAKE_ACP_MODE_REFUSE: "dont_ask" } })
+    expect(await up.engine.runTurn(turnInput({ text: "which mode", mode: () => "full" }).input)).toMatchObject({ status: "ok" })
   })
 
   test("an agent with no modes is never sent session/set_mode", async () => {

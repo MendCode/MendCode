@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { openPrivateDatabase } from "../src/private-database"
@@ -102,4 +102,25 @@ test("an encrypted database sealed whole, as earlier versions wrote it, still op
   expect(reopened.enabled()).toBe(true)
   expect(reopened.db.query("SELECT v FROM t").get()).toEqual({ v: "written by an older version" })
   reopened.db.close()
+})
+
+test("a grouped commit whose sealing fails inside the timer does not escape it: the store stays failed and the next call says why", async () => {
+  const dir = temp()
+  const { file, opened } = encrypted(dir)
+  const escaped: unknown[] = []
+  const hear = (error: unknown) => void escaped.push(error)
+  process.on("uncaughtException", hear)
+  try {
+    opened.group()
+    opened.db.query("INSERT INTO t VALUES (2, 'two')").run()
+    // The sealed file can no longer be replaced (the disk went wrong); the group commits on its own timer.
+    rmSync(file)
+    mkdirSync(file)
+    await Bun.sleep(80)
+    expect(escaped).toEqual([])
+    expect(() => opened.db.query("INSERT INTO t VALUES (3, 'three')").run()).toThrow()
+  } finally {
+    process.off("uncaughtException", hear)
+    rmSync(file, { recursive: true, force: true })
+  }
 })

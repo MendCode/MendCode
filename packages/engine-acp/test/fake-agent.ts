@@ -172,8 +172,12 @@ for await (const chunk of Bun.stdin.stream()) {
         send({ jsonrpc: "2.0", id, result: {} })
       }
     } else if (method === "session/set_mode") {
-      currentMode = params.modeId
-      send({ jsonrpc: "2.0", id, result: {} })
+      // FAKE_ACP_MODE_REFUSE=<id>: the agent refuses to enter that mode and stays where it is.
+      if (params.modeId === process.env.FAKE_ACP_MODE_REFUSE) send({ jsonrpc: "2.0", id, error: { code: -32602, message: `cannot enter ${params.modeId}` } })
+      else {
+        currentMode = params.modeId
+        send({ jsonrpc: "2.0", id, result: {} })
+      }
     } else if (method === "session/set_config_option") {
       if (params.configId === "effort" && process.env.FAKE_ACP_EFFORT === "1" && currentModel === "vendor/big" && EFFORTS.includes(params.value)) {
         currentEffort = params.value

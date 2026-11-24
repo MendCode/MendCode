@@ -362,7 +362,8 @@ The local reviewer is **off by default**: it reaches the network through `gh` (o
   an allowed publisher counts, hand-written reviews included. They go newest first, at most `backlog.max_prs` (default 10), and
   only PRs updated within `backlog.window_days` (default 30). A PR whose head already has a review stays as it is. The
   `/pr watch-repo` answer lists what it queued and every PR it skipped, with the reason. `max_prs: 0` restores the old baseline,
-  where the PRs open when the watch started were never reviewed. To start that way, put this in `.mendcode/review.yaml` and then
+  where the PRs open when the watch started were never reviewed. To start that way, put this in `.mendcode/review.yaml`,
+  **commit it so it is in the checkout's `HEAD`** (the watch reads the file from the commit, not from the working tree), and then
   type `/pr watch-repo requested` in a session in that repo:
 
   ```yaml
@@ -370,6 +371,9 @@ The local reviewer is **off by default**: it reaches the network through `gh` (o
   backlog:
     max_prs: 0
   ```
+
+  `max_prs: 0` turns off only this backlog. A PR that already requests a review from the daemon's login, is assigned to it, or is
+  routed to a personal reviewer of it by `.mendcode/reviewers.yaml` is still reviewed when the watch starts, as it always was.
 - `/pr unwatch-repo` stops it, `/pr repos` lists the watches. The watch belongs to the daemon, not
   to a terminal or an open session: it keeps reviewing with every terminal closed and after a daemon restart (`watches.json`), as
   long as the machine and its daemon run. A sleep or a network outage does not end it: it resumes by itself and catches up

@@ -337,7 +337,9 @@ export function createKeys(ctx: AppContext, actions: {
     // Over the left list the wheel moves the list's window, never the chat; a search drawn over the list keeps the wheel to itself.
     // Every mouse report says whether the pointer is over the list: the list holds still while it is (ui/app/sidebar-bots.ts).
     if (pointer) state.sidebarBots?.pointer(overSidebar(pointer.col, sidebarGeometry()))
-    if (wheel !== undefined && pointer && overSidebar(pointer.col, sidebarGeometry())) {
+    // The list drawn beside a page takes the wheel at its own columns too; the rest of a page's wheel is the page's.
+    const listPointer = pointer ?? (wheel !== undefined ? pointerOf(key) : undefined)
+    if (wheel !== undefined && listPointer && overSidebar(listPointer.col, sidebarGeometry())) {
       state.selection = undefined
       // The rows the wheel moves are the user's own doing: the click guard lets the next click through.
       state.sidebarInputAt = now()

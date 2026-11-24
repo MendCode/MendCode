@@ -85,7 +85,8 @@ export function parseDaemonService(argv: string[]): DaemonServiceCommand | undef
   if (flags.listener && !serviceListener) throw new Error("--listener goes with daemon service install or plan")
   if (listenerFlags.length && !(action === "run" && !service && !scheduler) && !serviceListener) throw new Error("--listen, --tls-cert and --tls-key go with daemon run (a foreground daemon) or daemon service install; other background daemons stay local")
   if (listenerFlags.length && !flags.listen) throw new Error("--tls-cert and --tls-key need --listen host:port")
-  const forwarded = listenerFlags.flatMap((name) => [`--${name}`, String(flags[name])])
+  // The service runs in --cwd, not where the user typed the paths: certificate files are named by absolute path before they are checked and saved.
+  const forwarded = listenerFlags.flatMap((name) => [`--${name}`, name === "listen" ? String(flags[name]) : path.resolve(String(flags[name]))])
   return {
     ...(serviceListener && (flags.listener || listenerFlags.length) ? { remote: forwarded } : listenerFlags.length ? { listener: forwarded } : {}),
     action: action === "remove" ? "uninstall" : action as DaemonServiceCommand["action"], service,

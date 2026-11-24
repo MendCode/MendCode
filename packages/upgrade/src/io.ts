@@ -92,14 +92,14 @@ export async function get(url: string, timeoutMs: number, limit: number, access:
 
 export const nodeFs: UpgradeFs = {
   readBytes: (file) => readFile(file),
-  lock: async (dir) => {
+  lock: async (dir, name = "upgrade.lock") => {
     await mkdir(dir, { recursive: true })
     for (const relative of ["bin", "bin/mendcode", "bin/mendcode.prev", "bin/mendcode.new", "upgrade.json", "upgrade.json.tmp", "upgrade-recovery.json", "upgrade-recovery.json.tmp"]) {
       const entry = await lstat(path.join(dir, relative)).catch((error: NodeJS.ErrnoException) => { if (error.code !== "ENOENT") throw error; return undefined })
       if (entry?.isSymbolicLink()) throw new UpgradeError("bad-data-dir", "updater paths cannot be symbolic links")
     }
-    const file = path.join(dir, "upgrade.lock")
-    const handle = await open(file, "wx", 0o600).catch(() => { throw new UpgradeError("busy", "another update/channel operation owns upgrade.lock; verify its owner before recovering it") })
+    const file = path.join(dir, name)
+    const handle = await open(file, "wx", 0o600).catch(() => { throw new UpgradeError("busy", `another update/channel operation owns ${name}; verify its owner before recovering it`) })
     await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: Date.now() }))
     return async () => { await handle.close(); await rm(file, { force: true }) }
   },

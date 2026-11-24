@@ -149,7 +149,7 @@ export type TurnInput = {
     whileTools?: boolean
   }): Promise<QueuedMessage | undefined>
   /** An engine that takes messages while its tools run (`whileTools`) registers this; it is called when one enters the queue during the turn. */
-  onQueued?(handler: () => void): void
+  onQueued?(handler: (queued?: { notice: boolean }) => void): void
   /**
    * An engine that can take a message mid-turn without stopping what the turn started (Claude Code: a plain interrupt also stops its
    * background agents) registers how. "Send now" then hands it the message: the handler returns true when it took it, and the turn

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createAcpSettings } from "../src/acp-settings"
@@ -32,4 +32,15 @@ test("a patch that is not an object says how to add or remove an agent", () => {
   expect(() => acp.prepare("opencode")).toThrow('{ "<name>": null } removes one')
   expect(() => acp.prepare(["opencode"])).toThrow("acpAgents must be an agent patch")
   expect(Object.keys(acp.get())).toEqual(["opencode", "gemini"])
+})
+
+test("a file that cannot even be inspected (a symlink loop) reads as no agents and never fails the settings read", () => {
+  const dir = mkdtempSync(join(tmpdir(), "acp-settings-"))
+  dirs.push(dir)
+  symlinkSync("acp-agents.json", join(dir, "acp-agents.json"))
+  const acp = createAcpSettings(dir)
+  expect(acp.get()).toEqual({})
+  rmSync(join(dir, "acp-agents.json"))
+  writeFileSync(join(dir, "acp-agents.json"), JSON.stringify({ opencode: { command: "opencode" } }))
+  expect(Object.keys(acp.get())).toEqual(["opencode"])
 })

@@ -1,3 +1,4 @@
+import path from "node:path"
 import { expectedSum, parseSums, verifyChecksum, sha256Hex } from "./checksum"
 import { UpgradeError } from "./errors"
 import { adoptLegacyBin, binPaths, installBinary, installWindowsBinary, refreshInstallReceipt, resolveDataDir, rollbackBinary, WINDOWS_EXE } from "./install"
@@ -170,8 +171,13 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   if (request.beforeActivate && !await request.beforeActivate()) throw new UpgradeError("busy", "automatic activation cancelled by current policy or active work")
   if (windows) {
     // The program that runs is replaced where it lives (or where install.ps1 puts it); the data directory keeps only the state files.
-    const installedTo = await installWindowsBinary({ fs, target: request.installPath!, bytes, sha256: expected })
-    await refreshInstallReceipt({ fs, target: installedTo, sha256: expected })
+    // One installation is one target whatever data directory each command names: its staging file and rename are serialized by the install directory.
+    const releaseTarget = await fs.lock(path.win32.dirname(request.installPath!), "install.lock")
+    let installedTo: string
+    try {
+      installedTo = await installWindowsBinary({ fs, target: request.installPath!, bytes, sha256: expected })
+      await refreshInstallReceipt({ fs, target: installedTo, sha256: expected })
+    } finally { await releaseTarget() }
     await writeRecovery(fs, dataDir, { current: { version: release.tag, sha256: expected, schema: index.schema }, previous: null })
     await save(release.tag)
     return { ...found, status: "installed", installedTo, downgrade: decision === "ahead", rollbackAvailable: false, verification }

@@ -245,6 +245,7 @@ export function createEvents(ctx: AppContext, actions: {
           // (the agent that built it is working there); every other terminal keeps it as shown or hidden.
           const own = state.sessionLook.get(state.sessionId)
           state.panelSpec = (reply.result?.widgets ?? []) as typeof state.tuiProfile.sidebarWidgets
+          state.panelSpecDirectory = directory
           if (own?.sidebarWidgets) return
           // A preset the session chose follows the profile's version of it: editing the custom galaxy changes the session's galaxy too.
           const widgets = own?.panelPreset ? resolvePanel(own.panelPreset, profilePanel(state)).widgets : state.panelSpec
@@ -297,6 +298,8 @@ export function createEvents(ctx: AppContext, actions: {
       const id = event.sessionId
       state.sessions = state.sessions.filter((session) => session.sessionId !== id)
       state.paletteSessions = state.paletteSessions.filter((session) => session.sessionId !== id)
+      // /sessions merges its search results back into the list: a deleted chat must not stay selectable there.
+      if (state.sessionList.found) state.sessionList.found = state.sessionList.found.filter((session) => session.sessionId !== id)
       state.agentSessions.delete(id)
       state.sidebarBots?.onRemoved(id)
       state.homeBots?.onRemoved(id)
@@ -357,6 +360,12 @@ export function createEvents(ctx: AppContext, actions: {
       const run = event.workflow
       noteWorkflow(run, event.deleted === true)
       if (run.state === "completed" && !event.deleted) state.pet?.cheer("jumping")
+      // The lists the page draws before the daemon answers follow the live updates too, or a reopened page would show the older runs.
+      for (const scope of ["project", "all"] as const) {
+        const seen = state.workflowsSeen[scope]
+        if (!seen || scope === "project" && !inProject(run.directory, input.directory)) continue
+        state.workflowsSeen[scope] = event.deleted ? seen.filter((entry) => entry.workflowId !== run.workflowId) : seen.some((entry) => entry.workflowId === run.workflowId) ? seen.map((entry) => (entry.workflowId === run.workflowId ? run : entry)) : [run, ...seen]
+      }
       if (state.page !== "workflows" || !state.workflowsLoaded) return requestFrame()
       if (state.workflowsState.scope === "project" && !inProject(run.directory, input.directory)) return
       const known = state.workflows.some((entry) => entry.workflowId === run.workflowId)
