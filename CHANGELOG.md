@@ -11,6 +11,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.
+- When a session's shell is refused a profile change, the message now says to use the `profiles` tool (the user approves on a card) and that enabling or disabling needs no reload or restart.
+- A queued message the engine already holds (read when the running tool ends) shows as delivered, with no drop or edit hint, and ctrl+k or edit on it say why instead of "queued message not found".
+- In a Claude session, a message that starts with `/` is read as your text instead of running a Claude Code command and vanishing; a turn that ends with no answer now says so.
 - A sub-agent started with an effort on a model that lists it (`high` on GPT-6.2-Astra) runs at that effort instead of being refused or dropping to the default.
 - A message you send while a turn waits for a command that moved to the background is read at once; the command keeps running.
 - The right panel, shown or hidden with `/panel`, stays that way in every session, bot chats included.

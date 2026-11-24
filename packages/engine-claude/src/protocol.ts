@@ -165,8 +165,21 @@ export function controlResponse(requestId: string, response: Record<string, unkn
   return JSON.stringify({ type: "control_response", response: { subtype: "success", request_id: requestId, response } })
 }
 
-export function userMessage(content: Array<Record<string, unknown>>, uuid?: string) {
-  return JSON.stringify({ type: "user", message: { role: "user", content }, parent_tool_use_id: null, session_id: "", ...(uuid ? { uuid } : {}) })
+/**
+ * Claude Code runs a user message whose last block is text starting with `/` as its own slash command (`/reload-plugins`, `/plugin`)
+ * and the model never sees it. A message of the user's is text: the last character moves to a block of its own, so the words reach
+ * the model whole (a message only reads as a command when its last block starts with the slash).
+ */
+export function plainTextContent(parts: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const last = parts.at(-1)
+  if (last?.type !== "text" || typeof last.text !== "string") return parts
+  const text = last.text.trimEnd()
+  if (!text.trimStart().startsWith("/") || text.length < 2) return parts
+  return [...parts.slice(0, -1), { ...last, text: text.slice(0, -1) }, { ...last, text: text.slice(-1) }]
+}
+
+export function userMessage(content: Array<Record<string, unknown>>, uuid?: string, command = false) {
+  return JSON.stringify({ type: "user", message: { role: "user", content: command ? content : plainTextContent(content) }, parent_tool_use_id: null, session_id: "", ...(uuid ? { uuid } : {}) })
 }
 
 const WINDOW_LABEL: Record<string, { label: string; minutes: number }> = { five_hour: { label: "5h", minutes: 300 }, seven_day: { label: "7d", minutes: WEEK_MINUTES } }
@@ -332,7 +345,10 @@ function isTaskNotice(message: ClaudeMessage): boolean {
   return message.type === "system" && (message.subtype === "task_started" || message.subtype === "task_notification")
 }
 
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined }; /** Facts about one tool call learned outside the stream (a hook: `graphHint`), added to its result's `meta`; asked once per result. */ resultMeta?(toolUseId: string): Record<string, number> | undefined }) {
+export function createTurnMapper(rawInput: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Keeps an image a tool result carried; its ref goes on the call's card. */ storeImage?(bytes: Uint8Array, mime: string): BlobRef | undefined; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined, toolUseId?: string): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined; /** The process's spend when its last `result` came, kept across turns: a compaction's calls show only there. */ processMark?: { spend?: ClaudeSpend | undefined }; /** Facts about one tool call learned outside the stream (a hook: `graphHint`), added to its result's `meta`; asked once per result. */ resultMeta?(toolUseId: string): Record<string, number> | undefined }) {
+  /** True until the turn draws its first item: a turn that ends so says why, instead of an empty "took 2s". */
+  let silent = true
+  const input = { ...rawInput, emit: (event: EngineEvent) => { if (event.type === "item.started") silent = false; rawInput.emit(event) } }
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   /** A tool result's pictures kept in the blob store, for its card; none without a store or when one cannot be kept. */
   const resultPictures = (part: any): BlobRef[] => {
@@ -453,6 +469,13 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     const output = count(usage.output_tokens)
     const callId = typeof id === "string" ? id : ""
     lastCall = lastCall && callId && lastCall.id === callId ? { id: callId, prompt: Math.max(lastCall.prompt, prompt), output: Math.max(lastCall.output, output) } : { id: callId, prompt, output }
+  }
+
+  /** A whole message from Claude Code itself, outside the model's stream. */
+  function say(text: string) {
+    const itemId = input.newItemId()
+    input.emit({ type: "item.started", itemId, kind: "agent_message" })
+    input.emit({ type: "item.completed", itemId, status: "ok", text: clip(text) })
   }
 
   function start(kind: "text" | "reasoning") {
@@ -791,11 +814,20 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       if (message.type === "stream_event") onStreamEvent(message.event)
       else if (message.type === "system" && message.subtype === "thinking_tokens") onThinkingTokens(message)
       else if (message.type === "system" && message.subtype === "compact_boundary") compacted = true
-      else if (message.type === "assistant") noteCall(message.message?.id, message.message?.usage, message.message?.model)
-      else if (message.type === "user") onToolResults(message.message?.content, message.tool_use_result)
+      else if (message.type === "assistant") {
+        noteCall(message.message?.id, message.message?.usage, message.message?.model)
+        // Claude Code answers its own commands (`/reload-plugins`) with a whole synthetic message and no stream.
+        if (message.message?.model === "<synthetic>" && Array.isArray(message.message.content)) {
+          for (const part of message.message.content) if (part?.type === "text" && typeof part.text === "string" && part.text.trim()) say(part.text)
+        }
+      } else if (message.type === "user") onToolResults(message.message?.content, message.tool_use_result)
       else if (message.type === "result") {
         const event = usage(message)
         if (event) { reported = true; input.emit(event) }
+        if (silent && resultOutcome(message).status === "ok" && message.terminal_reason !== "aborted_streaming" && message.terminal_reason !== "aborted_tools") {
+          const reason = typeof message.result === "string" ? message.result.trim() : ""
+          say(`Claude Code ended the turn without an answer${reason ? `: ${reason}` : "."}`)
+        }
         return message
       }
       return undefined

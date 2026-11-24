@@ -41,8 +41,8 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     e("prompt", "prompt <command>", "how the system prompt is built"),
     e("cache", "cache <command>", "prompt cache on or off"),
     e("theme", "theme <command>", "themes"),
-    e("profile", "profile <command>", "profiles: install, enable, create"),
-    e("plugin", "plugin MODULE", "install an extension"),
+    e("profile", "profile <command>", "profiles (also package, plugins): enable, disable"),
+    e("plugin", "plugin MODULE", "install an extension module"),
     e("plugin-auth", "plugin-auth [provider]", "sign in through an extension"),
     e("area", "area <command>", "areas of folders (memory, roles, permission)"),
     e("customize", "customize restore [id]", "restore saved terminal settings"),
@@ -80,7 +80,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
 
 /** Words that run a command listed under another word: the help of the first is the help of the second. */
 export const HELP_ALIASES: Readonly<Record<string, string>> = {
-  tui: "mendcode", workflows: "workflow", loops: "loop", package: "profile", packages: "profile", profiles: "profile", marketplace: "profile", runtime: "profile", plug: "plugin",
+  tui: "mendcode", workflows: "workflow", loops: "loop", package: "profile", packages: "profile", profiles: "profile", plugins: "profile", marketplace: "profile", runtime: "profile", plug: "plugin",
   login: "console", logout: "console", switch: "console", orgs: "console", open: "console", project: "control-plane", thread: "attach",
 }
 

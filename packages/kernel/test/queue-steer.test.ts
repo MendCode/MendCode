@@ -464,7 +464,8 @@ test("a message taken while the tools run shows as steering until the model read
     const before = userMessages().length
     const taken = await input.takeQueued?.({ whileTools: true })
     expect(taken).toMatchObject({ text: "while the tool runs" })
-    expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs", delivery: "steer" }])
+    // Marked as handed over: clients offer no drop or edit for it, which the daemon would refuse.
+    expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs", delivery: "steer", handed: true }])
     expect(userMessages()).toHaveLength(before)
     // Out of the queue's reach: nothing takes it twice.
     expect(await input.takeQueued?.({ whileTools: true })).toBeUndefined()
@@ -478,6 +479,7 @@ test("a message taken while the tools run shows as steering until the model read
   await flush()
   expect(lastQueue(s)).toMatchObject([{ preview: "while the tool runs" }])
   expect(lastQueue(s)[0]).not.toHaveProperty("delivery")
+  expect(lastQueue(s)[0]).not.toHaveProperty("handed")
   expect(await input.takeQueued?.({ whileTools: true })).toMatchObject({ text: "while the tool runs" })
   // Not reported by the end of the turn: it was written to the engine, so it counts as read there.
   s.manual.last().finish()

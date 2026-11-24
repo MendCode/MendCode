@@ -226,12 +226,13 @@ export function createSessionActor(options: SessionActorOptions) {
     emit({
       type: "queue.changed",
       sessionId,
-      queue: [...sent.map((each) => ({ ...each.entry, delivery: "steer" as const })), ...queue].map((entry) => ({
+      queue: [...sent.map((each) => ({ entry: { ...each.entry, delivery: "steer" as const }, handed: true })), ...queue.map((entry) => ({ entry, handed: false }))].map(({ entry, handed }) => ({
         queueId: entry.queueId,
         preview: entry.compact ? "compact context" : (entry.displayText ?? entry.text).slice(0, PREVIEW_CHARS),
         attachments: entry.attachments.length,
         kind: kindOf(entry),
         ...(entry.delivery ? { delivery: entry.delivery } : {}),
+        ...(handed ? { handed: true as const } : {}),
       })),
     })
   }
@@ -785,7 +786,7 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "queue.list":
         return { ok: true, result: { held, paused, entries: [
-          ...sent.map(({ entry }) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: false, delivery: "steer" as const })),
+          ...sent.map(({ entry }) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: false, delivery: "steer" as const, handed: true as const })),
           ...queue.map((entry) => ({ queueId: entry.queueId, kind: kindOf(entry), text: entry.compact ? "" : entry.text, ...(entry.displayText !== undefined ? { displayText: entry.displayText } : {}), attachments: entry.attachments.length, editable: editable(entry), ...(entry.delivery ? { delivery: entry.delivery } : {}) })),
         ] } }
       case "turn.cancel": {

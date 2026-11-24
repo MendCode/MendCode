@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, agentCommandClass, agentRefusal, capPermission, permissionRank, type Command, type PermissionMode, type SessionId, type SessionOrigin } from "@mendcode/protocol"
+import { AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, agentCommandClass, agentRefusal, agentRefusalFor, capPermission, permissionRank, type Command, type PermissionMode, type SessionId, type SessionOrigin } from "@mendcode/protocol"
 import { agentProcesses } from "@mendcode/tools"
 
 /**
@@ -143,7 +143,7 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
   const ceiling = (origin: AgentOrigin): PermissionMode => (origin.sessionId ? input.modeOf(origin.sessionId as SessionId) : undefined) ?? "ask"
   const mine = (origin: AgentOrigin, target: string) => target === origin.sessionId || launcherFor(target) === (origin.sessionId ?? "")
   const within = (origin: AgentOrigin, target: string) => mine(origin, target) || permissionRank(input.modeOf(target as SessionId) ?? "full") <= permissionRank(ceiling(origin))
-  const refuse = (what: string) => `[DAEMON]: ${agentRefusal({ what })}`
+  const refuse = (what: string, type?: string) => `[DAEMON]: ${agentRefusal({ what, ...(type ? agentRefusalFor(type) : {}) })}`
   return {
     ceiling,
     /** The mode a session this client starts gets: the usual one, never above the caller's own. */
@@ -161,7 +161,7 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
     check(origin: AgentOrigin, command: Command): string | undefined {
       const kind = agentCommandClass(command.type)
       if (kind === "open") return undefined
-      if (kind === "owner") return refuse(`${command.type} changes what only the user decides (permissions, settings, credentials, extensions, scheduled work, other sessions or the daemon)`)
+      if (kind === "owner") return refuse(`${command.type} changes what only the user decides (permissions, settings, credentials, extensions, scheduled work, other sessions or the daemon)`, command.type)
       if (command.type === "session.create") return undefined
       // Storing a file the caller's own shell can already read grants nothing: a session-less attachment counts as the caller's own.
       const target = "sessionId" in command && typeof command.sessionId === "string" ? command.sessionId : ATTACHMENTS.has(command.type) ? origin.sessionId : undefined

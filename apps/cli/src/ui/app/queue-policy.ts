@@ -13,6 +13,14 @@ export function userQueue<Entry extends { preview: string; notice?: true }>(queu
   return queue.filter((entry) => !internalQueued(entry))
 }
 
+/** What drop and edit can still act on: the user's queue minus the messages the engine already holds (they only wait for its tool to end). */
+export function takeableQueue<Entry extends { preview: string; notice?: true; handed?: true }>(queue: readonly Entry[]): Entry[] {
+  return userQueue(queue).filter((entry) => !entry.handed)
+}
+
+/** Said when drop or edit meets a message the engine already took: it cannot be undone, and Esc gives it back. */
+export const HANDED_OVER = "already handed to the model: it reads it when the running tool ends and cannot be dropped or edited · Esc stops the turn and gives it back"
+
 export type QueuePolicy ="after-response" | "after-tools" | "immediate"
 
 /**
