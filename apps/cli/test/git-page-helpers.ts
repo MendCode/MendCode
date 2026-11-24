@@ -143,7 +143,8 @@ export type GitSetup = {
 export async function gitApp(setup: GitSetup = {}) {
   const repo = setup.repo ?? (setup.bench ? benchRepo(setup.bench) : (() => { const made = repository(); made.dirty(); return made })())
   const dataDir = tempDir()
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...setup.profile })
+  // The pages are tested at the whole width; the session list beside a page has its own test (sidebar-pages.test.ts).
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", ...setup.profile })
   const workspaces = [
     { id: "ws_feature", name: "feature", type: "worktree", branch: "mend/feature", directory: path.join(repo.base, "feature") },
     { id: "ws_spike", name: "spike", type: "worktree", branch: "mend/spike", directory: path.join(repo.base, "spike") },

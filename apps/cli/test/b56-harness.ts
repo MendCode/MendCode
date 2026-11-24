@@ -14,7 +14,7 @@ export function b56Harness(options: HarnessOptions = {}) {
     ],
   }))
   const exported = "# Transcript\n\n## User\nInspect the export boundary\n\n## Assistant\nRead the complete session through the daemon.\n"
-  const h = appHarness({ ...options, directory, sessionId, dataDir: options.dataDir ?? tempDir("b56-data-"), env: options.env ?? {}, reply: (command) => {
+  const h = appHarness({ profile: { sidebar: "hidden" }, ...options, directory, sessionId, dataDir: options.dataDir ?? tempDir("b56-data-"), env: options.env ?? {}, reply: (command) => {
     const override = options.reply?.(command)
     if (override) return override
     let result: Record<string, unknown> | undefined

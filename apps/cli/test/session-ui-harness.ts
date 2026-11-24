@@ -4,6 +4,7 @@ import path from "node:path"
 import { createIdFactory, type SessionEvent, type SessionId } from "@mendcode/protocol"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import { createApp } from "../src/ui/app"
+import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { glyphs, type Line } from "../src/ui/theme"
 import type { PresentationMode } from "../src/view/transcript"
 import { mendChatLines, mendSpriteLines } from "../src/view/mend-sprite"
@@ -76,6 +77,8 @@ export type HarnessOptions = {
   daemon?: Parameters<typeof createApp>[0]["daemon"]
   /** The terminal profile in use, as a host that has no data dir hands it in. */
   hostProfile?: Parameters<typeof createApp>[0]["profile"]
+  /** Terminal profile keys written to the data dir before the app starts (a page tested at the whole width passes `sidebar: "hidden"`; the list beside a page has its own test). */
+  profile?: Partial<TuiProfile>
 }
 
 export function appHarness(options: HarnessOptions = {}) {
@@ -96,6 +99,9 @@ export function appHarness(options: HarnessOptions = {}) {
     options.screen.draw = (rows, cursor, images, finished) => { frames.push(rows); cursors.push(cursor); placements.push(images ?? []); if (finished?.length) committed.push(finished); return draw(rows, cursor, images, finished) }
   }
   const sessionId = options.sessionId ?? ids("session")
+  const dataDir = options.dataDir ?? (options.profile ? tempDir() : undefined)
+  // A profile the test already wrote keeps its keys; only the given ones are added.
+  if (options.profile && dataDir) writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...readTuiProfile(dataDir), ...options.profile })
   const app = createApp({
     ...(options.tuiControl ? { tuiControl: true } : {}),
     ...(options.safeMode ? { safeMode: true, pure: true } : {}),
@@ -134,7 +140,7 @@ export function appHarness(options: HarnessOptions = {}) {
     ...(options.launchDirectory ? { launchDirectory: options.launchDirectory } : {}),
     random: () => 0,
     ...(options.mode ? { mode: options.mode } : {}),
-    ...(options.dataDir ? { dataDir: options.dataDir } : {}),
+    ...(dataDir ? { dataDir } : {}),
     ...(options.directory ? { directory: options.directory } : {}),
   })
   const text = () => (frames.at(-1) ?? []).map(plain)

@@ -9,6 +9,13 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- The right panel, shown or hidden with `/panel`, stays that way in every session, bot chats included.
+- Switching sessions draws the right panel at once and asks the daemon for less.
+- The session list stays beside every page you open when it is on, and a click on a chat in it works there.
+- A model you pick in a bot's chat stays for that chat, including when it was picked before the first message and after a plan is applied.
+
 ## v0.0.19 - 2026-11-21
 
 Everything since v0.0.17 comes to stable, v0.0.18 included. Bots (`experimental.bots`) with a face, a page, memory, skills and schedules, Hermes Agent bots, and a model you pick in a bot's chat that runs there. The sessions list starts a chat in any folder with `+`, orders by what you sent and holds still under the pointer. `/today` is one chat per day that sorts memories with you. Long chats scroll and switch faster with less memory. Sub-agents take a model and an effort in one call, say how far they are when asked, and keep their threads right when started again. Mermaid diagrams draw whatever the model wrote, searches carry the code graph's answer, and the compaction arcade has more games.

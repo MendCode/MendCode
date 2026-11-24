@@ -139,6 +139,22 @@ describe("agents in a session's turns", () => {
     expect(h.requests[1]!.model).toBe("gpt-6-astra")
   })
 
+  test("a model picked in the bot's chat stays when the same bot is selected again, and when the pick came before the bot was assigned", async () => {
+    const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
+    put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol"))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await h.client.send({ type: "session.model.set", sessionId, choice: { model: "gpt-6-luna" } })
+    await h.client.send({ type: "session.agent.set", sessionId, agent: "reviewer" })
+    await say(h, sessionId, "first")
+    expect(h.requests[0]!.model).toBe("gpt-6-luna")
+    const blank = await openSession(h)
+    await h.client.send({ type: "session.model.set", sessionId: blank, choice: { model: "gpt-6-luna" } })
+    await h.client.send({ type: "session.agent.set", sessionId: blank, agent: "reviewer" })
+    await say(h, blank, "second")
+    expect(h.requests[1]!.model).toBe("gpt-6-luna")
+  })
+
   test("a fork and a focused handoff keep the model picked in the bot's chat over the bot's own", async () => {
     const h = await start({ steps: [stop("one"), stop("two"), stop("three")] })
     put(path.join(h.dir, "agents", "reviewer.md"), agentFile("description: Reviews\nmode: primary\ntools: read\nmodel: gpt-6-sol"))

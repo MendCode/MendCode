@@ -241,7 +241,7 @@ type Reply = (command: CommandInput) => CommandReply | undefined
 function treeApp(options: { width?: number; height?: number; entries?: TimelineEntry[]; nodes?: SessionTreeNode[]; reply?: Reply; tier?: "minimalist" | "balanced"; sessionId?: SessionId } = {}) {
   const sessionId = options.sessionId ?? ids("session")
   const state = { entries: options.entries ?? [], nodes: options.nodes ?? [] }
-  const h = appHarness({ sessionId, dataDir: tempDir(), directory: "/project", width: options.width ?? 110, height: options.height ?? 30, reply: (command): CommandReply | undefined => {
+  const h = appHarness({ sessionId, dataDir: tempDir(), directory: "/project", width: options.width ?? 150, height: options.height ?? 30, reply: (command): CommandReply | undefined => {
     const custom = options.reply?.(command)
     if (custom) return custom
     if (command.type === "session.timeline") return { ok: true, result: { entries: state.entries } }

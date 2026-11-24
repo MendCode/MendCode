@@ -37,6 +37,8 @@ export function readSessionLook(dataDir: string | undefined): Map<string, Sessio
       if (!look || typeof look !== "object" || Array.isArray(look)) continue
       const valid = normalizeTuiProfile(look)
       const kept: SessionLook = Object.fromEntries(Object.keys(look).filter((key) => key in valid).map((key) => [key, valid[key as keyof TuiProfile]]))
+      // Showing or hiding the panel follows the user everywhere (the profile's `rightSidebar`); older builds kept it per session.
+      delete kept.rightSidebar
       const choice = panelChoiceOf(look.panelPreset)
       const copied = kept.sidebarWidgets?.length ? presetOf(kept.sidebarWidgets) : "custom"
       if (choice || copied !== "custom") {
@@ -75,7 +77,7 @@ export function profilePanel(state: AppContext["state"]): readonly SidebarWidget
 
 /** A kept look as the screen applies it: a panel choice becomes the cards it resolves to now, never a stored copy. */
 export function appliedLook(look: SessionLook, profile: readonly SidebarWidget[]): Partial<TuiProfile> {
-  const { panelPreset, ...rest } = look
+  const { panelPreset, rightSidebar: _shown, ...rest } = look
   return panelPreset ? { ...rest, sidebarWidgets: resolvePanel(panelPreset, profile).widgets } : rest
 }
 
@@ -95,10 +97,9 @@ export function keepSessionLook(ctx: AppContext, patch: Partial<TuiProfile>, pan
   if (!saved.ok) ctx.fail(saved.error)
 }
 
-/** A new chat was just entered: `panelStart` (customize → Sidebar & panel) says whether it opens with the right panel, unless the chat already has a panel choice of its own. */
+/** A new chat was just entered: `panelStart` (customize → Sidebar & panel) says whether it opens with the right panel. */
 export function startNewChatPanel(ctx: AppContext) {
   const { state } = ctx
-  if (state.sessionLook.get(state.sessionId)?.rightSidebar !== undefined) return
   const next = panelStarted(state.tuiProfile)
   if (next === state.tuiProfile) return
   state.tuiProfile = next

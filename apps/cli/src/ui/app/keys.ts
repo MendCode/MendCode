@@ -76,6 +76,8 @@ export function createKeys(ctx: AppContext, actions: {
   chatWidth: () => number
   /** Whether the left list shows at this width (the search draws in it). */
   sidebarShown: (width: number) => boolean
+  /** The columns the left list takes, without the gap. */
+  sidebarCells: (width: number) => number
   /** The columns the transcript's text is laid out in (the chat column less the scrollbar's). */
   transcriptWidth: () => number
   pickApproval: (index: number) => Promise<void>
@@ -194,8 +196,9 @@ export function createKeys(ctx: AppContext, actions: {
     const rightWanted = panelWanted(state) || fileInSlot(state)
     const rightCells = rightWanted ? rightBarCells({ columns: width, setting: state.tuiProfile.sidebarWidth, collapsed: state.rightBarCollapsed }).cells : 0
     const rightWidth = rightCells ? rightCells + 1 : 0
-    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : 0
-    const onRight = !rightWidth && state.tuiProfile.sidebarSide === "right"
+    // On a page the list is beside it and nothing else is: the right panel is the chat's.
+    const sideWidth = state.page === "chat" ? width - chatWidth() - rightWidth : actions.sidebarShown(width) ? actions.sidebarCells(width) + SIDEBAR_GAP : 0
+    const onRight = (state.page !== "chat" || !rightWidth) && state.tuiProfile.sidebarSide === "right"
     return { width, rightWidth, sideWidth, onRight, offset: onRight ? 0 : sideWidth }
   }
 
@@ -429,7 +432,7 @@ export function createKeys(ctx: AppContext, actions: {
       }
     }
     const screenClick = clickOf(key)
-    if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
+    if (screenClick && sideWidth > 0 && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < sideWidth - SIDEBAR_GAP) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
       // A line whose row changed a moment ago without the user's doing: the click was aimed at the row that was there, so it is dropped.
       if (hit && !sidebarClickAllowed(state.sidebarGuard, screenClick.row, now())) return requestFrame()
@@ -556,11 +559,10 @@ export function createKeys(ctx: AppContext, actions: {
       if (await actions.limitClick(click.row, click.col)) return
     }
     // The Changes page is the one page with clickable parts (a file opens in the viewer); every other page ignores the mouse.
-    const pageClick = state.page === "changes" ? clickOf(key) : undefined
+    const pageClick = state.page === "changes" ? click : undefined
     // Inside the Git page the first row is the tabs row; the rows below it are the Changes page, one row lower than it draws itself.
     if (state.page === "changes" || state.page === "git-commit" || state.page === "git-pr" || state.page === "git-init" || state.page === "worktrees" || state.page === "warp") {
-      const tabClick = clickOf(key)
-      if (tabClick && await actions.gitClick(tabClick)) return
+      if (click && await actions.gitClick(click)) return
     }
     if (pageClick && actions.changesClick(pageClick)) return
     if (MOUSE_SGR.test(key)) return

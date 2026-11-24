@@ -435,13 +435,13 @@ export function createGit(ctx: AppContext, deps: { loadChanges(reload?: boolean)
     const view = state.gitPr
     // The one action of a folder that is not a repository, and of a repository with no remote: a click on it is its key.
     if (at.row > 0 && state.page === "git-init" && state.gitInit) {
-      const hit = gitInitHit(state.gitInit, input.screen.size.width, input.screen.size.height)
+      const hit = gitInitHit(state.gitInit, state.pageCols.width || input.screen.size.width, input.screen.size.height)
       if (!hit || at.row - 1 !== hit.row || at.col < hit.from || at.col >= hit.to) return false
       await initKey("i")
       return true
     }
     if (at.row > 0 && state.page === "git-pr" && view) {
-      const hit = gitPrPublishHit(view, input.screen.size.width, input.screen.size.height)
+      const hit = gitPrPublishHit(view, state.pageCols.width || input.screen.size.width, input.screen.size.height)
       if (hit) {
         if (at.row - 1 !== hit.row || at.col < hit.from || at.col >= hit.to) return false
         await prKey("g")
@@ -450,13 +450,13 @@ export function createGit(ctx: AppContext, deps: { loadChanges(reload?: boolean)
     }
     // The link of the pull request is the one thing on the PR tab a click does: it copies it.
     if (at.row > 0 && state.page === "git-pr" && view?.stage === "view" && view.body.kind === "pr") {
-      if (at.row - 1 !== gitPrLinkRow(view, input.screen.size.width, input.screen.size.height)) return false
+      if (at.row - 1 !== gitPrLinkRow(view, state.pageCols.width || input.screen.size.width, input.screen.size.height)) return false
       copyLink()
       requestFrame()
       return true
     }
     if (at.row !== 0) return false
-    const hit = gitTabHits(input.screen.size.width).find((entry) => at.col >= entry.from && at.col < entry.to)
+    const hit = gitTabHits(state.pageCols.width || input.screen.size.width).find((entry) => at.col >= entry.from && at.col < entry.to)
     if (hit && hit.tab !== tabOf(state.page)) await openTab(hit.tab)
     return true
   }
