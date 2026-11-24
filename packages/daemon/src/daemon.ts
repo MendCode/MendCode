@@ -5825,8 +5825,11 @@ export async function startDaemon(options: DaemonOptions) {
       case "extensions.report":
         uiReload.report(connection, command.revision, command.errors)
         return reply(connection, command.id, { ok: true })
-      case "extensions.reload":
-        return reply(connection, command.id, { ok: true, result: await uiReload.reload(command.directory) })
+      case "extensions.reload": {
+        const report = await uiReload.reload(command.directory)
+        const claude = command.sessionId && !connection.peer?.readOnly ? await engine.refresh?.(command.sessionId).catch(() => undefined) : undefined
+        return reply(connection, command.id, { ok: true, result: claude ? { ...report, claude } : report })
+      }
       case "extensions.export":
         return reply(connection, command.id, { ok: true, result: await uiReload.exportLook(command.directory) })
       case "commands.expand": {

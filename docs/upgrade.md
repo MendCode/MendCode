@@ -191,6 +191,8 @@ Where a process cannot replace itself, as on Windows, it says to reopen.
 | Daemon | The project's extensions and their MCP servers |
 | This terminal | Keybindings, extensions, enabled packages' activation and theme files |
 
+In a Claude session `/reload` also ends the idle Claude Code process, which reads its plugins, hooks and settings only at start: the next message starts a new one on the same conversation. A running turn or background task is never cut; the process ends after it.
+
 Skills, custom commands and context files are read again at each turn already.
 
 Reload waits for a running response the same way and interrupts nothing. Since one daemon serves every terminal, the others pick up the reloaded extensions too, without restarting.
