@@ -12,7 +12,8 @@ import type { SessionId } from "@mendcode/protocol"
  * - `sync_meta`: cursors and the last synced value of things merged three ways (session metadata, settings).
  */
 const NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
-const nextSeq = (kind: string) => `(SELECT coalesce(max(cseq), 0) + 1 FROM sync_changes WHERE kind = '${kind}')`
+/** The next change number: above every row left and above the highest one ever dropped (`forgetChange` keeps it in sync_meta), so a number is never used twice. */
+const nextSeq = (kind: string) => `(SELECT max(coalesce((SELECT max(cseq) FROM sync_changes WHERE kind = '${kind}'), 0), coalesce((SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'cseq-${kind}'), 0)) + 1)`
 const change = (kind: string, id: string, deleted: 0 | 1) => `INSERT OR REPLACE INTO sync_changes(kind, id, cseq, deleted, at) VALUES ('${kind}', ${id}, ${nextSeq(kind)}, ${deleted}, ${NOW_MS});`
 
 const TABLES = `
@@ -70,9 +71,20 @@ export function createSyncState(db: Database, now: () => number) {
     changes(kind: "session" | "memory", after: number, limit: number): SyncChange[] {
       return db.query<{ id: string; cseq: number; deleted: number; at: number }, [string, number, number]>("SELECT id, cseq, deleted, at FROM sync_changes WHERE kind = ? AND cseq > ? ORDER BY cseq LIMIT ?").all(kind, after, limit).map((row) => ({ id: row.id, cseq: row.cseq, deleted: row.deleted === 1, at: row.at }))
     },
+    /** This machine's own record of a memory's last change (a deletion stays here as a tombstone until the other machine has it). */
+    changeOf(kind: "memory", id: string): SyncChange | undefined {
+      const row = db.query<{ id: string; cseq: number; deleted: number; at: number }, [string, string]>("SELECT id, cseq, deleted, at FROM sync_changes WHERE kind = ? AND id = ?").get(kind, id)
+      return row ? { id: row.id, cseq: row.cseq, deleted: row.deleted === 1, at: row.at } : undefined
+    },
     /** A device that applied a row from the hub drops its own change record of it, so it is not sent back. */
     forgetChange(kind: "memory", id: string) {
-      db.query("DELETE FROM sync_changes WHERE kind = ? AND id = ?").run(kind, id)
+      db.transaction(() => {
+        const dropped = db.query<{ cseq: number }, [string, string]>("SELECT cseq FROM sync_changes WHERE kind = ? AND id = ?").get(kind, id)
+        if (!dropped) return
+        // The cursor already passed this number: a later change must not reuse it.
+        db.query("INSERT INTO sync_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = max(CAST(value AS INTEGER), CAST(excluded.value AS INTEGER))").run(`cseq-${kind}`, String(dropped.cseq))
+        db.query("DELETE FROM sync_changes WHERE kind = ? AND id = ?").run(kind, id)
+      })()
     },
     meta: {
       get: (key: string) => db.query<{ value: string }, [string]>("SELECT value FROM sync_meta WHERE key = ?").get(key)?.value,
@@ -137,7 +149,7 @@ export function createSyncState(db: Database, now: () => number) {
     seedMemories() {
       db.transaction(() => {
         if (db.query("SELECT 1 FROM sync_meta WHERE key = 'memory-seeded'").get()) return
-        let cseq = db.query<{ n: number }, []>("SELECT coalesce(max(cseq), 0) AS n FROM sync_changes WHERE kind = 'memory'").get()!.n
+        let cseq = db.query<{ n: number }, []>("SELECT max(coalesce((SELECT max(cseq) FROM sync_changes WHERE kind = 'memory'), 0), coalesce((SELECT CAST(value AS INTEGER) FROM sync_meta WHERE key = 'cseq-memory'), 0)) AS n").get()!.n
         const insert = db.query("INSERT OR IGNORE INTO sync_changes(kind, id, cseq, deleted, at) VALUES ('memory', ?, ?, 0, ?)")
         for (const { id } of db.query<{ id: string }, []>("SELECT id FROM memories WHERE scope != 'session' ORDER BY updated_at, id").all()) insert.run(id, ++cseq, now())
         db.query("INSERT INTO sync_meta(key, value) VALUES ('memory-seeded', '1')").run()

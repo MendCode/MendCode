@@ -12,6 +12,8 @@ export type RemoteFallback = "remote-first" | "local-first"
 export type RemoteProfiles = { defaultRemote?: string; fallback?: RemoteFallback; remotes: Record<string, RemoteProfile> }
 
 const NAME = /^[A-Za-z0-9_-]{1,64}$/
+/** The most remotes the file holds; the reader refuses more, so `remote add` stops here too. */
+const MAX_REMOTES = 64
 const fail = (): never => { throw new Error("invalid remotes.json") }
 
 export function parseRemoteProfiles(text: string): RemoteProfiles {
@@ -22,7 +24,7 @@ export function parseRemoteProfiles(text: string): RemoteProfiles {
   if (Object.keys(entry).some((key) => !["defaultRemote", "fallback", "remotes"].includes(key))) fail()
   const remotes: Record<string, RemoteProfile> = {}
   const all = entry.remotes ?? {}
-  if (!all || typeof all !== "object" || Array.isArray(all) || Object.keys(all).length > 64) fail()
+  if (!all || typeof all !== "object" || Array.isArray(all) || Object.keys(all).length > MAX_REMOTES) fail()
   for (const [name, raw] of Object.entries(all as Record<string, unknown>)) {
     const item = raw as Record<string, unknown> | null
     if (!NAME.test(name) || !item || typeof item !== "object" || Object.keys(item).some((key) => !["connect", "tokenFile", "ca", "tls"].includes(key))) fail()
@@ -66,7 +68,8 @@ export function parseProfileCommand(argv: string[], fallbackDir: string): Profil
   const booleans = new Set<string>()
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i]!
-    if (["--dir", "--token-file", "--ca"].includes(token)) {
+    if (token.startsWith("--dir=")) flags.set("--dir", token.slice("--dir=".length))
+    else if (["--dir", "--token-file", "--ca"].includes(token)) {
       const next = argv[++i]
       if (!next || next.startsWith("--")) throw new Error(`${token} needs a value`)
       flags.set(token, next)
@@ -97,6 +100,7 @@ export function runProfileCommand(command: ProfileCommand, out: { write(text: st
   if (command.action === "add") {
     if (!NAME.test(command.name)) throw new Error("remote name uses 1–64 letters, digits, _ or -")
     try { if (!parseRemoteAddress(command.connect).port) throw new Error() } catch { throw new Error("remote address must be host:port with a nonzero port") }
+    if (!next.remotes[command.name] && Object.keys(next.remotes).length >= MAX_REMOTES) throw new Error(`at most ${MAX_REMOTES} saved remotes; remove one first`)
     next.remotes[command.name] = { connect: command.connect, ...(command.tokenFile ? { tokenFile: command.tokenFile } : {}), ...(command.ca ? { ca: command.ca } : {}), ...(command.tls ? { tls: true } : {}) }
     if (command.makeDefault) next.defaultRemote = command.name
     if (command.fallback) next.fallback = command.fallback

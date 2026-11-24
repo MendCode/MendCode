@@ -40,7 +40,7 @@ import { backgroundRows, backgroundName } from "../../view/background-row"
 import { linkRows } from "../../view/links"
 import { homeLook, renderWelcomeReplacement, type HomeBots } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
-import { createHomeMascot } from "./home-mascot"
+import { createHomeMascot, wordmarkInPlaceOfMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
 import type { HomePrompt, HomeSession } from "../../view/home"
 import type { ImagePlacement } from "../image-layer"
@@ -558,7 +558,7 @@ export function createChatRows(ctx: AppContext, actions: {
       sessions,
       ...(state.homeSelected ?? state.homeHover ? { selectedId: (state.homeSelected ?? state.homeHover)! } : {}),
       spinner: state.spinFrame,
-      look: { ...homeLook(profile), ...(mascot?.none ? { logoKind: "wordmark" } : {}), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
+      look: { ...homeLook(profile), ...wordmarkInPlaceOfMascot(profile.logoKind, mascot), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),

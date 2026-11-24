@@ -349,6 +349,8 @@ export function createClaudeEngine(options: {
   const idleMs = options.idleMs
   const processIdleMs = options.processIdleMs ?? DEFAULT_PROCESS_IDLE_MS
   const connections = new Map<SessionId, Connection>()
+  /** Turns that took a session's process (or are starting it, or reading their attachments) and have not installed `connection.turn` yet: the process is not idle. */
+  const preparing = new Map<SessionId, number>()
   const isolatedEngines = new Set<ReturnType<typeof createClaudeEngine>>()
   /**
    * A bridged turn's own process (`externalMcp`) that still runs background agents when its turn ended, by session. It is kept, so
@@ -622,7 +624,8 @@ export function createClaudeEngine(options: {
       })
       if (tasks.length) connection.idle?.cancel()
       // An MCP, effort, fast or advisor change waited for the background tasks; with none left and no turn open, the process restarts now.
-      else if (!connection.turn && connection.reload) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
+      // A response Claude Code is giving on its own (unsolicited) is not cut: the turn that adopts it ends the process (`finish`).
+      else if (!connection.turn && connection.reload && !connection.unsolicited && !preparing.has(connection.sessionId)) close(connection, "a change waited for the background tasks (MCP servers, effort or fast)")
       else if (!connection.turn) keepIdle(connection)
       return
     }
@@ -936,7 +939,7 @@ export function createClaudeEngine(options: {
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.
     // An MCP change that waited for background tasks is made before a turn once none runs.
-    if (connection && ((bridged && !sameModel(connection.model, model)) || (connection.background === 0 && (!sameModel(connection.model, model) || connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
+    if (connection && ((bridged && !sameModel(connection.model, model)) || (connection.background === 0 && (!sameModel(connection.model, model) || (connection.reload && connection.unsolicited === undefined) || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
       close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }) ? "compaction point changed" : "credentials changed")
       connection = undefined
     }
@@ -1038,7 +1041,8 @@ export function createClaudeEngine(options: {
         const { trace: _trace, ...processOptions } = options
         const sessionId = input.sessionId
         // Its background agents ending is when a process kept for them stops.
-        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
+        // `retries: 0`: this engine's wrapper owns the network retries of a bridged turn, so the budget is spent once, not once per layer.
+        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, retries: 0, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
           onBackground: (id, tasks, stop) => { options.onBackground?.(id, tasks, stop); if (!tasks.length) queueMicrotask(() => settle(sessionId, isolated)) } })
         isolatedEngines.add(isolated)
         bridges.set(isolated, bridge)
@@ -1050,11 +1054,22 @@ export function createClaudeEngine(options: {
         finally { turn.flushProcessMcp(); inTurn.delete(isolated); settle(sessionId, isolated) }
       }
       let connection: Connection
+      // Until this turn is the connection's `turn`, `refresh` must not read the process as idle: starting it, or reading attachments, takes awaits.
+      preparing.set(input.sessionId, (preparing.get(input.sessionId) ?? 0) + 1)
+      let prepared = false
+      const installed = () => {
+        if (prepared) return
+        prepared = true
+        const left = (preparing.get(input.sessionId) ?? 1) - 1
+        if (left > 0) preparing.set(input.sessionId, left)
+        else preparing.delete(input.sessionId)
+      }
       try {
         const started = await unlessCancelled(connectionFor(input), input.signal)
-        if (!started) return { status: "ok" }
+        if (!started) { installed(); return { status: "ok" } }
         connection = started
       } catch (error) {
+        installed()
         const message = error instanceof Error ? error.message : String(error)
         // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
         const unstarted = !message.startsWith("[CLAUDE]") && /ENOENT|Executable not found|not found in \$PATH/i.test(message)
@@ -1062,12 +1077,13 @@ export function createClaudeEngine(options: {
           ? { status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." }
           : { status: "error", code: "claude_start", message: message.startsWith("[CLAUDE]") ? message : `[CLAUDE]: ${message}` }
       }
-      const body = await content(input)
+      const body = await content(input).catch((error: unknown) => { installed(); throw error })
       // A slash command (Claude Code's own `/compact`) is sent as typed.
       const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the process started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
+        installed()
         keepIdle(connection)
         return { status: "ok" }
       }
@@ -1109,6 +1125,7 @@ export function createClaudeEngine(options: {
           },
         }
         connection.turn = turn
+        installed()
         turn.touch()
         // The notice of a turn Claude Code already started on its own: that turn is shown (what it has said so far, then the rest live) and nothing is sent.
         const pending = connection.unsolicited
@@ -1191,7 +1208,7 @@ export function createClaudeEngine(options: {
       const connection = own && !own.closed ? own : undefined
       const later = running ? await running.refresh?.(sessionId) : undefined
       if (!connection) return later
-      if (connection.turn || connection.background > 0 || connection.unsolicited) {
+      if (connection.turn || connection.background > 0 || connection.unsolicited || preparing.has(sessionId)) {
         connection.reload = true
         return "later"
       }
@@ -1228,7 +1245,8 @@ export function createClaudeEngine(options: {
       // The summary is what the next turns read most: it is written in the user's language, so they do not drift into English.
       const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, "")).catch(() => undefined)
       const text = `/compact ${[input.instructions?.trim(), language ? `Write the summary in the user's language. ${language}` : undefined].filter(Boolean).join("\n\n")}`.trimEnd()
-      const outcome = await port.runTurn({
+      // `runOnce`, not `port.runTurn`: a network retry resumes the conversation with a message of its own, and a compaction must stay a compaction.
+      const outcome = await runOnce({
         sessionId: input.sessionId,
         turnId: input.turnId,
         text,

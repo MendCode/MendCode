@@ -534,7 +534,7 @@ export function createFileViewer(ctx: AppContext, deps: { insertPrompt(text: str
   /** Where the pointer is in the viewer, or undefined when it is not over it. */
   function local(fv: FileViewerState, x: number, y: number): { col: number; row: number } | undefined {
     const size = input.screen.size
-    if (state.page === "file") return x - 1 >= state.pageCols.left ? { col: x - 1 - state.pageCols.left, row: y - 1 } : undefined
+    if (state.page === "file") return x - 1 >= state.pageCols.left && x - 1 < state.pageCols.left + (state.pageCols.width || size.width) ? { col: x - 1 - state.pageCols.left, row: y - 1 } : undefined
     if (state.page !== "chat" || !fileInSlot(state)) return undefined
     const cells = slotCells(state, size.width)
     const left = size.width - cells

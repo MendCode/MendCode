@@ -13,7 +13,7 @@ import { createHomePet, gradientSpans, HOME_PET_SIZES } from "../src/pets/home-p
 import { listPets } from "../src/pets/manifest"
 import { createPetSlot, petChoices, PET_BOX, PET_HALF_BLOCK_SIZES, PET_SIZES } from "../src/pets/pet-slot"
 import { loadSprite } from "../src/pets/sprite"
-import { createHomeMascot, isPetMascot } from "../src/ui/app/home-mascot"
+import { createHomeMascot, isPetMascot, wordmarkInPlaceOfMascot } from "../src/ui/app/home-mascot"
 import { promptPetKind } from "../src/ui/app/pet-fallback"
 import { createTerminalFocus } from "../src/ui/terminal-focus"
 import { setTheme, type Line } from "../src/ui/theme"
@@ -1013,4 +1013,10 @@ console.log(JSON.stringify({ atStart, after: ["pets/home-pet", "pets/art", "src/
   const result = Bun.spawnSync(["bun", "-e", script], { cwd: path.join(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe" })
   expect(result.stderr.toString()).toBe("")
   expect(JSON.parse(result.stdout.toString().trim())).toEqual({ atStart: [], after: ["pets/home-pet", "pets/art", "src/pet-resample", "pets/controller"], never: [], zod: 0, schemas: 0 })
+})
+
+test("a pet that cannot be shown puts the wordmark in its place only for the logo modes that draw a mascot", () => {
+  for (const kind of ["both", "mascot"]) expect(wordmarkInPlaceOfMascot(kind, { none: true })).toEqual({ logoKind: "wordmark" })
+  for (const kind of ["none", "custom", "wordmark"]) expect(wordmarkInPlaceOfMascot(kind, { none: true })).toEqual({})
+  expect(wordmarkInPlaceOfMascot("both", undefined)).toEqual({})
 })

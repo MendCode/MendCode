@@ -58,7 +58,7 @@ mendcode remote code receive ~/code/app             # on the other machine: chec
 mendcode remote code clone https://git.example.com/alice/app.git   # clones only when no copy exists
 ```
 
-Handoff leaves your branch, index, stash and worktrees alone. Both machines need your own git access to the remote. Files that look like credentials and files over 5 MiB are left out.
+Handoff leaves your branch, index, stash and worktrees alone. Both machines need your own git access to the remote. New and staged files that look like credentials, or are over 5 MiB, are left out; changes to files git already tracks are pushed as they are.
 
 For one project that should stay in step on both machines, use live two-way sync. Install [Mutagen](https://mutagen.io) yourself first:
 

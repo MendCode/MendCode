@@ -35,9 +35,12 @@ export function createAcpSettings(dir: string) {
    * file is read again only when its signature (inode, size, times) changed; one stat instead of open, read and decode.
    */
   let view: { signature: string; agents: NonNullable<Settings["acpAgents"]> } | undefined
-  function signature(): string {
-    const info = statSync(file, { throwIfNoEntry: false })
-    return info ? fileSignature(info) : "missing"
+  function signature(): string | undefined {
+    // An optional file that cannot be inspected (a permission error, a symlink loop) reads as no agents, as an unreadable one always did.
+    try {
+      const info = statSync(file, { throwIfNoEntry: false })
+      return info ? fileSignature(info) : "missing"
+    } catch { return undefined }
   }
   function text(): string | undefined {
     try { return readFileSync(file, "utf8") } catch { return undefined }
@@ -45,6 +48,7 @@ export function createAcpSettings(dir: string) {
   return {
     get(): NonNullable<Settings["acpAgents"]> {
       const current = signature()
+      if (current === undefined) { view = undefined; return {} }
       if (!view || view.signature !== current) {
         const content = current === "missing" ? undefined : text()
         let agents: NonNullable<Settings["acpAgents"]> = {}

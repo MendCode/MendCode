@@ -79,6 +79,39 @@ test("handoff pushes a snapshot branch and leaves the user's branch, index and f
   expect(mine.calls.flat().some((arg) => /force|^\+|--mirror|--delete/.test(arg))).toBe(false)
 })
 
+test("handoff leaves out staged new credentials and oversized files too, and only from the snapshot: the user's index keeps them staged", async () => {
+  const { origin, work, root } = await fixture()
+  writeFileSync(path.join(work, ".env"), "TOKEN=abc\n")
+  writeFileSync(path.join(work, "id_rsa"), "-----BEGIN PRIVATE KEY-----\n")
+  writeFileSync(path.join(work, "big.bin"), Buffer.alloc(6 * 1024 * 1024))
+  writeFileSync(path.join(work, "ok.txt"), "fine\n")
+  await g(work, "add", ".env", "id_rsa", "big.bin", "ok.txt")
+  const staged = await g(work, "ls-files", "--stage")
+  const mine = deps()
+  expect(await runCode(parse(["handoff", work], root, work), mine.value)).toBe(0)
+  const refs = (await g(origin, "for-each-ref", "--format=%(refname)", "refs/heads/mend/")).split("\n")
+  const files = (await g(origin, "ls-tree", "-r", "--name-only", refs[0]!)).split("\n")
+  expect(files).toContain("ok.txt")
+  for (const left of [".env", "id_rsa", "big.bin"]) expect(files).not.toContain(left)
+  expect(mine.text()).toContain("left out: .env (looks like a credential, staged)")
+  expect(mine.text()).toContain("big.bin (over 5 MiB, staged)")
+  expect(await g(work, "ls-files", "--stage")).toBe(staged)
+})
+
+test("clone searches the --root and the usual folders as well as every --search-root", async () => {
+  const { work, root } = await fixture()
+  const url = "https://example.com/org/repo.git"
+  await g(work, "remote", "set-url", "origin", url)
+  const elsewhere = path.join(root, "elsewhere")
+  mkdirSync(elsewhere)
+  const here = deps()
+  const home = process.env.HOME
+  process.env.HOME = root
+  try { expect(await runCode(parse(["clone", url, "--root", root, "--search-root", elsewhere], root, root), here.value)).toBe(0) }
+  finally { if (home === undefined) delete process.env.HOME; else process.env.HOME = home }
+  expect(here.text()).toContain("Already here")
+})
+
 test("a clean tree has nothing to hand off, and a dry run commits and pushes nothing", async () => {
   const { origin, work, root } = await fixture()
   const clean = deps()
@@ -153,8 +186,10 @@ test("clone is skipped when a clone with the same git remote exists and creates 
   process.env.GIT_CONFIG_KEY_0 = `url.file://${origin}.insteadOf`
   process.env.GIT_CONFIG_VALUE_0 = url
   const fresh = deps()
+  const home = process.env.HOME
+  process.env.HOME = root
   try { expect(await runCode(parse(["clone", url, "--root", target, "--search-root", target], root, root), fresh.value)).toBe(0) }
-  finally { delete process.env.GIT_CONFIG_COUNT; delete process.env.GIT_CONFIG_KEY_0; delete process.env.GIT_CONFIG_VALUE_0 }
+  finally { if (home === undefined) delete process.env.HOME; else process.env.HOME = home; delete process.env.GIT_CONFIG_COUNT; delete process.env.GIT_CONFIG_KEY_0; delete process.env.GIT_CONFIG_VALUE_0 }
   expect(fresh.text()).toContain("Cloned")
   expect(existsSync(path.join(target, "repo", "a.txt"))).toBe(true)
   expect(() => parse(["clone", "--upload-pack=x"], root, root)).toThrow()

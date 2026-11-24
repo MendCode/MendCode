@@ -194,7 +194,9 @@ describe("two daemons of one reviewer: a claim that lapses mid-run", () => {
     await until(() => desk.job(12)?.state === "waiting")
     expect(hub.reviews.get(12) ?? []).toEqual([])
     const parked = desk.job(12)!
-    expect(parked.assignment).toStartWith(`device ${laptop.device()} took this pull request over (claim fence 2, this job's 1) while this job ran`)
+    // The job's own fence is its local lease's: a slow machine can lapse and re-claim that lease (fence 2), which says nothing about who won the pull request.
+    expect(parked.assignment).toStartWith(`device ${laptop.device()} took this pull request over (claim fence 2, this job's `)
+    expect(parked.assignment).toMatch(/this job's \d+\) while this job ran/)
     expect(parked.checkpoint.result?.findings.map((finding) => finding.id)).toEqual([FINDING_ID])
     expect(desk.notices.some((text) => text.includes("not posted from this device, device") && text.includes("took this pull request over"))).toBe(true)
     expect(desk.service.platform.effects.ofJob(parked.id).filter((effect) => effect.kind === "review")).toEqual([])
@@ -241,7 +243,9 @@ describe("two daemons of one reviewer: a claim that lapses mid-run", () => {
     deskFix.open()
     await until(() => desk.notices.some((text) => text.includes("fix mode ended")))
     expect(await hub.tip("feature")).toBe(head)
-    expect(desk.notices.find((text) => text.includes("fix mode ended"))).toContain(`device ${laptop.device()} took this pull request over (claim fence 2, this job's 1) while this job ran`)
+    const ended = desk.notices.find((text) => text.includes("fix mode ended"))!
+    expect(ended).toContain(`device ${laptop.device()} took this pull request over (claim fence 2, this job's `)
+    expect(ended).toMatch(/this job's \d+\) while this job ran/)
     const kept = await git(repo.dir, "for-each-ref", "--format=%(refname)", "refs/mendcode/fix/")
     expect(kept.split("\n").filter(Boolean)).toHaveLength(1)
 

@@ -162,6 +162,19 @@ test("a device mirrors the hub's settled turns at the hub's seqs, refuses to wri
   expect(device.daemon.store.sessionInfo(id)?.title).toBe("Renamed on the hub")
 })
 
+test("a session's permission mode never travels: a mirrored or pushed session.permission event is stored but changes nothing on the receiving machine", async () => {
+  const hub = await startHub()
+  const project = tempDir("project")
+  const id = await newSession(hub.client, project)
+  expect(await hub.client.send({ type: "session.permission.set", sessionId: id, mode: "full" } as never)).toMatchObject({ ok: true })
+  await turn(hub, id, "first")
+  expect(hub.daemon.store.permissionModeOf(id)).toBe("full")
+  const device = await startDevice(pairDevice(hub.dir, hub.daemon.remotePort!).dir)
+  await syncNow(device.client)
+  expect(events(device.daemon, id).some((event) => event.type === "session.permission" && event.mode === "full")).toBe(true)
+  expect(device.daemon.store.permissionModeOf(id)).toBe("ask")
+})
+
 test("take: the device writes the session and the hub refuses its own writes naming the device; release hands it back with nothing lost or doubled", async () => {
   const hub = await startHub()
   const project = tempDir("project")
@@ -314,6 +327,60 @@ test("attachments copy in chunks; one over 8 MiB stays on the hub with a note; a
   expect(Buffer.from(device.daemon.store.readBlob(small.sha256))).toEqual(Buffer.from(hub.daemon.store.readBlob(small.sha256)))
   expect(() => device.daemon.store.readBlob(large.sha256)).toThrow()
   expect(status.sessions.find((session) => session.sessionId === id)?.note).toContain("over 8 MiB")
+})
+
+test("an attachment of exactly the size limit finishes over several rounds instead of restarting each one", async () => {
+  const hub = await startHub()
+  const project = tempDir("project")
+  const id = await newSession(hub.client, project)
+  const limit = hub.daemon.store.putBlob(new Uint8Array(8 * 1024 * 1024).map((_, i) => i % 249), "application/octet-stream")
+  expect((await hub.client.send({ type: "user.submit", sessionId: id, text: "files", attachments: [limit] })).ok).toBe(true)
+  await until(() => turnsDone(hub.daemon, id) === 1 && hub.daemon.store.lastTurnStatus(id) !== "running", "turn with the file")
+  const device = await startDevice(pairDevice(hub.dir, hub.daemon.remotePort!).dir)
+  for (let round = 0; round < 8 && (device.daemon.store.lastSeq(id) ?? 0) < (hub.daemon.store.lastSeq(id) ?? 0); round++) await syncNow(device.client)
+  same(events(device.daemon, id), events(hub.daemon, id))
+  expect(Buffer.from(device.daemon.store.readBlob(limit.sha256))).toEqual(Buffer.from(hub.daemon.store.readBlob(limit.sha256)))
+})
+
+test("a turn longer than one history page cannot be pushed whole: the copy is marked as staying on this machine instead of retrying forever", async () => {
+  const hub = await startHub()
+  const project = tempDir("project")
+  const id = await newSession(hub.client, project)
+  await turn(hub, id, "on the hub")
+  const big = (() => ({
+    async runTurn(input: { text: string; newItemId(): string; emit(event: unknown): void }) {
+      for (let part = 0; part < 4; part++) {
+        const itemId = input.newItemId()
+        input.emit({ type: "item.started", itemId, kind: "agent_message" })
+        input.emit({ type: "item.completed", itemId, status: "ok", text: "x".repeat(60_000) })
+      }
+      return { status: "ok" }
+    },
+    needsCompaction: () => false,
+    compact: async () => ({ status: "ok" }),
+  }) as unknown as EnginePort)
+  const device = await boot(pairDevice(hub.dir, hub.daemon.remotePort!).dir, { engine: big, sync: { tickMs: 600_000, leaseMs: LEASE_MS, idleReleaseMs: 600_000 } })
+  await syncNow(device.client)
+  expect(await control(device.client, "take", id)).toMatchObject({ ok: true })
+  await turn(device, id, "a long one")
+  const status = await syncNow(device.client)
+  expect(status.sessions.find((session) => session.sessionId === id)).toMatchObject({ state: "unsyncable", note: expect.stringContaining("too large to copy") })
+  expect(await control(device.client, "release", id)).toMatchObject({ ok: false, error: { message: expect.stringContaining("too large to copy") } })
+})
+
+test("a title or pin changed here on a mirrored session reaches the hub even when the hub changes nothing", async () => {
+  const hub = await startHub()
+  const project = tempDir("project")
+  const id = await newSession(hub.client, project)
+  await turn(hub, id, "on the hub")
+  const device = await startDevice(pairDevice(hub.dir, hub.daemon.remotePort!).dir)
+  await syncNow(device.client)
+  await syncNow(device.client)
+  device.daemon.store.renameSession(id, "renamed on the laptop")
+  device.daemon.store.setSessionPinned(id, true)
+  await syncNow(device.client)
+  expect(hub.daemon.store.sessionInfo(id)?.title).toBe("renamed on the laptop")
+  expect(hub.daemon.store.sessionPinnedAt(id)).toBeDefined()
 })
 
 test("memories and preference settings sync both ways; deletes travel; credentials, tokens and authority or machine settings never reach the wire", async () => {

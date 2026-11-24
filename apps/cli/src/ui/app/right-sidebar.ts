@@ -191,7 +191,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
 
   /** `known`: a spec already read is drawn at once and the daemon is not asked again (a session switch; `sidebar.changed` keeps it current). */
   async function loadSpec({ known = false } = {}) {
-    if (known && state.panelSpec) {
+    if (known && state.panelSpec && state.panelSpecDirectory === (input.directory ?? process.cwd())) {
       applySpec()
       requestFrame()
       return
@@ -201,6 +201,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     if (directory !== (input.directory ?? process.cwd())) return
     if (reply.ok && Array.isArray(reply.result?.widgets)) {
       state.panelSpec = sidebarSpec(reply.result.widgets)
+      state.panelSpecDirectory = directory
       scope = reply.result?.scope === "project" ? "project" : "user"
       applySpec()
     } else noteCustomPanels(customPresetsOf(profilePanel(state)))
@@ -700,6 +701,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     }
     state.tuiProfile.sidebarWidgets = sidebarSpec(reply.result?.widgets ?? widgets)
     state.panelSpec = state.tuiProfile.sidebarWidgets
+    state.panelSpecDirectory = input.directory ?? process.cwd()
     noteCustomPanels(customPresetsOf(profilePanel(state)))
     state.tuiProfile.rightSidebar = widgets.length > 0
     state.rightScroll = 0

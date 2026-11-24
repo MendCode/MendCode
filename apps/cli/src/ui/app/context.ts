@@ -564,6 +564,8 @@ export type AppState = {
   sessionLook: Map<string, import("./session-look").SessionLook>
   /** The panel's file (user or project) as `sidebar.get` last answered; what a session's preset choice resolves against. */
   panelSpec?: import("@mendcode/protocol").SidebarWidget[]
+  /** The folder `panelSpec` was read for: another project has its own effective spec, so a spec of another folder is not reused. */
+  panelSpecDirectory?: string
   /** What enabled profiles' activations currently ask for (extensions/activation.ts, loaded only when one exists). */
   activation: import("../../extensions/activation").TuiActivation | undefined
   /** The keys a profile overlay or a running extension holds right now, with the value each put there. */

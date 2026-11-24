@@ -6,7 +6,7 @@ import { createClient } from "@mendcode/client"
 import { startDaemon } from "@mendcode/daemon"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import { parseAutomation, runAutomation, type AutomationDeps } from "../src/automation"
-import { EXPORT_TRUNCATED_NOTE, parseImportResult, parseSessionList, parseSetupCommand, runSetup, setupPlan, type LocalPort, type SetupCommand, type SshRunner } from "../src/remote-setup"
+import { argsCarryCredential, EXPORT_TRUNCATED_NOTE, parseImportResult, parseSessionList, parseSetupCommand, runSetup, setupPlan, type LocalPort, type SetupCommand, type SshRunner } from "../src/remote-setup"
 import { applyPathRule, mapProject, normalizeGitRemote, parsePathRule } from "../src/remote-setup-projects"
 
 const dirs: string[] = []
@@ -17,7 +17,7 @@ const TOKEN = "T".repeat(8) + "0123456789abcdefghijklmnopqrstuvwxyz"
 
 /** A pretend Linux host: it answers the scripts of a setup run from its own small state and records what ran. */
 function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; certFails?: string; repos?: string; missing?: string[] } = {}) {
-  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, acp: "", calls: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
+  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, localOnly: false, acp: "", calls: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" })
   const run: SshRunner = async ({ script, input }) => {
     state.inputs.push(input)
@@ -34,9 +34,10 @@ function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; cer
     if (script.includes("remote token list")) return ok([...state.tokens].map((name) => `${name}\tfull\t2026-01-01T00:00:00.000Z\tnever`).join("\n"))
     if (script.includes("remote token revoke")) { state.calls.push("revoke"); state.tokens.delete(/revoke '([^']+)'/.exec(script)![1]!); return ok("revoked\n") }
     if (script.includes("remote token create")) { state.calls.push("token"); state.tokens.add(/--name '([^']+)'/.exec(script)![1]!); return ok(`${TOKEN}\n`) }
-    if (script.includes("daemon service status")) return ok(`Service: systemd-user · ${state.installed ? "installed" : "not installed"} · ${state.loaded ? "loaded" : "stopped"}\n`)
+    if (script.includes("daemon service status")) return ok(`Service: systemd-user · ${state.installed ? "installed" : "not installed"} · ${state.loaded ? "loaded" : "stopped"}\nDefinition: /home/u/.config/systemd/user/mendcode.service\n`)
+    if (script.includes("grep -q -e '--local-only'")) return { code: state.localOnly ? 0 : 1, stdout: "", stderr: "" }
     if (script.includes("daemon service stop")) { state.calls.push("service-stop"); state.loaded = false; return ok() }
-    if (script.includes("daemon service install")) { state.calls.push("service-install"); state.installed = true; return ok() }
+    if (script.includes("daemon service install")) { state.calls.push("service-install"); state.installed = true; state.localOnly = false; return ok() }
     if (script.includes("daemon service start")) { state.calls.push("service-start"); state.loaded = true; return ok() }
     if (script.includes("config-bundle import")) { state.calls.push("bundle"); return ok("import imp_1 applied\ncomparison with the bundle: 3 match\n") }
     if (script.includes('cat "$D/acp-agents.json"')) return ok(state.acp || "{}")
@@ -106,7 +107,7 @@ test("setup installs, certifies, writes the listener, creates a private token, s
   expect(result.code).toBe(0)
   expect(host.state.calls).toEqual(["probe", "install", "cert", "write-remote-json", "token", "service-install", "service-start"])
   expect(JSON.parse(host.state.remoteJson)).toEqual({ listen: "100.64.0.9:9876", tlsCert: "/home/u/.mendcode/tls/cert.pem", tlsKey: "/home/u/.mendcode/tls/key.pem", mode: "tailscale" })
-  const file = path.join(dir, "remote", "my-mac.token")
+  const file = path.join(dir, "remote", "vps.my-mac.token")
   expect(readFileSync(file, "utf8").trim()).toBe(TOKEN)
   expect(statSync(file).mode & 0o777).toBe(0o600)
   expect(statSync(path.dirname(file)).mode & 0o777).toBe(0o700)
@@ -133,7 +134,7 @@ test("a lost token file is replaced by a fresh token, and --rotate replaces a ke
   const dir = temp()
   const host = fakeHost()
   await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
-  rmSync(path.join(dir, "remote", "my-mac.token"))
+  rmSync(path.join(dir, "remote", "vps.my-mac.token"))
   host.state.calls.length = 0
   await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
   expect(host.state.calls).toContain("revoke")
@@ -176,7 +177,7 @@ test("pair adds a device to a set-up host without touching its listener or servi
   expect(result.code).toBe(0)
   expect(host.state.calls).toEqual(["probe", "token"])
   expect(host.state.tokens.has("phone-pad")).toBe(true)
-  expect(statSync(path.join(second, "remote", "phone-pad.token")).mode & 0o777).toBe(0o600)
+  expect(statSync(path.join(second, "remote", "vps.phone-pad.token")).mode & 0o777).toBe(0o600)
   expect(JSON.parse(readFileSync(path.join(second, "remotes.json"), "utf8")).remotes.vps.connect).toBe(`${HOST}:9876`)
   const bare = fakeHost()
   const out = output()
@@ -211,8 +212,104 @@ test("unpair revokes on the host and removes the local token file and remote", a
   const result = await runSetup(parseSetupCommand(["remote", "unpair", "my-mac", "--dir", dir], dir)!, { ssh: () => host.run, local: fakeLocal(dir), out })
   expect(result.code).toBe(0)
   expect(host.state.tokens.has("my-mac")).toBe(false)
-  expect(existsSync(path.join(dir, "remote", "my-mac.token"))).toBe(false)
+  expect(existsSync(path.join(dir, "remote", "vps.my-mac.token"))).toBe(false)
   expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))).toEqual({ remotes: {} })
+})
+
+test("setting up a second host keeps the first host's token: token files are per remote", async () => {
+  const dir = temp()
+  const a = fakeHost()
+  const b = fakeHost({ dns: "other.example.ts.net" })
+  await runSetup(command(dir), { ssh: () => a.run, local: fakeLocal(dir), out: output() })
+  const first = readFileSync(path.join(dir, "remote", "vps.my-mac.token"), "utf8")
+  const second = parseSetupCommand(["remote", "setup", "other.example.ts.net", "--ssh", "user@other", "--dir", dir, "--no-default"], dir, () => "My-Mac.local")!
+  const result = await runSetup(second, { ssh: () => b.run, local: fakeLocal(dir), out: output() })
+  expect(result.code).toBe(0)
+  const profiles = JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8")).remotes
+  expect(profiles.vps.tokenFile).not.toBe(profiles.other.tokenFile)
+  expect(readFileSync(profiles.vps.tokenFile, "utf8")).toBe(first)
+  expect(existsSync(profiles.other.tokenFile)).toBe(true)
+  // Unpairing this machine from the second host leaves the first one's token and remote alone.
+  await runSetup(parseSetupCommand(["remote", "unpair", "my-mac", "--remote", "other", "--dir", dir], dir)!, { ssh: () => b.run, local: fakeLocal(dir), out: output() })
+  expect(existsSync(profiles.vps.tokenFile)).toBe(true)
+  expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8")).remotes.vps).toBeDefined()
+})
+
+test("unpair also revokes the sync token on the host and turns off this machine's sync with it", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir, ["--sync"]), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(host.state.tokens.has("my-mac-sync")).toBe(true)
+  const syncFile = path.join(dir, "remote", "vps.sync-token")
+  expect(existsSync(syncFile)).toBe(true)
+  expect(existsSync(path.join(dir, "sync.json"))).toBe(true)
+  await runSetup(parseSetupCommand(["remote", "unpair", "my-mac", "--dir", dir], dir)!, { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(host.state.tokens.has("my-mac")).toBe(false)
+  expect(host.state.tokens.has("my-mac-sync")).toBe(false)
+  expect(existsSync(syncFile)).toBe(false)
+  expect(existsSync(path.join(dir, "sync.json"))).toBe(false)
+})
+
+test("a service that was installed without the listener is reinstalled with it, even when remote.json is already right", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  host.state.localOnly = true
+  host.state.calls.length = 0
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(host.state.calls).toEqual(["probe", "cert", "service-stop", "service-install", "service-start"])
+  host.state.calls.length = 0
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(host.state.calls).toEqual(["probe", "cert"])
+})
+
+test("ACP agents whose arguments carry a credential are not copied", async () => {
+  expect(argsCarryCredential(["acp"])).toBe(false)
+  expect(argsCarryCredential(["acp", "--model", "fast", "--port=8080", "-v"])).toBe(false)
+  for (const args of [["--api-key=abcd"], ["--api-key", "abcd"], ["--token", "x"], ["https://user:pw@example.com/mcp"], ["https://example.com/mcp?api_key=1"], ["Authorization: Bearer abc"], ["--header=x-api-key: 1"], ["a".repeat(40)], ["sk-ant-api03-" + "x".repeat(40)]]) expect(argsCarryCredential(args)).toBe(true)
+  const dir = temp()
+  writeFileSync(path.join(dir, "acp-agents.json"), JSON.stringify({ keyed: { command: "hermes", args: ["acp", "--api-key=sk-secret-value"] }, plain: { command: "hermes", args: ["acp"] } }))
+  const host = fakeHost()
+  const out = output()
+  await runSetup(command(dir, ["--acp-agents"]), { ssh: () => host.run, local: fakeLocal(dir), out })
+  expect(JSON.parse(host.state.acp)).toEqual({ plain: { command: "hermes", args: ["acp"] } })
+  expect(host.state.acp).not.toContain("secret")
+  expect(out.text()).toContain("skipped keyed: its arguments look like they carry a credential")
+})
+
+test("--clone-missing does not take a same-named repository of another project for the clone, nor two missing projects of one name for each other", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  const cloneRuns: string[] = []
+  const existing: Record<string, string> = { "/code/app": "git@github.com:org-a/app.git" }
+  const run: SshRunner = async (call) => {
+    if (call.script.includes("git clone")) {
+      const target = /\[ -d "\$HOME"(\/code\/[^/]+)\/\.git \]/.exec(call.script)?.[1]
+      const origin = target ? existing[target] : undefined
+      if (origin) return { code: 0, stdout: `origin=${origin}\n`, stderr: "" }
+      cloneRuns.push(call.script)
+      if (target) existing[target] = /git clone -- '([^']+)'/.exec(call.script)![1]!
+      return { code: 0, stdout: "", stderr: "" }
+    }
+    return host.run(call)
+  }
+  const sessions = [
+    { id: "s1", title: "b-app", directory: "/Users/me/b/app" },
+    { id: "s2", title: "c-app", directory: "/Users/me/c/app" },
+    { id: "s3", title: "d-lib", directory: "/Users/me/d/lib" },
+  ]
+  const identities: Record<string, { id: string; url: string }> = {
+    "/Users/me/b/app": { id: "github.com/org-b/app", url: "https://github.com/org-b/app.git" },
+    "/Users/me/c/app": { id: "github.com/org-c/app", url: "https://github.com/org-c/app.git" },
+    "/Users/me/d/lib": { id: "github.com/org-d/lib", url: "https://github.com/org-d/lib.git" },
+  }
+  const local = fakeLocal(dir, { listSessions: async () => sessions, identity: async (directory) => ({ directory, ...identities[directory]!, rel: "" }) })
+  const out = output()
+  await runSetup(command(dir, ["--migrate-sessions", "--clone-missing"]), { ssh: () => run, local, out })
+  expect(local.exported).toEqual(["s3"])
+  expect(out.text()).toContain('skipped "b-app": ~/code/app on the host is a different repository')
+  expect(out.text()).toContain('skipped "c-app": ~/code/app on the host is a different repository')
+  expect(cloneRuns).toHaveLength(1)
 })
 
 test("settings travel as one bundle on stdin, once", async () => {

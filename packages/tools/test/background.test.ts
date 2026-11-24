@@ -386,3 +386,18 @@ describe("a foreground command that runs past its yield", () => {
     expect(result.output).toBe("here\n")
   })
 })
+
+describe("a read that is aborted", () => {
+  test("leaves what the command printed unread for the next read", async () => {
+    const { tasks } = registry()
+    const port = tasks.forSession("s1")
+    const started = port.start({ command: "echo first; sleep 0.2; echo second; sleep 5", cwd: tempDir() })
+    if (!started.ok) throw new Error(started.error)
+    const stop = new AbortController()
+    const waiting = port.read(started.task.id, { waitMs: 3_000, signal: stop.signal, until: "exit" })
+    await Bun.sleep(400)
+    stop.abort()
+    await waiting
+    expect((await port.read(started.task.id, { waitMs: 0, signal: never }))?.output).toBe("first\nsecond\n")
+  })
+})

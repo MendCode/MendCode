@@ -168,16 +168,23 @@ async function handoff(command: Extract<CodeCommand, { action: "handoff" }>, dep
   await gitRemoteExists(git, project.top, command.gitRemote)
   const untracked = (await must(git(project.top, ["ls-files", "--others", "--exclude-standard", "-z"]), "listing new files failed")).split("\0").filter(Boolean)
   if (untracked.length > SNAPSHOT_UNTRACKED_MAX_FILES) throw new CodeError(`${untracked.length} new files that are not ignored: add the build output to .gitignore, or commit and push the branch yourself`)
+  // Files staged as new are in the real index, so they are checked like the untracked ones and taken out of the snapshot's index when they fail.
+  const staged = (await must(git(project.top, ["diff", "--cached", "--name-only", "--diff-filter=A", "-z"]), "listing staged new files failed")).split("\0").filter(Boolean)
+  const excluded = (file: string) => {
+    if (SECRET_NAME.test(file)) return "looks like a credential"
+    try { const stat = lstatSync(path.join(project.top, file)); return stat.isFile() && stat.size > SNAPSHOT_FILE_MAX_BYTES ? "over 5 MiB" : undefined } catch { return "unreadable" }
+  }
   const included: string[] = []
   const left: string[] = []
+  const unstage: string[] = []
   for (const file of untracked) {
-    let reason: string | undefined
-    if (SECRET_NAME.test(file)) reason = "looks like a credential"
-    else {
-      try { const stat = lstatSync(path.join(project.top, file)); if (stat.isFile() && stat.size > SNAPSHOT_FILE_MAX_BYTES) reason = "over 5 MiB" } catch { reason = "unreadable" }
-    }
+    const reason = excluded(file)
     if (reason) left.push(`${file} (${reason})`)
     else included.push(file)
+  }
+  for (const file of staged) {
+    const reason = excluded(file)
+    if (reason) { left.push(`${file} (${reason}, staged)`); unstage.push(file) }
   }
   const scratch = mkdtempSync(path.join(tmpdir(), "mendcode-wip-"))
   try {
@@ -187,6 +194,7 @@ async function handoff(command: Extract<CodeCommand, { action: "handoff" }>, dep
     const realIndex = path.resolve(project.top, await must(git(project.top, ["rev-parse", "--git-path", "index"]), "locating the index failed"))
     if (existsSync(realIndex)) copyFileSync(realIndex, env.GIT_INDEX_FILE)
     else await must(git(project.top, ["read-tree", "HEAD"], { env }), "reading HEAD failed")
+    if (unstage.length) await must(git(project.top, ["update-index", "--force-remove", "-z", "--stdin"], { env, input: `${unstage.join("\0")}\0` }), "leaving staged credentials out failed")
     await must(git(project.top, ["add", "-u", "--", "."], { env }), "staging tracked changes failed")
     if (included.length) await must(git(project.top, ["add", "--pathspec-from-file=-", "--pathspec-file-nul"], { env, input: `${included.join("\0")}\0` }), "staging new files failed")
     const tree = await must(git(project.top, ["write-tree"], { env }), "writing the snapshot failed")
@@ -275,7 +283,7 @@ export async function scanRepos(git: GitRunner, roots: readonly string[], depth 
 
 async function clone(command: Extract<CodeCommand, { action: "clone" }>, deps: CodeDeps, say: (line: string) => void) {
   const id = normalizeGitRemote(command.source)!
-  const roots = command.searchRoots.length ? command.searchRoots : [...new Set([command.root, ...DEFAULT_SEARCH_ROOTS.map((name) => path.join(homedir(), name))])]
+  const roots = [...new Set([command.root, ...DEFAULT_SEARCH_ROOTS.map((name) => path.join(homedir(), name)), ...command.searchRoots])]
   const repos = await scanRepos(deps.git, roots)
   const mapping = mapProject({ project: { id, url: command.source, rel: "", directory: "" }, rules: command.pathMaps, repos, cloneMissing: true, cloneRoot: command.root })
   if (mapping.directory !== undefined && mapping.how === "git") { say(`Already here: ${mapping.directory} (${id}).`); return }
@@ -373,7 +381,7 @@ async function liveEnable(command: Extract<CodeCommand, { action: "live"; sub: "
   writeLive(command.dir, ledger)
   say(`Live sync ${name} is on: ${project.top} <-> ${command.ssh}:${remote} (two-way-safe; conflicts are kept, never overwritten).`)
   say(`Ignored: ${[...LIVE_IGNORES, ...command.includeEnv ? [] : ENV_IGNORES, ...command.ignores].join(", ")} and the .git folder. Each side keeps its own commits.`)
-  say("It pauses when either clone is on another branch: run `remote code live status` to check, `live resume` after.")
+  say("Nothing watches the branches: after switching one on either machine run `remote code live status`, which pauses the sync when they differ; `live resume` after they match again.")
 }
 
 /** Mutagen's `sync list` text, one entry per session. */

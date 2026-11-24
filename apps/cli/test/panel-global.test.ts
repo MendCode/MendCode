@@ -78,3 +78,41 @@ describe("switching sessions draws the panel at once", () => {
     expect(h.sentOf("background.list").length).toBe(before.jobs)
   })
 })
+
+describe("switching to a session of another project", () => {
+  test("the cards of the project's own panel are asked for, not the other project's cards already read", async () => {
+    const here = "/work/app", there = "/other/api", dataDir = tempDir(), sessionId = ids("session"), next = ids("session")
+    const specs = new Map<string, SidebarWidget[]>([[here, [{ type: "loops", options: {} }, { type: "jobs", options: {} }]], [there, [{ type: "clock", options: {} }]]])
+    const row = (id: string, title: string, directory: string, age: number) => ({ sessionId: id, title, directory, createdAt: Date.now() - age, updatedAt: Date.now() - age, lastSeq: 0, state: "idle", queued: 0 })
+    const sessions = [row(sessionId, "Chrome", here, 1000), row(next, "Other project", there, 2000)]
+    const clock = { at: Date.now() }
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", sidebarWidgets: specs.get(here)!, rightSidebar: true, sidebarProjectsFrom: "all" })
+    const h = appHarness({ width: 200, height: 40, directory: here, dataDir, sessionId, mode: "full", now: () => clock.at, inspectProject: async () => ({ git: true }), reply: (command) => {
+      if (command.type === "bot.list") return { ok: true, result: { bots: [], external: [], problems: [] } }
+      if (command.type === "session.list") return { ok: true, result: { sessions } }
+      if (command.type === "session.get") return { ok: true, result: { session: sessions.find((session) => session.sessionId === (command as { sessionId: string }).sessionId) } }
+      if (command.type === "sidebar.get") return { ok: true, result: { widgets: specs.get(command.directory) ?? [], scope: "user" } }
+      if (command.type === "git.status") return { ok: true, result: { branch: "main", ahead: 0, behind: 0, dirty: 0 } }
+      return { ok: true }
+    } })
+    h.app.applySettings({ onboarded: true, tier: "full", experimental: { bots: true } })
+    for (let turn = 0; turn < 100 && !h.text().some((line) => line.includes("Other project")); turn++) { h.app.render(); await Bun.sleep(5) }
+    // The spec of this project is read once; the session then chooses its own panel, and leaving it must show the next project's cards.
+    await h.type("/panel\r")
+    await h.type("/panel\r")
+    await h.type("/panel pulse\r")
+    await settle()
+    const asked = h.sentOf("sidebar.get").map((command) => (command as { directory: string }).directory)
+    expect(asked.length).toBeGreaterThan(0)
+    expect(new Set(asked)).toEqual(new Set([here]))
+    clock.at += 600
+    h.app.render()
+    const at = h.text().findIndex((line) => line.includes("Other project"))
+    expect(at).toBeGreaterThanOrEqual(0)
+    await h.type(`\x1b[<0;${h.text()[at]!.indexOf("Other project") + 2};${at + 1}M`)
+    await settle()
+    h.app.render()
+    expect(h.app.sessionId).toBe(next)
+    expect(h.app.accessibility.profile.sidebarWidgets.map((widget) => widget.type)).toEqual(["clock"])
+  })
+})

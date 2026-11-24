@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { hostname as osHostname, tmpdir } from "node:os"
 import path from "node:path"
+import { redactSecrets } from "@mendcode/protocol/wire"
 import { readRemoteProfiles, writeRemoteProfiles, type RemoteProfiles } from "./remote-profiles"
 import { mapProject, normalizeGitRemote, parsePathRule, readLedger, writeLedger, type PathRule, type ProjectIdentity, type RemoteRepo } from "./remote-setup-projects"
 
@@ -125,7 +126,7 @@ function fields(text: string) {
 
 /** The ordered list of steps and what each does; `--dry-run` prints exactly this and runs nothing. */
 export function setupPlan(command: SetupCommand): string[] {
-  if (command.action === "unpair") return [`revoke the token ${command.device} on the host over SSH (its devices drop within a second)`, `delete this machine's token file for ${command.device} and the saved remote that uses it, if any`]
+  if (command.action === "unpair") return [`revoke the token ${command.device} and its sync token ${command.device}-sync (if any) on the host over SSH (its devices drop within a second)`, `delete this machine's token files for ${command.device}, its session sync setup and the saved remote that use them, if any`]
   const lines = [`check ${command.ssh} over SSH (read-only): Linux with systemd, Tailscale running, and the name ${command.host}`]
   if (command.action === "setup") {
     lines.push(
@@ -134,7 +135,7 @@ export function setupPlan(command: SetupCommand): string[] {
       `write ${command.remoteDir}/remote.json with mode tailscale, the host's tailnet address and port ${command.port ?? `${DEFAULT_PORT} (or the one already set)`}`,
     )
   } else lines.push(`read ${command.remoteDir}/remote.json on the host for the address and port`)
-  lines.push(`create the token ${command.device}${command.expiresDays ? ` (expires in ${command.expiresDays} days)` : ""} on the host and save it to ${path.join(command.dir, "remote", `${command.device}.token`)} (mode 0600, never printed)`)
+  lines.push(`create the token ${command.device}${command.expiresDays ? ` (expires in ${command.expiresDays} days)` : ""} on the host and save it to ${tokenFile(command.dir, command.name, command.device)} (mode 0600, never printed)`)
   if (command.action === "setup") lines.push(`install the daemon service with a listener (\`daemon service install --listener\`) and start it${command.reinstallService ? " (reinstalling)" : ""}`)
   if (command.sync) lines.push(`create the sync token ${command.device}-sync (it may only sync sessions) on the host and save it to ${syncTokenFile(command.dir, command.name)}`)
   lines.push(`save the remote ${command.name} (${command.host}:${command.port ?? DEFAULT_PORT}) in ${path.join(command.dir, "remotes.json")}${command.makeDefault ? " as the default, so a bare mendcode connects" : ""}`, "check that the host answers over the tailnet")
@@ -169,7 +170,8 @@ export async function runSetup(command: SetupCommand, deps: SetupDeps): Promise<
   }
 }
 
-function tokenFile(dir: string, device: string) { return path.join(dir, "remote", `${device}.token`) }
+/** One file per (remote, device): this machine's device name is the same for every host it sets up, and each host issues its own token. */
+function tokenFile(dir: string, remote: string, device: string) { return path.join(dir, "remote", `${remote}.${device}.token`) }
 /** Where `--sync` keeps the sync-scoped token; `mendcode sync enable NAME` looks there too. */
 function syncTokenFile(dir: string, remote: string) { return path.join(dir, "remote", `${remote}.sync-token`) }
 
@@ -191,9 +193,26 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
   const result = await run({ script: `${PRELUDE(command.remoteDir)}"$MC" remote token revoke ${shq(command.device)} --dir "$D"` })
   if (result.code !== 0 && !/unknown token name/.test(result.stderr + result.stdout)) throw new SetupError(`could not revoke ${command.device} on the host: ${scrub(result.stderr || result.stdout)}`)
   say(result.code === 0 ? `revoked ${command.device} on the host` : `${command.device} was not on the host (already revoked)`)
-  const file = tokenFile(command.dir, command.device)
+  // The sync credential `--sync` issued beside it (`<device>-sync`) is revoked too: a copy of it stays valid on the host otherwise.
+  const syncName = `${command.device}-sync`
+  const syncResult = await run({ script: `${PRELUDE(command.remoteDir)}"$MC" remote token revoke ${shq(syncName)} --dir "$D"` })
+  if (syncResult.code !== 0 && !/unknown token name/.test(syncResult.stderr + syncResult.stdout)) throw new SetupError(`could not revoke ${syncName} on the host: ${scrub(syncResult.stderr || syncResult.stdout)}`)
+  if (syncResult.code === 0) say(`revoked ${syncName} on the host`)
+  if (!remote) return
+  const file = tokenFile(command.dir, remote, command.device)
   rmSync(file, { force: true })
-  if (profiles && remote && profile?.tokenFile === file) {
+  if (profile?.tokenFile === file) {
+    // This machine is the device that was unpaired: its sync token file and the sync setup that uses it go too.
+    rmSync(syncTokenFile(command.dir, remote), { force: true })
+    const { readSyncConfig, writeSyncConfig } = await import("@mendcode/daemon/sync-config")
+    let syncing: string | undefined
+    try { syncing = readSyncConfig(command.dir)?.remote } catch { /* an unreadable sync.json is left for `sync` to report */ }
+    if (syncing === remote) {
+      writeSyncConfig(command.dir, undefined)
+      say(`turned off session sync with ${remote}`)
+    }
+  }
+  if (profiles && profile?.tokenFile === file) {
     const next: RemoteProfiles = { ...profiles, remotes: { ...profiles.remotes } }
     delete next.remotes[remote]
     if (next.defaultRemote === remote) delete next.defaultRemote
@@ -321,7 +340,7 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
   }
 
   begin("device token")
-  const file = tokenFile(command.dir, command.device)
+  const file = tokenFile(command.dir, command.name, command.device)
   const listed = (await must("could not list the host's tokens", `"$MC" remote token list --dir "$D" || true`)).split("\n").map((line) => line.split("\t")[0]).filter(Boolean)
   const onHost = listed.includes(command.device)
   if (onHost && existsSync(file) && !command.rotate) say(`  token ${command.device} already exists; --rotate replaces it`)
@@ -351,7 +370,10 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
     const installed = /Service: [^\n]*· installed/.test(state)
     const loaded = /Service: [^\n]*· loaded/.test(state)
     const drift = /Drift:/.test(state)
-    if (!installed || drift || changedListener || command.reinstallService) {
+    // A service installed without a listener (`--local-only` in its definition) is no resume point: only its own definition says which kind it is.
+    const definition = /^Definition: (.+)$/m.exec(state)?.[1]?.trim()
+    const localOnly = installed && definition !== undefined && (await remote(`grep -q -e '--local-only' ${shq(definition)}`)).code === 0
+    if (!installed || drift || localOnly || changedListener || command.reinstallService) {
       if (loaded) await must("could not stop the service (a turn may be running; try again when it is idle)", `"$MC" daemon service stop --dir "$D"`)
       await must("could not install the service", `"$MC" daemon service install --listener --dir "$D"`)
       await must("could not start the service", `"$MC" daemon service start --dir "$D"`)
@@ -417,6 +439,20 @@ P=$("$MC" config-bundle import "$T/settings.bundle" --dir "$D" --rewrite-home --
   if (command.migrateSessions) await migrateSessions(command, deps, remote, must, say, ledger, save, now)
 }
 
+const CREDENTIAL_NAME = /key|token|secret|passw(?:or)?d|credential|auth|bearer|cookie/i
+/** Whether an agent's arguments could carry a credential: a key-like flag with a value, a header, a URL with userinfo or a secret in its query, or anything the secret scanner finds. Such an agent is not copied. */
+export function argsCarryCredential(args: string[]): boolean {
+  return args.some((arg, index) => {
+    if (redactSecrets(arg).count > 0 || /[A-Za-z0-9_-]{32,}/.test(arg)) return true
+    if (/^[a-z][a-z0-9+.-]*:\/\/[^/\s]*@/i.test(arg) || /[?&;](?:[\w-]*(?:key|token|secret|passw(?:or)?d|auth)[\w-]*)=/i.test(arg)) return true
+    if (/(?:^|=)\s*(?:authorization|x-api-key|cookie|proxy-authorization)\s*:/i.test(arg) || /\bbearer\s+\S/i.test(arg)) return true
+    const flag = /^--?([^=\s]+)=(.+)$/s.exec(arg)
+    if (flag) return CREDENTIAL_NAME.test(flag[1]!)
+    const next = args[index + 1]
+    return /^--?[A-Za-z][\w-]*$/.test(arg) && CREDENTIAL_NAME.test(arg) && next !== undefined && !next.startsWith("-")
+  })
+}
+
 async function migrateAgents(command: Provision,deps: SetupDeps, remote: Remote, must: Must, say: (line: string) => void, ledger: ReturnType<typeof readLedger>, save: () => void, now: () => number) {
   say("[migrate] ACP agents")
   let local: Record<string, { command?: unknown; args?: unknown }> = {}
@@ -429,6 +465,7 @@ async function migrateAgents(command: Provision,deps: SetupDeps, remote: Remote,
     const args = Array.isArray(entry?.args) ? entry.args.filter((arg): arg is string => typeof arg === "string") : []
     if (!/^[A-Za-z0-9._-]{1,64}$/.test(name) || !/^[A-Za-z0-9._+-]+$/.test(executable)) { say(`  skipped ${name}: its command is a path or not a plain program name (machine-specific)`); continue }
     if (name in have) { say(`  ${name} already exists on the host`); continue }
+    if (argsCarryCredential(args)) { say(`  skipped ${name}: its arguments look like they carry a credential (a key, token, password or authenticated URL); add it on the host yourself`); continue }
     if ((await remote(`command -v ${shq(executable)} >/dev/null 2>&1`)).code !== 0) { say(`  skipped ${name}: ${executable} is not on the host's PATH (install and sign in there, then run again)`); continue }
     added[name] = { command: executable, args }
   }
@@ -455,6 +492,7 @@ async function migrateSessions(command: Provision,deps: SetupDeps, remote: Remot
   }
   const mappings = new Map<string, ReturnType<typeof mapProject>>()
   const cloned = new Map<string, string>()
+  const claimed = new Map<string, string>()
   for (const [directory, project] of identities) {
     let mapping = mapProject({ project, rules: command.pathMaps, repos, cloneMissing: command.cloneMissing, cloneRoot: "~/code" })
     if (mapping.directory === undefined && mapping.clone) {
@@ -462,9 +500,20 @@ async function migrateSessions(command: Provision,deps: SetupDeps, remote: Remot
       if (!/^[A-Za-z0-9@:/._~+-]+$/.test(url) || url.startsWith("-")) mapping = { reason: "its git remote is not a plain URL; clone it on the host yourself" }
       else {
         const target = cloned.get(url) ?? `~/code/${name}`
-        const done = await remote(`mkdir -p "$HOME/code"; if [ -d ${shellPath(target)}/.git ]; then exit 0; fi; git clone -- ${shq(url)} ${shellPath(target)} >&2`)
-        mapping = done.code === 0 ? { directory: rel ? `${target}/${rel}` : target, how: "clone" } : { reason: `git clone failed on the host (${scrub(done.stderr)}); sign in to git there or clone it yourself` }
-        if (done.code === 0) cloned.set(url, target)
+        const taken = claimed.get(target)
+        if (taken !== undefined && taken !== url) mapping = { reason: `another project cloned in this run already uses ${target}; clone it on the host yourself or use --path-map` }
+        else {
+          // An existing checkout counts only when its origin is this project: a same-named repository of someone else is not a clone of it.
+          const done = await remote(`mkdir -p "$HOME/code"; if [ -d ${shellPath(target)}/.git ]; then echo "origin=$(git -C ${shellPath(target)} remote get-url origin 2>/dev/null || true)"; exit 0; fi; git clone -- ${shq(url)} ${shellPath(target)} >&2`)
+          const origin = fields(done.stdout).get("origin")
+          if (done.code !== 0) mapping = { reason: `git clone failed on the host (${scrub(done.stderr)}); sign in to git there or clone it yourself` }
+          else if (origin !== undefined && (normalizeGitRemote(origin) ?? origin) !== (normalizeGitRemote(url) ?? url)) mapping = { reason: `${target} on the host is a different repository; clone this one elsewhere and use --path-map` }
+          else {
+            mapping = { directory: rel ? `${target}/${rel}` : target, how: "clone" }
+            cloned.set(url, target)
+            claimed.set(target, url)
+          }
+        }
       }
     }
     if (mapping.directory !== undefined && (!REMOTE_PATH.test(mapping.directory) || mapping.directory.split("/").includes(".."))) mapping = { reason: `${mapping.directory} has characters this tool does not pass to a remote shell; use --path-map to a plain path` }

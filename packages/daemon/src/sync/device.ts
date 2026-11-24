@@ -16,6 +16,8 @@ const MAX_CARRY_BYTES = 16 * 1024 * 1024
 /** Sessions untouched on the hub for longer are not copied here (they are still listed by `mendcode sync status`). */
 const MIRROR_DAYS = 30
 const MAX_BACKOFF_MS = 60_000
+/** Blobs whose download a round left unfinished keep their chunks for the next one (at most this many, 8 MiB each). */
+const MAX_PARTIAL_BLOBS = 2
 
 type Summary = { sessionId: SessionId; cseq: number; deleted?: true; title?: string; directory?: string; project?: SyncProjectRef; lastSeq?: number; createdAt?: number; updatedAt?: number; archived?: boolean; pinned?: boolean; busy?: boolean; lease?: { holder: string; epoch: number; until: number } }
 type Meta = { title: string; archived: boolean; pinned: boolean }
@@ -43,6 +45,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   let rounds = 0
   const status = { connected: false, lastOkAt: 0, lastError: "" }
   const uploaded = new Set<string>()
+  const partials = new Map<string, Buffer[]>()
 
   const save = (row: SyncSessionRow) => { rows.set(row.sessionId, row); state.sessions.put(row) }
   const drop = (sessionId: string) => { rows.delete(sessionId); state.sessions.delete(sessionId) }
@@ -99,14 +102,19 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const refs = blobRefs(events)
     for (const ref of refs.copied) {
       try { if (ports.store.readBlob(ref.sha256).length === ref.bytes) continue } catch {}
-      const chunks: Buffer[] = []
-      for (let offset = 0; ;) {
+      // A blob of the size limit takes more requests than a round has left: what arrived stays, and the next round goes on from it.
+      const chunks = partials.get(ref.sha256) ?? []
+      partials.delete(ref.sha256)
+      partials.set(ref.sha256, chunks)
+      if (partials.size > MAX_PARTIAL_BLOBS) partials.delete(partials.keys().next().value!)
+      for (let offset = chunks.reduce((sum, chunk) => sum + chunk.length, 0); ;) {
         const part = await call({ op: "blob-read", input: { sha256: ref.sha256, offset } }) as { data: string; done: boolean; mime: string }
         const chunk = Buffer.from(part.data, "base64")
         chunks.push(chunk)
         offset += chunk.length
         if (part.done || !chunk.length) break
       }
+      partials.delete(ref.sha256)
       const bytes = Buffer.concat(chunks)
       if (bytes.length !== ref.bytes || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new SyncRefusal("invalid", `blob ${ref.sha256.slice(0, 12)} arrived damaged`)
       ports.store.putBlob(bytes, ref.mime)
@@ -124,7 +132,13 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       if (head.last_seq <= row.remoteSeq && !first) return
       const page = localPage(row.sessionId, row.remoteSeq)!
       const count = settledPrefix(page.events)
-      if (!count) return
+      if (!count) {
+        // Nothing runs here (syncOwned and move check), so a page that ends inside a turn means the turn is longer than one page, which the hub takes only whole.
+        if (!page.hasMore) return
+        const note = `one of its turns is too large to copy to ${hub}; this copy stays only here`
+        save({ ...row, state: "unsyncable", note })
+        throw new SyncRefusal("invalid", note)
+      }
       const events = page.events.slice(0, count)
       await uploadBlobs(events)
       const complete = count === page.events.length && !page.hasMore
@@ -203,6 +217,28 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const next = { ...row, meta: JSON.stringify({ ...remote, ...ours }) }
     save(next)
     return next
+  }
+
+  /** Title, archive and pin changed here on a copy of the hub's session go to the hub without waiting for the hub to change it too. */
+  async function pushLocalMeta() {
+    for (const row of [...rows.values()]) {
+      if (row.role !== "mirror" || row.state !== "ok" || !row.meta) continue
+      const head = state.sessionHead(row.sessionId)
+      if (!head) continue
+      let seen: Partial<Meta> = {}
+      try { seen = JSON.parse(row.meta) } catch { continue }
+      const local = metaOf(head)
+      const ours: Partial<Meta> = {}
+      for (const key of ["title", "archived", "pinned"] as const) if (seen[key] !== undefined && local[key] !== seen[key]) (ours as Record<string, unknown>)[key] = local[key]
+      if (!Object.keys(ours).length) continue
+      try {
+        await call({ op: "meta", sessionId: row.sessionId, ...ours })
+        save({ ...row, meta: JSON.stringify({ ...seen, ...ours }) })
+      } catch (error) {
+        if (roundError(error)) throw error
+        ports.log(`[SYNC]: session ${row.sessionId} title, archive or pin not sent: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
+      }
+    }
   }
 
   /** Copies the hub's settled new events of one session here. Returns false when the round's budget ran out before its end. */
@@ -327,6 +363,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     try {
       await syncOwned()
       await pullChanges()
+      await pushLocalMeta()
       if (config.memories) await syncMemories()
       if (config.settings && rounds % 6 === 1) await syncSettings()
       delay = ports.tickMs

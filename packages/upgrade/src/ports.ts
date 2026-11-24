@@ -13,7 +13,8 @@ export type UpgradeFs = {
   /** The file's text, or undefined when it does not exist. */
   readText(file: string): Promise<string | undefined>
   readBytes(file: string): Promise<Uint8Array>
-  lock(dataDir: string): Promise<() => Promise<void>>
+  /** Takes `<dir>/<name>` (default `upgrade.lock`) exclusively; fails with `busy` while another process holds it. */
+  lock(dir: string, name?: string): Promise<() => Promise<void>>
 }
 
 /** Everything with side effects, injected so the whole flow runs offline in tests. */

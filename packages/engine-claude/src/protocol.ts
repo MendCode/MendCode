@@ -174,8 +174,12 @@ export function plainTextContent(parts: Array<Record<string, unknown>>): Array<R
   const last = parts.at(-1)
   if (last?.type !== "text" || typeof last.text !== "string") return parts
   const text = last.text.trimEnd()
-  if (!text.trimStart().startsWith("/") || text.length < 2) return parts
-  return [...parts.slice(0, -1), { ...last, text: text.slice(0, -1) }, { ...last, text: text.slice(-1) }]
+  if (!text.trimStart().startsWith("/")) return parts
+  // The last character is a whole code point: an emoji is two UTF-16 units, and a block must never end between them.
+  const characters = Array.from(text)
+  if (characters.length < 2) return parts
+  const tail = characters.at(-1)!
+  return [...parts.slice(0, -1), { ...last, text: text.slice(0, text.length - tail.length) }, { ...last, text: tail }]
 }
 
 export function userMessage(content: Array<Record<string, unknown>>, uuid?: string, command = false) {

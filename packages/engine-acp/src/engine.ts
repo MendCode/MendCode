@@ -115,6 +115,16 @@ const MODE_IDS: Partial<Record<PermissionMode, string[]>> = {
   full: ["dont_ask", "bypassPermissions", "bypass_permissions", "yolo"],
   edits: ["accept_edits", "acceptEdits"],
   ask: ["default"],
+  // Plan and smart need the agent to ask: MendCode answers (or rejects) only the requests the agent sends.
+  plan: ["default"],
+  smart: ["default"],
+}
+
+/** How freely an agent mode acts: 2 skips every approval, 1 accepts edits, 0 asks. */
+function modeFreedom(id: string | undefined): number {
+  if (id === undefined || MODE_IDS.full?.includes(id)) return 2
+  if (MODE_IDS.edits?.includes(id)) return 1
+  return 0
 }
 
 /** The agent mode id for a MendCode permission mode; undefined when the agent lists none (its mode stays as it is). */
@@ -427,8 +437,9 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         try {
           await connection.rpc.request("session/set_mode", { sessionId: acpSessionId, modeId }, { timeoutMs: SESSION_TIMEOUT_MS })
           connection.modes.current = modeId
-        } catch {
-          // The mode only saves round trips: approvals are still answered by MendCode.
+        } catch (error) {
+          // Widening the mode only saves round trips. Narrowing it must hold: an agent left in a freer mode never asks, so MendCode could not answer.
+          if (modeFreedom(modeId) < modeFreedom(connection.modes.current)) return fail("acp_mode", `agent "${agent}" did not switch to its "${modeId}" mode, so it would run without asking: ${error instanceof Error ? error.message : String(error)}`)
         }
       }
       const body = await content(input, connection)
