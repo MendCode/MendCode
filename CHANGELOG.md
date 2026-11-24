@@ -23,6 +23,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Windows: after a restart or a killed daemon, starting MendCode no longer fails with "daemon did not start" when the number of the old daemon's process now belongs to another program. A start that still fails says how the daemon exited and who holds the data directory.
 
+- A pet you chose that the terminal cannot show (no pictures, an image too small for text) now shows no pet, instead of the default robot taking its place; the robot in text mode is smaller by default (13 x 7 cells, was 26 x 14).
 - Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
 
 - Switching between chats, bots and sub-agents no longer stalls the daemon: a chat's sub-agent tree, file changes and the session lists answer quickly in projects with many sessions and sub-agents, and every client stays responsive while they load.

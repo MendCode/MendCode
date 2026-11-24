@@ -88,7 +88,7 @@ export type HomeMascotBox = { row: number; col: number; cols: number; rows: numb
  * rows of one (half blocks, or blank cells when the terminal draws the picture itself over them). `title` colors a
  * wordmark row. `shown` is called with where it was drawn, so the terminal animates and places it only while it is on screen.
  */
-export type HomeMascot = { pixel?: { boxes: ReadonlyArray<{ cols: number; rows: number }>; lines(cols: number, rows: number): readonly Line[] }; title?: (row: string, width: number) => Span[]; shown?: (at: HomeMascotBox) => void }
+export type HomeMascot = { /** A chosen pet that cannot be drawn: the home shows no mascot, never the built-in one. */ none?: true; pixel?: { boxes: ReadonlyArray<{ cols: number; rows: number }>; lines(cols: number, rows: number): readonly Line[] }; title?: (row: string, width: number) => Span[]; shown?: (at: HomeMascotBox) => void }
 
 /** The gap between the sprite and the title beside it. */
 export const HOME_MASCOT_GAP = 4
