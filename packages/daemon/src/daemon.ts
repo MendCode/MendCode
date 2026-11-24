@@ -3019,6 +3019,7 @@ export async function startDaemon(options: DaemonOptions) {
     fingerprint: workspaceFingerprint,
     ledger: (workflowId, category, query) => (store.automationLedger.known("workflow", workflowId) ? store.automationLedger.page("workflow", workflowId, category, query) : undefined),
     emit: (event) => void globalSink.append(event),
+    notifyOrigin: (sessionId, text) => { if (store.hasSession(sessionId)) void actorFor(sessionId)?.notify(secrets.mask(sessionId, text), undefined, false, "steer") },
   })
   sessionObservers.push(workflows.observe)
   function workflowContext(sessionId: SessionId) {

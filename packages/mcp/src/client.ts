@@ -18,7 +18,7 @@ const CLOSE_STDIN_GRACE_MS = 300
 const CLOSE_TERM_GRACE_MS = 1_000
 const EXIT_DRAIN_MS = 200
 
-export type McpToolInfo = { name: string; description?: string; inputSchema: Record<string, unknown> }
+export type McpToolInfo = { name: string; description?: string; inputSchema: Record<string, unknown>; /** The server's `annotations.readOnlyHint`. */ readOnly?: boolean }
 export type McpCallResult = { text: string; isError: boolean }
 
 export class McpError extends Error {
@@ -75,6 +75,7 @@ export async function listAllTools(request: (params?: Json) => Promise<unknown>)
       if (!isRecord(item) || typeof item.name !== "string") continue
       const info: McpToolInfo = { name: item.name, inputSchema: isRecord(item.inputSchema) ? item.inputSchema : { type: "object" } }
       if (typeof item.description === "string") info.description = item.description
+      if (isRecord(item.annotations) && item.annotations.readOnlyHint === true) info.readOnly = true
       tools.push(info)
     }
     cursor = typeof result.nextCursor === "string" && result.nextCursor !== "" ? result.nextCursor : undefined
