@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
+
 - Switching between chats, bots and sub-agents no longer stalls the daemon: a chat's sub-agent tree, file changes and the session lists answer quickly in projects with many sessions and sub-agents, and every client stays responsive while they load.
 - The daemon holds far less memory with the code panel open across projects: a project's code graph for the Galaxy panel is loaded by a short-lived process of its own, and opening the same project again reuses its last overview while its files are unchanged.
 - Streaming replies take less of the daemon's CPU: their deltas are written to the database in small groups instead of one commit each.
