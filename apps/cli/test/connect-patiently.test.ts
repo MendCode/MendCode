@@ -36,3 +36,25 @@ test("a daemon that never answers still fails after the last attempt, with its o
   await expect(connectPatiently({ build, attempts: 3, delayMs: () => 1 })).rejects.toBe(timeout)
   expect(built).toHaveLength(3)
 })
+
+test("a daemon that misses the first start deadline is waited for again; any other failure ends at once", async () => {
+  const { startPatiently } = await import("../src/connect-patiently")
+  let calls = 0
+  const waits: number[] = []
+  const up = await startPatiently({ start: async () => { if (++calls < 3) throw new Error("[CLI]: daemon did not start within 5000 ms (dir /x)"); return "up" }, onWait: (attempt) => void waits.push(attempt) })
+  expect([up, calls, waits]).toEqual(["up", 3, [1, 2]])
+  calls = 0
+  const other = new Error("[CLI]: local daemon endpoint not published")
+  await expect(startPatiently({ start: async () => { calls++; throw other } })).rejects.toBe(other)
+  expect(calls).toBe(1)
+  calls = 0
+  await expect(startPatiently({ start: async () => { calls++; throw new Error("[CLI]: daemon did not start within 5000 ms") } })).rejects.toThrow("did not start")
+  expect(calls).toBe(3)
+})
+
+test("the start failure is one readable line with where to look, without the error's source frame", async () => {
+  const { startFailureMessage } = await import("../src/connect-patiently")
+  const message = startFailureMessage(new Error("[CLI]: daemon did not start within 5000 ms (dir /d)"), "/d")
+  expect(message).toBe("error: daemon did not start within 5000 ms (dir /d)\nThe daemon's own output is in /d/logs (mendcode daemon logs); run mendcode again to retry.\n")
+  expect(startFailureMessage(new Error("[CLIENT]: nope"), "/d")).toBe("error: nope\n")
+})

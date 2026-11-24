@@ -457,7 +457,10 @@ async function connect() {
   log("DEBUG", "connecting to daemon")
   const hostSolo = soloPending
   soloPending = false
-  const local = transportFlags.socketPath || remote ? undefined : await ensureDaemon({ ...daemonOptions, ...(hostSolo ? { solo: true } : {}) })
+  const local = transportFlags.socketPath || remote ? undefined : await (await import("./connect-patiently")).startPatiently({
+    start: () => ensureDaemon({ ...daemonOptions, ...(hostSolo ? { solo: true } : {}) }),
+    onWait: () => process.stderr.write("mendcode: the daemon is slow to start; still waiting…\n"),
+  })
   if (local?.host) soloHost = local.host
   const socketPath = transportFlags.socketPath ?? local?.socketPath ?? ""
   const build = () => createClient({
@@ -501,12 +504,17 @@ async function connect() {
 }
 
 // A remote daemon that is not there (nothing listening, wrong port, TLS refused) is a plain error, never Bun's dump of the bundle.
-let { client, socketPath } = await connect().catch((error: unknown) => {
-  if (!remote) throw error
+const connectOrExit = () => connect().catch(async (error: unknown) => {
+  if (!remote) {
+    // No daemon and none could start: a readable line before the terminal was touched (no raw mode, no alternate screen yet), not the bundle's source frame.
+    process.stderr.write((await import("./connect-patiently")).startFailureMessage(error, daemonDataDir ?? envDataDir()))
+    process.exit(69)
+  }
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   process.stderr.write(`error: cannot reach the MendCode daemon at ${remote.hostname}:${remote.port}${code ? ` (${code})` : ""}: ${error instanceof Error ? error.message.replace(/^\[CLIENT\]: /, "") : String(error)}. On that machine it must run with mendcode daemon run --listen HOST:PORT.\n`)
   process.exit(69)
 })
+let { client, socketPath } = await connectOrExit()
 let startupNotice = ""
 // This process is the new build an open terminal restarted into (relaunch.ts): said once, and not passed on to anything it starts.
 const relaunched = process.env.MENDCODE_RELAUNCHED
@@ -524,7 +532,7 @@ if (freshness === "stopped") {
   client.close()
   await waitForSocketGone(socketPath)
   // Said to nobody: an idle daemon replaced by the build that is starting is housekeeping, with nothing for the user to do.
-  ;({ client, socketPath } = await connect())
+  ;({ client, socketPath } = await connectOrExit())
 } else if (freshness === "busy") daemonOlder = true
 else if (freshness === "legacy") startupNotice = "daemon outdated; run with --restart-daemon"
 
