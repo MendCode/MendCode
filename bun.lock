@@ -178,6 +178,10 @@
       "name": "@mendcode/extension-api",
       "version": "0.0.0",
     },
+    "packages/gateway": {
+      "name": "@mendcode/gateway",
+      "version": "0.0.0",
+    },
     "packages/kernel": {
       "name": "@mendcode/kernel",
       "version": "0.0.0",
@@ -326,6 +330,8 @@
     "@mendcode/engine-pi": ["@mendcode/engine-pi@workspace:packages/engine-pi"],
 
     "@mendcode/extension-api": ["@mendcode/extension-api@workspace:packages/extension-api"],
+
+    "@mendcode/gateway": ["@mendcode/gateway@workspace:packages/gateway"],
 
     "@mendcode/kernel": ["@mendcode/kernel@workspace:packages/kernel"],
 

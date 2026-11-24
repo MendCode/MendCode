@@ -23,7 +23,7 @@ select { font: inherit; color: inherit; background: #0b1b13; border: 1px solid v
 #diff { border: 1px solid var(--border); padding: 12px; max-height: 40vh; overflow: auto; display: flex; flex-direction: column; gap: 8px } #files { display: flex; flex-wrap: wrap; gap: 6px } #patch { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere }
 ::selection { background: #31583f } input,textarea { caret-color: var(--accent) } @media (max-width: 70ch) { main { grid-template-columns: minmax(0,1fr) } nav { max-height: 28vh } body { padding: 8px } section,nav { padding: 12px } }
 ${WEB_EDITOR_CSS}${WEB_TERMINAL_CSS}</style><header><h1>MendCode</h1>${WEB_WORKSPACES_BAR}<span>ctrl-enter send</span></header>
-<form id="login"><label for="token">Token</label><input id="token" type="password" autocomplete="off" required><button>Connect</button><button id="disconnect" type="button" hidden>Disconnect</button></form>
+<form id="login"><label for="token" id="tokenLabel">Token</label><input id="token" type="password" autocomplete="off" required><button id="connect">Connect</button><button id="disconnect" type="button" hidden>Disconnect</button></form>
 <p id="error" role="alert"></p><main><nav aria-label="Sessions"><header><h2>Sessions</h2><button id="new" disabled>New</button></header><div id="sessions"></div></nav>
 <div id="panes"><div id="tabs" role="tablist" aria-label="View"><button id="tab-chat" role="tab" type="button" aria-selected="true" aria-controls="pane-chat">Chat</button><button id="tab-files" role="tab" type="button" aria-selected="false" aria-controls="pane-files" tabindex="-1">Files</button><button id="tab-terminal" role="tab" type="button" aria-selected="false" aria-controls="pane-terminal" tabindex="-1">Terminal</button></div>
 <section id="pane-chat" role="tabpanel" aria-labelledby="tab-chat" aria-label="Conversation"><header><h2 id="title">Conversation</h2><span id="state"></span></header>
@@ -41,7 +41,9 @@ let items = new Map(), pending = new Map()
 const toolNames = ['model','rename','renameGo','fork','changes']
 const node = (tag, text, props) => { const item = document.createElement(tag); if (text !== undefined) item.textContent = text; return Object.assign(item, props || {}) }
 const error =(value) => { el('error').textContent = value ? String(value.message || value) : '' }
-const headers = (extra) => Object.assign({ Authorization: 'Bearer ' + token }, workspaceId ?{ 'x-mendcode-workspace': workspaceId } : {}, extra || {})
+// Served by a gateway (docs/gateway.md): signed in by an HttpOnly cookie; changes carry the page's CSRF token instead of a pasted token.
+const gatewayCsrf = (typeof document.querySelector === 'function' && document.querySelector('meta[name="mendcode-gateway-csrf"]')?.getAttribute('content')) || ''
+const headers = (extra) => Object.assign(gatewayCsrf ? { 'x-mendcode-csrf': gatewayCsrf } : { Authorization: 'Bearer ' + token }, workspaceId ?{ 'x-mendcode-workspace': workspaceId } : {}, extra || {})
 async function rest(method, target, body, extra) {
   const response = await fetch(target, { method, headers: headers(Object.assign(body === undefined ? {} : { 'Content-Type': 'application/json' }, extra || {})), body: body === undefined ? undefined : JSON.stringify(body) })
   const result = await response.json().catch(() => ({}))
@@ -155,7 +157,7 @@ el('login').onsubmit = async (event) => {
   event.preventDefault(); error(); stream?.abort(); ++epoch; terminalReset(); editorReset(); workspacesReset(); token = el('token').value; el('token').value = ''
   for (const name of ['new','send','message','cancel', ...toolNames]) el(name).disabled = true
   try {
-    const response = await fetch('/event', { method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' }, body: JSON.stringify({ clientId, hello: true }) })
+    const response = await fetch('/event', { method: 'POST', headers: Object.assign(gatewayCsrf ? { 'x-mendcode-csrf': gatewayCsrf } : { Authorization: 'Bearer ' + token }, { 'Content-Type': 'application/json' }), body: JSON.stringify({ clientId, hello: true }) })
     const hello = await response.json()
     if (!response.ok) throw new Error(hello.error?.message || 'Connection failed')
     directory = hello.directory; homeDirectory = directory; readOnly = hello.remote?.readOnly === true
@@ -190,6 +192,7 @@ function clearConversation() {
   for (const name of ['cancel', ...toolNames]) el(name).disabled = true
 }
 el('disconnect').onclick = () => {
+  if (gatewayCsrf) { fetch('/_gw/logout', { method: 'POST', headers: { 'x-mendcode-csrf': gatewayCsrf, 'Content-Type': 'application/json' }, body: '{}' }).finally(() => location.assign('/_gw/')); return }
   terminalReset(); editorReset(); workspacesReset(); homeDirectory = ''; clearConversation(); token = ''; el('sessions').replaceChildren()
   for (const name of ['new','send','message','cancel','path','open','up', ...toolNames]) el(name).disabled = true
   el('disconnect').hidden = true; error()
@@ -205,4 +208,9 @@ el('tabs').onkeydown = (event) => {
   if (!step) return
   event.preventDefault(); const next = panes[(at + step + panes.length) % panes.length]; showTab(next); el('tab-' + next).focus?.()
 }
-${WEB_WORKSPACES_SCRIPT}${WEB_EDITOR_SCRIPT}${WEB_TERMINAL_SCRIPT}</script></html>`
+${WEB_WORKSPACES_SCRIPT}${WEB_EDITOR_SCRIPT}${WEB_TERMINAL_SCRIPT}
+if (gatewayCsrf) {
+  // The cookie is the credential; 'gateway' only marks the client as connected and is never sent.
+  for (const name of ['tokenLabel','token','connect']) el(name).hidden = true
+  el('disconnect').textContent = 'Sign out'; el('token').required = false; el('token').value = 'gateway'; el('login').requestSubmit()
+}</script></html>`

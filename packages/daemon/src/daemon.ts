@@ -7408,7 +7408,11 @@ export async function startDaemon(options: DaemonOptions) {
           return { receive: (data) => handlers.data?.(socket, Buffer.from(data)), close: () => closeHttp(connection) }
         },
       } })
-      if (options.httpListen !== false) httpListener = Bun.serve({ hostname: serverConfig.hostname, port: serverConfig.port, idleTimeout: 60, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter.fetch, websocket: httpAdapter.websocket })
+      if (options.httpListen !== false && serverConfig.socket) {
+        // A gateway's per-account daemon (docs/gateway.md): a Unix socket in a folder whose group is the gateway's; only a stale socket is replaced.
+        const { bindHttpSocket } = await import("./http-socket")
+        httpListener = bindHttpSocket(serverConfig.socket, (unix) => Bun.serve({ unix, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter!.fetch, websocket: httpAdapter!.websocket }))
+      } else if (options.httpListen !== false) httpListener = Bun.serve({ hostname: serverConfig.hostname, port: serverConfig.port, idleTimeout: 60, maxRequestBodySize: MAX_FRAME_BYTES, fetch: httpAdapter.fetch, websocket: httpAdapter.websocket })
     }
     if (options.mflowListen) {
       const address = mflowListenerAddress(options.mflowListen)

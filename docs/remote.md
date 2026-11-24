@@ -4,6 +4,8 @@ Attach your terminal to a daemon on another machine using an SSH tunnel, authent
 
 Start with [Setup](#setup) for TCP or [SSH tunnel: simplest safe path](#ssh-tunnel-simplest-safe-path) to forward an existing Unix socket.
 
+For several people on one server with their own domain and passkeys, see the [gateway](gateway.md). Pair a terminal with `remote login URL`, then `attach URL`.
+
 ## Session HTTP bridge (B87)
 
 The daemon's `--http-listen 127.0.0.1:9877` opt-in flag enables four donor-shaped routes; no HTTP listener opens by default.

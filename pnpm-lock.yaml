@@ -269,6 +269,8 @@ importers:
 
   packages/extension-api: {}
 
+  packages/gateway: {}
+
   packages/kernel:
     dependencies:
       '@mendcode/protocol':
