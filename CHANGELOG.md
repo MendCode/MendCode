@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Switching between sub-agents is faster and the terminal idles lighter while they work: a sub-agent with large tool outputs is kept for the way back like any other chat, the strip and jobs count refresh at a bounded pace, and frames while output streams are capped at 30 a second.
 - `/reload` in a Claude session also ends its idle Claude Code process, so the next message starts one that reads your current plugins and hooks on the same conversation; a running turn or background task is never cut.
 
 ### Fixed
