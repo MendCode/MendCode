@@ -9,6 +9,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.20 - 2026-11-24
+
+Run MendCode on a server of your own and use it from anywhere: one command prepares a Linux VPS, saved remotes connect to it, sessions and code move between machines, and a domain mode serves several people with passkeys. Switching between chats, bots and sub-agents is faster and the daemon holds less memory. A Claude Code turn cut by a network failure resumes by itself, goals wait for background commands, ACP agents show their models in `/model`, `mendcode upgrade` works on Windows, and workflows tell the session that started them how they ended.
+
+### Upgrade notes
+
+- Same code as v0.0.20-beta.1.
+
+## v0.0.20-beta.1 - 2026-11-24
+
+Run MendCode on a server of your own and use it from anywhere: one command prepares a Linux VPS, saved remotes connect to it, sessions and code move between machines, and a domain mode serves several people with passkeys. Switching between chats, bots and sub-agents is faster and the daemon holds less memory. A Claude Code turn cut by a network failure resumes by itself, goals wait for background commands, ACP agents show their models in `/model`, `mendcode upgrade` works on Windows, and workflows tell the session that started them how they ended.
+
 ### Fixed
 
 - A read-only workflow task keeps the MCP tools their server marks read-only, so an agent that only needs to look at a device or service can use them.
