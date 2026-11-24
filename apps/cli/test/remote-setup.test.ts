@@ -235,6 +235,24 @@ test("unpair still cleans up a profile whose token file uses the earlier <device
   expect(JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))).toEqual({ remotes: {} })
 })
 
+test("unpair keeps an earlier-named token file that another saved remote still uses", async () => {
+  const dir = temp()
+  const host = fakeHost()
+  await runSetup(command(dir), { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  const legacy = path.join(dir, "remote", "my-mac.token")
+  renameSync(path.join(dir, "remote", "vps.my-mac.token"), legacy)
+  const profiles = JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))
+  profiles.remotes.vps.tokenFile = legacy
+  profiles.remotes.other = { ...profiles.remotes.vps }
+  writeFileSync(path.join(dir, "remotes.json"), JSON.stringify(profiles))
+  const result = await runSetup(parseSetupCommand(["remote", "unpair", "my-mac", "--remote", "vps", "--dir", dir], dir)!, { ssh: () => host.run, local: fakeLocal(dir), out: output() })
+  expect(result.code).toBe(0)
+  expect(existsSync(legacy)).toBe(true)
+  const after = JSON.parse(readFileSync(path.join(dir, "remotes.json"), "utf8"))
+  expect(after.remotes.vps).toBeUndefined()
+  expect(after.remotes.other.tokenFile).toBe(legacy)
+})
+
 test("setting up a second host keeps the first host's token: token files are per remote", async () => {
   const dir = temp()
   const a = fakeHost()
