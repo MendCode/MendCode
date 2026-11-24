@@ -364,6 +364,8 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   approvalFor?(args: z.infer<Args>, context?: ToolPermissionContext & { /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
   /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
   refusalFor?(args: z.infer<Args>, context?: ToolPermissionContext): string | undefined
+  /** The tool's own claim that it changes nothing (an MCP server's `readOnlyHint`): a read-only workflow task keeps it, and its approval still applies. */
+  readOnlyHint?: boolean
   /** The lowest tier that offers this tool to the model (docs/tiers.md); absent means every tier. Ignored while no `tier` is set. */
   tier?: import("@mendcode/protocol/wire").Tier
   args: Args

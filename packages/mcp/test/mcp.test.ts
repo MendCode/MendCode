@@ -353,6 +353,15 @@ describe("tools bridge", () => {
     setTimeout(() => controller.abort(), 50)
     expect(await pending).toMatchObject({ isError: true, output: "cancelled" })
   })
+  test("a tool the server marks read-only carries the hint, and a plain one does not", async () => {
+    const { listAllTools } = await import("../src/client")
+    const listed = await listAllTools(async () => ({ tools: [{ name: "peek", inputSchema: {}, annotations: { readOnlyHint: true } }, { name: "poke", inputSchema: {}, annotations: { readOnlyHint: false } }, { name: "plain", inputSchema: {} }] }))
+    expect(listed.map((tool) => tool.readOnly === true)).toEqual([true, false, false])
+    const manager = { listTools: async () => ({ tools: listed.map((tool) => ({ server: "s", tool })), issues: [] }) } as unknown as McpManager
+    const tools = await mcpTools(manager, PROJ)
+    expect(tools.map((tool) => tool.readOnlyHint === true)).toEqual([true, false, false])
+    expect(tools.every((tool) => tool.permission === "execute")).toBe(true)
+  })
   test("truncates huge output through the tools helper", async () => {
     const { tools: _unused } = { tools: [] }
     void _unused

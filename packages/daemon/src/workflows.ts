@@ -90,6 +90,8 @@ export function createWorkflowsHost(options: {
   /** One page of a run's evidence ledger; undefined when the run has none recorded. */
   ledger?(workflowId: WorkflowId, category: "event" | "artifact", query: { before?: number | undefined; limit: number }): LedgerPage | undefined
   emit(event: { type: "workflow.changed"; workflow: WorkflowSummary; deleted?: boolean }): void
+  /** Tells the session that started a run how it ended (completed, failed or blocked). */
+  notifyOrigin?(sessionId: SessionId, text: string): void
 }) {
   let service: WorkflowService | undefined
   let disposed = false
@@ -101,9 +103,23 @@ export function createWorkflowsHost(options: {
     return definitions ??= createWorkflowDefinitions({ store: options.definitions, now: () => options.clock.now() })
   }
 
+  /**
+   * The session that started a run hears how it ended: once per arrival at completed, failed or blocked, never for a run first seen
+   * already ended (a restart) and never when the user stopped it. A retry that ends again is a new arrival.
+   */
+  const lastStates = new Map<WorkflowId, WorkflowRun["state"]>()
+  function tellOrigin(run: WorkflowRun, deleted: boolean) {
+    const previous = lastStates.get(run.workflowId)
+    if (deleted) return void lastStates.delete(run.workflowId)
+    lastStates.set(run.workflowId, run.state)
+    if (!run.originSessionId || !options.notifyOrigin || previous === undefined || previous === run.state || !["completed", "failed", "blocked"].includes(run.state)) return
+    options.notifyOrigin(run.originSessionId, endNotice(summarizeWorkflow(run)))
+  }
+
   /** Leading edge now; later changes in the window collapse into one trailing push. */
   function changed(run: WorkflowRun, deleted?: boolean) {
     if (disposed) return
+    tellOrigin(run, deleted === true)
     if (deleted) {
       windows.get(run.workflowId)?.timer.cancel()
       windows.delete(run.workflowId)
@@ -453,6 +469,12 @@ export function ledgerReceipt(kind: "events" | "artifacts", page: LedgerPage): s
   if (!page.entries.length) lines.push("(no entries)")
   if (next) lines.push(`next_before: ${next}`)
   return redactSecrets(lines.join("\n")).text
+}
+
+/** The message the starting session gets when its workflow ends: the status, and how to read more or act. */
+export function endNotice(run: WorkflowSummary) {
+  const next = run.state === "completed" ? "Read the task outputs with workflow_artifacts if you need them." : "Read why with workflow_events or workflow_artifacts; workflow_control retry (with taskId) runs a failed task again if that is right, or do the work yourself."
+  return `[workflow ${run.workflowId} ${run.state}]\n${statusReceipt(run)}\n(${next})`
 }
 
 /** A bounded status receipt for the model. */

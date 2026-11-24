@@ -9,7 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A read-only workflow task keeps the MCP tools their server marks read-only, so an agent that only needs to look at a device or service can use them.
+- The session that started a workflow is told when it completes, fails or blocks, with the reason, and can react.
+
 ### Changed
+
+- The workflow tools say that a single task is a sub-agent call, not a workflow.
 
 - Docs: how to start PR review without reviewing PRs that are already open (`backlog.max_prs: 0`).
 
