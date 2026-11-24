@@ -4,7 +4,8 @@ import path from "node:path"
 import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 
 export const REMOTE_TOKENS_FILE = "remote-tokens.json"
-export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number }
+/** `expiresAt` (epoch ms): after it the token no longer authenticates and an open connection drops; absent means it never expires. */
+export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number; expiresAt?: number }
 type Entry = RemoteTokenInfo & { hash: string }
 const hashToken = (token: string) => createHash("sha256").update(token).digest()
 
@@ -19,7 +20,7 @@ export function remoteTokens(dir: string) {
     }
     let entries: unknown
     try { entries = JSON.parse(text) } catch { throw new Error("invalid remote token store") }
-    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)))) throw new Error("invalid remote token store")
+    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)))) throw new Error("invalid remote token store")
     chmodSync(file, 0o600)
     return entries as Entry[]
   }
@@ -44,16 +45,17 @@ export function remoteTokens(dir: string) {
       unlinkSync(lock)
     }
   }
-  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }) })
+  const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }), ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }) })
+  const live = (entry: Entry) => entry.expiresAt === undefined || Date.now() < entry.expiresAt
   return {
-    create(input: { name?: string; readOnly?: boolean } = {}) {
+    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number } = {}) {
       const name = input.name ?? `token-${randomBytes(4).toString("hex")}`
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("token name must use letters, digits, _ or - (1–64)")
       const token = randomBytes(32).toString("base64url")
       return update((entries) => {
         if (entries.some((e) => e.name === name)) throw new Error("token name already exists")
         if (entries.length >= 1000) throw new Error("remote token limit reached")
-        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex") }
+        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}) }
         entries.push(entry)
         return { token, ...info(entry) }
       })
@@ -70,14 +72,14 @@ export function remoteTokens(dir: string) {
       const digest = hashToken(token)
       return update((entries) => {
         let matched: Entry | undefined
-        for (const entry of entries) if (timingSafeEqual(digest, Buffer.from(entry.hash, "hex"))) matched = entry
+        for (const entry of entries) if (timingSafeEqual(digest, Buffer.from(entry.hash, "hex")) && live(entry)) matched = entry
         if (!matched) return undefined
         matched.lastUsedAt = Date.now()
         return { ...matched }
       })
     },
     active(peer: { name: string; hash: string; readOnly: boolean }) {
-      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly)
+      return read().some((e) => e.name === peer.name && e.hash === peer.hash && e.readOnly === peer.readOnly && live(e))
     },
   }
 }

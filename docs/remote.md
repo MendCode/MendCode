@@ -36,7 +36,7 @@ mendcode remote token list --dir /srv/mendcode
 mendcode remote token revoke laptop --dir /srv/mendcode
 ```
 
-`create` prints a random token once. Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`.
+`create` prints a random token once; `--expires-days N` makes it stop working after N days (`list` shows when). Copy it into a private file on the client (mode 0600) or a secret manager that supplies `MENDCODE_TOKEN`.
 
 | Command | Result |
 |---|---|
@@ -112,6 +112,40 @@ mendcode --remote lab          # a named one; --local ignores the saved default
 ```
 
 `<data dir>/remotes.json` (mode 0600) holds names, addresses and token-file and CA paths, never a token. An explicit `--connect`, `--server-url` or `--socket` wins. The default applies only to a bare terminal start (`mendcode`, `mendcode --session ID`), never to `daemon`, `session` or other commands. `remote-first` (the default) checks that the remote answers and otherwise starts on this machine with a one-line note; `local-first` uses a local daemon that already runs and goes remote only when none does. `--remote NAME` never falls back. A terminal without `remotes.json` reads nothing and loads nothing extra.
+
+### One command for a VPS (`remote setup`)
+
+For a Linux VPS with systemd and Tailscale (MagicDNS and HTTPS certificates enabled for the tailnet), where `ssh USER@HOST` already works without a password prompt:
+
+```sh
+mendcode remote setup vps.tailnet.ts.net --ssh user@vps --dry-run     # prints the plan; opens no connection
+mendcode remote setup vps.tailnet.ts.net --ssh user@vps               # does it
+mendcode                                                              # now connects to the VPS
+```
+
+HOST is the host's Tailscale name; the host must report the same name. The steps, each skipped when the host already has the result:
+
+1. Check the host over SSH (read-only): Linux, systemd, Tailscale running.
+2. Install MendCode with the official `install.sh` (https only, `--installer-url` to change it). The installer checks the binary's SHA256 and the signature when cosign is present. An installed version is kept; `--upgrade` replaces it, `--channel` picks stable, beta or nightly.
+3. `tailscale cert` into `<remote dir>/tls` (default `~/.mendcode`, `--remote-dir`) and a systemd user timer `mendcode-cert.timer` that renews it every 30 days; the daemon reloads it without a restart. If `tailscale cert` needs permission, run `sudo tailscale set --operator=$USER` on the host once.
+4. Write `remote.json` (`"mode": "tailscale"`, the host's tailnet address, port 9876 or `--port`; other keys already there are kept).
+5. Create a token named after this device (`--device`, `--expires-days N` to make it expire) in the host's token store and save it to `<data dir>/remote/<device>.token` (mode 0600). It is never printed or logged; `--rotate` replaces it.
+6. `daemon service install --listener` and start (`--reinstall-service` to force; it stops a running service first, which refuses while a turn runs).
+7. Save the remote (named after the host, `--name`) as the default (`--no-default` to skip) and check that it answers over the tailnet.
+
+An SSH, Tailscale or certificate failure stops with the cause and what to do. Run the same command again to continue: finished steps are detected on the host or in the ledger `<data dir>/remote-setup/NAME.json` (mode 0600, no secrets).
+
+**Another device** (needs SSH to the host): `mendcode remote pair vps.tailnet.ts.net --ssh user@vps --device tablet` creates that device's own token and saves the remote. `mendcode remote unpair tablet --remote vps` revokes it on the host (connected clients drop within a second) and removes this machine's token file. Tokens never expire unless created with `--expires-days`; an expired token fails like a revoked one. There is no shared token: one name per device.
+
+**Migrating** (all optional and previewable with `--dry-run`; credentials never travel):
+
+| Flag | What moves |
+|---|---|
+| `--migrate-settings` | This machine's [config bundle](config-bundle.md) is imported on the host with `--rewrite-home` and `--on-conflict keep`: skills, commands, themes, preference settings. Provider credentials, tokens, `environment.enc`, keys and authority settings (permissions, tier, models) are left out or wait for approval on the host. Once per saved remote. |
+| `--acp-agents` | ACP agents of this machine whose command is a plain program name found on the host's PATH, as command and args only. No `env` values, no credentials; sign in on the host. Agents already there are kept. To use one from this machine, the host lists it in `remoteEngines`. Hermes and other agents can run on both machines. |
+| `--migrate-sessions` | Up to `--session-limit` (default 100) newest sessions of all projects, as transcripts imported on the host as new sessions (the host owns them afterwards; there is no offline merge). A project is matched by its normalized git remote plus the path inside the repo, after any `--path-map LOCAL=REMOTE` prefix rules; clones are looked for under `~/code`, `~/src`, `~/projects`, `~/work`, `~/dev`, `~/repos`, `~/git` and each `--search-root`. `--clone-missing` clones a repository the host lacks into `~/code` (the host needs git access). Sessions whose project is not on the host are skipped with the reason, and a later run moves them once it is. Exports are bounded (the `export` limit), and a cut one is noted. Attachment files and engine-side state (ACP session ids) do not move. |
+
+Not done yet: the device-key challenge that would replace the bearer token, approval-code pairing without SSH, and continuous two-way sync (planned as a later slice).
 
 ### Choose a session
 

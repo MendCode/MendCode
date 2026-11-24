@@ -83,6 +83,15 @@ try {
   const profileDir = (() => { const at = rawArgv.indexOf("--dir"); return path.resolve(at >= 0 && rawArgv[at + 1] ? rawArgv[at + 1]! : envDataDir()) })()
   // Token and saved-remote administration run without connecting to or launching a daemon.
   if (rawArgv.includes("remote")) {
+    // `remote setup|pair|unpair`: SSH provisioning of a host; the module loads only for these words.
+    if (rawArgv.some((token) => token === "setup" || token === "pair" || token === "unpair")) {
+      const { parseSetupCommand, runSetupCommand } = await import("./remote-setup")
+      const setup = parseSetupCommand(rawArgv, profileDir)
+      if (setup) {
+        if (!setup.dryRun) refuseFromSession(setup.dir, "provisions a remote host")
+        process.exit(await runSetupCommand(setup, process.stdout))
+      }
+    }
     const { parseProfileCommand, runProfileCommand } = await import("./remote-profiles")
     const profileCommand = parseProfileCommand(rawArgv, profileDir)
     if (profileCommand) {

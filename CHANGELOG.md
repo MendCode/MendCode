@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - Remote daemon: a full-token remote client can run turns on an ACP agent or pi when the host lists it in `remoteEngines` (off by default), `daemon service install --listener` keeps a listening daemon across reboots, `remote.json` accepts `"mode": "tailscale"`, and a renewed TLS certificate is served without a restart.
+- One-command remote: `mendcode remote setup HOST --ssh USER@VPS` prepares a Linux VPS with Tailscale (installs MendCode with checksum verification, gets the TLS certificate with a renewal timer, creates a token for this device, starts the daemon service with its listener and saves the remote so `mendcode` connects). `--dry-run` prints the plan, a repeated or interrupted run continues where it stopped, `--migrate-settings`, `--acp-agents` and `--migrate-sessions` (projects matched by git remote and path in the repo, `--path-map`, `--clone-missing`) are opt-in and never move credentials. `remote pair` adds another device, `remote unpair` removes one, and `remote token create --expires-days N` makes a token expire.
 - Saved remotes: `mendcode remote add NAME HOST:PORT`, `--remote NAME`, `--local` and a default remote, so typing `mendcode` connects to your daemon on another machine (falls back to this machine when it is unreachable).
 
 ### Changed

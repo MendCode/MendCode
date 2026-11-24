@@ -75,15 +75,20 @@ export function remoteTransport(flags: NonNullable<ReturnType<typeof parseRemote
   return { hostname: flags.hostname, port: flags.port, tls: flags.tls, token, ...(ca ? { ca } : {}), ...("httpUrl" in flags ? { httpUrl: flags.httpUrl, ...(flags.directory ? { directory: flags.directory } : {}), ...((flags.username || flags.password || env.OPENCODE_SERVER_USERNAME) ? { username: flags.username ?? env.OPENCODE_SERVER_USERNAME ?? "mendcode" } : {}) } : {}) }
 }
 
-export type TokenCommand = { dir: string } & ({ action: "create"; name?: string; readOnly: boolean } | { action: "list" } | { action: "revoke"; name: string })
+export type TokenCommand = { dir: string } & ({ action: "create"; name?: string; readOnly: boolean; expiresDays?: number } | { action: "list" } | { action: "revoke"; name: string })
 export function parseTokenCommand(argv: string[]): TokenCommand | undefined {
   const words: string[] = []
   let dir: string | undefined
   let name: string | undefined
   let readOnly = false
+  let expiresDays: number | undefined
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i]!
-    if (value === "--dir" || value === "--name") {
+    if (value === "--expires-days") {
+      const days = Number(argv[++i])
+      if (!Number.isInteger(days) || days < 1 || days > 3650) throw new Error("--expires-days needs a whole number from 1 to 3650")
+      expiresDays = days
+    } else if (value === "--dir" || value === "--name") {
       const next = argv[++i]
       if (!next || next.startsWith("--")) throw new Error(`${value} needs a value`)
       if (value === "--dir") dir = next
@@ -94,18 +99,18 @@ export function parseTokenCommand(argv: string[]): TokenCommand | undefined {
   if (words[0] !== "remote") return undefined
   if (!dir) throw new Error("remote token commands require explicit --dir")
   if (words[1] !== "token") throw new Error("usage: remote token create|list|revoke <name> --dir D")
-  if (words[2] === "create" && words.length === 3) return { dir, action: "create", readOnly, ...(name ? { name } : {}) }
-  if (words[2] === "list" && words.length === 3 && !name && !readOnly) return { dir, action: "list" }
-  if (words[2] === "revoke" && words.length === 4 && !name && !readOnly) return { dir, action: "revoke", name: words[3]! }
-  throw new Error("usage: remote token create [--read-only] [--name N] | list | revoke <name> --dir D")
+  if (words[2] === "create" && words.length === 3) return { dir, action: "create", readOnly, ...(name ? { name } : {}), ...(expiresDays ? { expiresDays } : {}) }
+  if (words[2] === "list" && words.length === 3 && !name && !readOnly && !expiresDays) return { dir, action: "list" }
+  if (words[2] === "revoke" && words.length === 4 && !name && !readOnly && !expiresDays) return { dir, action: "revoke", name: words[3]! }
+  throw new Error("usage: remote token create [--read-only] [--name N] [--expires-days N] | list | revoke <name> --dir D")
 }
 
 export async function runTokenCommand(command: TokenCommand, out: { write(text: string): unknown }) {
   const { remoteTokens } = await import("@mendcode/daemon/remote")
   const tokens = remoteTokens(command.dir)
-  if (command.action === "create") out.write(`${tokens.create(command).token}\n`)
+  if (command.action === "create") out.write(`${tokens.create({ ...(command.name ? { name: command.name } : {}), readOnly: command.readOnly, ...(command.expiresDays ? { expiresInMs: command.expiresDays * 86_400_000 } : {}) }).token}\n`)
   else if (command.action === "list") {
-    for (const entry of tokens.list()) out.write(`${entry.name}\t${entry.readOnly ? "read-only" : "full"}\t${new Date(entry.createdAt).toISOString()}\t${entry.lastUsedAt === undefined ? "never" : new Date(entry.lastUsedAt).toISOString()}\n`)
+    for (const entry of tokens.list()) out.write(`${entry.name}\t${entry.readOnly ? "read-only" : "full"}\t${new Date(entry.createdAt).toISOString()}\t${entry.lastUsedAt === undefined ? "never" : new Date(entry.lastUsedAt).toISOString()}${entry.expiresAt === undefined ? "" : `\texpires ${new Date(entry.expiresAt).toISOString()}`}\n`)
   } else {
     tokens.revoke(command.name)
     out.write("revoked\n")
