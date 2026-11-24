@@ -92,6 +92,15 @@ try {
         process.exit(await runSetupCommand(setup, process.stdout))
       }
     }
+    // `remote code ...`: git handoff and opt-in live sync of a project; lazy like the setup module.
+    if (rawArgv.includes("code")) {
+      const { parseCodeCommand, runCodeCommand } = await import("./remote-code")
+      const code = parseCodeCommand(rawArgv, profileDir)
+      if (code) {
+        if (!code.dryRun && !(code.action === "live" && (code.sub === "list" || code.sub === "status"))) refuseFromSession(code.dir, "pushes code or syncs files between machines")
+        process.exit(await runCodeCommand(code, process.stdout))
+      }
+    }
     const { parseProfileCommand, runProfileCommand } = await import("./remote-profiles")
     const profileCommand = parseProfileCommand(rawArgv, profileDir)
     if (profileCommand) {
