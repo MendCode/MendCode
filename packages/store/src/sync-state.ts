@@ -22,6 +22,8 @@ CREATE INDEX IF NOT EXISTS sync_changes_seq ON sync_changes(kind, cseq);
 CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS sync_sessions (session_id TEXT PRIMARY KEY, role TEXT NOT NULL, remote_seq INTEGER NOT NULL DEFAULT 0, epoch INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ok', note TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', active_at INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS sync_leases (session_id TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL, until INTEGER NOT NULL) WITHOUT ROWID;
+`
+const TRIGGERS = `
 CREATE TRIGGER IF NOT EXISTS sync_memory_insert AFTER INSERT ON memories WHEN new.scope != 'session' BEGIN ${change("memory", "new.id", 0)} END;
 CREATE TRIGGER IF NOT EXISTS sync_memory_update AFTER UPDATE ON memories WHEN new.scope != 'session' BEGIN ${change("memory", "new.id", 0)} END;
 CREATE TRIGGER IF NOT EXISTS sync_memory_delete AFTER DELETE ON memories WHEN old.scope != 'session' BEGIN ${change("memory", "old.id", 1)} END;
@@ -45,8 +47,25 @@ export type MemoryRecord = {
 type SessionRowDb = { session_id: string; role: string; remote_seq: number; epoch: number; lease_until: number; state: string; note: string; meta: string; active_at: number }
 const toSession = (row: SessionRowDb): SyncSessionRow => ({ sessionId: row.session_id as SessionId, role: row.role === "owned" ? "owned" : "mirror", remoteSeq: row.remote_seq, epoch: row.epoch, leaseUntil: row.lease_until, state: row.state === "diverged" || row.state === "unsyncable" ? row.state : "ok", note: row.note, meta: row.meta, activeAt: row.active_at })
 
+/** Raise it when a trigger's SQL changes: a database that holds an older number has its triggers recreated on open (CREATE TRIGGER IF NOT EXISTS keeps old ones). */
+const TRIGGER_VERSION = "2"
+const TRIGGER_VERSION_KEY = "trigger-version"
+
+function migrateTriggers(db: Database) {
+  const current = db.query<{ value: string }, [string]>("SELECT value FROM sync_meta WHERE key = ?").get(TRIGGER_VERSION_KEY)?.value
+  if (current === TRIGGER_VERSION) return
+  db.transaction(() => {
+    const hub = db.query("SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'sync_session_insert'").get() !== null
+    for (const name of DROP) db.run(`DROP TRIGGER IF EXISTS ${name}`)
+    db.run(TRIGGERS)
+    if (hub) db.run(HUB_TRIGGERS)
+    db.query("INSERT OR REPLACE INTO sync_meta(key, value) VALUES (?, ?)").run(TRIGGER_VERSION_KEY, TRIGGER_VERSION)
+  })()
+}
+
 export function createSyncState(db: Database, now: () => number) {
   db.run(TABLES)
+  migrateTriggers(db)
   return {
     /** Hub role: session triggers, and every existing root session enters the feed once. */
     enableHub() {
