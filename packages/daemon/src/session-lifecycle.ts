@@ -4,7 +4,9 @@ import type { GhRun } from "./pr-watch"
 
 export function lifecycleOf(store: Store, id: SessionId): SessionLifecycle {
   let data: SessionLifecycle = {}
-  try { data = SessionLifecycle.parse(JSON.parse(store.sessionData.get(id, "lifecycle") ?? "{}")) } catch {}
+  // Most sessions never had a lifecycle saved: nothing to parse or validate (a session list reads this for every row).
+  const saved = store.sessionData.get(id, "lifecycle")
+  if (saved !== undefined) try { data = SessionLifecycle.parse(JSON.parse(saved)) } catch {}
   const pinnedAt = store.sessionPinnedAt(id)
   return { ...data, ...(pinnedAt !== undefined ? { pinnedAt } : {}) }
 }

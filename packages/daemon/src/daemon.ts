@@ -315,6 +315,8 @@ const TREE_NODES = 400
 const TREE_MERGE_COUNTS = 50
 const TREE_TASK_DEPTH = 4
 const oneLine = (text: string, max: number) => redactSecrets(text).text.replace(/\s+/g, " ").trim().slice(0, max)
+/** The session a child in its own worktree came from (its project's agents and trust apply); undefined for any other session. */
+const worktreeParent = (task: { parentId: string; worktree?: unknown } | undefined) => (task?.worktree ? task.parentId : undefined)
 
 type Connection = {
   id: number
@@ -584,7 +586,7 @@ export async function startDaemon(options: DaemonOptions) {
   let promptPackaged: ReturnType<typeof loadSystemPrompt> | undefined
   const storeWarnings: string[] = []
   let warnStore = (message: string) => { storeWarnings.push(message) }
-  const store = openStore({ dir: options.dir, now: () => clock.now(), warn: (message) => warnStore(message) })
+  const store = openStore({ dir: options.dir, now: () => clock.now(), warn: (message) => warnStore(message), groupCommits: true })
   // Saved loops need recovery at launch. Finish their import before arming any startup timers;
   // an empty store leaves the scheduler module unevaluated until a loop is used.
   const configuredLoops = store.loops.all().length ? await import("@mendcode/loops") : undefined
@@ -1050,7 +1052,7 @@ export async function startDaemon(options: DaemonOptions) {
       return (store.settings.get().trustedToolDirs ?? []).some((trusted) => trusted === canonical || canonicalDir(trusted) === canonical)
     },
     // A child in its own worktree reads agents (and their trust) from its parent's project, as a workflow agent does from its source.
-    directoryOf: (sessionId) => workflowContext(sessionId)?.workflow.sourceDirectory ?? store.sessionDirectory((store.meta.get(`session.fanout.owner:${sessionId}`) || (store.tasks.list().find((task) => task.taskId === sessionId && task.worktree)?.parentId ?? sessionId)) as SessionId),
+    directoryOf: (sessionId) => workflowContext(sessionId)?.workflow.sourceDirectory ?? store.sessionDirectory((store.meta.get(`session.fanout.owner:${sessionId}`) || (worktreeParent(store.tasks.get(sessionId)) ?? sessionId)) as SessionId),
     // A report-only loop session is in plan mode; a bot's own schedule keeps the bot as its agent (the session's mode still caps it to reading).
     selected: (sessionId) => livePermission(sessionId) === "plan" && !loops.forSession(sessionId)?.agent ? "plan" : store.sessionAgent(sessionId),
     planExitAgent: () => store.settings.get().plan_exit_agent ?? store.settings.get().planExitAgent,
@@ -4314,7 +4316,17 @@ export async function startDaemon(options: DaemonOptions) {
           if (!parent || !store.hasSession(parent)) break
           anchor = parent
         }
-        const modelOf = (id: SessionId) => resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }).model
+        // One read of the settings, the sessions' parents and the child tasks for the whole tree: asked per node, a tree of a
+        // project with a few hundred sub-agents held the daemon for a third of a second each time a chat was opened.
+        const settings = store.settings.get()
+        const modelOf = (id: SessionId) => resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(settings, store.sessionDirectory(id)), catalog }).model
+        const childrenOf = store.sessionChildIndex()
+        const tasksByParent = new Map<string, import("@mendcode/protocol").TaskRecord[]>()
+        for (const task of store.tasks.list()) {
+          const siblings = tasksByParent.get(task.parentId)
+          if (siblings) siblings.push(task)
+          else tasksByParent.set(task.parentId, [task])
+        }
         const stateOf = (id: SessionId) => ((actors.get(id)?.snapshot().foreground ?? "idle") === "idle" ? "idle" : "running")
         const family = store.sessionTree.family(anchor)
         const nodes: Array<Record<string, unknown>> = family.map((node, index) => ({
@@ -4331,8 +4343,9 @@ export async function startDaemon(options: DaemonOptions) {
         const local = !connection.remoteAddress && !connection.peer
         const addTasks = (parent: SessionId, depth: number) => {
           if (depth > TREE_TASK_DEPTH) return
-          const childTasks = new Map(tasks.list(parent).map((task) => [task.taskId, task]))
-          for (const id of store.sessionChildren(parent).slice(0, TREE_NODES)) {
+          // The same 40 newest tasks of the parent `tasks.list(parent)` gives.
+          const childTasks = new Map((tasksByParent.get(parent) ?? []).slice(-40).map((task) => [task.taskId, task]))
+          for (const id of childrenOf(parent).slice(0, TREE_NODES)) {
             if (nodes.length >= TREE_NODES) break
             if (!known.has(id)) {
               known.add(id)

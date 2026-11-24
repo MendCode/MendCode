@@ -7,7 +7,7 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import { createIdFactory, MODEL_ROLES, type ModelInfo, type ModelsReport } from "@mendcode/protocol"
 import { startDaemon, type DaemonOptions } from "../src"
 import { CLAUDE_COMPACT_WINDOW, claudeCompactEnv, claudeSubagentEnv } from "../src/claude-models"
-import { invalidChoice, resolveModel, type ModelCatalog } from "../src/models"
+import { invalidChoice, oncePerTurn, resolveModel, type ModelCatalog } from "../src/models"
 
 const MODELS: ModelInfo[] = [
   { id: "gpt-6-luna", name: "GPT-6-Luna", efforts: ["low", "medium", "high"], defaultEffort: "medium", contextWindow: 272_000 },
@@ -217,4 +217,21 @@ describe("catalog ids a model writes", () => {
     expect(catalogId(catalog, "codex/codex:gpt-6-sol")).toBe("codex:gpt-6-sol")
     expect(catalogId(catalog, "claude/claude-nope")).toBeUndefined()
   })
+})
+
+test("a catalog list is built once per turn of the event loop (each read-only form apart), and each caller gets its own array", async () => {
+  let builds = 0
+  let models: ModelInfo[] = [{ id: "a", name: "A", efforts: [] }]
+  const list = oncePerTurn((readOnly) => { builds++; return readOnly ? models.slice(0, 1) : models })
+  const first = list()
+  for (let call = 0; call < 50; call++) list()
+  list(true)
+  expect(builds).toBe(2)
+  first.push({ id: "mutated", name: "M", efforts: [] })
+  expect(list().map((model) => model.id)).toEqual(["a"])
+  // A model connected now shows from the next turn on.
+  models = [...models, { id: "b", name: "B", efforts: [] }]
+  await new Promise((resolve) => setImmediate(resolve))
+  expect(list().map((model) => model.id)).toEqual(["a", "b"])
+  expect(builds).toBe(3)
 })

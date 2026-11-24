@@ -6,6 +6,8 @@ if (process.argv[2] === "__daemon") await import("../../../packages/daemon/src/m
 // The sandboxed process a workflow script runs in: it loads only the script runtime, never the CLI or the daemon.
 // A first code graph build scans its files there, with every JIT tier on (packages/codegraph/src/scan-host.ts).
 else if (process.argv[2] === "__codegraph-scan") await (await import("../../../packages/codegraph/src/scan-host")).runScanHost()
+// The code panel's overview of a project the daemon does not hold: its index loads, refreshes and leaves with this process.
+else if (process.argv[2] === "__codegraph-overview") await (await import("../../../packages/codegraph/src/overview-host")).runOverviewHost()
 else if (process.argv[2] === "__script-host") await (await import("../../../packages/workflows/src/script-host")).runScriptHost()
 else {
   // Before main reads the data directory: an earlier version's ~/.mendcode-v2 becomes ~/.mendcode once (data-dir-move.ts).

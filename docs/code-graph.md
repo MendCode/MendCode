@@ -137,7 +137,11 @@ const tools = createCodeGraphTools({ cacheDir, jgBin?, now?, jgTimeoutMs?, onSca
 
 ## Overview for the Galaxy panel
 
-`codegraph.overview {directory, limit?}` is the daemon command behind the Galaxy panel's code mode (`createCodeOverview({ indexer })` and `fileOverview({ graph, limit })` in `packages/codegraph/src/overview.ts`). It is sent when the user presses the mode key, or once for a session whose galaxy has nothing touched, and it builds or refreshes the index of `directory` like a graph tool does. The reply is one of:
+`codegraph.overview {directory, limit?}` is the daemon command behind the Galaxy panel's code mode (`createCodeOverview({ indexer })` and `fileOverview({ graph, limit })` in `packages/codegraph/src/overview.ts`). It is sent when the user presses the mode key, or once for a session whose galaxy has nothing touched, and it builds or refreshes the index of `directory` like a graph tool does.
+
+Where it is drawn: when the daemon already holds the project's graph (a graph tool used it), or the project has no index file yet (its first build, whose progress the terminal shows), the daemon draws it from its own indexer. Otherwise a short-lived process does (`__codegraph-overview`, `packages/codegraph/src/overview-host.ts`): it loads the index file, refreshes and saves it, prints the overview and exits, so the daemon never holds a project's whole graph just to draw the panel. The daemon keeps the last hosted overview of up to 16 projects with a hash of one walk of the project (paths, sizes and times of its files, its workspace packages and its graft wiring): the same walk later answers from that overview without starting the process. A process that cannot start or fails leaves the drawing to the daemon.
+
+The reply is one of:
 
 | State | Meaning |
 | --- | --- |

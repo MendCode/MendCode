@@ -60,6 +60,8 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     if (Object.keys(own).length || panel !== undefined) sessionLook(own, panel)
   }
   let loadedKey = ""
+  /** The sidebar's questions on their way, by card source: the command sent and what to ask once more when it lands. */
+  const askedNow = new Map<string, { asked: string; again?: () => void }>()
   let scope: "user" | "project" = "user"
   let git: { branch?: string; ahead?: number; behind?: number; dirty?: number; conflicts?: number; untracked?: number; error?: string } = {}
   /** False until `git.status` answers, so the workspace card says it is checking instead of claiming there is no repository. */
@@ -310,7 +312,19 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     askedShared = sharedKey
     const query = (type: string, command: Parameters<typeof input.send>[0], apply: (result: Record<string, unknown> | undefined) => void, shared = false) => {
       if (!types.has(type) || shared && reuseShared) return
+      // Opening a chat changes the key two or three times while its history arrives: the same question still on its way is not
+      // asked again at once, only once more when its answer lands (what it answers may have changed meanwhile).
+      const asked = JSON.stringify(command)
+      const pending = askedNow.get(type)
+      if (pending?.asked === asked) {
+        pending.again = () => query(type, command, apply, shared)
+        return
+      }
+      const entry: { asked: string; again?: () => void } = { asked }
+      askedNow.set(type, entry)
       void input.send(command).then((reply) => {
+        if (askedNow.get(type) === entry) askedNow.delete(type)
+        entry.again?.()
         if (shared ? sharedKey !== askedShared : key !== loadedKey) return
         if (reply.ok) {
           sourceErrors.delete(type)
@@ -318,7 +332,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
         }
         else sourceErrors.set(type, reply.error.message)
         requestFrame()
-      })
+      }, () => { if (askedNow.get(type) === entry) askedNow.delete(type) })
     }
     query("mcp", { type: "mcp.status", directory }, (result) => { state.sidebarMcp = (result as McpStatusReport | undefined)?.servers }, true)
     query("jobs", { type: "background.list" }, (result) => { if (Array.isArray(result?.tasks)) state.agentShells = result.tasks as typeof state.agentShells }, true)

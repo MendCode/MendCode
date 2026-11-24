@@ -169,6 +169,35 @@ The extra solo frame time is the daemon sharing the thread; the client's collect
 
 ## Findings
 
+### Chat switches on a large data directory (2026-11-22)
+
+A copy of a long-used data directory (hundreds of sessions, a few hundred sub-agent tasks, a dozen projects with code-graph caches) stalled the daemon on every chat switch. What held the loop, measured with a 20 ms lag probe and CPU profiles of the daemon on the copy (fake engines, private HOME):
+
+- **The model catalog was rebuilt on every lookup.** Each engine event, global event and tree node resolved a model, and each resolution rebuilt the whole catalog with a settings read per provider: one switch made 866 catalog builds and 9,555 settings reads. The catalog is now built once per turn of the event loop (`oncePerTurn`, `packages/daemon/src/models.ts`), and a settings read parses a kept JSON text instead of cloning (ACP agents are read only when their file changes).
+- **Bun's statement cache keeps only the first 20 SQL texts**; the store has hundreds, so most reads compiled their SQL each call. `private-database.ts` keeps up to 400 statements by text.
+- **`session.tree` read every task and scanned every session per node** (300–400 ms, asked about three times per switch by the right sidebar). The tree reads the tasks and the parent index once (`sessionChildIndex`, `tasks.list(parent)`), and the sidebar no longer resends a question still in flight.
+- **`session.changes` started `git diff` synchronously per changed file** (100–140 ms per request). Diffs are kept by content (128 entries, 1 MB of text).
+- **The Galaxy code overview loaded a project's whole graph into the daemon** (about 90 MB of heap per project, two kept for ten minutes). A short-lived `__codegraph-overview` process draws it and the daemon keeps only the drawn overview with a walk hash ([code graph](code-graph.md#overview-for-the-galaxy-panel)).
+- **Each streamed delta committed on its own.** Deltas now share a commit for 25 ms (`group` in `private-database.ts`, daemon only).
+
+Compiled binaries, same copy, two alternating rounds, base → candidate. Replay of the terminal's recorded switch commands over 12 project chats, 12 bot chats and 12 sub-agents, twice, with the Galaxy overview on each:
+
+| | Base | Candidate |
+|---|---|---|
+| Project switch median / p90 / max | 203–255 / 821–961 / 1206–1344 ms | 82–85 / 119–122 / 183–186 ms |
+| Sub-agent switch median / p90 | 191–220 / 823–946 ms | 77–79 / 128–135 ms |
+| Bot switch median | 110–129 ms | 72–75 ms |
+| Galaxy overview median | 62 ms | 66–67 ms (first spawn of a project up to 0.85 s, off the loop) |
+| Loop blocks over 100 ms after start-up | 41–57, max 0.59–1.03 s | none (start-up only, max 153 ms) |
+| Daemon after the replay: RSS / footprint | 1225–1248 MB / 306–336 MB | 436–464 MB / 141–145 MB |
+| Daemon at rest after start: RSS / footprint | 163 MB / 58.2 MB | 163 MB / 58.5 MB |
+
+The compiled terminal attached to that daemon, 40 sidebar switches 1.2 s apart (two rounds): terminal CPU 7–10% → 7–11%, daemon CPU 19–21% → 14%, terminal footprint 41.2–42.4 → 42.4–43.0 MB (within the spread), highest RSS 97–100 → 110–114 MB (more of each chat arrives within the 1.2 s; RSS is shown, not judged), terminal CPU at rest afterwards 4–9% → 3–4%.
+
+Streaming, three fake Claude sessions at about 275 events a second for 15 s (source runs, three rounds): daemon CPU 24–40% → 28–30%; the spread of the base runs is wider than the difference, so the gain is small. Binary 72.717 → 72.734 MB (the overview host and memo code).
+
+What stays above 100 MB after the replay: the live JS heap is 37 MB (heap snapshot), the rest of the footprint is WebKit malloc pages kept after the replay's peak (dirty 107 MB, peak footprint 227 MB) and `IOAccelerator` (12–80 MB, varies between runs of the same binary). RSS also counts the mapped binary and clean pages.
+
 ### Compiled runtime baseline
 
 Start-up loads less code (2026-11-05). The terminal, which hosts the daemon, evaluated about 5.1 MB of JS source at start, including HTTP/REST, GitHub and PR review, engines and providers a session does not use, MCP, LSP, loops, Dream, the code graph, terminal pages, daemon helpers and all 64 Zod locales.

@@ -97,7 +97,7 @@ export function createChildTasks(options: {
   }
   /** `byModel`: the owner's model reads the answer itself, so a finished background child's completion notice would only repeat it. */
   async function status(parentId: SessionId, input: Parameters<TaskPort["status"]>[1], signal: AbortSignal, byModel: boolean) {
-    if (!input.task_id) return store.tasks.list().filter((task) => task.parentId === parentId).slice(-40).map((task) => `${task.taskId} · ${task.state} · ${task.description}`).join("\n") || "No child tasks"
+    if (!input.task_id) return store.tasks.list(parentId).slice(-40).map((task) => `${task.taskId} · ${task.state} · ${task.description}`).join("\n") || "No child tasks"
     let task = get(input.task_id)
     if (!task || task.parentId !== parentId) throw new Error("unknown child task for this session")
     if (input.action === "cancel" && ACTIVE.has(task.state)) await options.cancel(task.taskId)
@@ -227,7 +227,7 @@ export function createChildTasks(options: {
     },
     start: (parentId: SessionId, input: TaskInput, command: { displayText: string; attachments: BlobRef[]; model?: ModelChoice }) => port.run(parentId, input, new AbortController().signal, command),
     get,
-    list: (parentId?: SessionId) => store.tasks.list().filter((task) => !parentId || task.parentId === parentId).slice(-40),
+    list: (parentId?: SessionId) => store.tasks.list(parentId).slice(-40),
     detach(parentId: SessionId, taskId: SessionId) {
       const task = get(taskId)
       if (!task || task.parentId !== parentId) throw new Error("unknown child task for this session")
