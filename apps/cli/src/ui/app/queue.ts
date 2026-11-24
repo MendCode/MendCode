@@ -3,7 +3,7 @@ import type { QueuePageState, QueueRow } from "../../view/queue-page"
 import { parseCommentMessage } from "../../view/reply-comments"
 import { createQueuePageState, preload } from "../lazy-pages"
 import type { AppContext } from "./context"
-import { queuePolicy } from "./queue-policy"
+import { HANDED_OVER, queuePolicy } from "./queue-policy"
 
 type QueueMode = NonNullable<Settings["queue"]>["mode"]
 type QueueList = { held: boolean; paused: boolean; entries: QueueRow[] }
@@ -105,6 +105,12 @@ export function createQueue(ctx: AppContext, applySettings: (settings: Settings)
     }
     const row = page.rows[page.selected]
     const sessionId = state.sessionId
+    // A message the engine already holds can only be sent now (p): everything else says why it cannot be done, without asking the daemon.
+    if (row?.handed && ["K", "J", "\x1b[1;2A", "\x1b[1;2B", "e", "\r", "s", "x"].includes(key)) {
+      page.deleting = undefined
+      page.error = HANDED_OVER
+      return requestFrame()
+    }
     if (key === "\x1b") {
       if (page.deleting !== undefined) page.deleting = undefined
       else {

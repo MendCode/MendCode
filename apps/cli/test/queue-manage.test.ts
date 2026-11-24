@@ -156,3 +156,17 @@ test("ctrl+shift+enter sends once the other way: steer by default, queue under a
   await tools.app.onKey(flip)
   expect(tools.sentOf("user.submit").at(-1)).toMatchObject({ delivery: "queue" })
 })
+
+test("a handed row shows as delivered and x, e, s and K on it explain why without asking the daemon", async () => {
+  const h = queueHarness("after-tools", [{ queueId: ids("queue"), kind: "message", text: "Handed over text", attachments: 0, editable: false, delivery: "steer", handed: true } as never])
+  running(h)
+  await h.type("/queue\r")
+  await Bun.sleep(5)
+  for (let i = 0; i < 3; i++) await h.app.onKey("\x1b[B")
+  expect(h.text().join("\n")).toContain("DELIVERED")
+  for (const key of ["x", "x", "e", "s", "K"]) await h.app.onKey(key)
+  for (const type of ["queue.remove", "queue.edit", "queue.steer", "queue.reorder"] as const) expect(h.sentOf(type)).toHaveLength(0)
+  const shown = h.text().join("\n")
+  expect(shown).toContain("already handed to the model")
+  expect(shown).not.toContain("queued message not found")
+})

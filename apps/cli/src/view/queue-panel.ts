@@ -10,13 +10,14 @@ import { queuedNotice } from "./pr-notice"
 export const QUEUE_SHOWN = 3
 const QUEUED = " QUEUED "
 const STEER = " STEERING "
+const DELIVERED = " DELIVERED "
 const SEND = " ↗ SEND "
 const HELD_INDENT = "  "
 /** Cells of another session's title in the held label, so the panel's title still fits a narrow terminal. */
 const HELD_AUTHOR_WIDTH = 32
 
 /** v1's queued previews and send chip, inside the shared panel grid. Chip coordinates are local to these rows. */
-export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; /** The title of the session whose interrupt was the cancel; absent when the user cancelled. */ heldBySession?: string; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number>; /** Positions that are the daemon's internal notes for the agent (a child waits for approval): never listed or counted. */ internal?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
+export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; /** The title of the session whose interrupt was the cancel; absent when the user cancelled. */ heldBySession?: string; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number>; /** Positions that are the daemon's internal notes for the agent (a child waits for approval): never listed or counted. */ internal?: ReadonlySet<number>; /** Positions the engine already holds (it reads them when its running tool ends): they can no longer be dropped or edited. */ handed?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
   const { width } = input
   if (input.previews.length === 0) return { rows: [] }
   const shown = input.previews.flatMap((preview, index) => (input.internal?.has(index) ? [] : [{ preview, index }]))
@@ -44,7 +45,7 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
   shown.slice(0, QUEUE_SHOWN).forEach(({ preview, index: at }, index) => {
     const chips: Line = [
       ...(index === 0 ? [{ text: SEND, bold: true, ...onColor("primary") }, { text: " " }] : []),
-      { text: input.delivery?.[at] === "steer" ? STEER : QUEUED, bold: true, ...onColor("accent") },
+      { text: input.handed?.has(at) ? DELIVERED : input.delivery?.[at] === "steer" ? STEER : QUEUED, bold: true, ...onColor("accent") },
     ]
     const text = truncateEnd(`${input.shell?.has(at) ? "$ " : ""}${queuedNotice(readableText(preview, { quotes: false }).replace(/\s+/g, " "))}`, Math.max(1, room - lineWidth(chips) - 4))
     const left: Line = [{ text: "… ", fg: "muted" }, { text, fg: "body" }]
@@ -64,7 +65,9 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
   const cancel = cancelledBy === undefined ? "Held since your cancel" : `Held since the cancel by session ${truncateEnd(cancelledBy || "untitled", HELD_AUTHOR_WIDTH)}`
   const held = input.heldBy === "restart" ? "Held since the restart" : input.heldBy === "interrupt" ? "Held since the interruption" : input.heldBy === "cancel" ? cancel : "Held"
   const label = input.paused ? "Paused" : input.held ? held : mode === "after-tools" ? "After tools" : mode === "immediate" ? "Sending" : "After response"
-  const hints = keyText(input.paused ? padded ? "/unpause to continue · ctrl+k drop last" : "/unpause · ctrl+k drop" : padded ? `ctrl+s ${input.held ? "sends them" : "send now"} · ctrl+k drop last · ${preferChord() ? "ctrl+x ^" : "alt+↑"} edit` : "ctrl+s send · ctrl+k drop")
+  // Only messages the engine already holds: there is nothing left to drop or edit, so the hints say what happens instead.
+  const delivered = shown.every((entry) => input.handed?.has(entry.index))
+  const hints = keyText(delivered ? padded ? "delivered · the model reads it when the tool ends · ctrl+s send now" : "delivered · ctrl+s send now" : input.paused ? padded ? "/unpause to continue · ctrl+k drop last" : "/unpause · ctrl+k drop" : padded ? `ctrl+s ${input.held ? "sends them" : "send now"} · ctrl+k drop last · ${preferChord() ? "ctrl+x ^" : "alt+↑"} edit` : "ctrl+s send · ctrl+k drop")
   const header = fit(spread([{ text: "Queue", fg: "primary" }], [{ text: hints, fg: "muted" }], width), width)
   const rows = [header, ...panelGrid({ rows: [[{ title: `${previews.length} queued · ${label}`, body }]], width, compact: false, maxColumns: 1, padding: padded })]
   return { rows, ...(sendChip ? { sendChip } : {}) }

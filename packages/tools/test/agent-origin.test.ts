@@ -33,6 +33,21 @@ describe("a session's shell does not change the owner's configuration through th
     expect(message).toContain("/permissions")
   })
 
+  test("turning a profile (package, plugin) off is refused with the profiles tool as the way, not a dead end", () => {
+    const { refusal } = scene()
+    for (const command of ["mendcode profile disable demo", "mendcode package disable demo", "mendcode packages disable demo", "mendcode plugins disable demo", "mendcode plugin disable demo", "mendcode plugins config demo disable tools/x"]) {
+      const message = refusal(command)
+      expect([command, message]).toEqual([command, expect.stringContaining("call the profiles tool")])
+      expect(message).toContain("approves on a card")
+      expect(message).toContain("no /reload and no restart")
+      expect(message).not.toContain("mendcode_settings")
+    }
+    expect(refusal("mendcode plugins list")).toBeUndefined()
+    expect(refusal("mendcode plugin list")).toBeUndefined()
+    // `plugin MODULE` installs an extension: still its own refusal.
+    expect(refusal("mendcode plugin some-module")).toContain("installs an extension")
+  })
+
   test("the ways of naming the program that are recognised", () => {
     const { refusal, bin } = scene()
     for (const command of [

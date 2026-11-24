@@ -21,6 +21,24 @@ describe("profiles (formerly packages)", () => {
     expect(parsed("control-plane", "profiles", "list")).toMatchObject({ kind: "profile.list" })
   })
 
+  test("`plugins`, and `plugin` before a profile command, run the profile command; `plugin MODULE` still installs", () => {
+    expect(parsed("plugins", "list")).toMatchObject({ kind: "profile.list" })
+    expect(parsed("plugins", "disable", "acme")).toMatchObject({ kind: "profile.enable", name: "acme", enabled: false })
+    expect(parsed("plugin", "enable", "acme", "--project")).toMatchObject({ kind: "profile.enable", name: "acme", scope: "project", enabled: true })
+    expect(parsed("plugin", "remove", "acme")).toMatchObject({ kind: "profile.remove", name: "acme" })
+    expect(parsed("plugin", "some-module")).toMatchObject({ kind: "plugin.install", spec: "some-module" })
+    expect(helpText("plugins")).toBe(helpText("profile"))
+    expect(helpText("profile")).toContain("plugins")
+    expect(helpText("profile")).toContain("no /reload and no restart")
+  })
+
+  test("/plugins and /plugin open the profiles page", () => {
+    expect(parseSlash("/plugins")?.command.name).toBe("profiles")
+    expect(parseSlash("/plugin")?.command.name).toBe("profiles")
+    // Claude Code's word for reload: here it is /reload, which also re-reads profiles.
+    expect(parseSlash("/reload-plugins")?.command.name).toBe("reload")
+  })
+
   test("help and the index say profile and never list the older words", () => {
     expect(helpText("profile")).toContain("mendcode profile <command>")
     for (const word of ["package", "packages", "profiles"]) expect(helpText(word)).toBe(helpText("profile"))

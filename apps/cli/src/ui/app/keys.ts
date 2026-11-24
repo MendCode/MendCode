@@ -33,7 +33,7 @@ import { createOptionKeys } from "./option-keys"
 import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
-import { queuePolicy, userQueue } from "./queue-policy"
+import { HANDED_OVER, queuePolicy, takeableQueue, userQueue } from "./queue-policy"
 import { fastStep, wheelStep } from "./page-wheel"
 
 /** The arrows of a terminal in application-cursor mode, as the list reads them. */
@@ -904,10 +904,13 @@ export function createKeys(ctx: AppContext, actions: {
 
   /** The newest queued message is removed (ctrl+k on an empty prompt). */
   async function dropLastQueued() {
-    const last = userQueue(state.transcript.queue).at(-1)
-    if (!last) return
+    const last = takeableQueue(state.transcript.queue).at(-1)
+    if (!last) return userQueue(state.transcript.queue).length ? say(HANDED_OVER, "warning") : undefined
     const reply = await input.send({ type: "queue.remove", sessionId: state.sessionId, queueId: last.queueId })
-    if (!reply.ok) fail(reply.error.message)
+    if (!reply.ok) {
+      if (reply.error.code === "target_mismatch") say("that message already started", "warning")
+      else fail(reply.error.message)
+    }
     requestFrame()
   }
 

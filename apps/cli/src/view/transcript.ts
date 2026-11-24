@@ -324,7 +324,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   let densities: Map<ItemId, ToolDensity> | undefined
   /** The latest turn end (its closing line says what still runs); rebuilt when blocks change. */
   let lastEnd: { id: ItemId | undefined } | undefined
-  let queue: Array<{ queueId: QueueId; preview: string; delivery?: "queue" | "steer" | "restart"; /** A system notice (a background task ended), not something the user typed. */ notice?: true }> = []
+  let queue: Array<{ queueId: QueueId; preview: string; delivery?: "queue" | "steer" | "restart"; /** Already with the engine, which reads it when the running tool ends: no longer droppable or editable. */ handed?: true; /** A system notice (a background task ended), not something the user typed. */ notice?: true }> = []
   let foreground: ForegroundState = "idle"
   /** What ended the last turn when it did not finish on its own: it is why a held queue waits. */
   let lastStop: "cancel" | "restart" | "interrupt" | undefined
@@ -1344,7 +1344,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         break
       }
       case "queue.changed":
-        queue = event.queue.map((entry) => ({ queueId: entry.queueId, preview: entry.preview, ...(entry.delivery ? { delivery: entry.delivery } : {}), ...(entry.kind === "notice" ? { notice: true as const } : {}) }))
+        queue = event.queue.map((entry) => ({ queueId: entry.queueId, preview: entry.preview, ...(entry.delivery ? { delivery: entry.delivery } : {}), ...(entry.handed ? { handed: true as const } : {}), ...(entry.kind === "notice" ? { notice: true as const } : {}) }))
         break
       case "continuity.updated":
         keepContinuity(event)

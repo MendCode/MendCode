@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs"
 import path from "node:path"
-import { AGENT_CALLER_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, AGENT_SHELL_ENV, agentCommandClass, agentRefusal } from "@mendcode/protocol/wire"
+import { AGENT_CALLER_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_ORIGIN_CAPABILITY, AGENT_SHELL_ENV, agentCommandClass, agentRefusal, agentRefusalFor } from "@mendcode/protocol/wire"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
@@ -45,8 +45,8 @@ export function shownCommand(argv: readonly string[]) {
   return [PROGRAM_NAME, ...argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))].join(" ").slice(0, 400)
 }
 
-export function originRefusal({ argv, what }: { argv: readonly string[]; what: string }) {
-  return agentRefusal({ what: `\`${shownCommand(argv)}\` ${what}`, ask: "run it from their own terminal, or to change it in the TUI (/settings, /permissions)" })
+export function originRefusal({ argv, what, type }: { argv: readonly string[]; what: string; type?: string }) {
+  return agentRefusal({ what: `\`${shownCommand(argv)}\` ${what}`, ask: "run it from their own terminal, or to change it in the TUI (/settings, /permissions)", ...(type ? agentRefusalFor(type) : {}) })
 }
 
 type Reply = { ok: true; result?: Record<string, unknown> } | { ok: false; error: { code: string; message: string } }
@@ -57,10 +57,10 @@ type Reply = { ok: true; result?: Record<string, unknown> } | { ok: false; error
  */
 export function guardClient<Client extends { send(command: never): Promise<unknown> }>(client: Client, argv: readonly string[]): Client {
   const send = client.send.bind(client) as (command: { type: string; decision?: { kind?: string } }) => Promise<Reply>
-  const refuse = (what: string): Reply => ({ ok: false, error: { code: "forbidden", message: originRefusal({ argv, what }) } })
+  const refuse = (what: string, type?: string): Reply => ({ ok: false, error: { code: "forbidden", message: originRefusal({ argv, what, ...(type ? { type } : {}) }) } })
   ;(client as { send: unknown }).send = async (command: { type: string; decision?: { kind?: string } }) => {
     const kind = agentCommandClass(command.type)
-    if (kind === "owner") return refuse(`needs ${command.type}, which only the user decides`)
+    if (kind === "owner") return refuse(`needs ${command.type}, which only the user decides`, command.type)
     if (command.type === "request.resolve" && command.decision?.kind !== "deny") return refuse("would answer an approval on the user's behalf")
     return send(command)
   }

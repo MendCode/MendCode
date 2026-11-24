@@ -2,7 +2,7 @@ import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { defaultDataDirNow } from "@mendcode/program/data-dir"
-import { AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentRefusal } from "@mendcode/protocol/wire"
+import { AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, PROFILES_ASK, PROFILES_INSTEAD, agentRefusal } from "@mendcode/protocol/wire"
 
 /**
  * The shell side of the agent-origin guard (docs/permissions.md): every command a session starts is marked, tracked and,
@@ -104,7 +104,7 @@ const WRAPPERS = new Set(["command", "exec", "builtin", "nohup", "time", "nice",
 /** `--dir` after these names a project, not a data directory. */
 const PROJECT_DIR_HEADS = new Set(["session", "sessions", "ps", "logs", "kill", "attach"])
 
-type Rule = { subs?: readonly string[]; except?: readonly string[]; flags?: readonly string[]; what: string; ask?: string }
+type Rule = { subs?: readonly string[]; except?: readonly string[]; flags?: readonly string[]; what: string; ask?: string; instead?: string }
 const lifecycle = "stops, starts or reinstalls the daemon every session runs under"
 /** By first word (after an optional `control-plane`): what a session may not ask this program to do from its shell. */
 const RULES: Record<string, Rule> = {
@@ -120,7 +120,7 @@ const RULES: Record<string, Rule> = {
   providers: { subs: ["login", "logout", "smoke"], what: "changes provider credentials", ask: "/connect" },
   auth: { subs: ["login", "refresh", "logout"], what: "changes provider credentials", ask: "/connect" },
   mcp: { subs: ["add", "add-local", "auth", "logout"], except: ["auth:list"], what: "changes the MCP servers this machine runs", ask: "/mcp" },
-  profile: { subs: ["install", "use", "install-source", "use-source", "remove", "restore", "enable", "disable", "deselect", "disable-all", "deselect-all", "add-source", "remove-source", "refresh", "create", "update", "delete-local"], what: "installs, removes or switches profiles", ask: "/profiles" },
+  profile: { subs: ["install", "use", "install-source", "use-source", "remove", "restore", "enable", "disable", "deselect", "disable-all", "deselect-all", "add-source", "remove-source", "refresh", "create", "update", "delete-local"], what: "installs, removes or switches profiles (also called packages or plugins)", ask: PROFILES_ASK, instead: PROFILES_INSTEAD },
   plugin: { what: "installs an extension" },
   theme: { subs: ["install", "select"], what: "installs or selects a theme", ask: "/theme" },
   agent: { subs: ["create", "debug"], what: "creates an agent or runs one of its tools with approval off" },
@@ -152,6 +152,9 @@ RULES.profiles = RULES.profile!
 RULES.package = RULES.profile!
 RULES.packages = RULES.profile!
 RULES.marketplace = RULES.profile!
+RULES.plugins = RULES.profile!
+/** `plugin list|enable|disable|…` is the profile command of that name; any other `plugin <module>` installs an extension (RULES.plugin). */
+const PLUGIN_PROFILE_WORDS = new Set(["list", "status", "enable", "disable", "config", "remove", "restore", "new", "check"])
 /** First words that only read or work inside the session's own authority; the first known first word decides. */
 const SAFE_HEADS = new Set(["run", "session", "sessions", "ps", "logs", "kill", "attach", "docs", "status", "doctor", "context", "usage", "stats", "export", "db", "generate", "completion", "help", "apply", "pr", "acp", "app-server", "ai", "system", "setup", "budget", "remote"])
 const APPROVAL_FLAGS = ["--approve", "--dangerously-skip-permissions"]
@@ -229,7 +232,7 @@ function isProgram(word: string, lookup: Lookup) {
 
 function refusalFor(shown: string, rule: Rule | undefined, reason?: string) {
   const what = reason ?? rule?.what ?? "changes the owner's configuration"
-  return agentRefusal({ what: `\`${shown}\` ${what}`, ask: `run it from their own terminal${rule?.ask ? `, or to use ${rule.ask} in the TUI` : ""}` })
+  return agentRefusal({ what: `\`${shown}\` ${what}`, ask: rule?.instead ? rule.ask : `run it from their own terminal${rule?.ask ? `, or to use ${rule.ask} in the TUI` : ""}`, instead: rule?.instead })
 }
 
 /** The arguments of one invocation of this program: the reason to refuse it, or nothing. */
@@ -248,7 +251,8 @@ function checkInvocation(program: string, args: string[], directory: string | un
   const approval = APPROVAL_FLAGS.find((flag) => args.includes(flag))
   if (approval) return refusalFor(shown, undefined, `starts or drives a session with approvals off (${approval})`)
   if (args.includes("--restart-daemon")) return refusalFor(shown, RULES.daemon)
-  const rule = head ? RULES[head] : undefined
+  const asProfile = head === "plugin" && PLUGIN_PROFILE_WORDS.has(positionals[positionals.indexOf(head) + 1] ?? "")
+  const rule = head ? RULES[asProfile ? "profile" : head] : undefined
   if (!rule) return undefined
   const rest = positionals.slice(positionals.indexOf(head!) + 1)
   if (rule.flags) return rule.flags.some((flag) => args.includes(flag)) ? refusalFor(shown, rule) : undefined
@@ -256,7 +260,7 @@ function checkInvocation(program: string, args: string[], directory: string | un
   const sub = rest[0]
   if (!sub || !rule.subs.includes(sub)) {
     // `profile config <name> enable|disable …` switches a resource; plain `config` only shows.
-    return (head === "profile" || head === "profiles" || head === "package" || head === "packages") && sub === "config" && rest.some((word) => word === "enable" || word === "disable") ? refusalFor(shown, rule) : undefined
+    return (asProfile || head === "profile" || head === "profiles" || head === "package" || head === "packages" || head === "plugins") && sub === "config" && rest.some((word) => word === "enable" || word === "disable") ? refusalFor(shown, rule) : undefined
   }
   if (rule.except?.includes(`${sub}:${rest[1] ?? ""}`)) return undefined
   return refusalFor(shown, rule)

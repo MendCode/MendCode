@@ -74,7 +74,7 @@ export const QueueAdded = lazySchema(() => z.strictObject({
 export const QueueChanged = lazySchema(() => z.strictObject({
   ...sessionBase,
   type: z.literal("queue.changed"),
-  queue: z.array(z.strictObject({ queueId: QueueId, preview: z.string().max(200), attachments: z.number().int().nonnegative(), kind: QueueEntryKind.optional(), delivery: QueueDelivery.optional() })).max(MAX_QUEUE_ENTRIES),
+  queue: z.array(z.strictObject({ queueId: QueueId, preview: z.string().max(200), attachments: z.number().int().nonnegative(), kind: QueueEntryKind.optional(), delivery: QueueDelivery.optional(), /** Already written to the engine, waiting for its running tool: it can no longer be dropped or edited. */ handed: z.literal(true).optional() })).max(MAX_QUEUE_ENTRIES),
 }))
 
 /** A queued message's text was replaced in place; the entry keeps its place, id and attachments. Persisted, so the edit survives a restart. */

@@ -33,7 +33,7 @@ export function createSelfPackages(input: {
       : request.action === "remove" ? `${PROGRAM_NAME} profile remove ${name}${flag}`
       : request.action === "install" ? `${PROGRAM_NAME} profile install ${directory}${request.replace ? " --replace" : ""}${flag}`
       : `${PROGRAM_NAME} profile check ${directory}`
-    return `Do it from the shell, where you see the profile yourself: ${command}`
+    return `Give the user this command to run from their own terminal (a session's shell is refused it): ${command}`
   }
   const installed = () => listPackages({ userDir: input.userDir, directory: input.directory, disabled: input.disabled() })
   const target = (request: PackageRequest) => {
