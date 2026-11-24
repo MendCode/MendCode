@@ -58,9 +58,15 @@ The name distinguishes these from the same models on a native provider, which ru
 
 The list comes from the agent's last `session/new`, `session/load`, `session/set_config_option` answer or `config_option_update`. It is kept in `<dataDir>/acp-models.json`, so it appears after the agent's first turn and survives restarts.
 
-Choosing a value sends `session/set_config_option` before the prompt when the agent's value differs. A refused value fails the turn (`acp_model`) with the agent's reason; so does an `acp:<name>/<value>` for an agent with no model option.
+An agent that has no `model` select but lists `models` (`availableModels`, `currentModelId`; Hermes Agent does) is read the same way, and its models appear as `acp:<name>/<modelId>` too. It is switched with `session/set_model`.
+
+Choosing a value sends `session/set_config_option` (or `session/set_model`) before the prompt when the agent's value differs. A refused value fails the turn (`acp_model`) with the agent's reason; so does an `acp:<name>/<value>` for an agent with no model option.
 
 Every `acp:<name>/…` is the same engine as `acp:<name>`. Switching between them keeps the agent's session and process.
+
+### Session modes
+
+An agent that lists session `modes` follows MendCode's permission mode before a prompt, when it differs: `full` sets `dont_ask` (or `bypassPermissions`, `yolo`), `edits` sets `accept_edits` (or `acceptEdits`), `ask` sets `default`. An agent that lists none of these is left in its own mode, and MendCode still answers its permission requests. A refused mode is ignored.
 
 ### Effort
 
@@ -213,7 +219,7 @@ Opted-in thread bridge turns use isolated processes that stop at turn completion
 ## Limits
 
 - Context, compaction and `/context` belong to the agent. Non-main roles (aside, dream, permission reviewer) cannot use an ACP model; a session on one falls back to the default model for those calls.
-- No token usage or cost is shown: the stable protocol does not report it.
+- Token usage is shown when the agent reports it (`usage_update` and the prompt's `usage`); no cost, as ACP gives none, so the price stays unknown unless you priced the model.
 - Agents without HTTP MCP support cannot use MendCode's tools or the optional thread bridge; regular turns still work with an empty client server list.
 - pi has no MCP client, and Codex runs one app-server for every session, so neither gets MendCode's tools; they keep their own.
 - Sessions of an agent without `loadSession` lose their history when the process restarts.
