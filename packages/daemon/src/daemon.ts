@@ -3725,6 +3725,8 @@ export async function startDaemon(options: DaemonOptions) {
     engine.forget?.(sessionId)
     options.onSessionRemoved?.(sessionId)
     store.deleteSession(sessionId)
+    // A blank chat no terminal heard of (`quietEmpties`) is not announced: no list holds it.
+    if (!quietEmpties.has(sessionId)) globalSink.append({ type: "session.removed", sessionId })
     secrets.drop(sessionId)
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
