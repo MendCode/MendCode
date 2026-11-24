@@ -1,5 +1,5 @@
 ---
-summary: images, PDFs and files in a message; read images; generate images; voice
+summary: images, PDFs and files in a message; generate images; voice
 docs: attachments, voice, tools-web
 aliases: attach, attachment, image, images, paste, pdf, screenshot, dictate, voice, drag-drop
 ---

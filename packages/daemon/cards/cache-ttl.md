@@ -1,5 +1,5 @@
 ---
-summary: how long Anthropic keeps the prompt cache: 5m or 1h, and Claude Code's
+summary: how long Anthropic keeps the prompt cache: 5m or 1h
 docs: prompt-cache, claude-code, compaction, message-threads
 aliases: ttl, cache-lifetime, one-hour-cache
 ---

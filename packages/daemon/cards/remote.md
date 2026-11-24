@@ -1,5 +1,5 @@
 ---
-summary: drive MendCode from a phone or another machine; share a session; editors
+summary: drive MendCode from a phone or another machine; share; editors
 docs: remote, channels, console, mflow, tsm, editor, automation, herdr
 aliases: telegram, phone, remote-control, tailscale, share-link, ssh, ide, zed, jetbrains, console, org, rooms, multiplexer, herdr, tuios
 ---

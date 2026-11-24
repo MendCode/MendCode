@@ -1,5 +1,5 @@
 ---
-summary: run MendCode headless: scripts, CI, JSON output, GitHub, editors, HTTP
+summary: run MendCode headless: scripts, CI, JSON, GitHub, editors, HTTP
 docs: automation, github, embedding, server-rest, session-rest, project-rest, interaction-rest, catalog-rest, file-rest, tui-rest
 aliases: headless, ci, script, scripting, pipeline-ci, non-interactive, json, app-server, http-api, openapi, github-actions
 ---

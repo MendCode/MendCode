@@ -1,5 +1,5 @@
 ---
-summary: profiles = packages = plugins: install, turn on or off, make your own
+summary: profiles = packages = plugins: install, turn on/off, make your own
 docs: profiles, customize
 aliases: profile, package, packages, pkg, bundle, plugin, plugins
 ---

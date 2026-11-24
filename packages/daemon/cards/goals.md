@@ -1,5 +1,5 @@
 ---
-summary: finish a task step by step: /goal, plan mode and plan review, todo lists
+summary: finish a task step by step: /goal, plan mode, plan review, todos
 docs: goals, plan-review, tool-discovery
 aliases: goal, plan, planning, todo, todos, objective, until-done, ultraplan
 ---

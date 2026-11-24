@@ -1,5 +1,5 @@
 ---
-summary: recurring work: every N minutes, daily, on an external trigger (loops)
+summary: recurring work: every N minutes, daily, on an external trigger
 docs: loops, automation, pr-watch
 aliases: loop, schedule, recurring, cron, every, interval, repeat, periodic, babysit
 ---

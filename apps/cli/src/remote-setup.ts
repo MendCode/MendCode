@@ -504,13 +504,8 @@ cd ${shellPath(mapping.directory)} && "$MC" import "$T/session.json" --from mend
 export function sshRunner(target: string): SshRunner {
   return async ({ script, input }) => {
     if (!SSH_TARGET.test(target)) throw new SetupError("invalid SSH target")
-    const child = Bun.spawn(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", target, `sh -c ${shq(script)}`], { stdin: input === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" })
-    if (input !== undefined) {
-      child.stdin!.write(input)
-      await child.stdin!.end()
-    }
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-    return { code, stdout, stderr }
+    const { runProcess } = await import("@mendcode/upgrade/process")
+    return runProcess(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", "--", target, `sh -c ${shq(script)}`], input === undefined ? {} : { input })
   }
 }
 
@@ -520,14 +515,14 @@ function selfCommand() {
 }
 
 async function self(args: string[]) {
-  const child = Bun.spawn([...selfCommand(), ...args], { stdout: "pipe", stderr: "pipe", stdin: "ignore" })
-  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+  const { runProcess } = await import("@mendcode/upgrade/process")
+  const { stdout, stderr, code } = await runProcess([...selfCommand(), ...args])
   return { stdout, stderr, code }
 }
 
 async function git(directory: string, args: string[]) {
-  const child = Bun.spawn(["git", "-C", directory, ...args], { stdout: "pipe", stderr: "ignore", stdin: "ignore" })
-  const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited])
+  const { runProcess } = await import("@mendcode/upgrade/process")
+  const { stdout, code } = await runProcess(["git", "-C", directory, ...args], { stderr: "ignore" })
   return code === 0 ? stdout.trim() : undefined
 }
 
