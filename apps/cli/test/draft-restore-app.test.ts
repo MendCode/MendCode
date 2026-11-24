@@ -37,7 +37,7 @@ function daemon() {
 
 /** A terminal on the shared daemon: the same data dir and project, a new session each time. */
 async function terminal(shared: ReturnType<typeof daemon>, dataDir: string, profile: Partial<typeof DEFAULT_TUI_PROFILE> = {}) {
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", ...profile })
   const h = appHarness({ dataDir, directory: DIRECTORY, reply: shared.reply, width: 110, height: 30 })
   h.app.applySettings({ onboarded: true })
   await Bun.sleep(15)

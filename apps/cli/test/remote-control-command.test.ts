@@ -11,6 +11,7 @@ function app(options: { remote?: boolean; enabled?: boolean; running?: boolean; 
   const directory = tempDir("mendcode-remote-control-")
   const report = (enabled: boolean) => ({ telegram: { enabled, tokenConfigured: options.token !== false, running: enabled && options.running !== false, botName: "mend_bot", chats: enabled ? [{ id: "7", name: "Ana", directory, pairedAt: 1 }] : [], ...(options.error ? { error: options.error } : {}) }, discord: { enabled, tokenConfigured: options.token !== false, running: enabled && options.running !== false, botName: "mend_discord", chats: [] } })
   const h = appHarness({
+    profile: { sidebar: "hidden" },
     directory,
     ...(options.remote ? { remote: { host: "test.invalid", readOnly: false } } : {}),
     reply: (command: CommandInput) => {

@@ -183,7 +183,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     if (state.page === "help" && ["\x1b[A", "\x1b[B", "\x1b[5~", "\x1b[6~"].includes(key)) {
       const height = input.screen.size.height
       const extensions = actions.helpExtensions()
-      const room = helpPageWindow(input.screen.size.width, height - 1, (extensions?.loaded.length ?? 0) + (extensions?.problems.length ?? 0)).visibleRows
+      const room = helpPageWindow(state.pageCols.width || input.screen.size.width, height - 1, (extensions?.loaded.length ?? 0) + (extensions?.problems.length ?? 0)).visibleRows
       const max = Math.max(0, Math.max(helpKeyRows(state.bindings).length, listedBuiltins(state.settingsNow, state.tuiProfile.slashCommands).length + (state.ext?.commands().length ?? 0)) - room)
       const delta = key.endsWith("A") ? -1 : key.endsWith("B") ? 1 : key === "\x1b[5~" ? -room : room
       state.helpScroll = Math.max(0, Math.min(max, (state.helpScroll ?? 0) + delta))
@@ -247,7 +247,8 @@ export function createPageKeys(ctx: AppContext, actions: {
       await actions.memoryAssistantKey(key)
     } else if (state.page === "memory") {
       if (key === "t" && !state.memoryState.filtering && state.memoryState.workspace.picking === undefined && state.memoryState.sharing.confirmation === undefined && state.memoryState.extraction.editing === undefined && state.memoryState.dream.typing === undefined && state.memoryState.pick === undefined && !state.memoryState.confirmDelete && !state.memoryState.confirmBatch) return actions.openMemoryAssistant()
-      const { width, height } = input.screen.size
+      const { height } = input.screen.size
+      const width = state.pageCols.width || input.screen.size.width
       const graph = { report: state.memoryGraph, size: memoryGraphCanvas(width, height - 1, state.memoryWorkspaces !== undefined) }
       const result = memoryPageKey(state.memoryState, key, state.memories, Math.max(1, Math.floor((height - 3) / 3)), graph, state.dreamRuns, memoryPageData(width, height - 1))
       const before = state.memoryState
@@ -514,7 +515,8 @@ export function createPageKeys(ctx: AppContext, actions: {
       else if (action.type === "revoke") await revokeGrant(action.grantId)
       else if (action.type === "model") await openFromPage("model")
     } else if (state.page === "diagram") {
-      const { width, height } = input.screen.size
+      const { height } = input.screen.size
+      const width = state.pageCols.width || input.screen.size.width
       const layout = diagramLayout()
       const bounds = layout ? diagramBounds(layout, width, height - 1) : { maxX: 0, maxY: 0, viewWidth: Math.max(1, width - 2), viewHeight: Math.max(1, height - 6) }
       const result = diagramViewKey(state.diagramView, key, { count: state.diagramSources.length, bounds })

@@ -34,7 +34,7 @@ const FULL: Settings = {
 }
 
 async function open(settings: Settings = { onboarded: true }, reply?: (command: Record<string, unknown>) => unknown, height = 46) {
-  const h = await appHarness({ width: 120, height, ...(reply ? { reply } : {}) })
+  const h = await appHarness({ width: 160, height, ...(reply ? { reply } : {}) })
   await h.start(settings)
   await h.type("/settings")
   await h.key("\r")
@@ -70,7 +70,7 @@ describe("/settings page", () => {
   })
 
   test("edits send the same settings.set patches the setup page sends", async () => {
-    const { app, sent, key, type } = await appHarness({ width: 120, height: 44, reply: (command) => (command.type === "mcp.status" ? { ok: true, result: { servers: [], issues: [] } } : undefined) })
+    const { app, sent, key, type } = await appHarness({ width: 160, height: 44, reply: (command) => (command.type === "mcp.status" ? { ok: true, result: { servers: [], issues: [] } } : undefined) })
     app.applySettings({})
     await app.openSetup({ advanced: true })
     // Setup rows: recipe, theme, view, permission, motion, dream, retention.

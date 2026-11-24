@@ -72,7 +72,8 @@ export function createSessionNav(ctx: AppContext) {
       return requestFrame()
     }
     if (key === "r" && page.title === "Recap" && page.status !== "loading") return recapCommand("refresh")
-    const { width, height } = input.screen.size
+    const { height } = input.screen.size
+    const width = state.pageCols.width || input.screen.size.width
     const view = textPageViewport(width, state.pageBodyHeight ?? height)
     const result = textPageKey(page, key, textPageRows(page, view.inner).length, view.rows)
     state.textPage = result.state

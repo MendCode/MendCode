@@ -19,7 +19,7 @@ function app(options: { remote?: boolean } = {}) {
   let stored: Record<string, unknown> = {}
   let addDirs: string[] | undefined
   const h = appHarness({
-    directory: project,
+    profile: { sidebar: "hidden" }, directory: project,
     ...(options.remote ? { remote: { host: "test.invalid", readOnly: false } } : {}),
     reply: (command: CommandInput) => {
       if (command.type === "settings.set") {
@@ -76,7 +76,7 @@ describe("/add-dir", () => {
     const { h, real } = app({ remote: true })
     await h.type(`/add-dir ${real}\r`)
     expect(h.sentOf("session.run.configure")).toHaveLength(0)
-    expect((await h.details()).join("\n")).toContain("local only")
+    expect(flat(await h.details())).toContain("local only")
   })
 })
 

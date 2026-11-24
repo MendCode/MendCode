@@ -9,7 +9,7 @@ export function b63Harness(width = 100, height = 30) {
   let error = ""
   let archived: Array<{ archiveId: string; archivedAt: number; thread: MemoryAssistantThread }> = []
   const listing = () => archived.map(({ archiveId, archivedAt, thread: chat }) => ({ archiveId, archivedAt, messages: chat.messages.length, proposals: chat.proposals.length, title: chat.messages[0]?.text ?? "" }))
-  const h = appHarness({ width, height, dataDir: tempDir(), directory: "/work/mendcode", reply: (command) => {
+  const h = appHarness({ profile: { sidebar: "hidden" }, width, height, dataDir: tempDir(), directory: "/work/mendcode", reply: (command) => {
     if (command.type === "models.list") return { ok: true, result: { engine: "native", selectable: true, defaults: { model: "local-test-model" }, roles: { memoryAssistant: { model: "local-memory-model" } }, effective: { model: "local-test-model" }, models: [{ id: "local-memory-model", name: "Memory test model", provider: "local", contextWindow: 128000, efforts: [] }] } }
     if (command.type === "memory.list") return { ok: true, result: { memories: [...memories, ...(thread.proposals.length ? [pending] : [])] } }
     if (command.type === "memory.workspaces") return { ok: true, result: { workspaces: [], omitted: 0 } }

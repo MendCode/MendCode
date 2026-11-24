@@ -30,7 +30,7 @@ function run(patch: Partial<WorkflowSummary> = {}): WorkflowSummary {
 function harness(reply: (command: Record<string, unknown>) => unknown = () => undefined) {
   const frames: Line[][] = []
   const sent: Array<Record<string, unknown>> = []
-  const screen = { size: { width: 120, height: 30 }, draw: (rows: Line[]) => void frames.push(rows) } as unknown as Parameters<typeof createApp>[0]["screen"]
+  const screen = { size: { width: 160, height: 30 }, draw: (rows: Line[]) => void frames.push(rows) } as unknown as Parameters<typeof createApp>[0]["screen"]
   const app = createApp({
     sessionId: ids("session"),
     screen,

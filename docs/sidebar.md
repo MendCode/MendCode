@@ -4,7 +4,7 @@ Use the right panel to follow your session's work, context and quota in cards. R
 
 Its fixed header names the current preset and `/panel`, including in the narrow sheet (`panelNarrow: sheet`). `Ctrl+X, Shift+B` also toggles it (`panel.toggle`, rebindable in `/keymap`).
 
-`/sidebar` only controls the left session list.
+`/sidebar` only controls the left session list. While it is open it stays beside every page you open (`/settings`, `/usage`, `/reviews`, help and the rest), the page is drawn in the width that is left, and a click on a chat in it opens that chat. The first-run setup and the tutorial draw the whole screen.
 
 ## The left list: every project, and bots
 
@@ -150,7 +150,7 @@ Text and extension widgets open the JSON editor.
 
 These commands affect the session where you type them, not every terminal:
 
-- `/panel`: shown, hidden, a preset, `next`, an added card, the width.
+- `/panel`: a preset, `next`, an added card, the width. Showing or hiding the panel is yours everywhere: it holds in every session and is saved in `tui/profile.json` (`rightSidebar`).
 - `/sidebar`, `/timestamps`, `/thinking`, `/scrollbar` and the keys bound to them.
 
 Another terminal, or another session in the same terminal, keeps its own screen.
@@ -192,7 +192,7 @@ A refused preset changes nothing and says why in one line:
 
 ### Choose the effective spec
 
-`sidebarWidgets` is an ordered list in `<dataDir>/tui/profile.json`. `rightSidebar` is the default visibility; a session's own goes in `session-look.json`.
+`sidebarWidgets` is an ordered list in `<dataDir>/tui/profile.json`. `rightSidebar` is whether the panel shows, in every session; a session's own cards and width go in `session-look.json`.
 `panelStart` (`/customize` → Sidebar & panel → Panel at start) decides how a new terminal and a new chat open: `remember` (the default) uses `rightSidebar` as saved, `shown` always opens the panel, `hidden` never does. `/panel` still toggles it in the chat, and a chat keeps its own choice.
 `<project>/.mendcode/tui/profile.json` can override `sidebarWidgets`; even an empty project list overrides the user list.
 The manual editor and `/panel reset` edit the effective spec: the project override when present, otherwise the user profile. An empty project override stays empty; edit or remove that override explicitly to inherit the user spec again. Existing right-panel subcommands under `/sidebar` remain hidden compatibility aliases; completion and help only advertise `/panel`.

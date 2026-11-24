@@ -41,7 +41,7 @@ export function createHistory(ctx: AppContext, actions: { loadPage(): Promise<vo
     await actions.loadPage()
     state.page = "history"
     const saved = remembered.get(state.sessionId)
-    state.historyState = saved?.state ?? createHistoryState(input.screen.size.width)
+    state.historyState = saved?.state ?? createHistoryState(state.pageCols.width || input.screen.size.width)
     state.historyReport = saved?.report
     state.historyDetail = undefined
     requestFrame()
@@ -69,7 +69,7 @@ export function createHistory(ctx: AppContext, actions: { loadPage(): Promise<vo
       else { remember(); serial++; state.page = "chat" }
     } else if (key === "l") { remember(); serial++; state.page = "chat"; ctx.view.jump(state.sessionId, 0, 0) }
     else if (h.reader) {
-      const max = Math.max(0, historyReaderRows(state.historyDetail ?? selected, h, Math.max(1, input.screen.size.width - 4), ctx.now()).length - Math.max(1, input.screen.size.height - 7))
+      const max = Math.max(0, historyReaderRows(state.historyDetail ?? selected, h, Math.max(1, (state.pageCols.width || input.screen.size.width) - 4), ctx.now()).length - Math.max(1, input.screen.size.height - 7))
       const step = key === "\x1b[5~" || key === "\x1b[6~" ? Math.max(1, input.screen.size.height - 8) : 1
       if (["\x1b[A", "k", "\x1b[5~"].includes(key)) h.scroll = Math.max(0, h.scroll - step)
       if (["\x1b[B", "j", "\x1b[6~"].includes(key)) h.scroll = Math.min(max, h.scroll + step)

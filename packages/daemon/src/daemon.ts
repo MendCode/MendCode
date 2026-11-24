@@ -1057,9 +1057,10 @@ export async function startDaemon(options: DaemonOptions) {
     settings: () => store.settings.get(),
     modelExists: (id) => (options.models?.list() ?? []).some((model) => model.id === id),
     select: (sessionId, name) => {
-      store.setSessionAgent(sessionId, name === "build" ? undefined : name)
-      // Another agent (bot) brings its own model again: a model picked for the previous one no longer overrides it.
-      store.meta.set(pickedModelKey(sessionId), "")
+      const next = name === "build" ? undefined : name
+      const previous = store.sessionAgent(sessionId)
+      store.setSessionAgent(sessionId, next)
+      resetPickForAgentSwitch(sessionId, previous, next)
     },
     isChild: (sessionId) => store.tasks.get(sessionId) !== undefined || workflows.execution(sessionId) !== undefined || asideSessions.isAside(sessionId),
     botsOn: () => botsOn(),
@@ -1570,6 +1571,13 @@ export async function startDaemon(options: DaemonOptions) {
   /** Set when the user picks a model for the session (`/model`): that pick runs instead of the model its agent (bot) names. */
   function pickedModelKey(sessionId: SessionId) {
     return `session.model-picked:${sessionId}`
+  }
+  /**
+   * Another bot brings its own model again: a model picked for the previous bot no longer overrides it. Selecting the same bot again,
+   * assigning a bot to a chat that had none (its first message) or leaving for build/plan keeps the user's pick.
+   */
+  function resetPickForAgentSwitch(sessionId: SessionId, previous: string | undefined, next: string | undefined) {
+    if (previous && next && previous !== next) store.meta.set(pickedModelKey(sessionId), "")
   }
   /** A session that inherits the model and the agent of another keeps the pick that made that model win over the agent's. */
   function inheritPickedModel(from: SessionId, to: SessionId) {
@@ -6485,9 +6493,10 @@ export async function startDaemon(options: DaemonOptions) {
           // `plan` is plan mode itself; any other agent leaves it (like an approved plan does), so the picker never shows one while the session runs as another.
           const mode = livePermission(command.sessionId)
           const target = name === "plan" ? "plan" : mode === "plan" ? "ask" : undefined
-          store.setSessionAgent(command.sessionId, name === "plan" ? undefined : name)
-          // Another agent brings its own model again, as `select` does.
-          store.meta.set(pickedModelKey(command.sessionId), "")
+          const previousAgent = store.sessionAgent(command.sessionId)
+          const nextAgent = name === "plan" ? undefined : name
+          store.setSessionAgent(command.sessionId, nextAgent)
+          resetPickForAgentSwitch(command.sessionId, previousAgent, nextAgent)
           const actor = target && target !== mode ? actorFor(command.sessionId) : undefined
           if (actor && target) await actor.handle({ id: command.id, clientId: command.clientId, type: "session.permission.set", sessionId: command.sessionId, mode: target })
         }

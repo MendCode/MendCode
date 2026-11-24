@@ -137,7 +137,7 @@ describe("refusals", () => {
 })
 
 describe("persisted state", () => {
-  test("showing and hiding is the session's: the stored profile is never written, and /panel reset still clears the panel's file", async () => {
+  test("showing and hiding is the user's: the profile keeps it, and /panel reset still clears the panel's file", async () => {
     const h = reviewFixture({ session: "active" })
     mkdirSync(path.join(h.directory, ".mendcode", "tui"), { recursive: true })
     writeFileSync(path.join(h.directory, ".mendcode", "tui", "profile.json"), JSON.stringify({ sidebarWidgets: [] }))
@@ -147,16 +147,18 @@ describe("persisted state", () => {
     expect(h.app.accessibility.profile.rightSidebar).toBe(false)
     await h.type("/panel\r")
     expect(h.app.accessibility.profile.rightSidebar).toBe(true)
-    expect(readTuiProfile(h.dataDir).rightSidebar).toBe(false)
+    await settle()
+    expect(readTuiProfile(h.dataDir).rightSidebar).toBe(true)
     await h.type("/panel reset\r")
     expect(h.app.accessibility.profile.rightSidebar).toBe(false)
   })
 
-  test("preset, visibility and width come back with the session after a restart, and another session keeps the default", async () => {
+  test("preset and width come back with the session after a restart, visibility is the user's everywhere, and another session keeps the default panel", async () => {
     const first = reviewFixture({ session: "active" })
     await first.type("/panel ledger\r")
     await first.type("/panel width 60\r")
-    expect(readTuiProfile(first.dataDir)).toMatchObject({ rightSidebar: false, sidebarWidth: 0 })
+    await settle()
+    expect(readTuiProfile(first.dataDir)).toMatchObject({ rightSidebar: true, sidebarWidth: 0 })
     const again = reviewFixture({ session: "active", width: 200, height: 60, reopen: { dataDir: first.dataDir, directory: first.directory, sessionId: first.sessionId } })
     await settle()
     again.app.render()
@@ -164,7 +166,7 @@ describe("persisted state", () => {
     expect(again.app.accessibility.profile).toMatchObject({ rightSidebar: true, sidebarWidth: 60 })
     const other = reviewFixture({ session: "active", width: 200, height: 60, reopen: { dataDir: first.dataDir, directory: first.directory, sessionId: "ses_other" } })
     await settle()
-    expect(other.app.accessibility.profile).toMatchObject({ rightSidebar: false, sidebarWidth: 0 })
+    expect(other.app.accessibility.profile).toMatchObject({ rightSidebar: true, sidebarWidth: 0 })
   })
 })
 
