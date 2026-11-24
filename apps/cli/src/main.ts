@@ -20,7 +20,7 @@ import type { PresentationMode } from "./view/transcript"
 import { readTuiProfile } from "./view/tui-profile"
 import packageJson from "../package.json"
 import { parseGlobalOptions, cliLogger } from "./global-options"
-import { HTTP_USAGE, parseServerCommand } from "./http-cli"
+import { commandIndex, HTTP_USAGE, parseServerCommand } from "./http-cli"
 import type { DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
 import { clearRestart, markRestart } from "./restart-mark"
@@ -77,12 +77,28 @@ try {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "HTTP server setup failed"}\n${HTTP_USAGE}`)
   process.exit(64)
 }
+// `gateway …` (Domain mode, docs/gateway.md) runs without a local daemon; the package loads only for this word.
+if (rawArgv[commandIndex(rawArgv)] === "gateway") {
+  const { runGatewayCli } = await import("../../../packages/gateway/src/cli")
+  process.exit(await runGatewayCli(rawArgv.slice(commandIndex(rawArgv) + 1), { out: process.stdout, err: process.stderr }))
+}
 let transportFlags: ReturnType<typeof parseRemoteFlags>
+/** Set when an HTTPS attach has no token and this data dir holds gateway pairings: the attach signs for short tokens instead. */
+let gatewayDataDir: string | undefined
 try {
   // Saved remotes (`mendcode remote add`): read only when the file exists or a flag names one.
   const profileDir = (() => { const at = rawArgv.indexOf("--dir"); return path.resolve(at >= 0 && rawArgv[at + 1] ? rawArgv[at + 1]! : envDataDir()) })()
   // Token and saved-remote administration run without connecting to or launching a daemon.
   if (rawArgv.includes("remote")) {
+    // `remote login|logout URL`: device pairing with a gateway (passkey approval); loaded only for these words.
+    if (rawArgv.some((token) => token === "login" || token === "logout")) {
+      const { parseLoginCommand, runLoginCommand } = await import("./gateway-login")
+      const login = parseLoginCommand(rawArgv, profileDir)
+      if (login) {
+        refuseFromSession(profileDir, "pairs this machine with a gateway")
+        process.exit(await runLoginCommand(login, process.stdout))
+      }
+    }
     // `remote setup|pair|unpair`: SSH provisioning of a host; the module loads only for these words.
     if (rawArgv.some((token) => token === "setup" || token === "pair" || token === "unpair")) {
       const { parseSetupCommand, runSetupCommand } = await import("./remote-setup")
@@ -123,12 +139,23 @@ try {
     if (choice.note) process.stderr.write(`${choice.note}\n`)
   }
   transportFlags = parseRemoteFlags(transportArgs)
+  const attach = transportFlags.remote
+  if (attach && "httpUrl" in attach && attach.tls && !attach.tokenFile && !("password" in attach && attach.password) && !process.env.MENDCODE_TOKEN && existsSync(path.join(profileDir, "remote", "gateway"))) gatewayDataDir = profileDir
 } catch (error) {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "remote setup failed"}\n`)
   process.exit(64)
 }
 const argv = transportFlags.args
-const remote = transportFlags.remote ? remoteTransport(transportFlags.remote, process.env) : undefined
+const remote = transportFlags.remote ? await gatewayOrToken(transportFlags.remote) : undefined
+async function gatewayOrToken(flags: NonNullable<typeof transportFlags.remote>) {
+  if (gatewayDataDir && "httpUrl" in flags) {
+    const login = await import("./gateway-login")
+    try {
+      if (login.readGatewayProfile(gatewayDataDir, login.gatewayOrigin(flags.httpUrl))) return login.gatewayTransport({ ...flags, ...(flags.caFile ? { ca: (await import("node:fs")).readFileSync(flags.caFile, "utf8") } : {}) }, gatewayDataDir)
+    } catch (error) { process.stderr.write(`error: ${error instanceof Error ? error.message : "gateway attach failed"}\n`); process.exit(64) }
+  }
+  return remoteTransport(flags, process.env)
+}
 const remoteAttach = Boolean(remote || transportFlags.socketPath)
 const traceEnabled = globalOptions.trace ?? process.env.MENDCODE_TRACE === "1"
 if (traceEnabled && remoteAttach) {

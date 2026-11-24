@@ -2,12 +2,13 @@ import { rootCertificates } from "node:tls"
 import type { RemoteTransport } from "./index"
 
 /** WebSocket carries exactly the existing newline frames; reconnect/replay stay in createClient. */
-export function connectHttpSocket(remote: RemoteTransport, input: { timeoutMs: number; data(data: Uint8Array): void; close(): void }) {
+export async function connectHttpSocket(remote: RemoteTransport, input: { timeoutMs: number; data(data: Uint8Array): void; close(): void }) {
   const url = new URL(remote.httpUrl!)
   url.pathname = "/wire"
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
   if (remote.directory) url.searchParams.set("directory", remote.directory)
-  const headers = { Authorization: remote.username ? `Basic ${Buffer.from(`${remote.username}:${remote.token}`).toString("base64")}` : `Bearer ${remote.token}` }
+  const token = remote.freshToken ? await remote.freshToken() : remote.token
+  const headers = { Authorization: remote.username ? `Basic ${Buffer.from(`${remote.username}:${token}`).toString("base64")}` : `Bearer ${token}` }
   return new Promise<{ write(data: Uint8Array): number; end(): void; terminate(): void }>((resolve, reject) => {
     const HttpWebSocket = WebSocket as unknown as { new(url: URL, options: Bun.WebSocketOptions): WebSocket }
     const ws = new HttpWebSocket(url, { headers, ...(remote.ca ? { tls: { rejectUnauthorized: true, ca: [...rootCertificates, remote.ca] } } : {}) })

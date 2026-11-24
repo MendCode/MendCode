@@ -116,3 +116,28 @@ test("read-only browser peers can read but not answer, rename, fork or switch mo
   await el("fork").onclick()
   expect(commands.some((command) => ["request.resolve", "session.rename", "session.fork"].includes(command.type))).toBe(false)
 })
+
+test("served by a gateway, the client signs in by cookie: no token field, every call carries the page's CSRF token and no Authorization", async () => {
+  const elements = new Map<string, Fake>()
+  const make = (): Fake => ({ value: "", textContent: "", disabled: true, hidden: false, dataset: {}, children: [] as Fake[], replaceChildren() { this.children = [] }, append(item: Fake) { this.children.push(item) }, setAttribute() {}, removeAttribute() {} })
+  const el = (id: string) => { if (!elements.has(id)) elements.set(id, make()); return elements.get(id)! }
+  el("login").requestSubmit = () => el("login").onsubmit({ preventDefault() {} })
+  const calls: { url: string; headers: Record<string, string> }[] = []
+  const fetcher = async (url: string, init: RequestInit) => {
+    calls.push({ url, headers: init.headers as Record<string, string> })
+    const body = JSON.parse(String(init.body))
+    if (url === "/event" && body.hello) return Response.json({ directory: "/work", remote: { readOnly: false } })
+    return Response.json(body.type === "session.list" ? { sessions: [] } : {})
+  }
+  const script = HTTP_WEB.match(/<script>([\s\S]*)<\/script>/)![1]!
+  const meta = { getAttribute: (name: string) => (name === "content" ? "csrf-from-page" : null) }
+  new Function("document", "fetch", "crypto", script)({ getElementById: el, createElement: () => make(), querySelector: (selector: string) => (selector.includes("mendcode-gateway-csrf") ? meta : null) }, fetcher, crypto)
+  await until(() => calls.some((call) => call.url === "/command"))
+  expect(el("token").hidden).toBe(true)
+  expect(el("disconnect").textContent).toBe("Sign out")
+  expect(calls.length).toBeGreaterThan(1)
+  for (const call of calls) {
+    expect(call.headers["x-mendcode-csrf"]).toBe("csrf-from-page")
+    expect(call.headers.Authorization).toBeUndefined()
+  }
+})
