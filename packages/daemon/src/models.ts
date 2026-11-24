@@ -118,8 +118,8 @@ export function usableEffort(asked: ModelChoice, catalog: ModelCatalog): ModelCh
   const info = catalogModel(catalog, asked.model)
   if (!info) return asked
   const chosen = info.id === asked.model ? asked : { ...asked, model: info.id }
-  // An external engine's model has no provider variants: a variant naming one of its efforts is that effort.
-  if (info.engine && chosen.variant) {
+  // An external engine's model has no provider variants, and a native one may not define this variant: a variant naming one of its efforts is that effort.
+  if (chosen.variant && (info.engine || (!info.variants?.[chosen.variant] && info.efforts.includes(chosen.variant as never)))) {
     const { variant: named, ...rest } = chosen
     const effort = info.efforts.includes(named as never) ? (named as ModelChoice["effort"]) : chosen.effort
     return usableEffort({ ...rest, ...(effort ? { effort } : {}) }, catalog)
@@ -197,8 +197,8 @@ export function invalidChoice(choice: ModelChoice, catalog: ModelCatalog, role: 
     // Claude Code has no provider variants; a variant naming one of its efforts means that effort.
     if (choice.parameters) return `${choice.model} does not support provider variants`
     if (choice.variant && !info.efforts.includes(choice.variant as never)) return info.efforts.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${info.efforts.join(", ")}` : `${choice.model} does not support provider variants`
-  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) {
-    const valid = Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name)
+  } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled) && !(!info.variants?.[choice.variant] && info.efforts.includes(choice.variant as never))) {
+    const valid = [...Object.entries(info.variants ?? {}).filter(([, variant]) => !variant.disabled).map(([name]) => name), ...info.efforts.filter((effort) => !info.variants?.[effort])]
     return valid.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${valid.join(", ")}` : `unknown variant ${choice.variant} for ${choice.model}`
   }
   // A sub-agent on an engine model goes through task's `engine`; the refusal says how, so a model does not fall back to another provider's copy.

@@ -11,8 +11,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A sub-agent started with an effort on a model that lists it (`high` on GPT-6.2-Astra) runs at that effort instead of being refused or dropping to the default.
 - A message you send while a turn waits for a command that moved to the background is read at once; the command keeps running.
 - The right panel, shown or hidden with `/panel`, stays that way in every session, bot chats included.
+- The workflows page draws its list at once, the last one it had, while the daemon sends the new one.
 - Switching sessions draws the right panel at once and asks the daemon for less.
 - The session list stays beside every page you open when it is on, and a click on a chat in it works there.
 - A model you pick in a bot's chat stays for that chat, including when it was picked before the first message and after a plan is applied.

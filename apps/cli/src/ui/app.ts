@@ -305,6 +305,7 @@ export function createApp(input: AppInput) {
     workflows: [],
     workflowsLoaded: false,
     workflowsError: "",
+    workflowsSeen: {},
     liveWorkflows: new Map<string, boolean>(),
     permissionGrants: undefined,
     permissionGrantsError: "",

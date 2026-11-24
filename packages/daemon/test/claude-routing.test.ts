@@ -39,6 +39,13 @@ describe("Claude Code models in the catalog", () => {
     expect(claudeAlias(usableEffort({ model: "claude-opus", variant: "low" }, catalog))).toEqual({ model: "opus", effort: "low" })
   })
 
+  test("a native model without named variants takes an effort name as its variant; an unknown one lists the efforts", () => {
+    const plain: ModelCatalog = { selectable: true, list: () => [{ id: "plain-model", name: "Plain", efforts: ["low", "medium", "high"], defaultEffort: "low" }], defaults: { model: "plain-model" } }
+    expect(invalidChoice({ model: "plain-model", variant: "high" }, plain)).toBeUndefined()
+    expect(usableEffort({ model: "plain-model", variant: "high" }, plain)).toEqual({ model: "plain-model", effort: "high" })
+    expect(invalidChoice({ model: "plain-model", variant: "turbo" }, plain)).toBe("unknown variant turbo for plain-model; use low, medium, high")
+  })
+
   test("ids map to the CLI's aliases", () => {
     expect(claudeAlias({ model: "claude-opus", effort: "xhigh" })).toEqual({ model: "opus", effort: "xhigh" })
     expect(claudeAlias({ model: "claude-haiku" })).toEqual({ model: "haiku" })
