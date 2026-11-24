@@ -29,6 +29,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - A Claude Code turn cut by a network or provider failure (no connection, overloaded, 5xx) now waits and resumes by itself instead of ending as failed, and the next message after any failed turn starts on a fresh Claude Code process.
+- When a goal is blocked, the agent tells you to reopen it with `/goal resume`.
 - A chat reopened or reconnected (after a daemon restart, say) keeps the "took ... · ended ..." line under the last answer even when that turn was long enough to start before the first page of history.
 - `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.
 - When a session's shell is refused a profile change, the message now says to use the `profiles` tool (the user approves on a card) and that enabling or disabling needs no reload or restart.
