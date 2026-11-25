@@ -14,7 +14,7 @@ export const IMAGE_MAX_ROWS = 16
 /** Decoded images kept (about 5 MB each at most), and loads running at once. */
 const KEEP_IMAGES = 24
 const KEEP_SCALED = 32
-const PARALLEL_LOADS = 2
+const PARALLEL_LOADS = 1
 
 type Entry = { status: "loading" | "failed"; session: SessionId } | { status: "ready"; image: PetImage }
 

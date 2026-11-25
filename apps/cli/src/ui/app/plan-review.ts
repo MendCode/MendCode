@@ -153,11 +153,15 @@ export function createPlanReview(ctx: AppContext) {
     return true
   }
 
-  function planReviewFrame(width: number, height: number) {
+  /** The page drawn in `width` columns; `offset` is how far the session list pushes them right, so the wheel's box is in screen columns. */
+  function planReviewFrame(width: number, height: number, offset = 0) {
     const view = sync()
     // Nothing to review: the drawn plan goes with its draft.
     if (!view) { draft = undefined; return undefined }
-    return renderPlanReviewPage({ ...view, width, height, index: view.pending ? 0 : selected, count: view.pending ? 1 : saved.length, renderer: state.transcript.concealed ? state.tuiProfile.messageRenderer : "plain", markdown: markdownStyleFor({ profile: state.tuiProfile, mode: state.mode }) })
+    const frame = renderPlanReviewPage({ ...view, width, height, index: view.pending ? 0 : selected, count: view.pending ? 1 : saved.length, renderer: state.transcript.concealed ? state.tuiProfile.messageRenderer : "plain", markdown: markdownStyleFor({ profile: state.tuiProfile, mode: state.mode }) })
+    const box = view.draft.reviewBox
+    if (box && offset) view.draft.reviewBox = { ...box, left: box.left + offset, right: box.right + offset }
+    return frame
   }
   return { openPlanReview, planReviewKey, planReviewPaste, planReviewFrame }
 }

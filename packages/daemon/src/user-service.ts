@@ -23,6 +23,19 @@ export function validRemoteArgs(value: unknown): value is string[] {
   }
   return true
 }
+/** The listener flags an installed definition passes (systemd `ExecStart=` or a launchd plist), for a binding that does not record them. */
+export function remoteArgsFromDefinition(text: string): string[] | undefined {
+  const unescape = (value: string) => value.replace(/\\(.)/g, "$1").replaceAll("%%", "%").replaceAll("$$", "$")
+  const tokens = text.includes("<key>ProgramArguments</key>")
+    ? [...text.matchAll(/<string>([^<]*)<\/string>/g)].map((match) => match[1]!.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&quot;", '"').replaceAll("&apos;", "'").replaceAll("&amp;", "&"))
+    : [...(text.split("\n").find((line) => line.startsWith("ExecStart="))?.slice(10) ?? "").matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((match) => unescape(match[1]!))
+  const found: string[] = []
+  for (const flag of ["--listen", "--tls-cert", "--tls-key"]) {
+    const at = tokens.indexOf(flag)
+    if (at >= 0 && tokens[at + 1]) found.push(flag, tokens[at + 1]!)
+  }
+  return found.length && validRemoteArgs(found) ? found : undefined
+}
 export type ServicePlan = {
   label: string
   backend: "launchd" | "systemd-user" | "unsupported"
@@ -194,7 +207,13 @@ export function createUserService(options: ServiceOptions, execute: ServiceExecu
     }
     return status()
   }
-  return { plan: requested, control, status, logs: (lines = 100) => daemonLogs(requested.dataDir, lines) }
+  /** Stops a loaded service whatever its definition says: a definition that differs from today's template is stopped by the same command. */
+  async function stopLoaded() {
+    const existing = await status()
+    if (existing.loaded) run(existing.stopCommand)
+    return existing
+  }
+  return { plan: requested, control, status, stopLoaded, logs: (lines = 100) => daemonLogs(requested.dataDir, lines) }
 }
 
 /** Detached startup owns file descriptors only until spawn; the daemon owns its existing writer lock. */

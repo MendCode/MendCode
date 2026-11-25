@@ -147,6 +147,7 @@ import type { createRestSessions } from "./session-rest"
 import type { createRestMutations } from "./session-rest-mutate"
 import { readRestArchives } from "./session-rest-archives"
 import { createServerControl, processMemory } from "./server-control"
+import { residentBytes, residentMemoryUsage } from "./resident-memory"
 import { createServerConfigExtras } from "./server-config-extras"
 import { createSessionHistory } from "./session-history"
 import { sessionPanelSavings } from "./session-panel"
@@ -6187,7 +6188,7 @@ export async function startDaemon(options: DaemonOptions) {
         Bun.gc(true)
         return reply(connection, command.id, {
           ok: true,
-          result: { ...registry.snapshot(), connections: connections.size, actors: actors.size, jobs: scheduler.snapshot().length, rssBytes: process.memoryUsage().rss, memory: process.memoryUsage(), pid: process.pid, uptime: process.uptime() },
+          result: { ...registry.snapshot(), connections: connections.size, actors: actors.size, jobs: scheduler.snapshot().length, rssBytes: residentBytes(), memory: residentMemoryUsage(), pid: process.pid, uptime: process.uptime() },
         })
       case "diagnostics.snapshot":
         return reply(connection, command.id, { ok: true, result: { path: await (await import("./diagnostics")).writeDiagnosticsSnapshot(options.dir) } })
