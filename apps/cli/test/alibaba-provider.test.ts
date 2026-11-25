@@ -9,7 +9,7 @@ import { CONNECT_PRESETS, presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "alibaba-ui-fixture-never-print-0123456789"
 const endpoint = "http://127.0.0.1:1234/v1"
@@ -21,14 +21,14 @@ const report = { ...REPORT, models: [...REPORT.models, ...provider.models.map((m
 
 describe("B10.13 Alibaba CLI factories", () => {
   test("preset tables agree and Alibaba is appended without moving numeric shortcuts", () => {
-    expect(CONNECT_CHOICES.slice(0, 20)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity"])
-    expect(CONNECT_CHOICES[20]).toBe("alibaba")
+    expect(LEGACY_CHOICES.slice(0, 20)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity"])
+    expect(LEGACY_CHOICES[20]).toBe("alibaba")
     const { id: _id, ...preset } = presetOf("alibaba")!
     const { models: _models, defaultEnabled: _enabled, ...native } = PROVIDER_PRESETS.alibaba!
     expect(preset).toEqual(native)
     expect(CONNECT_PRESETS.find((preset) => preset.id === "alibaba")).toBeDefined()
     expect(createConnectState("Alibaba").target).toBe("alibaba")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("app saves a masked token once, tests, refreshes and opens the Alibaba model picker", async () => {

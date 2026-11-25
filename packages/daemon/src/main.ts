@@ -25,6 +25,7 @@ import {
   CHATGPT_PLAN_BASE_URL,
   chatgptQuota,
   codexSubscriptionHeaders,
+  importedChatgptLogin,
   createChatgptModelCatalog,
   latestCodexRelease,
   createInstructionLoader,
@@ -295,7 +296,7 @@ const LIST_PRICE_VENDOR: Readonly<Record<string, string>> = { chatgpt: "openai",
 /** models.dev's reasoning levels and prices for the models providers and ACP agents list; fetched in the background, never awaited. */
 const modelsDev = createModelsDev({ dir, log: (message) => logLine(`[MODELS]: ${message}`) })
 const providerService = createProviderService({ dir, settings: () => extractionSettings(), keyForEnv: providerMetadata.keyForEnv, extensions: () => extensionProviders(), modelsDev })
-const providerAuth = createProviderAuth({ dir, providers: providerService, metadata: providerMetadata })
+const providerAuth = createProviderAuth({ dir, providers: providerService, metadata: providerMetadata, importedLogin: () => (ownLoginsOnly() ? undefined : importedChatgptLogin()) })
 /** `ownLogins`: only MendCode's own ChatGPT login (/connect chatgpt) is used; the Codex CLI's login file is never read. */
 const NO_OWN_CHATGPT = "[AUTH]: sign in to ChatGPT for MendCode with /connect chatgpt (MendCode does not use the Codex CLI's login)"
 const subscriptionHeaders = async () => {

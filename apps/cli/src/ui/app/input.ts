@@ -3,7 +3,7 @@ import type { createGoal } from "./goal"
 import type { createPrompt } from "./prompt"
 import type { createMemory } from "./memory"
 import { createKeyTokenizer, type KeyToken } from "../keys"
-import { connectPaste } from "../lazy-pages"
+import { connectPaste, connectPasteAction } from "../lazy-pages"
 import { runningSubagents, stopSubagents as stopSessionSubagents } from "./subagent-stop"
 import { composeSubmission, liveAttachments, pastedPaths } from "../../view/attachments"
 import { livePastes } from "../../view/paste-placeholders"
@@ -26,6 +26,7 @@ export function createInput(ctx: AppContext, actions: {
   recordSlash?: (name: string) => void
   rewind: ReturnType<typeof import("./session").createSession>["rewind"]
   findPaste(text: string): boolean
+  connectAction(action: import("../../view/connect-page").ConnectAction): Promise<void>
   composer: ReturnType<typeof import("./composer-recovery").createComposerRecovery>
   prepareIdeContext(): Promise<{ text: string; markSent(): void }>
   attachPasted: ReturnType<typeof createPrompt>["attachPasted"]
@@ -161,7 +162,10 @@ export function createInput(ctx: AppContext, actions: {
         await onKey(token.text.replace(/[\x00-\x1f\x7f]/g, ""))
       } else if (state.page === "connect") {
         // A pasted key goes into the masked field (or is ignored); it never reaches the prompt editor.
-        state.connectState = connectPaste(state.connectState, token.text)
+        // While a ChatGPT sign-in waits, a pasted callback address finishes it.
+        const finish = connectPasteAction(state.connectState, token.text)
+        if (finish) void actions.connectAction(finish)
+        else state.connectState = connectPaste(state.connectState, token.text)
         requestFrame()
       }
     }

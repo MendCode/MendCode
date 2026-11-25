@@ -232,13 +232,28 @@ export function statusLine(end: TurnEnd, width: number, glyphs: Glyphs, indent =
   return wrapSpans(spans, width, [{ text: indent }, { text: `${glyphs.done} `, fg: aborted ? "muted" : "primary" }], [{ text: `${indent}  ` }])
 }
 
+const SIGN_IN_FIX = /\/connect (?:chatgpt|github-copilot)\b/
+const TAGS = /^(?:\[[A-Z]+\]: )+/
+
+/** The message as one muted run with the `/connect …` command in the accent color. */
+function highlightCommand(text: string): Span[] {
+  const at = text.search(SIGN_IN_FIX)
+  const command = SIGN_IN_FIX.exec(text)![0]
+  return [{ text: text.slice(0, at), fg: "muted" }, { text: command, fg: "primary", bold: true }, { text: text.slice(at + command.length), fg: "muted" }]
+}
+
 /** v1's error box: an error-colored `┃` rail on the panel fill, the provider message muted, the error code small under it. */
 export function errorBox(error: { code: string; message: string }, width: number, glyphs: Glyphs): Line[] {
   const inner = Math.max(4, width - 2 - 1 - 2 - 2)
-  const body = error.message
-    .replace(/\s+$/, "")
-    .split("\n")
-    .flatMap((line) => wrapSpans([{ text: line, fg: "muted" }], inner))
+  // A sign-in problem names its fix (`/connect chatgpt`): the sentence leads without its tags and the command stands out.
+  const fix = SIGN_IN_FIX.exec(error.message)
+  const text = fix ? error.message.replace(TAGS, "").replace(/^./, (first) => first.toUpperCase()) : error.message
+  const body = fix
+    ? [...wrapSpans(highlightCommand(text.replace(/\s+$/, "")), inner), [], ...wrapSpans([{ text: "Type ", fg: "text" }, { text: fix[0], fg: "primary", bold: true }, { text: " to sign in again here. It works on a remote server too.", fg: "text" }], inner)]
+    : error.message
+      .replace(/\s+$/, "")
+      .split("\n")
+      .flatMap((line) => wrapSpans([{ text: line, fg: "muted" }], inner))
   const shown = body.length > ERROR_MAX_ROWS ? [...body.slice(0, ERROR_MAX_ROWS), [{ text: `… ${body.length - ERROR_MAX_ROWS} more lines`, fg: "muted" as const, dim: true }]] : body
   const rows: Line[] = [[], ...shown, ...(error.code ? [[{ text: error.code, fg: "muted" as const, dim: true }]] : []), []]
   const bar: Span = { text: glyphs.rail, fg: "error" }

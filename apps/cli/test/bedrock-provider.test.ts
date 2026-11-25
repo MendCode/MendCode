@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { ProviderAuthMethod, ProviderInfo } from "@mendcode/protocol"
 import { CONNECT_CHOICES, connectKey, connectPaste, connectWithMethods, createConnectState, renderConnectPage, validateConnect } from "../src/view/connect-page"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 import { catalogHarness } from "./catalog-harness"
 import { parseAutomation } from "../src/automation"
 import { textWidth } from "../src/view/wrap"
@@ -19,8 +19,8 @@ const temp = () => { const dir = mkdtempSync(path.join(tmpdir(), "mendcode-bedro
 
 describe("B10.01 Bedrock CLI and terminal", () => {
   test("appended choice preserves shortcuts; AWS chain and bearer methods stay local", () => {
-    expect(CONNECT_CHOICES.slice(0, 13)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure"])
-    expect(CONNECT_CHOICES[13]).toBe("amazon-bedrock")
+    expect(LEGACY_CHOICES.slice(0, 13)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure"])
+    expect(LEGACY_CHOICES[13]).toBe("amazon-bedrock")
     expect(createConnectState("Amazon Bedrock").target).toBe("amazon-bedrock")
     expect(createConnectState("bedrock").target).toBe("amazon-bedrock")
     let state = connectWithMethods(createConnectState("bedrock"), { "amazon-bedrock": methods })

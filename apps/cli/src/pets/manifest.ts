@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises"
-import { isAbsolute, join, relative } from "node:path"
+import { dirname, isAbsolute, join, relative } from "node:path"
 import { readPetLayout, type PetLayout } from "../../../../packages/protocol/src/pet-data"
 
 /** `builtin` pets ship inside MendCode (`builtin.ts`); a `builtin` entry of the dirs lists them and its `dir` is not read. */
@@ -39,7 +39,19 @@ export async function listPets(dirs: Array<{ dir: string; source: PetSource }>):
       }
     }
   }
-  return { pets, skipped }
+  return { pets: withoutBuiltInCopies(pets, skipped), skipped }
+}
+
+/** A pet of the user's (or a package's) that repeats a built-in one by id or name is hidden: the built-in is the one that is listed. */
+function withoutBuiltInCopies(pets: PetInfo[], skipped: SkippedPet[]): PetInfo[] {
+  const taken = new Set<string>()
+  for (const pet of pets) if (pet.ref.startsWith("builtin:")) taken.add(pet.id.toLowerCase()).add(pet.displayName.trim().toLowerCase())
+  if (taken.size === 0) return pets
+  return pets.filter((pet) => {
+    if (pet.ref.startsWith("builtin:") || !(taken.has(pet.id.toLowerCase()) || taken.has(pet.displayName.trim().toLowerCase()))) return true
+    skipped.push({ dir: dirname(pet.sheetPath), reason: `repeats the built-in pet ${pet.displayName}` })
+    return false
+  })
 }
 
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)

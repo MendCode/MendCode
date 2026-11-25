@@ -14,6 +14,8 @@ export type ProviderAuthStatus = {
   provider: string
   state: "none" | "pending" | "authorized" | "expired" | "failed" | "cancelled"
   source: "v2" | "none"
+  /** The login belongs to another tool on this machine (MendCode only reads it); `state` says whether it still works. */
+  imported?: "codex"
   accessTokenPresent: boolean
   refreshTokenPresent: boolean
   accountIdPresent: boolean

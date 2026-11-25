@@ -9,7 +9,7 @@ import { CONNECT_PRESETS, presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "togetherai-ui-fixture-never-print-0123456789"
 const MODEL = "openai/gpt-oss-120b"
@@ -25,12 +25,12 @@ describe("B10.11 TogetherAI CLI factories", () => {
     expect(CONNECT_PRESETS.map((preset) => preset.id).sort()).toEqual(Object.keys(PROVIDER_PRESETS).sort())
     expect(CONNECT_CHOICES.filter((id) => id === "togetherai")).toHaveLength(1)
     expect(CONNECT_CHOICES.indexOf("togetherai")).toBeGreaterThan(CONNECT_CHOICES.indexOf("mistral"))
-    expect(CONNECT_CHOICES.slice(0, 12)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot"])
+    expect(LEGACY_CHOICES.slice(0, 12)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot"])
     const { id: _id, ...preset } = presetOf("togetherai")!
     const { models: _models, defaultEnabled: _enabled, ...native } = PROVIDER_PRESETS.togetherai!
     expect(preset).toEqual(native)
     expect(createConnectState("TogetherAI").target).toBe("togetherai")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("app saves the masked proxy token once, tests, refreshes and opens the model picker", async () => {

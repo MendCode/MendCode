@@ -9,7 +9,7 @@ import { CONNECT_PRESETS } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "deepinfra-ui-fixture-never-print"
 const MODEL = "deepseek-ai/DeepSeek-V4-Flash-0731"
@@ -22,8 +22,8 @@ const report: ModelsReport = { ...REPORT, models: [{ id: `deepinfra:${MODEL}`, n
 
 describe("B10.08 DeepInfra terminal", () => {
   test("appends the preset without moving existing shortcuts; engine and schema-free UI metadata agree", async () => {
-    expect(CONNECT_CHOICES.slice(0, 18)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral"])
-    expect(CONNECT_CHOICES[18]).toBe("deepinfra")
+    expect(LEGACY_CHOICES.slice(0, 18)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral"])
+    expect(LEGACY_CHOICES[18]).toBe("deepinfra")
     const { PROVIDER_PRESETS } = await import("../../../packages/engine-native/src/provider-presets")
     expect(CONNECT_PRESETS.find((preset) => preset.id === "deepinfra")).toEqual({ id: "deepinfra", name: PROVIDER_PRESETS.deepinfra!.name, type: PROVIDER_PRESETS.deepinfra!.type, baseUrl: PROVIDER_PRESETS.deepinfra!.baseUrl, keyEnv: PROVIDER_PRESETS.deepinfra!.keyEnv })
     expect(createConnectState("DeepInfra").target).toBe("deepinfra")

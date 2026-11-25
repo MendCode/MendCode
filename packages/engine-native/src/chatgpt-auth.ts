@@ -30,7 +30,7 @@ type Host = { hostId: string; clientId?: string }
 export type JsonWebKey = { kty?: string; kid?: string; n?: string; e?: string; [field: string]: unknown }
 type Tokens = { access_token?: unknown; refresh_token?: unknown; id_token?: unknown; expires_in?: unknown; scope?: unknown }
 type Callback = (request: Request) => Promise<Response>
-type Pending = { generation: number; abort: AbortController; expiresAt: number; close?(): void; complete?(code: string): Promise<void>; timer: ReturnType<typeof setTimeout> }
+type Pending = { generation: number; abort: AbortController; expiresAt: number; close?(): void; complete?(input: string): Promise<void>; timer: ReturnType<typeof setTimeout> }
 
 function claims(token: unknown): Record<string, unknown> {
   try { return typeof token === "string" ? JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString()) : {} } catch { return {} }
@@ -226,6 +226,27 @@ export function createChatgptAuth(options: {
     return { redirectUri: `http://${hostname}:${server.port}/auth/callback`, close: () => server.stop(true) }
   }
 
+  /**
+   * A sign-in finished on another machine: the browser ended on a `127.0.0.1` page that this machine's listener never saw. The
+   * pasted full callback URL (or only its `code`) goes through the same callback, so state, PKCE and ID-token checks still apply.
+   */
+  async function completeFromPaste(callback: Callback, redirectUri: string, stateToken: string, pasted: string) {
+    const text = pasted.trim()
+    if (!text || text.length > 4096) throw new Error("[AUTH]: paste the full address the browser ended on, or its code")
+    const url = new URL(redirectUri)
+    if (/^https?:\/\//i.test(text)) {
+      let given: URL
+      try { given = new URL(text) } catch { throw new Error("[AUTH]: that is not a web address; paste the full address the browser ended on") }
+      if (given.pathname !== "/auth/callback") throw new Error("[AUTH]: that address is not the sign-in redirect (it should contain /auth/callback)")
+      url.search = given.search
+    } else {
+      url.searchParams.set("code", text)
+    }
+    if (!url.searchParams.has("state")) url.searchParams.set("state", stateToken)
+    const response = await callback(new Request(url))
+    if (!response.ok || status().state !== "authorized") throw new Error("[AUTH]: the pasted sign-in did not complete; start again")
+  }
+
   /** Sign in with ChatGPT: browser, loopback callback, issued client, verified ID token, plan scope granted. */
   function authorizePlan(serial: number, abort: AbortController, expiresAt: number): ProviderAuthorization {
     const registration = host()
@@ -270,6 +291,7 @@ export function createChatgptAuth(options: {
     const redirect = new URL(redirectUri)
     if (redirect.protocol !== "http:" || redirect.hostname !== "127.0.0.1") { listener.close(); throw new Error("[AUTH]: callback must be loopback") }
     pending!.close = listener.close
+    pending!.complete = (pasted) => completeFromPaste(callback, redirectUri, stateToken, pasted)
     const params = new URLSearchParams({
       client_id: saved ?? REGISTRATION_CLIENT,
       ...(saved ? {} : { agent_name_hint: AGENT_NAME }),
@@ -316,13 +338,7 @@ export function createChatgptAuth(options: {
         const redirect = new URL(redirectUri)
         if (redirect.protocol !== "http:" || !["127.0.0.1", "localhost", "[::1]"].includes(redirect.hostname)) { listener.close(); throw new Error("[AUTH]: callback must be loopback") }
         pending!.close = listener.close
-        pending!.complete = async (code) => {
-          const url = new URL(redirectUri)
-          url.searchParams.set("state", stateToken)
-          url.searchParams.set("code", code)
-          const response = await callback(new Request(url))
-          if (!response.ok || status().state !== "authorized") throw new Error("[AUTH]: OAuth callback failed")
-        }
+        pending!.complete = (pasted) => completeFromPaste(callback, redirectUri, stateToken, pasted)
         const params = new URLSearchParams({ response_type: "code", client_id: clientId(), redirect_uri: redirectUri, scope: "openid profile email offline_access", code_challenge: challenge, code_challenge_method: "S256", state: stateToken, id_token_add_organizations: "true", codex_cli_simplified_flow: "true", originator: "mendcode" })
         return { provider: "chatgpt", method, url: `${issuer}/oauth/authorize?${params}`, instructions: "Complete authorization in your browser", expiresAt }
       }
@@ -381,9 +397,9 @@ export function createChatgptAuth(options: {
   }
   return {
     status, authorize, refresh, cancel,
-    async complete(code: string) {
+    async complete(input: string) {
       if (!pending?.complete) throw new Error("[AUTH]: no pending browser authorization")
-      await pending.complete(code)
+      await pending.complete(input)
     },
     setCredential(input: { access: string; refresh: string; expires: number; accountId?: string | undefined }) {
       const account = input.accountId ?? accountOf({ access_token: input.access })

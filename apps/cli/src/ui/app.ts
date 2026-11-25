@@ -41,6 +41,7 @@ import { createSlashMenu } from "./app/slash-menu"
 import { editableCatalog } from "../view/commands"
 import { expandUserAlias } from "../view/slash-aliases"
 import { createPets } from "./app/pets"
+import { featureOn } from "@mendcode/protocol/wire"
 import { createImages } from "./app/images"
 import { createLoops } from "./app/loops"
 import { createWorkflows } from "./app/workflows"
@@ -716,7 +717,7 @@ export function createApp(input: AppInput) {
   const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
-  const images = createImages(ctx)
+  const images = createImages(ctx, { onProtocol: () => void choosePet(featureOn(appState.settingsNow, "pets") ? appState.tuiProfile.pet || appState.settingsNow.pet : undefined) })
   const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name), loadWorkflows: () => loadWorkflows(), loadEarlier })
   const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
     resetAudio: audio.reset,
@@ -1135,6 +1136,7 @@ export function createApp(input: AppInput) {
     suggestionPool,
     rewind,
     findPaste: find.paste,
+    connectAction,
     composer,
     prepareIdeContext,
     compactionPaste,

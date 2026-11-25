@@ -10,7 +10,7 @@ import { presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -20,15 +20,15 @@ const report = { ...REPORT, models: [...REPORT.models, ...ZENMUX_MODELS.map((mod
 
 describe("B10.19 Zenmux CLI factories", () => {
   test("appends the provider, preserves numeric shortcuts and aligns both preset tables", () => {
-    expect(CONNECT_CHOICES.slice(0, 25)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core"])
-    expect(CONNECT_CHOICES[25]).toBe("zenmux")
+    expect(LEGACY_CHOICES.slice(0, 25)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core"])
+    expect(LEGACY_CHOICES[25]).toBe("zenmux")
     const { id: _id, ...preset } = presetOf("zenmux")!
     const { models, defaultEnabled, ...native } = PROVIDER_PRESETS.zenmux!
     expect(preset).toEqual(native)
     expect(models).toEqual([])
     expect(defaultEnabled).toBe(false)
     expect(createConnectState("Zenmux").target).toBe("zenmux")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("saves the masked token once, refreshes before testing and selects a zenmux model", async () => {

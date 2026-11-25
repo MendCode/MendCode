@@ -38,6 +38,8 @@ export type ConnectState = {
   authStatus?: ProviderAuthStatus
   authStatuses?: Record<string, ProviderAuthStatus>
   confirmLogout?: boolean
+  /** A line under the pick list's title: what the last choice needs. */
+  info?: string
   /** The pick list's filter: providers whose name or id contains it. */
   query?: string
   /** `/` was pressed: typed keys edit `query` instead of acting. */
@@ -61,6 +63,7 @@ export type ConnectAction =
   | { type: "model" }
   | { type: "authorize"; provider: string; method: string }
   | { type: "auth"; action: "cancel" | "refresh" | "logout" }
+  | { type: "auth-complete"; input: string }
   | { type: "auth-status" }
   | { type: "copy-auth" }
   | { type: "add-opencode" }
@@ -69,8 +72,13 @@ const NONE: ConnectAction = { type: "none" }
 /** Presets that ship a public HTTPS endpoint: the form's endpoint is an optional override, blank uses the preset's. */
 const DEFAULT_ENDPOINT_PRESETS: readonly string[] = ["deepinfra", "cerebras", "cohere", "togetherai", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "zenmux", "kilo", ...GATEWAY_CHOICES.filter((id) => id !== "atomic-chat")]
 export const CUSTOM = "custom"
+/** Claude Code's models come from the user's own `claude` command; there is nothing to fill in here. */
+export const CLAUDE_CODE = "claude-code"
 /** Preserve existing numeric shortcuts; newly added providers follow the original choices. */
-export const CONNECT_CHOICES: readonly string[] = [...CONNECT_PRESETS.filter((preset) => !["google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", ...GATEWAY_CHOICES].includes(preset.id)).map((preset) => preset.id), CUSTOM, "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", ...GATEWAY_CHOICES, OPENCODE_FREE]
+const LEGACY_CHOICES: readonly string[] = [...CONNECT_PRESETS.filter((preset) => !["google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", ...GATEWAY_CHOICES].includes(preset.id)).map((preset) => preset.id), CUSTOM, "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", ...GATEWAY_CHOICES, OPENCODE_FREE]
+/** Sign-ins that use a subscription come first: they are the primary choices, API keys and endpoints follow. */
+export const SUBSCRIPTION_CHOICES: readonly string[] = ["chatgpt", CLAUDE_CODE, "github-copilot"]
+export const CONNECT_CHOICES: readonly string[] = [...SUBSCRIPTION_CHOICES, ...LEGACY_CHOICES.filter((id) => !SUBSCRIPTION_CHOICES.includes(id))]
 
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
@@ -93,7 +101,19 @@ export function createConnectState(target?: string): ConnectState {
   const wanted = raw === "cloudflare" ? "cloudflare-workers-ai" : raw === "cloudflare gateway" ? "cloudflare-ai-gateway" : raw === "vertex anthropic" ? "google-vertex-anthropic" : raw === "vertex" ? "google-vertex" : raw === "bedrock" ? "amazon-bedrock" : raw === "zen" || raw === "opencode/zen" ? "opencode" : raw
   const match = wanted ? CONNECT_CHOICES.find((id) => id === wanted || presetOf(id)?.name.toLowerCase() === wanted) : undefined
   const base: ConnectState = { step: "pick", selected: 0, focus: 0, values: emptyValues(), viaEnv: false }
-  return match ? openForm(base, match) : base
+  return match === CLAUDE_CODE ? choose(base, CLAUDE_CODE).state : match ? openForm(base, match) : base
+}
+
+/**
+ * The daemon's sign-in states reach the page. A sign-in that expired takes the cursor, so enter is the way to fix it, unless the
+ * user already moved.
+ */
+export function connectWithAuth(state: ConnectState, statuses: readonly ProviderAuthStatus[]): ConnectState {
+  const authStatuses = Object.fromEntries(statuses.map((entry) => [entry.provider, entry]))
+  const next = { ...state, authStatuses }
+  if (state.step !== "pick" || state.selected !== 0 || state.searching) return next
+  const expired = SUBSCRIPTION_CHOICES.findIndex((id) => authStatuses[id]?.state === "expired")
+  return expired > 0 ? { ...next, selected: CONNECT_CHOICES.indexOf(SUBSCRIPTION_CHOICES[expired]!) } : next
 }
 
 function openForm(from: ConnectState, target: string): ConnectState {
@@ -233,6 +253,16 @@ export function connectFailed(state: ConnectState, error: string): ConnectState 
 export function connectDone(state: ConnectState, result: ConnectResult): ConnectState {
   const { phase: _phase, error: _error, ...rest } = state
   return { ...rest, step: "result", result }
+}
+
+/**
+ * A paste while a ChatGPT browser sign-in waits: the address the browser ended on (`http://127.0.0.1:…/auth/callback?code=…`), or only its code.
+ * That page is on this machine's loopback, so when the daemon runs elsewhere the browser cannot reach its listener and the paste finishes the login.
+ */
+export function connectPasteAction(state: ConnectState, text: string): ConnectAction | undefined {
+  if (state.step !== "oauth" || state.authStatus?.state !== "pending" || state.authorization?.method !== "browser") return undefined
+  const input = text.trim()
+  return input ? { type: "auth-complete", input } : undefined
 }
 
 /** A bracketed paste: goes into the focused text field (masked when it is the key); ignored anywhere else. */
@@ -478,6 +508,7 @@ function searchKey(state: ConnectState, key: string): { state: ConnectState; act
 
 /** A choice opens its form; OpenCode (free) has nothing to type and is added at once. */
 function choose(state: ConnectState, target: string): { state: ConnectState; action: ConnectAction } {
+  if (target === CLAUDE_CODE) return { state: { ...state, selected: CONNECT_CHOICES.indexOf(CLAUDE_CODE), info: "Claude Code signs in with its own `claude` command on the machine that runs MendCode; its models appear here once it is signed in." }, action: NONE }
   if (target !== OPENCODE_FREE) return { state: openForm(state, target), action: NONE }
   return { state: connectBusy({ ...state, selected: CONNECT_CHOICES.indexOf(target), target }, "Adding OpenCode"), action: { type: "add-opencode" } }
 }
@@ -516,7 +547,7 @@ export type ConnectPageInput = {
 const hintsFor = (state: ConnectState): string => {
   if (state.confirmLogout) return "y remove saved login · any other key cancel"
   if (state.step === "methods") return ["azure", "amazon-bedrock"].includes(state.target ?? "") ? "↑↓ method · enter select · esc back" : "↑↓ method · enter select · s login status · esc back"
-  if (state.step === "oauth") return state.authStatus?.state === "pending" ? "c copy · s status · x cancel · esc close" : state.authStatus?.source === "v2" ? `${state.authStatus.state === "authorized" ? "m models" : "e login"} · r refresh · d logout · esc close` : "e retry · esc close"
+  if (state.step === "oauth") return state.authStatus?.state === "pending" ? "c copy · paste address · x cancel · esc close" : state.authStatus?.source === "v2" ? `${state.authStatus.state === "authorized" ? "m models" : "e login"} · r refresh · d logout · esc close` : "e retry · esc close"
   if (state.step === "pick") return state.searching ? "type to filter · ↑↓ select · enter connect · esc clear" : "↑↓ select · enter connect · / search · 1-9 jump · esc back"
   if (state.step === "busy") return "esc close"
   if (state.step === "result" && state.result?.provider === OPENCODE_FREE) return state.result.ok ? "m open model page · esc close" : "esc close"
@@ -552,39 +583,79 @@ function providerMark(preset: ConnectPreset, providers: readonly ProviderInfo[] 
   return { text: `connected · ${key} · ${info.models.length} ${info.models.length === 1 ? "model" : "models"}`, tone: "success" }
 }
 
-const choiceName = (id: string) => (id === "chatgpt" ? "ChatGPT" : id === CUSTOM ? "Custom endpoint" : providerName(id))
+const choiceName = (id: string) => (id === "chatgpt" ? "ChatGPT" : id === CLAUDE_CODE ? "Claude Code" : id === CUSTOM ? "Custom endpoint" : providerName(id))
+
+type Mark = { text: string; tone: "success" | "warning" | "muted" | "error"; glyph?: "ok" | "fail" }
+
+/**
+ * The real state of a subscription sign-in: signed in, expired (the page offers the fix), failed or not signed in. A subscription
+ * that works never reads as one that does not, and the other way round.
+ */
+function subscriptionMark(id: string, input: Pick<ConnectPageInput, "state" | "providers" | "models">): Mark {
+  const { state, models } = input
+  const count = (predicate: (model: ModelsReport["models"][number]) => boolean) => (models ? models.models.filter(predicate).length : 0)
+  const plural = (n: number) => `${n} ${n === 1 ? "model" : "models"}`
+  if (id === CLAUDE_CODE) {
+    if (!models) return { text: "checking…", tone: "muted" }
+    const n = count((model) => model.engine === "claude")
+    return n > 0 ? { text: `ready · ${plural(n)}`, tone: "success", glyph: "ok" } : { text: "not found · run `claude` on this machine", tone: "muted" }
+  }
+  const status = state.authStatuses?.[id]
+  const n = id === "chatgpt" ? count((model) => !model.provider && !model.engine) : 0
+  const models_ = n > 0 ? ` · ${plural(n)}` : ""
+  if (status?.state === "pending") return { text: "waiting for the sign-in to finish", tone: "warning" }
+  if (status?.state === "expired") return { text: status.imported ? "expired (imported) · enter to sign in here" : "expired · enter to sign in again", tone: "error", glyph: "fail" }
+  if (status?.state === "failed") return { text: "sign-in failed · enter to try again", tone: "error", glyph: "fail" }
+  if (status?.state === "authorized") return { text: `signed in · ${status.imported ? "login from another tool" : "MendCode login"}${models_}`, tone: "success", glyph: "ok" }
+  if (id === "github-copilot") {
+    const mark = providerMark(presetOf(id)!, input.providers)
+    return mark.tone === "success" ? { ...mark, glyph: "ok" } : status ? { text: "not signed in · enter to sign in", tone: "muted" } : mark
+  }
+  return status ? { text: "not signed in · enter to sign in", tone: "muted" } : n > 0 ? { text: `available${models_}`, tone: "success", glyph: "ok" } : { text: "browser or device login", tone: "muted" }
+}
+
+/** The sign-ins that need attention, in list order: what the banner says and where enter goes. */
+const needsAttention = (state: ConnectState): string[] => SUBSCRIPTION_CHOICES.filter((id) => state.authStatuses?.[id]?.state === "expired" || state.authStatuses?.[id]?.state === "failed")
 
 function pickBody(input: ConnectPageInput, inner: number, glyphs: Glyphs): { body: Line[]; focus: number; summary: string } {
   const { state, providers, models } = input
   const rows: Line[] = []
   const nameWidth = Math.max(...CONNECT_CHOICES.map((id) => choiceName(id).length)) + 2
   const shown = state.searching ? connectMatches(state.query) : CONNECT_CHOICES.map((_, index) => index)
+  const heading = (text: string): Line => [{ text, fg: "text", bold: true }]
   if (state.searching) {
     rows.push(pageSearchRow({ open: true, query: state.query ?? "" }, shown.length, inner) ?? [], [])
     if (shown.length === 0) rows.push([{ text: `  No provider matches "${state.query}" · backspace edits · esc ends the search`, fg: "muted" }])
+  } else {
+    // What needs doing comes first: an expired sign-in names itself and the key that fixes it.
+    const attention = needsAttention(state)
+    for (const id of attention) rows.push(fit([{ text: `${glyphs.fail} `, fg: "error", bold: true }, { text: `${choiceName(id)} ${state.authStatuses?.[id]?.state === "expired" ? "sign-in expired" : "sign-in failed"}`, fg: "error", bold: true }, { text: " · select it and press enter to sign in again", fg: "muted" }], inner))
+    if (state.info) rows.push(...wrap(state.info, inner).map((text): Line => [{ text, fg: "warning" }]))
+    if (attention.length || state.info) rows.push([])
   }
+  let focus = 0
   shown.forEach((index) => {
     const id = CONNECT_CHOICES[index]!
     const on = index === state.selected
+    if (!state.searching && (index === 0 || index === SUBSCRIPTION_CHOICES.length)) rows.push(...(index ? [[] as Line] : []), heading(index === 0 ? "Sign in with a subscription" : "API keys and endpoints"))
     const preset = presetOf(id)
-    const mark = preset ? providerMark(preset, providers) : id === OPENCODE_FREE ? opencodeMark(models) : { text: id === "chatgpt" ? "browser or device login" : "Responses, Messages, Chat Completions or Gemini", tone: "muted" as const }
+    const subscription = SUBSCRIPTION_CHOICES.includes(id)
+    const mark: Mark = subscription ? subscriptionMark(id, input) : preset ? providerMark(preset, providers) : id === OPENCODE_FREE ? opencodeMark(models) : { text: "Responses, Messages, Chat Completions or Gemini", tone: "muted" }
+    const lead = mark.glyph ? `${glyphs[mark.glyph]} ` : ""
+    if (on) focus = rows.length
     rows.push(
       fit(
         [
           on ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " },
           { text: `${index + 1} `, fg: "muted" },
           { text: choiceName(id).padEnd(nameWidth), fg: on ? "primary" : "text", bold: on },
-          { text: truncateEnd(mark.text, Math.max(1, inner - nameWidth - 6)), fg: mark.tone },
+          ...(lead ? [{ text: lead, fg: mark.tone }] : []),
+          { text: truncateEnd(mark.text, Math.max(1, inner - nameWidth - 7 - lead.length)), fg: mark.tone },
         ],
         inner,
       ),
     )
   })
-  const focus = (state.searching ? 2 + Math.max(0, shown.indexOf(state.selected)) : state.selected) + 5
-  const count = (predicate: (model: ModelsReport["models"][number]) => boolean) => (models ? models.models.filter(predicate).length : 0)
-  const info = (name: string, n: number): Line =>
-    fit([{ text: "  " }, { text: glyphs.ok, fg: n > 0 ? "success" : "muted" }, { text: " " }, { text: name.padEnd(Math.max(nameWidth, "ChatGPT subscription".length) + 1), fg: "text" }, { text: n > 0 ? `${n} ${n === 1 ? "model" : "models"}` : "not available here", fg: "muted" }], inner)
-  rows.unshift([{ text: "Model catalogs", fg: "text", bold: true }], info("ChatGPT subscription", count((model) => !model.provider && !model.engine)), info("Claude Code", count((model) => model.engine === "claude")), [], [])
   const connected = CONNECT_PRESETS.filter((preset) => providerMark(preset, providers).tone === "success").length
   return { body: rows, focus, summary: connected ? `${connected} connected` : "" }
 }
@@ -672,6 +743,7 @@ function authBody(state: ConnectState, width: number, glyphs: Glyphs): Line[] {
       ...wrap(state.authorization.instructions, width).map((text): Line => [{ text, fg: "text" }]),
       [],
       ...wrap(state.authorization.url, width).map((text): Line => [{ text, fg: "primary" }]),
+      ...(state.authorization.method === "browser" ? [[], ...wrap("Signing in from another machine? The browser may end on a page that cannot be reached (127.0.0.1). Copy that address and paste it here.", width).map((text): Line => [{ text, fg: "muted" }])] : []),
     ] : []),
     ...(status?.source === "v2" ? [[{ text: "v2 credentials saved", fg: "muted" } as Span]] : []),
     ...(status?.error || state.error ? [[], ...wrap(status?.error ?? state.error!, width).map((text): Line => [{ text, fg: "error" }])] : []),
@@ -688,7 +760,7 @@ export function renderConnectPage(input: ConnectPageInput): Line[] {
   const room = Math.max(0, height - 4)
   const frame = (body: Line[]) => {
     const title = `Connect${state.target ? ` · ${state.target === "chatgpt" ? "ChatGPT" : providerName(state.target)}` : ""}`
-    const short = state.confirmLogout ? "y logout · esc cancel" : state.step === "pick" ? state.searching ? "type · ↑↓ · enter · esc" : "↑↓ · enter · / search · esc" : state.step === "methods" ? "↑↓ select · enter · esc back" : state.step === "form" ? isVertexPreset(state.target) || state.target === "azure" && state.values.azureAuth === "entra" || state.target === "amazon-bedrock" && state.values.awsAuth === "chain" ? "enter · tab next · esc" : "enter · ctrl+e env · esc" : state.step === "oauth" ? state.authStatus?.state === "pending" ? "c copy · x cancel · esc" : state.authStatus?.source === "v2" ? `${state.authStatus.state === "authorized" ? "m models" : "e login"} · r · d · esc` : "e retry · esc" : "esc back"
+    const short = state.confirmLogout ? "y logout · esc cancel" : state.step === "pick" ? state.searching ? "type · ↑↓ · enter · esc" : "↑↓ · enter · / search · esc" : state.step === "methods" ? "↑↓ select · enter · esc back" : state.step === "form" ? isVertexPreset(state.target) || state.target === "azure" && state.values.azureAuth === "entra" || state.target === "amazon-bedrock" && state.values.awsAuth === "chain" ? "enter · tab next · esc" : "enter · ctrl+e env · esc" : state.step === "oauth" ? state.authStatus?.state === "pending" ? "c copy · paste · x · esc" : state.authStatus?.source === "v2" ? `${state.authStatus.state === "authorized" ? "m models" : "e login"} · r · d · esc` : "e retry · esc" : "esc back"
     const compactHints = isVertexPreset(state.target) && state.step === "result" ? state.result?.ok ? "r models · m · t · esc" : "e edit · t test · esc" : state.target === "amazon-bedrock" && state.step === "result" ? state.result?.ok ? "r models · m pick · t test · esc" : "e edit · t test · esc" : short
     const fallback = ["cloudflare-workers-ai", "cloudflare-ai-gateway"].includes(state.target ?? "") && state.step === "result" ? state.result?.ok ? "r · m · t · esc" : "e · t · r · esc" : ["llmgateway", "nvidia", "zenmux", "gitlab", "togetherai", "kilo"].includes(state.target ?? "") && state.step === "result" ? state.result?.ok ? "r models · m select · t test · esc" : "r models · t test · e edit · esc" : compactHints
     const shownHints = title.length + hints.length + 4 <= width ? hints : fallback
@@ -785,9 +857,9 @@ export function renderConnectPage(input: ConnectPageInput): Line[] {
     const preset = presetOf(id)
     const info = input.providers?.find((provider) => provider.id === id)
     body = panelGrid({ width: inner, padding: true, heights: [room], rows: [[
-      { title: "Connect a provider", weight: 3, body: (w) => pickBody(input, w, glyphs).body, scroll: Math.max(0, state.selected + 7 - (room - 4)) },
+      { title: "Connect a provider", weight: 3, body: (w) => pickBody(input, w, glyphs).body, scroll: Math.max(0, pickBody(input, inner, glyphs).focus + 2 - (room - 4)) },
       { title: choiceName(id), weight: 2, body: (w) => [
-        ...wrap(id === "chatgpt" ? `OAuth · ${state.authStatus?.state ?? "none"}` : preset ? providerMark(preset, input.providers).text : id === OPENCODE_FREE ? opencodeMark(input.models).text : "Responses, Messages, Chat Completions or Gemini", w).map((text): Line => [{ text, fg: "muted" }]),
+        ...wrap(SUBSCRIPTION_CHOICES.includes(id) ? subscriptionMark(id, input).text : preset ? providerMark(preset, input.providers).text : id === OPENCODE_FREE ? opencodeMark(input.models).text : "Responses, Messages, Chat Completions or Gemini", w).map((text): Line => [{ text, fg: "muted" }]),
         ...(id === OPENCODE_FREE ? OPENCODE_ABOUT.flatMap((text) => [[] as Line, ...wrap(text, w).map((line): Line => [{ text: line, fg: "text" }])]) : []),
         ...(info ? [[{ text: `${info.type} · ${info.models.length} models`, fg: "text" } as Span]] : []),
         ...(id === "chatgpt" ? (state.methods?.chatgpt ?? []).map((method): Line => [{ text: method.label, fg: method.available ? "text" : "muted" }]) : []),

@@ -1,4 +1,4 @@
-import { type preload, connectBusy, connectDone, connectFailed, createConnectState, connectWithMethods } from "../lazy-pages"
+import { type preload, connectBusy, connectDone, connectFailed, createConnectState, connectWithMethods, connectWithAuth } from "../lazy-pages"
 import type { ConnectAction, ConnectSubmit } from "../../view/connect-page"
 import type { ProviderNote, ProvidersPageAction } from "../../view/providers-page"
 import { GATEWAY_CHOICES, OPENCODE_AGENT, OPENCODE_FREE, providerName } from "../../view/provider-presets"
@@ -133,7 +133,7 @@ export function createProviders(ctx: AppContext, actions: {
     if (methods.ok && methods.result?.methods) state.connectState = connectWithMethods(state.connectState, methods.result.methods as Record<string, ProviderAuthMethod[]>)
     const statuses = auth.ok ? auth.result?.statuses as ProviderAuthStatus[] | undefined : undefined
     const status = statuses?.find((entry) => entry.provider === authProvider())
-    if (statuses) state.connectState = { ...state.connectState, authStatuses: Object.fromEntries(statuses.map((entry) => [entry.provider, entry])) }
+    if (statuses) state.connectState = connectWithAuth(state.connectState, statuses)
     if (status) state.connectState = { ...state.connectState, authStatus: status, ...(["chatgpt", "github-copilot"].includes(state.connectState.target ?? "") && (status.source === "v2" || status.state === "pending") ? { step: "oauth" as const } : {}) }
     requestFrame()
   }
@@ -257,6 +257,14 @@ export function createProviders(ctx: AppContext, actions: {
     else if (action.type === "copy-auth") {
       const authorization = state.connectState.authorization
       if (authorization) ctx.copyText(["headless", "device"].includes(authorization.method) ? authorization.instructions.replace(/^Enter code: /, "") : authorization.url, "authorization")
+    } else if (action.type === "auth-complete") {
+      const serial = state.connectSerial
+      const reply = await input.send({ type: "providers.auth.action", provider: "chatgpt", action: "complete", input: action.input })
+      if (serial !== state.connectSerial || state.page !== "connect") return
+      stopAuthTick()
+      if (!reply.ok) state.connectState = { ...state.connectState, error: plainError(reply.error.message) }
+      else state.connectState = { ...state.connectState, error: undefined }
+      await authStatus(serial)
     } else if (action.type === "auth") {
       stopAuthTick()
       const serial = ++state.connectSerial

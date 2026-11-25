@@ -3,12 +3,14 @@ import { readdirSync } from "node:fs"
 import path from "node:path"
 import { tuiProblems } from "@mendcode/protocol/wire"
 import { BUILT_IN_PETS } from "../src/pets/builtin"
+import { IMAGE_ONLY_REASON, petNeedsImages, usablePetRef } from "../src/pets/image-gate"
 import { listPets } from "../src/pets/manifest"
 import { createPetSlot } from "../src/pets/pet-slot"
 import { loadSprite } from "../src/pets/sprite"
 import { isPetMascot } from "../src/ui/app/home-mascot"
+import { petPickerKey } from "../src/view/pet-picker"
 import { DEFAULT_TUI_PROFILE, normalizeHomeMascot, readTuiProfile } from "../src/view/tui-profile"
-import { mascotScene, petStore, type PetStore } from "./mascot-scene"
+import { hasHalfBlocks, mascotScene, petStore, type PetStore } from "./mascot-scene"
 import { cleanTemps, tempDir } from "./session-ui-harness"
 
 afterAll(() => cleanTemps())
@@ -82,7 +84,7 @@ describe("MendGirl, the built-in pet", () => {
 
   test("/pet lists it right after MendAscii as Built-in, without rename or delete; enter chooses it, and /mascot mendgirl puts it on the start screen", async () => {
     const store = withBuiltIns(petStore())
-    const { h } = await mascotScene({ store })
+    const { h } = await mascotScene({ store, graphics: { env: { TERM_PROGRAM: "ghostty" } } })
     await h.type("/pet\r")
     // Its preview decodes the sheet once: the list arrives when that is done.
     for (let turn = 0; turn < 50 && !h.text().join("\n").includes("MendGirl"); turn++) {
@@ -108,4 +110,63 @@ describe("MendGirl, the built-in pet", () => {
     await Bun.sleep(40)
     expect(readTuiProfile(store.dir)).toMatchObject({ logoKind: "both", homeMascot: MENDGIRL })
   }, 20_000)
+
+  test("without a terminal that draws images, /pet shows MendGirl unavailable with its reason, enter does not choose her, and the ASCII Mend stays", async () => {
+    const store = withBuiltIns(petStore())
+    const { h } = await mascotScene({ store })
+    await h.type("/pet\r")
+    for (let turn = 0; turn < 50 && !h.text().join("\n").includes("MendGirl"); turn++) {
+      await Bun.sleep(40)
+      h.app.render()
+    }
+    await h.type("\x1b[B")
+    h.app.render()
+    expect(h.text().join("\n")).toContain(`Unavailable here: ${IMAGE_ONLY_REASON}`)
+    await h.type("\r")
+    h.app.render()
+    expect(readTuiProfile(store.dir)).toMatchObject({ pet: "", homeMascot: "mend" })
+    expect(h.text().join("\n")).toContain("MendGirl")
+  }, 20_000)
+
+  test("a saved choice of MendGirl in a terminal without images shows MendAscii on the start screen and loads no pet, and the choice is kept", async () => {
+    const store = withBuiltIns(petStore())
+    const { h, frame, placement } = await mascotScene({ store, ref: MENDGIRL })
+    h.app.render()
+    expect(h.app.mascotAnimating).toBe(false)
+    expect(placement()).toBeUndefined()
+    expect(hasHalfBlocks(frame())).toBe(true)
+    expect(readTuiProfile(store.dir)).toMatchObject({ homeMascot: MENDGIRL })
+    expect(h.text().join("\n")).not.toContain("Pet not found")
+  }, 20_000)
+})
+
+describe("the default pet list", () => {
+  test("is MendAscii and MendGirl only: a pets folder with a pet that repeats MendGirl by name or id lists the built-in alone", async () => {
+    const store = petStore()
+    await store.importPath(path.join(import.meta.dir, "fixtures", "pets", "tiny", "spritesheet.png"), { name: "MendGirl" })
+    await store.importPath(path.join(import.meta.dir, "fixtures", "pets", "tiny", "spritesheet.png"), { name: "Other" })
+    const listed = await listPets(withBuiltIns(store).pets().dirs)
+    expect(listed.pets.map((pet) => pet.displayName)).toEqual(["MendGirl", "Other"])
+    expect(listed.pets[0]!.ref).toBe(MENDGIRL)
+    expect(listed.skipped.some((entry) => entry.reason.includes("repeats the built-in pet MendGirl"))).toBe(true)
+    expect((await listPets([BUILT_IN])).pets.map((pet) => pet.ref)).toEqual([MENDGIRL])
+  })
+
+  test("the image gate: MendGirl needs pictures, every other pet does not; without pictures she is MendAscii", () => {
+    expect(petNeedsImages(MENDGIRL)).toBe(true)
+    expect(petNeedsImages("user:photo")).toBe(false)
+    expect(petNeedsImages("mend")).toBe(false)
+    expect(usablePetRef(MENDGIRL, true)).toBe(MENDGIRL)
+    expect(usablePetRef(MENDGIRL, false)).toBe("mend")
+    expect(usablePetRef("user:photo", false)).toBe("user:photo")
+    expect(usablePetRef("", false)).toBe("")
+  })
+
+  test("the picker ignores enter and space on an unavailable pet, and still turns the shown pet off with space elsewhere", () => {
+    const choices = [{ ref: "builtin:x", name: "X", description: "", disabled: IMAGE_ONLY_REASON }, { ref: "user:y", name: "Y", description: "" }]
+    expect(petPickerKey({ selected: 0 }, "\r", choices, "").action).toEqual({ type: "none" })
+    expect(petPickerKey({ selected: 0 }, " ", choices, "user:y").action).toEqual({ type: "none" })
+    expect(petPickerKey({ selected: 1 }, "\r", choices, "").action).toEqual({ type: "choose", ref: "user:y" })
+    expect(petPickerKey({ selected: 1 }, " ", choices, "user:y").action).toEqual({ type: "choose", ref: "off" })
+  })
 })
