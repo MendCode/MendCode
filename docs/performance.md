@@ -189,6 +189,30 @@ Real terminal in a pseudo-terminal, one real turn on a cheap model (`real.ts men
 
 Throwaway HOME, ten alternating runs: `--version` 42.3 → 34.2 ms, `session list --json` against a running daemon 50.7 → 40.4 ms. A daemon with no terminal used 0.2 s of CPU a minute on 1.3.13 and 0–0.1 s on 1.4.5. `scripts/perf.ts` (two alternating runs, load about 3): daemon idle RSS 91–94 → 72 MB and footprint 51–53 → 35–36 MB; terminal footprint after a stream at 10,000 messages 87–90 → 48–55 MB; solo footprint after a stream at 10,000 messages 140–144 → 75–80 MB; first frame at 10,000 messages 177–186 → 135–144 ms.
 
+### Against pi, Claude Code, Codex and OpenCode (2026-11-25, Bun 1.4.5)
+
+Installed `mendcode` (98.75 MB, source revision `aca4e43b`) and the peers as installed on the machine: pi 0.85.1, Claude Code 2.1.330, Codex CLI 0.166.0, OpenCode 1.19.3. Apple M4 Pro, macOS 27.0, load average 0.5 to 9.7 (median 1.2) over the runs. `real.ts` in a pseudo-terminal 160×45, a temporary HOME with only that tool's login copied in (Claude Code keeps its login in the keychain, so it ran on the real HOME with no user settings or MCP servers), gpt-6-luna (Haiku for Claude Code), the same read-only question over a small project. Five rounds, the tools alternating inside each round; median [range]. Memory is the tool's whole process tree at the prompt (after 12 s) / right after the reply.
+
+| | RSS, prompt / reply (MB) | Footprint, prompt / reply (MB) | Turn CPU (s) | CPU over 30 s at rest (s) | Disk per session |
+|---|---|---|---|---|---|
+| MendCode minimalist | 103 [103–104] / 122 [116–127] | 48 [47–48] / 54 [52–58] | 1.32 [1.15–1.47] | 0.21 | 2.6 KB |
+| MendCode balanced | 104 [103–104] / 121 [113–122] | 48 / 54 [53–54] | 1.29 [1.08–1.35] | 0.20 | 2.7 KB |
+| MendCode full | 106 [105–107] / 122 [117–127] | 49 [49–50] / 53 [53–55] | 1.23 [0.92–1.33] | 0.21 | 2.7 KB |
+| pi | 133 [132–134] / 141 [140–141] | 81 [79–82] / 89 [88–89] | 0.44 [0.35–0.48] | 0.00 | 2.85 KB |
+| Claude Code (Haiku) | 299 [280–338] / 328 [306–394] | 158 [152–171] / 167 [161–178] | 1.28 [1.20–5.59] | 0.47 | 315 KB |
+| Codex CLI | 331 [314–342] / 577 [549–601] | 230 [213–242] / 413 [343–437] | 2.62 [2.33–3.15] | 2.63 | 110 KB |
+| OpenCode | 1,418 [1,327–1,500] / not measured | 690 [667–720] / not measured | not measured | not measured | not measured |
+
+Peak footprint over the run: MendCode 59 to 60 MB, pi 98, Claude Code 179 (its two processes), Codex 561.
+
+- **OpenCode** answered no turn: its copied login was rejected (`Token refresh failed: 401`), so only the prompt row is a measurement.
+- **Codex** was started with `-s workspace-write`, not `-s read-only`: with 0.166.0 and `-a never`, `read-only` made the model decline to read the file, so no turn ran. Its first run, with `read-only`, is not in the table.
+- One Claude Code round took 5.6 s of CPU; the other four took 1.2 to 1.4 s.
+
+Install size (`du -sk` of what the installer put on disk, in decimal MB): MendCode 98.8 (one binary, 25.8 MB more than on Bun 1.3.13), OpenCode 144.8 (the `opencode-ai` package), pi 171.2 (the package and its dependencies in the pnpm store, without Node), Claude Code 363.8 (one version of the binary), Codex CLI 426.8 (the 0.166.0 release directory, binary 269.0). `--help`, median of seven alternating runs, temporary HOME: MendCode 34 ms, pi 21 ms, Claude Code 61 ms, OpenCode 256 ms, Codex CLI 12 ms.
+
+Real CLI in a pseudo-terminal against a running daemon on the faux engine (`perf-real.ts --scenario startup --runs 8`, empty session, `--no-pure`): first frame 138 ms [133–149], 145 ms until a typed key shows. One process with no daemon running (balanced tier, temporary HOME, eight cold launches): first frame 251 ms [245–254]. These are new measurements with this method; earlier first-frame figures from the real CLI used a different rig and are not comparable with them.
+
 ### Chat switches on a large data directory (2026-11-22)
 
 A copy of a long-used data directory (hundreds of sessions, a few hundred sub-agent tasks, a dozen projects with code-graph caches) stalled the daemon on every chat switch. What held the loop, measured with a 20 ms lag probe and CPU profiles of the daemon on the copy (fake engines, private HOME):

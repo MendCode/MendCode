@@ -514,23 +514,23 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 
 ## Measurements
 
-Measured 2026-11-02 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.3.13, arm64; source revision `b482241f`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools, except the two real-CLI rows. Load average 5–6 (shared machine, not repeated on an idle one).
+Measured 2026-11-25 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.4.5, arm64; source revision `aca4e43b`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools, except the two real-CLI rows. Load average 1.0–1.5 for the synthetic rows, 0.5–9.7 (median 1.2) during the real-CLI rows (shared machine). The Bun 1.3.13 to 1.4.5 comparison is in [performance](docs/performance.md#bun-1313--145-2026-11-24).
 
 | Measure | Result | Method |
 |---|---|---|
-| Compiled CLI `help` startup | 59.3 ms | `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
-| Bytes per session, 60-session batch | 154,283 | Rounded batch total / 60 after checkpoint, compression and sharing |
-| Bytes for 2,000 sessions | 235,356,160 (224.5 MiB) | Database + WAL + blobs after checkpoint; 117,678 bytes/session rounded |
-| Real CLI, one process: at the prompt / after a first reply | 129–131 / 138–140 MB RSS, 63–64 / 66–69 MB physical footprint | Compiled build in a pseudo-terminal 160×45, clean HOME with only the login copied, minimalist, balanced and full tiers, one read-only question on gpt-6-luna, the prompt after 12 s, three launches each (pi the same way: 133 / 139 MB RSS, 81 / 88 MB footprint) |
-| Real session on disk | 2.5–2.6 KB | Same run: every stored byte of that session's rows plus its session row, read after the daemon's idle step (pi: 2.8–2.9 KB session file) |
-| Daemon RSS, idle / with a client attached | 95–98 MB / 119–130 MB | `bun scripts/perf.ts --mode daemon,solo`, compiled daemon, 0 / 1,000 / 10,000 messages |
-| Client RSS, idle / after scrolling and streaming | 66–74 MB / 131–165 MB | Same run, compiled client |
-| First frame | 163 ms / 198 ms / 220 ms | Same run, `daemon` mode, 0 / 1,000 / 10,000 messages |
-| Scroll frame p95 | 3.5 ms / 5.6 ms / 5.3 ms | Same run |
-| Streaming frame p95 | 5.3 ms / 7.4 ms / 7.3 ms | Same run |
-| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 128 / 220 MB (0 messages), 145 / 305 MB (10,000) | Same run; this rig starts the process without the launcher's compile options, so it reads higher than the real-CLI row. [Design](docs/design/memory-single-process.md) |
-| One process, frame p95, scroll / stream | 1.7 to 8.4 ms / 2.3 to 3.0 ms | Same run as the one-process RSS row |
-| One process, first frame | 304 ms / 323 ms / 342 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
+| Compiled CLI `help` startup | 34.1–34.3 ms | `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
+| Bytes per session, 60-session batch | 154,010 | Rounded batch total / 60 after checkpoint, compression and sharing |
+| Bytes for 2,000 sessions | 231,784,448 (221.0 MiB) | Database + WAL + blobs after checkpoint; 115,892 bytes/session rounded |
+| Real CLI, one process: at the prompt / after a first reply | 103–106 / 121–122 MB RSS, 48–49 / 53–54 MB physical footprint | Compiled build in a pseudo-terminal 160×45, clean HOME with only the login copied, minimalist, balanced and full tiers, one read-only question on gpt-6-luna, the prompt after 12 s, five alternating launches each, medians (pi the same way: 133 / 141 MB RSS, 81 / 89 MB footprint) |
+| Real session on disk | 2.6–2.7 KB | Same run: every stored byte of that session's rows plus its session row, read after the daemon's idle step (pi: 2.9 KB session file) |
+| Daemon RSS, idle / with a client attached | 71–72 MB / 97–107 MB | `bun scripts/perf.ts --mode daemon,solo`, compiled daemon, 0 / 1,000 / 10,000 messages, two runs |
+| Client RSS, idle / after scrolling and streaming | 57–64 MB / 109–154 MB | Same run, compiled client |
+| First frame | 115–127 ms / 125–129 ms / 140 ms | Same run, `daemon` mode, 0 / 1,000 / 10,000 messages |
+| Scroll frame p95 | 2.1 ms / 3.1 ms / 3.0 ms | Same run, the larger of page up and page down, mean of the two runs |
+| Streaming frame p95 | 2.6 ms / 3.7 ms / 3.8 ms | Same command, three runs on `48c5ee58` (after the change that made a streamed frame in a long chat cost less CPU), load 2.6 to 3.1, mean of the three runs |
+| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 94 / 170 MB (0 messages), 110 / 218 MB (10,000) | Same run; this rig starts the process without the launcher's compile options, so it differs from the real-CLI row. [Design](docs/design/memory-single-process.md) |
+| One process, frame p95, scroll / stream | 3.2 to 5.2 ms / 3.4 to 5.5 ms | Same run as the one-process RSS row |
+| One process, first frame | 199–205 ms / 206–207 ms / 212 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
 
 Disk command: `MEND_DISK_REPORT=1 bun test packages/store/test/disk-budget.test.ts` (5 passed). Each [synthetic session](packages/store/test/synthetic-data.ts) has eight turns, three tool calls/turn, streamed text, model history and file snapshots. Batch sizes share different amounts of data; these are not predictions for arbitrary transcripts or Git worktrees. The [disk test](packages/store/test/disk-budget.test.ts) enforces 210 KiB/session for the small batch and 350 MiB for 2,000 sessions. See [storage](docs/storage.md).
 
