@@ -82,6 +82,22 @@ describe("/whatsnew page", () => {
     expect(whatsNewCostText({ model: "gpt-6-luna", estimate: 4200, usage: { input: 3900, output: 300, costMicros: 2500 } }, "ready")).toBe("gpt-6-luna · 3.9k in · 300 out · $0.0025")
   })
 
+  test("the short page groups by New, Fixed, Changed, fits 80 columns and points to the full changelog", () => {
+    const groups = ["New", "Fixed", "Changed"]
+    const many = Array.from({ length: 8 }, (_, index) => ({ section: "v0.0.3", group: groups[index % 3]!, text: `Change number ${index} ${"with a long description ".repeat(6)}`, fresh: true }))
+    const lines = renderWhatsNewPage({ state: { ...createWhatsNewState({ all: false, summary: "MendCode 0.0.3", changes: many, more: 5 }), status: "error", error: "no model" }, width: 80, height: 40 }).map((line) => line.map((part) => part.text).join(""))
+    expect(lines.every((line) => [...line].length <= 80)).toBe(true)
+    const body = lines.join("\n")
+    for (const group of groups) expect(body).toContain(group)
+    expect(body).not.toContain("v0.0.3\n")
+    expect(lines.filter((line) => line.includes("Change number")).length).toBe(8)
+    expect(body).toContain("more: 5 other changes · /whatsnew all lists the full changelog")
+  })
+
+  test("a saved summary says so instead of a token estimate", () => {
+    expect(whatsNewCostText({ model: "gpt-6-luna", estimate: 4200, cached: true }, "ready")).toBe("saved summary · gpt-6-luna")
+  })
+
   test("the page fits a narrow terminal", () => {
     const lines = renderWhatsNewPage({ state: ready(), width: 50, height: 20 })
     expect(lines.length).toBeLessThanOrEqual(20)

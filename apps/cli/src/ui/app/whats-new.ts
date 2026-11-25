@@ -7,6 +7,9 @@ import type { AppContext } from "./context"
 
 /** Most changes one `/whatsnew` call carries; the page says how many more `/whatsnew all` lists. */
 const MAX_SENT_CHANGES = 80
+/** Most bullets the page lists; `/whatsnew all` lists the rest. */
+const MAX_SHOWN_CHANGES = 8
+const GROUP_ORDER = ["New", "Fixed", "Changed"]
 const USAGE = "usage: /whatsnew [all]"
 
 /**
@@ -25,21 +28,24 @@ export function createWhatsNew(ctx: AppContext) {
     if (!featureOn(state.settingsNow, "whats_new")) return say(`/whatsnew · ${gatedHint("whats_new", state.settingsNow) ?? "off"}`, "info")
     const all = word === "all"
     await preload("whatsnew")
-    const [{ bundledChangelog, freshItems, readSeen, sectionItems, writeSeen }, { brief, plainItem, WHATS_NEW_MAX_CHANGES }] = await Promise.all([import("../../changelog"), import("@mendcode/protocol/changelog")])
+    const [{ bundledChangelog, freshItems, itemKey, readSeen, sectionItems, writeSeen }, { brief, NOTE_GROUPS, plainItem, WHATS_NEW_MAX_CHANGES }] = await Promise.all([import("../../changelog"), import("@mendcode/protocol/changelog")])
     let entries: ReturnType<typeof bundledChangelog>
     try { entries = bundledChangelog(input.version) } catch (error) { return say(error instanceof Error ? error.message : String(error), "error") }
     const seen = input.dataDir ? readSeen(input.dataDir) : undefined
     const listed = entries.flatMap((entry) => {
       const fresh = freshItems(entry, seen, entries)
-      return sectionItems(entry).map((item, index) => ({ section: entry.title, item, fresh: fresh[index]! }))
+      return NOTE_GROUPS.flatMap((group) => entry.items[group].map((item) => ({ section: entry.title, group: group as string, item })))
+        .map((change, index) => ({ ...change, fresh: fresh[index]! }))
     })
     const unseen = listed.filter((change) => change.fresh)
     // Nothing new (or a first look): the newest section stands for "this version".
     const newest = entries[0]?.title
     const mine = unseen.length ? unseen : listed.filter((change) => change.section === newest)
-    const shown = all ? listed : mine
+    // The short page: the top bullets, New then Fixed then Changed (a stable sort keeps the changelog's order inside a group).
+    const rank = (group: string) => { const at = GROUP_ORDER.indexOf(group); return at < 0 ? GROUP_ORDER.length : at }
+    const shown = all ? listed : [...mine].sort((a, b) => rank(a.group) - rank(b.group)).slice(0, MAX_SHOWN_CHANGES)
     const lead = seen === undefined ? "first look" : unseen.length ? `${unseen.length} new since your last look` : "nothing new since your last look"
-    const changes: WhatsNewChange[] = shown.map((change) => ({ section: change.section, text: plainItem(change.item), fresh: change.fresh }))
+    const changes: WhatsNewChange[] = shown.map((change) => ({ section: change.section, group: change.group, text: plainItem(change.item), fresh: change.fresh }))
     // The call carries one line per change, newest first, within the protocol's limit.
     const sent: string[] = []
     let size = 0
@@ -49,7 +55,7 @@ export function createWhatsNew(ctx: AppContext) {
       sent.push(line)
       size += line.length + 1
     }
-    state.whatsNew = createWhatsNewState({ all, summary: `${input.version ? `MendCode ${input.version} · ` : ""}${lead}${!all && !unseen.length && newest ? ` · ${newest}` : ""}`, changes, unsent: all ? 0 : mine.length - sent.length })
+    state.whatsNew = createWhatsNewState({ all, summary: `${input.version ? `MendCode ${input.version} · ` : ""}${lead}${!all && !unseen.length && newest ? ` · ${newest}` : ""}`, changes, unsent: all ? 0 : mine.length - sent.length, more: all ? 0 : mine.length - shown.length })
     state.page = "whatsnew"
     if (input.dataDir) writeSeen(input.dataDir, entries)
     requestFrame()
@@ -60,7 +66,7 @@ export function createWhatsNew(ctx: AppContext) {
     const failWith = (message: string) => { if (live()) { page.status = "error"; page.error = message; requestFrame() } }
     if (input.remote) return failWith("/whatsnew reads this machine's memories and settings: run it on the machine that runs MendCode · /whatsnew all lists the changes")
     if (!sent.length) return failWith("no changes to ask about · /whatsnew all lists the changelog")
-    const request = { type: "whatsnew.ask", directory: input.directory ?? ".", version: input.version ?? "dev", changes: sent.join("\n"), ...(state.sessionId ? { sessionId: state.sessionId } : {}) }
+    const request = { type: "whatsnew.ask", directory: input.directory ?? ".", version: input.version ?? "dev", changes: sent.join("\n"), cacheKey: `${input.version ?? "dev"}:${itemKey(sectionItems(entries[0]!).join("\n"))}`, ...(state.sessionId ? { sessionId: state.sessionId } : {}) }
     const planned = await input.send({ ...request, dryRun: true } as never)
     if (!planned.ok) return failWith(planned.error.message)
     page.cost = planned.result as WhatsNewCost
@@ -69,7 +75,7 @@ export function createWhatsNew(ctx: AppContext) {
     if (!live()) return
     if (!reply.ok) return failWith(reply.error.message)
     const result = reply.result as WhatsNewCost & { suggestions?: WhatsNewPick[] }
-    page.cost = { model: result.model, estimate: result.estimate, ...(result.usage ? { usage: result.usage } : {}) }
+    page.cost = { model: result.model, estimate: result.estimate, ...(result.cached ? { cached: true } : {}), ...(result.usage ? { usage: result.usage } : {}) }
     page.picks = (result.suggestions ?? []).map((pick) => ({ ...pick, text: plainItem(pick.text) }))
     page.status = "ready"
     requestFrame()

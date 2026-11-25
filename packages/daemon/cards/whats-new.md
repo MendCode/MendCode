@@ -14,6 +14,8 @@ The user types: /whatsnew (the changes since their last look and one model call 
 
 What /whatsnew sends: this project's saved memories, the settings in effect with secrets hidden and recent session titles, only to the provider of the model the call runs on (the aside role, else the session's model). Local terminals only. Counted in /usage as the whatsNew role.
 
+The model's answer is saved in whats-new-cache.json of the data directory under the version and the newest changelog section's hash: running /whatsnew again calls no model until either changes. Short page: at most 8 changes (New, Fixed, Changed) and a "more:" line; /whatsnew all lists the rest.
+
 Not possible: a changelog of a version newer than the running build (it is packed into the build), applying a pick without its preview and confirmation, or changing settings from the pasted prompt alone.
 
 Starting the day or coming back after time away: /today (the user types it) opens one chat per day with a brief of what was done since yesterday per project, what waits for them and pending memories as groups. In that chat they ask to accept or decline memories, to decide a project's or a kind's memories from now on, and to report or check something in every Today; only that chat has the today tool that does it, and those requests are kept in today.json of the data directory. Local terminals only; the brief runs on the main model.

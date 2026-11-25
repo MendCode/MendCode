@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `/whatsnew` asks the model once per version and changelog content and reuses the saved answer after that, and its page is shorter: at most 8 changes grouped New, Fixed and Changed, with `/whatsnew all` for the rest.
 - `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed in, and puts the cursor on an expired sign-in.
 
 ### Fixed

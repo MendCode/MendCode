@@ -1,4 +1,5 @@
-import { readFileSync } from "node:fs"
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import path from "node:path"
 import systemFile from "../prompts/whats-new.md" with { type: "file" }
 import type { MemoryEntry, Settings } from "@mendcode/protocol"
 import { whatsNewPrompt } from "@mendcode/protocol/changelog"
@@ -101,4 +102,25 @@ export function checkSuggestions(picks: WhatsNewSuggestion[], input: { settings:
     const diff = settingsDiff(input.settings as Record<string, unknown>, after as Record<string, unknown>, Object.keys(patch))
     return diff.length ? { ...rest, patch, diff } : { ...rest, dropped: "already set" }
   })
+}
+
+/** The one saved answer: the model's text for a version and changelog content, reused until either changes. */
+export type WhatsNewCache = { key: string; model: string; text: string }
+const cacheFile = (dir: string) => path.join(dir, "whats-new-cache.json")
+
+export function readWhatsNewCache(dir: string | undefined, key: string): WhatsNewCache | undefined {
+  if (!dir) return undefined
+  try {
+    const value = JSON.parse(readFileSync(cacheFile(dir), "utf8")) as Partial<WhatsNewCache>
+    return value.key === key && typeof value.text === "string" && typeof value.model === "string" ? { key, model: value.model, text: value.text } : undefined
+  } catch { return undefined }
+}
+
+/** A failed write only means the next call asks again. */
+export function writeWhatsNewCache(dir: string | undefined, entry: WhatsNewCache) {
+  if (!dir) return
+  try {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(cacheFile(dir), `${JSON.stringify(entry)}\n`)
+  } catch {}
 }
