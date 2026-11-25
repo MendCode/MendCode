@@ -400,7 +400,7 @@ export function createChatRows(ctx: AppContext, actions: {
     while (body.length < bodyHeight) home || cleared || topAnchored ? body.push([]) : body.unshift([])
     /** Blank rows above the transcript's first shown row. */
     const padTop = topAnchored ? blankAbove : body.length - visible.length
-    const shownFrom = topAnchored ? 0 : state.transcript.totalLines(tw) - localState.offset - visible.length
+    const shownFrom = topAnchored ? 0 : total - localState.offset - visible.length
     let jump: { row: number; from: number; to: number } | undefined
     if (pill) {
       const from = pillFrom
@@ -424,10 +424,10 @@ export function createChatRows(ctx: AppContext, actions: {
     if (!inlineBody && !home && !cleared) comments.decorate({ body, visible, padTop, top: topbar.length, width: tw })
     // At the top of the laid-out window with older blocks waiting: scrolling up lays out the next slice of them.
     const topBefore = body[0]
-    if (!inlineBody && !home && state.transcript.olderBlocks > 0 && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) body[0] = withRightLabel(body[0] ?? [], tw, `↑ ${state.transcript.olderBlocks} earlier · scroll up`)
+    if (!inlineBody && !home && state.transcript.olderBlocks > 0 && localState.offset >= farthest) body[0] = withRightLabel(body[0] ?? [], tw, `↑ ${state.transcript.olderBlocks} earlier · scroll up`)
     // A sub-agent's thread whose start is loaded has nothing earlier: the session's paging is not about it, and its label would
     // cover the right end of the thread's first row (the message the sub-agent was sent).
-    else if (!inlineBody && !home && state.paging && !(state.agentView !== undefined && state.agentRoot?.agentThreadLoaded(state.agentView)) && !localState.follow && state.transcript.totalLines(tw) > bodyHeight && localState.offset >= Math.max(0, state.transcript.totalLines(tw) - bodyHeight)) {
+    else if (!inlineBody && !home && state.paging && !(state.agentView !== undefined && state.agentRoot?.agentThreadLoaded(state.agentView)) && !localState.follow && total > bodyHeight && localState.offset >= farthest) {
       const label = state.paging.loading ? "loading earlier…" : !state.paging.ready ? "history unavailable" : state.paging.more ? "↑ earlier · scroll up" : state.paging.loadedEarlier ? "start of session" : ""
       if (label) body[0] = withRightLabel(body[0] ?? [], tw, label)
     }
@@ -437,12 +437,12 @@ export function createChatRows(ctx: AppContext, actions: {
     // the view is off the bottom or was scrolled a moment ago; the column is reserved either way.
     let scrollbar: SelectionMap["scrollbar"]
     if (gutter && !inlineBody && !home) {
-      const total = cleared ? 0 : state.transcript.totalLines(tw)
-      const thumb = scrollThumb({ rows: body.length, total, viewport: bodyHeight, offset: localState.offset })
+      const thumbTotal = cleared ? 0 : total
+      const thumb = scrollThumb({ rows: body.length, total: thumbTotal, viewport: bodyHeight, offset: localState.offset })
       const lingering = state.scrollbarAt !== undefined && now() - state.scrollbarAt < SCROLLBAR_LINGER_MS
       const shown = !!thumb && scrollbarShown({ mode: state.tuiProfile.scrollbar, offset: localState.offset, lingering })
       body.splice(0, body.length, ...withScrollbar({ rows: body, width, thumb, glyphs: scrollbarGlyphs(state.tuiProfile.scrollbarGlyphs, g), shown }))
-      if (shown && thumb) scrollbar = { col: width - 1, top: topbar.length, rows: body.length, thumb, total, viewport: bodyHeight }
+      if (shown && thumb) scrollbar = { col: width - 1, top: topbar.length, rows: body.length, thumb, total: thumbTotal, viewport: bodyHeight }
     }
     if (boxed) body.push(frameBottomEdge({ width, color: boxColor, ascii: !rich || asciiGlyphs() }))
     // Minimal keeps the last row empty: the prompt's closing rule stays full width (the screen never draws the bottom-right cell).
@@ -468,7 +468,7 @@ export function createChatRows(ctx: AppContext, actions: {
       let rows: BodyLine[] | undefined
       return {
         base: shownFrom - padTop,
-        count: state.transcript.totalLines(tw),
+        count: total,
         at: (row: number) => (rows ??= state.transcript.blocks().slice(state.transcript.olderBlocks).flatMap((block) => state.transcript.blockLines(block.itemId, tw)).map(bodyLine))[row],
       }
     })() : undefined
