@@ -63,6 +63,20 @@ test("token subcommand: explicit dir, create/list/revoke, no token or hash in li
   expect(JSON.parse(readFileSync(path.join(dir, "remote-tokens.json"), "utf8"))).toEqual([])
 })
 
+test("token subcommand: --bot makes a folder-scoped token, lists it with its folder and refuses mixes", async () => {
+  const dir = tempDir()
+  expect(() => parseTokenCommand(["remote", "token", "create", "--dir", dir, "--bot", "relative"])).toThrow("absolute")
+  expect(() => parseTokenCommand(["remote", "token", "create", "--dir", dir, "--bot", "/bots/a", "--read-only"])).toThrow("only one of")
+  const command = parseTokenCommand(["remote", "token", "create", "--dir", dir, "--bot", "/bots/a", "--name", "vorlen"])!
+  expect(command).toEqual({ action: "create", dir, readOnly: false, botRoot: "/bots/a", name: "vorlen" })
+  let output = ""
+  const out = { write: (text: string) => { output += text } }
+  await runTokenCommand(command, out)
+  output = ""
+  await runTokenCommand(parseTokenCommand(["remote", "token", "list", "--dir", dir])!, out)
+  expect(output).toContain("vorlen\tbot /bots/a\t")
+})
+
 function harness(readOnly = false, width = 100) {
   const sent: Array<Record<string, unknown>> = []
   const frames: Line[][] = []
