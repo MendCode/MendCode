@@ -124,6 +124,31 @@ export const SHARE_HELP = text([
   "  gist SESSION_ID         --yes | --remove",
 ])
 
+export const SYNC_HELP = text([
+  `usage: ${P} sync <command> [--dir DATA] [--json]`,
+  "",
+  "Sessions in step with an always-on host, the hub (docs/sync.md).",
+  "",
+  "  enable REMOTE           sync with a saved remote: --sync-token-file F",
+  "                          --path-map LOCAL=HUB (repeatable) --no-memories",
+  "                          --no-settings --follow",
+  "  disable                 stop syncing; copies already here stay",
+  "  status | now            show the state, or run one round now",
+  "  take ID | release ID    continue a hub chat here, or give it back",
+  "  handoff ID              move a chat made here to the hub",
+  "  hub-off                 stop serving as a hub (run on the hub)",
+  "  parity [REMOTE]         how the hub's portable configuration differs from",
+  "                          this machine's (also: remote parity)",
+  "    --apply               bring the hub level: profiles, skills, agents,",
+  "                          themes, prompt files, MCP servers (pending there)",
+  "    --code                also send code that runs on its own",
+  "                          (extensions, profiles with tools or hooks)",
+  "    --allow-flagged PATH  send a reviewed folder the credential scan held",
+  "                          back (repeatable)",
+  "  follow on|off           keep the hub level on its own (full token of the",
+  "                          saved remote; never code)",
+])
+
 export const MFLOW_HELP = text([
   `usage: ${P} [control-plane] mflow <command> [--json]`,
   "",

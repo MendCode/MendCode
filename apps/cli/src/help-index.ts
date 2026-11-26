@@ -66,7 +66,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     e("gateway", "gateway <command>", "several people on one server: HTTPS, passkeys"),
     e("console", "console <command>", "MendCode console: setup, login, orgs"),
     e("share", "share <command>", "share a session: link, local file, gist"),
-    e("sync", "sync <command>", "sessions in step with a remote"),
+    e("sync", "sync <command>", "sessions and the hub's setup in step"),
     e("github", "github install|run", "GitHub workflow and action"),
     e("pr", "pr NUMBER | pr setup", "work on a pull request"),
     e("acp", "acp", "Agent Client Protocol on stdio (editors)"),

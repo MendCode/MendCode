@@ -17,6 +17,8 @@ const MAX_CARRY_BYTES = 16 * 1024 * 1024
 /** Sessions untouched on the hub for longer are not copied here (they are still listed by `mendcode sync status`). */
 const MIRROR_DAYS = 30
 const MAX_BACKOFF_MS = 60_000
+/** Longest a following device waits before comparing its configuration with the hub again. */
+const FOLLOW_SUMMARY_MAX = 300
 /** Blobs whose download a round left unfinished keep their chunks for the next one (at most this many, 8 MiB each). */
 const MAX_PARTIAL_BLOBS = 2
 
@@ -45,6 +47,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   let budget = 0
   let rounds = 0
   const status = { connected: false, lastOkAt: 0, lastError: "" }
+  const following = { at: 0, ok: true, summary: "", running: undefined as Promise<void> | undefined }
   /** Chats this machine started or prompted on the hub: their running turn is copied as it happens (not only once settled) until it ends. */
   const live = new Map<string, { directory: string; since: number }>()
   const LIVE_TICK_MS = 300
@@ -407,6 +410,19 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     status.connected = true
     status.lastOkAt = ports.now()
     status.lastError = ""
+    void follow(false)
+  }
+  /**
+   * With `follow` on, the hub is compared with this machine's portable configuration every `followMs` (and by `sync now`) and brought
+   * level with what the owner's full token for the saved remote may do; never with the sync token. Off, this costs one boolean read per round.
+   */
+  function follow(force: boolean): Promise<void> {
+    if (!config.follow || stopped) return Promise.resolve()
+    if (following.running) return following.running
+    if (!force && ports.now() - following.at < ports.followMs) return Promise.resolve()
+    following.at = ports.now()
+    following.running = ports.parity({ remote: hub }).then((outcome) => { following.ok = true; following.summary = outcome.summary.slice(0, FOLLOW_SUMMARY_MAX) }, (error) => { following.ok = false; following.summary = (error instanceof Error ? error.message : String(error)).slice(0, FOLLOW_SUMMARY_MAX) }).finally(() => { following.running = undefined })
+    return following.running
   }
   function schedule() {
     if (stopped) return
@@ -514,18 +530,21 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       await now()
     },
     control,
+    follow,
     start() { delay = Math.min(ports.tickMs, 1000); schedule() },
     liveCount: () => live.size,
     async stop() {
       stopped = true
       clearTimeout(timer)
       await round?.catch(() => {})
+      await following.running
       try { client?.close() } catch {}
       client = undefined
     },
     status() {
       return {
         remote: hub, connected: status.connected, lastOkAt: status.lastOkAt, ...(status.lastError ? { lastError: status.lastError } : {}),
+        ...(config.follow ? { follow: { at: following.at, ok: following.ok, summary: following.summary } } : {}),
         sessions: [...rows.values()].map((row) => ({ sessionId: row.sessionId, title: state.sessionHead(row.sessionId)?.title ?? "", owner: row.state !== "ok" ? "this machine only" : row.role === "owned" ? "this machine" : hub, role: row.role, state: row.state, ...(row.note ? { note: row.note } : {}), ...(row.role === "owned" ? { leaseUntil: row.leaseUntil } : {}) })),
       }
     },
