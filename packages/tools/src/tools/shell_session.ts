@@ -38,7 +38,7 @@ export default defineTool({
     "Actions: start (command, optional workdir, cols, rows, waitMs; returns an id and the first output), write (id, input; include \\n to press enter; waits waitMs for the reply), " +
     "read (id, waitMs, maxChars: output since the last read), resize (id, cols, rows), signal (id, INT is ctrl-c, EOF is ctrl-d, or TERM/HUP/QUIT/KILL), kill (id), list. " +
     "Output has terminal escape codes removed. Starting a command asks for the same approval as shell; the other actions only touch sessions you started. " +
-    "A bare shell (bash, sh, zsh...) is refused: give each command to shell instead. Sessions stop after 15 minutes without a call, when the chat session ends, and at 2 hours. For plain commands that just run and finish, use shell.",
+    "A bare shell (bash, sh, zsh...) is refused: give each command to shell instead. Sessions run until they end, shell_session kill stops them, or the chat session ends; there is no time cap unless the user sets one. For plain commands that just run and finish, use shell.",
   permission: "execute",
   permissionFor: ({ action }) => (action === "start" ? "execute" : "read"),
   args: z.object({

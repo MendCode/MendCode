@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, SPARE_AGENTS, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, plainTextContent, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, transientFailure, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, plainTextContent, type ClaudeModelChoice, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeBackgroundEnv, claudeProcessEnv, claudeContextArgs, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, retainAgentTurns, resultOutcome, signInHint, transientFailure, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1643,7 +1643,26 @@ describe("claude protocol helpers", () => {
     h.engine.stop()
   })
 
-  test("the cache TTL variables are opt-in and only for 1h; the child's environment is the daemon's own with them on top", () => {
+  test("Claude Code's background Bash cap is lifted by default, follows processLimits.lifetimeMinutes, and yields to a value the user set", async () => {
+    expect(claudeBackgroundEnv({})).toEqual({ BASH_MAX_TIMEOUT_MS: "2147483647" })
+    expect(claudeBackgroundEnv({ lifetimeMinutes: 0 })).toEqual({ BASH_MAX_TIMEOUT_MS: "2147483647" })
+    expect(claudeBackgroundEnv({ lifetimeMinutes: 90 })).toEqual({ BASH_MAX_TIMEOUT_MS: "5400000" })
+    expect(claudeBackgroundEnv({ lifetimeMinutes: 525_600 })).toEqual({ BASH_MAX_TIMEOUT_MS: "2147483647" })
+    expect(claudeBackgroundEnv({ inherited: "600000" })).toBeUndefined()
+    expect(claudeBackgroundEnv({})).not.toHaveProperty("BASH_DEFAULT_TIMEOUT_MS")
+    const answer = (api: FakeApi) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-bg" })
+      streamText(api, 0, "ok")
+      api.push(result({ session_id: "cc-bg" }))
+    }
+    const limits: { lifetimeMinutes?: number } = {}
+    const { engine, spawned } = engineWith([fakeClaude({ onUser: answer }), fakeClaude({ onUser: answer })], { env: () => claudeBackgroundEnv(limits) })
+    await engine.runTurn(turnInput().input)
+    expect((spawned[0] as { env?: Record<string, string> }).env).toEqual({ BASH_MAX_TIMEOUT_MS: "2147483647" })
+    engine.stop()
+  })
+
+  test("the cache TTL variables are opt-in and only for 1h;the child's environment is the daemon's own with them on top", () => {
     expect(claudeCacheEnv({})).toBeUndefined()
     expect(claudeCacheEnv({ promptCacheTtl: "1h" })).toBeUndefined()
     expect(claudeCacheEnv({ claudeCacheTtl: false, promptCacheTtl: "1h" })).toBeUndefined()

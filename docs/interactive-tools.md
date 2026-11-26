@@ -72,6 +72,8 @@ The sweep timer exists only while a session is running. The daemon does not evic
 
 `shell` with `background: true` follows the same rule: no cap by default, and `processLimits.lifetimeMinutes` stops one that runs longer.
 
+On the Claude engine, Claude Code's own Bash stops a background command at its `timeout`, capped by `BASH_MAX_TIMEOUT_MS`. MendCode starts `claude` with that variable at its largest value (about 24.8 days), or at `processLimits.lifetimeMinutes` when set, unless `BASH_MAX_TIMEOUT_MS` is already in the daemon's environment. `BASH_DEFAULT_TIMEOUT_MS` is untouched.
+
 Compaction keeps background commands: the registry lives in the daemon, and the summary lists running ones with their ids. `shell_output` and `shell_kill` stay listed while the chat owns any. A daemon restart still ends them.
 
 ### Availability and transcript
