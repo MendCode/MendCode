@@ -331,7 +331,7 @@ type Connection = {
   directory?: string
   trace?: boolean
   remoteAddress?: string
-  peer?: { name: string; hash: string; readOnly: boolean; scope?: "sync" | "bot"; root?: string }
+  peer?: { name: string; hash: string; readOnly: boolean; scope?: "sync" | "sync-run" | "bot"; root?: string }
   /** The client was started by a session's own shell: it reads, and works only inside that session's authority (agent-origin.ts). */
   agent?: AgentOrigin | undefined
   /** What `hello` said of the client: its name and whether it runs inside another agent's shell (`caller:agent`). Only ever lowers the origin from `cli` to `agent`; see `connectionOrigin`. */
@@ -3869,9 +3869,11 @@ export async function startDaemon(options: DaemonOptions) {
   let sync: Promise<import("./sync").Sync> | undefined
   /** Set once sync has loaded: a prompt to a session another machine owns is refused before it is queued, with that machine's name. */
   let syncGuard: import("./sync").Sync["guard"] | undefined
+  let syncRoute: import("./sync").Sync["route"] | undefined
   const syncService = () => sync ??= import("./sync").then(({ createSync }) => {
     const service = createSync(syncPorts())
     syncGuard = service.guard
+    syncRoute = service.route
     return service
   })
   const syncPorts = (): import("./sync").SyncPorts => ({
@@ -3925,11 +3927,26 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.rejected) return
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
     // A device daemon's sync token syncs sessions and nothing else (docs/sync.md).
-    if (connection.peer?.scope === "sync" && command.type !== "hello" && command.type !== "sync.peer") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: a sync token only syncs sessions" })
+    // A run token also starts chats and runs turns, only in the folders this daemon already works in and only for the hub's own sessions.
+    if ((connection.peer?.scope === "sync" || connection.peer?.scope === "sync-run") && command.type !== "hello" && command.type !== "sync.peer") {
+      const { SYNC_TOKEN_REFUSAL, syncRunRefusal } = await import("./sync/run-peer")
+      const refusal = connection.peer.scope === "sync" ? SYNC_TOKEN_REFUSAL : syncRunRefusal({ command, sessionDirectory: (id) => store.sessionDirectory(id as SessionId), isRoot: (id) => { const info = store.sessionInfo(id as SessionId); return info !== undefined && !info.parentId }, knownFolder: (directory) => existsSync(directory) && knownProjectDirectory(directory) })
+      if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+    }
     // A chat bot's token runs turns inside its own folder and nothing else (docs/remote.md, "Bot bridge").
     if (connection.peer?.scope === "bot") {
       const refusal = botPeerRefusal({ command, root: connection.peer.root ?? "/nonexistent", sessionDirectory: (id) => store.sessionDirectory(id as SessionId), canonical: canonicalDir })
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+    }
+    // A chat the hub owns runs on the hub: this daemon forwards the prompt, the cancel or the answer, and a new chat in the hub's folder, and the turn comes back through the mirror.
+    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create")) {
+      const forward = syncRoute(command)
+      if (forward) {
+        const done = await forward(command)
+        if (done.ok) return reply(connection, command.id, { ok: true, ...(done.result ? { result: done.result } : {}) })
+        const refused = command.type === "user.submit" && syncGuard?.(command.sessionId, "queue.added")
+        return reply(connection, command.id, { ok: false, code: "forbidden", message: refused ? `${refused} (${done.message.replace(/^\[SYNC\]: /, "")})` : done.message })
+      }
     }
     if (syncGuard && command.type === "user.submit") {
       const refusal = syncGuard(command.sessionId, "queue.added")
@@ -4274,7 +4291,7 @@ export async function startDaemon(options: DaemonOptions) {
         const actor = actorFor(id)
         publishActivity(id, "idle", true)
         // New sessions start in the user's default permission mode, recorded as a normal event.
-        const usual = selectedAgent === "plan" ? "plan" : defaultPermissionFor(store.settings.get(), command.directory)
+        const usual = connection.peer?.scope === "sync-run" ? (store.settings.get().syncRunPermission ?? "edits") : selectedAgent === "plan" ? "plan" : defaultPermissionFor(store.settings.get(), command.directory)
         // A session started from a session's shell never begins with more authority than the session that started it.
         const mode = connection.agent ? agentGate.cap(connection.agent, usual ?? "ask") : usual
         if (connection.agent) agentGate.started(connection.agent, id)

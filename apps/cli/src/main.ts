@@ -359,6 +359,18 @@ const automationApi = async () => automationModule ?? await import("./automation
 if (automation.ok === true && automation.command.kind === "storage" && automation.command.offline) {
   if (remoteAttach) { process.stderr.write("error: offline storage compaction is local-only\n"); process.exit(64) }
   if (!automation.command.dryRun) refuseFromSession(arg("dir"), "rewrites the stored sessions")
+  if (automation.command.moveDir) {
+    try {
+      const { moveStoredDirectories } = await import("@mendcode/daemon/move-session-dirs")
+      const result = moveStoredDirectories({ dir: arg("dir")!, ...automation.command.moveDir, dryRun: automation.command.dryRun })
+      const moved = Object.entries(result.moved).map(([table, count]) => `${table} ${count}`).join(", ") || "nothing"
+      process.stdout.write(wantsJson ? `${JSON.stringify(result)}\n` : `${result.dryRun ? "preview" : "moved"}: ${result.from} → ${result.to} · ${moved}${result.backup ? ` · backup ${result.backup}` : ""}\n`)
+      process.exit(0)
+    } catch (error) {
+      process.stderr.write(`error: ${error instanceof Error ? error.message : "moving folders failed"}\n`)
+      process.exit(1)
+    }
+  }
   try {
     const { compactOfflineStorage } = await import("@mendcode/daemon/storage-compact")
     const result = compactOfflineStorage({ dir: arg("dir")!, dryRun: automation.command.dryRun })
