@@ -306,17 +306,18 @@ describe("a project's row only folds; `n` or its `+` starts a chat in it", () =>
     await h.type("N")
     for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
     await h.type(`${h.dataDir}/`)
-    expect(sidebarText(h)).toContain("tab into")
+    expect(sidebarText(h)).toContain("tab complete")
     expect(side(h).find((row) => /^ › /.test(row))).toBeDefined()
     await h.type("\r")
     expect(h.sentOf("session.create").at(-1)).toMatchObject({ directory: h.dataDir, reuseEmpty: true })
-    // A path that is no directory starts nothing.
+    // A path that is no directory starts nothing: Enter on its `create folder` row only asks once more.
     await h.type(LEFT)
     await h.type("N")
     for (let turn = 0; turn < 40 && !sidebarText(h).includes("New chat in…"); turn++) { await Bun.sleep(5); h.app.render() }
     await h.type("/no/such/place/at/all")
-    expect(sidebarText(h)).toContain("No such directory")
+    expect(sidebarText(h)).toContain("create folder all")
     await h.type("\r")
+    expect(sidebarText(h)).toContain("again makes the folder")
     expect(h.sentOf("session.create")).toHaveLength(2)
   })
 
