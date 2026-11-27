@@ -32,7 +32,7 @@ import { LoopBudget, LoopTrigger, LoopCostBudget, LoopRubric, LoopApprovalPolicy
 import { ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule } from "./providers"
 import { BotActivity, BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
 import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelivery, ResourceMode, TurnOptions } from "./states"
-import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
+import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowName, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
 import { LedgerQuery } from "./automation-ledger"
 import { CompactionOverrideInput } from "./compaction"
@@ -1079,6 +1079,18 @@ export const AttachmentPaste = lazySchema(() => z.strictObject({
   allowDirectory: z.boolean().optional(),
 }))
 
+/**
+ * Makes a file attached as `{ kind: "file" }` readable where the chat runs, before its prompt is sent. A local chat: the file stays
+ * where it is. A chat a sync hub owns: the file is copied to the hub's `uploads/<session>/` folder (at most 100 MiB). Ack:
+ * `{ path, size, copied }`, the path the model is told. Local clients only.
+ */
+export const AttachmentUpload = lazySchema(() => z.strictObject({
+  ...base,
+  type: z.literal("attachment.upload"),
+  sessionId: SessionId,
+  path: z.string().min(1).max(4096),
+}))
+
 /** Ack: `{ commands: Array<{ name, description, argumentHint, source }> }` from .mendcode/commands and the user folder. */
 export const CustomCommandsList = lazySchema(() => z.strictObject({
   ...base,
@@ -2050,7 +2062,7 @@ export const WorkflowScriptCommand = lazySchema(() => z.strictObject({
   workflowId: WorkflowId,
   action: z.enum(["budget", "update", "save"]),
   /** `save`: the run's script (or plan) becomes the saved workflow `workflows/<name>.js` of the user layer, runnable as `/<name>`. */
-  name: WorkflowSlug.optional(),
+  name: WorkflowName.optional(),
   budget: WorkflowScriptBudget.optional(),
   script: z.string().min(1).max(WORKFLOW_SCRIPT_MAX_BYTES).optional(),
   args: z.record(z.string(), z.unknown()).optional(),
@@ -2191,6 +2203,7 @@ export const COMMAND_SCHEMAS = {
   "attachment.clipboard": AttachmentClipboard,
   "attachment.read": AttachmentRead,
   "attachment.paste": AttachmentPaste,
+  "attachment.upload": AttachmentUpload,
   "commands.list": CustomCommandsList,
   "commands.expand": CustomCommandExpand,
   "scratchpad.get": ScratchpadGet,

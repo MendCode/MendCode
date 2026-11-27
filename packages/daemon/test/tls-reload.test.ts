@@ -7,6 +7,12 @@ import path from "node:path"
 import type { FSWatcher } from "node:fs"
 import { watchTlsFiles } from "../src/tls-reload"
 
+/** Waits for the renewal to be seen, as long as it takes (a loaded runner is slow), instead of for a fixed time. */
+async function seen(changed: () => number) {
+  const deadline = Date.now() + 15_000
+  while (changed() === 0 && Date.now() < deadline) await Bun.sleep(10)
+}
+
 function certFolder() {
   const dir = mkdtempSync(path.join(tmpdir(), "mendtest-tls-"))
   writeFileSync(path.join(dir, "cert.pem"), "one")
@@ -27,7 +33,7 @@ test("a folder watcher error (Linux ENXIO from a unix socket beside the certific
     expect(() => watcher.emit("error", enxio)).not.toThrow()
     writeFileSync(path.join(dir, "cert.pem.new"), "renewed")
     renameSync(path.join(dir, "cert.pem.new"), path.join(dir, "cert.pem"))
-    await Bun.sleep(300)
+    await seen(() => changed)
     expect(changed).toBeGreaterThan(0)
   } finally { handle.close(); rmSync(dir, { recursive: true, force: true }) }
 })
@@ -39,10 +45,9 @@ test("a real unix socket in the certificate folder does not stop a renewal from 
   let changed = 0
   const handle = watchTlsFiles({ files: [path.join(dir, "cert.pem"), path.join(dir, "key.pem")], debounceMs: 1, pollMs: 20, changed: () => { changed++ } })
   try {
-    await Bun.sleep(100)
     writeFileSync(path.join(dir, "cert.pem.new"), "renewed")
     renameSync(path.join(dir, "cert.pem.new"), path.join(dir, "cert.pem"))
-    await Bun.sleep(300)
+    await seen(() => changed)
     expect(changed).toBeGreaterThan(0)
   } finally { handle.close(); server.close(); rmSync(dir, { recursive: true, force: true }) }
 })

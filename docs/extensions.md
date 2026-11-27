@@ -102,7 +102,7 @@ mendcode profile enable|disable <name>          # applies at once: no /reload an
 mendcode plugin-auth                            # sign-in methods an extension registered
 ```
 
-`profile list --project` shows only this directory's profiles (`.mendcode/packages`). Extension code from a project is not loaded until the project is trusted. The full command list is in [automation](automation.md#commands).
+`profile list` includes the user profiles and this directory's project profiles (`.mendcode/packages`); `--project` does not filter the listing. Extension code from a project is not loaded until the project is trusted. The full command list is in [automation](automation.md#commands).
 
 ## Where they are found
 

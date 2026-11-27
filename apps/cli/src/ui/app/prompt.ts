@@ -216,6 +216,7 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean; /** A
     const result = reply.result as AttachmentPasteResult
     if (result.kind === "image" || result.kind === "document") addAttachment(result.kind === "image" ? { kind: "image", ref: result.attachment, name: result.name, ...(result.width && result.height ? { width: result.width, height: result.height } : {}) } : { kind: "document", ref: result.attachment, name: result.name })
     else if (result.kind === "mention") editor.insert(`@${/\s/.test(result.path) ? JSON.stringify(result.path) : result.path} `)
+    else if (result.kind === "file") addAttachment({ kind: "file", name: result.name, path: result.path, size: result.size, type: result.type })
     else addAttachment({ kind: "text", name: result.name, content: result.content, ...(result.directory ? { directory: true } : {}) })
     state.notice = ""
     requestFrame()

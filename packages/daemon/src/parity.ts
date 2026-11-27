@@ -185,15 +185,17 @@ export function compareManifests(input: { here: ParityManifest; hub: ParityManif
 type Remote = { send(command: { type: "config.parity"; input: ConfigParityInput }): Promise<{ ok: true; result?: Record<string, unknown> } | { ok: false; error: { code: string; message: string } }>; close(): void }
 
 export function createParity(ports: ParityPorts) {
-  let running: Promise<ParityOutcome> | undefined
+  let queue: Promise<void> = Promise.resolve()
+  const pending = new Map<string, Promise<ParityOutcome>>()
   const importsDir = path.join(ports.dir, CONFIG_IMPORTS_DIR)
   const staged = (id: string, part: boolean) => path.join(importsDir, `parity-${id}.${part ? "part" : "bundle"}`)
 
   async function exportHere(allowFlagged: readonly string[]) {
     return exportBundle({ dataDir: ports.dir, settings: await ports.settings(), home: os.homedir(), platform: process.platform, arch: process.arch, now: ports.now(), mendcodeVersion: ports.version, buildId: ports.buildId, allowFlagged }).bundle
   }
-  async function manifest(tools: boolean): Promise<ParityManifest> {
-    const built = manifestOf(await exportHere(HASH_ONLY))
+  /** `allowFlagged`: what the owner named, so a flagged standalone resource they chose is in the comparison and can be selected. */
+  async function manifest(tools: boolean, allowFlagged: readonly string[] = []): Promise<ParityManifest> {
+    const built = manifestOf(await exportHere([...HASH_ONLY, ...allowFlagged]))
     return tools ? { ...built, tools: { graft: await toolVersion("graft") } } : built
   }
 
@@ -242,10 +244,18 @@ export function createParity(ports: ParityPorts) {
   /** The bundle that carries only what differs: the chosen units, profiles and MCP servers, never settings, and code only when allowed. */
   function subset(bundle: Bundle, input: { keys: ReadonlySet<string>; allowCode: boolean }): Bundle {
     const names = new Set(bundle.manifest.packages.filter((pkg) => input.keys.has(`packages/${pkg.name}`)).map((pkg) => pkg.name))
-    const mcp = [...input.keys].some((key) => key.startsWith("mcp.json#"))
-    const entries = bundle.manifest.entries.filter((entry) => entry.action === "package" ? names.has(entry.unit.split("/")[1]!) : entry.action === "mcp-pending" ? mcp : input.keys.has(entry.unit))
-      .map((entry) => input.allowCode && entry.action === "quarantine" ? { ...entry, action: "write" as const } : entry)
-    const files = Object.fromEntries(entries.map((entry) => [entry.path, bundle.files[entry.path]!]))
+    const servers = new Set([...input.keys].filter((key) => key.startsWith("mcp.json#")).map((key) => key.slice("mcp.json#".length)))
+    const files: Record<string, string> = {}
+    const entries = bundle.manifest.entries.filter((entry) => entry.action === "package" ? names.has(entry.unit.split("/")[1]!) : entry.action === "mcp-pending" ? servers.size > 0 : input.keys.has(entry.unit))
+      .map((entry) => {
+        if (entry.action !== "mcp-pending") return input.allowCode && entry.action === "quarantine" ? { ...entry, action: "write" as const } : entry
+        // Only the chosen servers travel: the hub compares whole configurations, so a server that was not chosen would be replaced and disabled pending approval.
+        const parsed = JSON.parse(Buffer.from(bundle.files[entry.path]!, "base64").toString("utf8")) as { servers?: Record<string, unknown> }
+        const text = JSON.stringify({ ...parsed, servers: Object.fromEntries(Object.entries(parsed.servers ?? {}).filter(([name]) => servers.has(name))) }, null, 2)
+        files[entry.path] = Buffer.from(text, "utf8").toString("base64")
+        return { ...entry, sha256: sha256(text), bytes: Buffer.byteLength(text) }
+      })
+    for (const entry of entries) files[entry.path] ??= bundle.files[entry.path]!
     const manifest = {
       ...bundle.manifest, entries,
       packages: bundle.manifest.packages.filter((pkg) => names.has(pkg.name)).map((pkg) => input.allowCode ? { ...pkg, autoRuns: [] } : pkg),
@@ -282,9 +292,15 @@ export function createParity(ports: ParityPorts) {
     const allowCode = input.allowCode === true
     const remote = await connect(remoteName)
     try {
-      const here = await manifest(true)
+      const here = await manifest(true, input.allowFlagged ?? [])
       const hub = await call(remote, { op: "manifest", tools: true }).then((result) => result.manifest as ParityManifest)
       const before = compareManifests({ here, hub, allowCode })
+      // What the credential scan withholds here has no unit to compare: it is listed, with the way to send it, instead of passing for hub-only or nothing to send.
+      for (const entry of here.blocked) {
+        if (before.some((row) => row.key !== undefined && (row.key === entry.item || row.key.startsWith(`${entry.item}/`) || entry.item.startsWith(`${row.key}/`)))) continue
+        if (entry.item === "mcp.json" || entry.item.startsWith("packages/")) continue
+        before.push({ kind: kindOf(entry.item), item: entry.item, state: "blocked", note: `withheld here: ${entry.reason.slice(0, 200)}; name it with --allow-flagged to send it` })
+      }
       // A unit the hub holds as a link (`skills` pointing into a checkout) is never written through.
       const hubBlocked = new Map(hub.blocked.map((entry) => [entry.item, entry.reason]))
       for (const row of before) {
@@ -321,6 +337,8 @@ export function createParity(ports: ParityPorts) {
         if (row.kind === "mcp" && row.state === "same") row.note = "pending approval there (/mcp); sign-in stays per machine"
         const was = before.find((entry) => entry.kind === row.kind && entry.item === row.item)
         if (was?.state === "blocked" && row.state !== "same") { row.state = "blocked"; if (was.note) row.note = was.note }
+        // The hub's own comparison leaves out what its credential scan flags, so a resource sent by name cannot show there; the import's own report says whether it was taken.
+        else if (row.key !== undefined && row.state === "missing" && keys.has(row.key) && (input.allowFlagged ?? []).some((entry) => row.key === entry || row.key!.startsWith(`${entry}/`)) && !done.blocked.some((line) => line.startsWith(`${row.key}:`))) { row.state = "same"; row.note = "sent by name" }
       }
       return { ...outcome, applied: true, after, import: done, counts: parityCounts(after) }
     } finally { try { remote.close() } catch {} }
@@ -330,11 +348,16 @@ export function createParity(ports: ParityPorts) {
     manifest: (tools: boolean) => manifest(tools),
     stage,
     apply,
-    /** This machine against a saved remote; one at a time. */
+    /** This machine against a saved remote; one at a time, in the order asked. A request identical to one already waiting or running shares its answer; a different one (another remote, apply, allowances) runs after it. */
     run(input: { remote?: string; apply?: boolean; allowFlagged?: readonly string[]; allowCode?: boolean }) {
-      if (running) return running
-      running = runOnce(input).finally(() => { running = undefined })
-      return running
+      const key = JSON.stringify([input.remote ?? null, input.apply === true, [...(input.allowFlagged ?? [])].sort(), input.allowCode === true])
+      const same = pending.get(key)
+      if (same) return same
+      const started = queue.then(() => runOnce(input))
+      const result = started.finally(() => { if (pending.get(key) === result) pending.delete(key) })
+      pending.set(key, result)
+      queue = result.then(() => undefined, () => undefined)
+      return result
     },
   }
 }

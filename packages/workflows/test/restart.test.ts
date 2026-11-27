@@ -35,6 +35,11 @@ describe("restarting one agent of a run (r on /workflows)", () => {
     expect(answers).toBe(2)
     expect(h.get(run).tasks.find((task) => task.id === first.id)!.state).toBe("done")
     expect(h.prompts).toContain("second answer-2")
+    // The agent the old answer started no longer runs beside the one that replaces it.
+    const seconds = h.get(run).tasks.filter((task) => task.title.startsWith("second"))
+    expect(seconds).toHaveLength(2)
+    expect(h.cancelled.some((entry) => entry.sessionId === seconds[0]!.sessionId)).toBe(true)
+    expect(h.cancelled.some((entry) => entry.sessionId === seconds[1]!.sessionId)).toBe(false)
   })
 
   test("a run that is over refuses a restart, and a step that never started has nothing to restart", async () => {

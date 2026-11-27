@@ -82,6 +82,8 @@ export function createHttpAdapter(input: { dir: string; directory: string; confi
     }
     let peer: HttpPeer | undefined
     if (token && token.length <= 4096) try { peer = tokens.authenticate(token) } catch {}
+    // A chat bot's token runs turns through the daemon's own protocol, where its folder is enforced; none of these routes (events, files, catalogs, shells) checks a folder.
+    if (peer && (peer as { scope?: string }).scope === "bot") peer = undefined
     if (!peer) backoff.fail(address)
     return peer
   }

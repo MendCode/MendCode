@@ -11,7 +11,8 @@ import { isMachineNotice } from "./reply-language"
  */
 const WORD = /(?<![\w\\-])(?:fanout|ultracode)(?![\w-])/i
 const SKIP = /(?<![\w-])--no-fanout(?![\w-])/i
-const MENTION = /```[\s\S]*?```|`[^`\n]*`/g
+/** A code span opens with a run of backticks and ends with a run of the same length: three or more may span lines (a fence), one or two stay on a line. */
+const MENTION = /(?<!`)(`{3,})(?!`)[\s\S]*?(?<!`)\1(?!`)|(?<!`)(`{1,2})(?!`)[^\n]*?(?<!`)\2(?!`)/g
 
 export type FanoutTrigger = "keyword" | "auto"
 

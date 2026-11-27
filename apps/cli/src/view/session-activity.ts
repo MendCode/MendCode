@@ -9,7 +9,7 @@ export type ActivityEvent = Extract<GlobalEvent, { type: "session.activity" }>
  * pushes need no frame of their own (the spinner tick redraws the list) and no new list of background work.
  */
 export function activityShown(event: ActivityEvent): string {
-  return JSON.stringify([event.state, event.tool, event.title, event.queued ?? 0, event.paused === true, event.agents, event.compacting, event.pendingKind, event.pending, event.draft, event.archivedAt, event.lifecycle])
+  return JSON.stringify([event.state, event.tool, event.title, event.queued ?? 0, event.paused === true, event.agents, event.compacting, event.pendingKind, event.pending, event.draft, event.archivedAt, event.lifecycle, event.hub, event.hubDirectory])
 }
 
 /** Remembers what each session's last push showed (bounded): `changed` is true for a push that shows something new. */
@@ -36,10 +36,12 @@ export function mergeActivity(list: SessionSummary[], event: ActivityEvent, { ca
   const archived = event.archivedAt === null ? { archivedAt: undefined } : event.archivedAt !== undefined ? { archivedAt: event.archivedAt } : {}
   // The live detail of a running turn is replaced by every push: gone from the push means the turn or the request ended.
   const live = { since: event.since, tool: event.tool, pending: event.pending, pendingKind: event.pendingKind, agents: event.agents, compacting: event.compacting }
+  // A copy of a chat the sync hub runs carries the hub's name and folder in every push; a push without them leaves what the list already knows.
+  const owner = event.hub ? { hub: event.hub, ...(event.hubDirectory ? { hubDirectory: event.hubDirectory } : {}) } : {}
   const known = list.some((session) => session.sessionId === id)
   // The draft of an untitled session labels it in every list: the push carries it when it appeared, changed its first line or went.
   const merged = known
-    ? list.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state, updatedAt, queued: event.queued ?? 0, paused: event.paused === true, ...live }, event.draft) : session))
-    : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state, queued: event.queued ?? 0, paused: event.paused === true, ...live }, event.draft), ...list]
+    ? list.map((session) => (session.sessionId === id ? withPushedDraft({ ...session, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, state, updatedAt, queued: event.queued ?? 0, paused: event.paused === true, ...owner, ...live }, event.draft) : session))
+    : [withPushedDraft({ sessionId: id, ...archived, ...(event.lifecycle ? { lifecycle: event.lifecycle } : {}), title, directory, createdAt: updatedAt, updatedAt, lastSeq: 0, state, queued: event.queued ?? 0, paused: event.paused === true, ...owner, ...live }, event.draft), ...list]
   return merged.length > cap ? merged.filter((session, at) => at < cap || session.sessionId === keep) : merged
 }

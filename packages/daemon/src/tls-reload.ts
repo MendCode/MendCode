@@ -1,4 +1,4 @@
-import { readFileSync, unwatchFile, watch, watchFile, type FSWatcher } from "node:fs"
+import { readFileSync, statSync, unwatchFile, watch, watchFile, type FSWatcher } from "node:fs"
 import path from "node:path"
 
 const POLL_MS = 250
@@ -31,8 +31,14 @@ export function watchTlsFiles(input: {
     for (const file of names) {
       if (path.dirname(file) !== folder) continue
       polled.add(file)
-      watchFile(file, { interval: input.pollMs ?? POLL_MS, persistent: false }, (current, previous) => {
-        if (current.mtimeMs !== previous.mtimeMs || current.ino !== previous.ino || current.size !== previous.size) schedule()
+      // The file as it is when the watch is asked for: the poll's own first look comes later, and a file renamed over in between would be taken as the starting point.
+      let known: { mtimeMs: number; ino: number; size: number } | undefined
+      try { known = statSync(file) } catch { /* missing now: any appearance is a change */ }
+      watchFile(file, { interval: input.pollMs ?? POLL_MS, persistent: false }, (current) => {
+        if (!known || current.mtimeMs !== known.mtimeMs || current.ino !== known.ino || current.size !== known.size) {
+          known = { mtimeMs: current.mtimeMs, ino: current.ino, size: current.size }
+          schedule()
+        }
       })
     }
   }

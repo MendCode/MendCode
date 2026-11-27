@@ -9,6 +9,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A prompt with pasted images, PDFs or long pasted text sent to a chat that lives on the sync hub runs on the hub like a text prompt, instead of being refused as owned by the hub.
+- Any file can be attached: a big text file, an `.excalidraw`, a large SVG, a binary or an oversized image shows as a `[File: name · size]` chip, and the model gets its path (copied to the hub's per-chat uploads folder, up to 100 MB, for a hub chat) and a short note instead of the bytes.
+
 ## v0.0.21 - 2026-11-26
 
 Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.

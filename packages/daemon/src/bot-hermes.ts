@@ -1,4 +1,4 @@
-import type { BotActivityReport, ExternalBotInfo } from "@mendcode/protocol"
+import { redactSecrets, type BotActivityReport, type ExternalBotInfo } from "@mendcode/protocol"
 import type { AcpAgentConfig } from "../../engine-acp/src/agents"
 import { offerConnectorAgents } from "./bot-connector-agents"
 import type { BotConnector } from "./bot-service"
@@ -141,7 +141,8 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
         ;(running ? activity : finished).set(profile, listed)
         if (typeof session.id !== "string" || !SESSION_ID.test(session.id)) continue
         // A session with no title of its own reads as what it was asked first, never as a blank row.
-        const title = (session.title || session.preview || "").replace(/\s+/g, " ").trim().slice(0, 200)
+        // What it was asked can hold a credential: the row is redacted first, as the messages of the chat are, and cut afterwards.
+        const title = redactSecrets(session.title || session.preview || "").text.replace(/\s+/g, " ").trim().slice(0, 200)
         const startedAt = millis(session.started_at)
         const activeAt = millis(session.last_active ?? session.last_activity_at)
         listed.push({ id: session.id, ...(title ? { title } : {}), ...(typeof session.source === "string" && session.source ? { source: session.source.slice(0, 64) } : {}), ...(startedAt !== undefined ? { startedAt } : {}), ...(activeAt !== undefined ? { activeAt } : {}) })

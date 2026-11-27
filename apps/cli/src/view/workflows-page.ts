@@ -1458,7 +1458,7 @@ function renderPage(input: RenderInput & { glyphs: Glyphs }): Line[] {
   const titleWidth = textWidth(`Workflows · ${context}`) + 3
   const summary = status ? "" : state.scope === "saved" ? keysText([{ key: "enter", label: "type args" }, { key: "r", label: "run now" }, { key: "↑↓", label: "select" }, { key: "tab", label: "scope" }], escape, Math.max(8, inner - titleWidth), glyphs) : keysText(keyHints({ run: inRun ? run : row?.kind === "run" ? row.run : undefined, row, state, empty: runs.length === 0 }), escape, Math.max(8, inner - titleWidth), glyphs)
   const room = Math.max(0, height - pageChrome({ tabs: true, hints: [], back: false, width }))
-  const frame = (body: Line[]) => page({ title: "Workflows", context, ...(summary ? { summary } : {}), ...(status ? { status } : {}), tabs, activeTab: state.scope === "project" ? 0 : 1, body, hints: [], back: false, width, height })
+  const frame = (body: Line[]) => page({ title: "Workflows", context, ...(summary ? { summary } : {}), ...(status ? { status } : {}), tabs, activeTab: state.scope === "project" ? 0 : state.scope === "all" ? 1 : 2, body, hints: [], back: false, width, height })
   const keys = state.keys ? allKeysRows(inner) : []
   const bodyRoom = Math.max(0, room - keys.length)
 

@@ -175,6 +175,37 @@ test("a profile with credential-like text is held back until it is named, and th
   expect(existsSync(path.join(node.hubDir, "packages", "flagged", "skills", "fixture", "SKILL.md"))).toBe(true)
 })
 
+test("sending one MCP server leaves the hub's other, approved servers as they are", async () => {
+  const node = await pair({
+    hub: (dir) => write(dir, "mcp.json", JSON.stringify({ servers: { docs: { command: "docs-server", args: ["--stdio"], disabled: true } } })),
+    configure: (dir) => write(dir, "mcp.json", JSON.stringify({ servers: { docs: { command: "docs-server", args: ["--stdio"] }, extra: { command: "extra-server" } } })),
+  })
+  await node.parity({ apply: true })
+  const servers = JSON.parse(read(node.hubDir, "mcp.json")).servers
+  expect(servers.extra.command).toBe("extra-server")
+  expect(JSON.stringify(servers.extra)).toContain("pendingApproval")
+  expect(servers.docs).toMatchObject({ disabled: true })
+  expect(JSON.stringify(servers.docs)).not.toContain("pendingApproval")
+})
+
+test("a standalone resource the credential scan withholds is listed as withheld, and travels once it is named", async () => {
+  const node = await pair({ configure: (dir) => write(dir, "skills/flagged/SKILL.md", `---\nname: flagged\ndescription: f\n---\nANTHROPIC_API_KEY=sk-ant-api03-${"x".repeat(80)}\n`) })
+  const held = await node.parity({ apply: true })
+  expect(state(held.before, "skill", "skills/flagged")).toBe("blocked")
+  expect(existsSync(path.join(node.hubDir, "skills", "flagged"))).toBe(false)
+  const sent = await node.parity({ apply: true, allowFlagged: ["skills/flagged"] })
+  expect(existsSync(path.join(node.hubDir, "skills", "flagged", "SKILL.md"))).toBe(true)
+  expect(state(sent.after, "skill", "skills/flagged")).toBe("same")
+})
+
+test("overlapping parity requests each run: an apply that arrives during a comparison still applies", async () => {
+  const node = await pair()
+  const [comparison, applied] = await Promise.all([node.parity(), node.parity({ apply: true })])
+  expect(comparison.applied).toBe(false)
+  expect(applied.applied).toBe(true)
+  expect(read(node.hubDir, "skills/alpha/SKILL.md")).toBe(read(node.deviceDir, "skills/alpha/SKILL.md"))
+})
+
 test("only a full token reaches the hub side, and only a local client runs a comparison", async () => {
   const node = await pair()
   const port = node.hub.daemon.remotePort!

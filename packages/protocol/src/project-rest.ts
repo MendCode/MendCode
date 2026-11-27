@@ -29,9 +29,13 @@ export const SyncReplayInput = lazySchema(() => z.strictObject({ directory: text
 /** Largest blob a sync transfer carries, and the largest chunk of one request. */
 export const MAX_SYNC_BLOB_BYTES = 8 * 1024 * 1024
 export const MAX_SYNC_BLOB_CHUNK_BYTES = 128 * 1024
+/** Largest attachment a device uploads to the hub with a prompt (the attachment limit of images); sessions' own events still copy blobs only up to `MAX_SYNC_BLOB_BYTES`. */
+export const MAX_SYNC_UPLOAD_BLOB_BYTES = 20 * 1024 * 1024
+/** Largest file a device copies to the hub into a chat's uploads folder. */
+export const MAX_SYNC_UPLOAD_FILE_BYTES = 100 * 1024 * 1024
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/)
 /** Uploads one blob a replayed event references, in order, `data` being base64 of at most 128 KiB; the last chunk verifies the hash. */
-export const SyncBlobPutInput = lazySchema(() => z.strictObject({ sha256, bytes: z.number().int().positive().max(MAX_SYNC_BLOB_BYTES), mime: z.string().min(1).max(255), offset: z.number().int().nonnegative(), data: z.string().min(1).max(Math.ceil(MAX_SYNC_BLOB_CHUNK_BYTES / 3) * 4) }))
+export const SyncBlobPutInput = lazySchema(() => z.strictObject({ sha256, bytes: z.number().int().positive().max(MAX_SYNC_UPLOAD_BLOB_BYTES), mime: z.string().min(1).max(255), offset: z.number().int().nonnegative(), data: z.string().min(1).max(Math.ceil(MAX_SYNC_BLOB_CHUNK_BYTES / 3) * 4) }))
 /** Reads one blob a session of the project references, `offset` onwards, in chunks of at most 128 KiB. */
 export const SyncBlobReadInput = lazySchema(() => z.strictObject({ sha256, offset: z.number().int().nonnegative().default(0) }))
 export const SyncHistoryInput = lazySchema(() => z.record(SessionId, z.number().int().nonnegative()).refine((value) => Object.keys(value).length <= 1000, "too many cursors"))

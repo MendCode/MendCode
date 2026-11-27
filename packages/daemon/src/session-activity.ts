@@ -2,7 +2,7 @@ import type { Clock } from "@mendcode/kernel"
 import type { ForegroundState, GlobalEvent, SessionId } from "@mendcode/protocol"
 
 export type SessionActivityEvent = Extract<GlobalEvent, { type: "session.activity" }>
-export type ActivityEntry = { sessionId: SessionId; directory: string; title: string; state: ForegroundState; updatedAt: number; queued?: number; since?: number; tool?: string; pending?: string; paused?: boolean; archivedAt?: number | null; lifecycle?: import("@mendcode/protocol").SessionLifecycle; draft?: import("@mendcode/protocol").SessionDraft | null }
+export type ActivityEntry = { sessionId: SessionId; directory: string; title: string; state: ForegroundState; updatedAt: number; queued?: number; since?: number; tool?: string; pending?: string; paused?: boolean; archivedAt?: number | null; lifecycle?: import("@mendcode/protocol").SessionLifecycle; draft?: import("@mendcode/protocol").SessionDraft | null; hub?: string; hubDirectory?: string }
 
 /** At most one event per session in this window. */
 export const ACTIVITY_MIN_INTERVAL_MS = 250

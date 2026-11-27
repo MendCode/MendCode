@@ -9,6 +9,8 @@ export type PendingAttachment =
   | { kind: "image"; ref: BlobRef; name: string; width?: number; height?: number; label?: string }
   | { kind: "document"; ref: BlobRef; name: string; label?: string }
   | { kind: "text"; name: string; content: string; directory?: boolean; label?: string }
+  /** Any other file: the model is told its path and a note (name, size, type), never its bytes. `path` is where the chat can read it. */
+  | { kind: "file"; name: string; path: string; size: number; type: string; label?: string }
 
 /** 512 B / 1.5 KB / 240 KB / 12.4 MB — base 1024, a trailing ".0" dropped. Independent of the lazily-loaded storage page (P5): chips render on every keystroke, before /storage ever opens. */
 export function formatAttachmentBytes(bytes: number): string {
@@ -29,6 +31,7 @@ const IMAGE_TOKEN = /^\[Image #(\d+)\]$/
 export function attachmentLabel(pending: readonly PendingAttachment[], index: number): string {
   const item = pending[index]!
   if (item.kind === "text") return item.name
+  if (item.kind === "file") return `${item.name} · ${formatAttachmentBytes(item.size)}`
   if (item.kind === "document") return `${item.name} · ${formatAttachmentBytes(item.ref.bytes)}`
   const imageIndex = Number(IMAGE_TOKEN.exec(item.label ?? "")?.[1]) || pending.slice(0, index + 1).filter((p) => p.kind === "image").length
   const size = item.width && item.height ? `${item.width}×${item.height} · ` : ""
@@ -56,7 +59,7 @@ export function attachmentToken(pending: readonly PendingAttachment[], item: Pen
     const highest = pending.reduce((max, other) => Math.max(max, Number(IMAGE_TOKEN.exec(other.label ?? "")?.[1]) || 0), sent)
     return `[Image #${highest + 1}]`
   }
-  const base = item.kind === "document" ? `PDF ${tokenName(item.name)}` : `${tokenName(item.name)}${item.directory ? "/" : ""}`
+  const base = item.kind === "file" ? `File: ${tokenName(item.name)} · ${formatAttachmentBytes(item.size)}` : item.kind === "document" ? `PDF ${tokenName(item.name)}` : `${tokenName(item.name)}${item.directory ? "/" : ""}`
   const taken = new Set(pending.flatMap((other) => (other.label ? [other.label] : [])))
   let label = `[${base}]`
   for (let n = 2; taken.has(label); n++) label = `[${base} #${n}]`
@@ -116,7 +119,7 @@ export const chipRowAttachments = (live: readonly PendingAttachment[], mode: "in
 export const refOf = (item: PendingAttachment & { kind: "image" | "document" }): BlobRef => ({ ...item.ref, ...(item.name ? { name: item.name.slice(0, 255) } : {}), ...(item.label ? { label: item.label } : {}) })
 
 /** The media refs a saved draft keeps for the prompt as it is now (a text file or folder is not part of a draft). */
-export const draftRefs = (pending: readonly PendingAttachment[], text: string): BlobRef[] => liveAttachments(pending, text).flatMap((item) => (item.kind !== "text" ? [refOf(item)] : []))
+export const draftRefs = (pending: readonly PendingAttachment[], text: string): BlobRef[] => liveAttachments(pending, text).flatMap((item) => (item.kind === "image" || item.kind === "document" ? [refOf(item)] : []))
 
 /**
  * Refs from a draft, the queue or an earlier message as pending attachments. A ref that carries its token keeps it (the restored
@@ -157,7 +160,8 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
   }
   placed.sort((a, b) => a.start - b.start)
 
-  const block = (item: PendingAttachment & { kind: "text" }) => {
+  const block = (item: PendingAttachment & { kind: "text" | "file" }) => {
+    if (item.kind === "file") return `[attached file: ${item.name} · ${formatAttachmentBytes(item.size)} · ${item.type}]\npath: ${item.path}`
     const fence = fileFence(item.content)
     return `[attached file: ${item.name}]\n${fence}\n${item.content}\n${fence}`
   }
@@ -184,7 +188,7 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
   for (const { item, start, end } of placed) {
     if (waiting.length && start >= waitingEnd) flush()
     take(end)
-    if (item.kind === "text") {
+    if (item.kind === "text" || item.kind === "file") {
       waiting.push(block(item))
       const newline = text.indexOf("\n", end)
       waitingEnd = newline < 0 ? text.length : newline
@@ -198,7 +202,7 @@ export function composeSubmission(text: string, pending: readonly PendingAttachm
   const blocks: string[] = []
   for (const item of loose) {
     // The name rides along for display in the transcript; the hash stays the identity.
-    if (item.kind !== "text") refs.set(item, item.name ? { ...item.ref, name: item.name.slice(0, 255) } : item.ref)
+    if (item.kind !== "text" && item.kind !== "file") refs.set(item, item.name ? { ...item.ref, name: item.name.slice(0, 255) } : item.ref)
     else blocks.push(block(item))
   }
   return { text: [body, ...blocks].filter(Boolean).join("\n\n"), attachments: pending.flatMap((item) => (refs.has(item) ? [refs.get(item)!] : [])) }

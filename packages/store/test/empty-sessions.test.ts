@@ -68,6 +68,18 @@ describe("empty sessions", () => {
     expect(store.emptySessions.list().map((entry) => entry.sessionId)).toEqual([lonely])
   })
 
+  test("with anyModel a chat on a chosen model is empty until something is written in it: a draft keeps it", () => {
+    const store = open()
+    const fresh = chat(store)
+    store.setSessionModel(fresh, { model: "acp:hermes-ada" } as never)
+    const drafted = chat(store)
+    store.setSessionModel(drafted, { model: "acp:hermes-ada" } as never)
+    store.drafts.set(drafted, "half a thought", [])
+    expect(store.emptySessions.has(fresh)).toBe(false)
+    expect(store.emptySessions.has(fresh, { anyModel: true })).toBe(true)
+    expect(store.emptySessions.has(drafted, { anyModel: true })).toBe(false)
+  })
+
   test("the project's default agent is not a setting; another agent is", () => {
     const store = open()
     store.settings.set({ defaultAgent: "reviewer" })
