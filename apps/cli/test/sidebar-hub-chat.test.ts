@@ -20,7 +20,7 @@ describe("a chat the hub runs is marked in the sidebar and its project says it h
 
 describe("where a chat's folder reads in the footer", () => {
   test("a hub chat shows the hub's own folder under the hub's name, a local one its folder", () => {
-    expect(chatFolder({ hub: "hostinger-dev", hubDirectory: "/home/coder/projects/kontrologs/kontrolog-studio" }, "~/Code/kontrologs/kontrolog-studio")).toBe("hostinger-dev:~/projects/kontrologs/kontrolog-studio")
+    expect(chatFolder({ hub: "hostinger-dev", hubDirectory: "/home/dev/projects/shop/web" }, "~/Code/shop/web")).toBe("hostinger-dev:~/projects/shop/web")
     expect(chatFolder({ hub: "hostinger-dev", hubDirectory: "/srv/app" }, "~/Code/app")).toBe("hostinger-dev:/srv/app")
     expect(chatFolder({}, "~/Code/app")).toBe("~/Code/app")
     expect(chatFolder(undefined, undefined)).toBeUndefined()
