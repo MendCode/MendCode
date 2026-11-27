@@ -35,11 +35,14 @@ describe("restarting one agent of a run (r on /workflows)", () => {
     expect(answers).toBe(2)
     expect(h.get(run).tasks.find((task) => task.id === first.id)!.state).toBe("done")
     expect(h.prompts).toContain("second answer-2")
-    // The agent the old answer started no longer runs beside the one that replaces it.
+    // The agent the old answer started was ended and left the run; only the one asked for from the new answer remains, and it runs.
     const seconds = h.get(run).tasks.filter((task) => task.title.startsWith("second"))
-    expect(seconds).toHaveLength(2)
-    expect(h.cancelled.some((entry) => entry.sessionId === seconds[0]!.sessionId)).toBe(true)
-    expect(h.cancelled.some((entry) => entry.sessionId === seconds[1]!.sessionId)).toBe(false)
+    expect(seconds).toHaveLength(1)
+    expect(h.cancelled.length).toBeGreaterThan(0)
+    expect(h.cancelled.some((entry) => entry.sessionId === seconds[0]!.sessionId)).toBe(false)
+    expect(h.get(run).tasks.filter((task) => task.state === "running")).toHaveLength(1)
+    // It did not start from the old answer a second time before the script asked for the new one.
+    expect(h.prompts.filter((prompt) => prompt === "second answer-1")).toHaveLength(1)
   })
 
   test("a script whose second call does not depend on the first is not stuck after the first is restarted: both finish", async () => {
