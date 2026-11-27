@@ -33,6 +33,17 @@ describe("one user service", () => {
     expect(daemonServiceDefinition(plan)).toContain('"/opt/%%n/$$BIN/code\\\\name"')
   })
 
+  test("the systemd unit writes WorkingDirectory and the log paths unquoted, as systemd requires, spaces and % included", () => {
+    for (const cwd of ["/home/user", "/home/some user/work 100%"]) {
+      const definition = daemonServiceDefinition(daemonServicePlan({ ...options("linux"), cwd }))
+      const line = definition.split("\n").find((entry) => entry.startsWith("WorkingDirectory="))!
+      expect(line).toBe(`WorkingDirectory=${cwd.replaceAll("%", "%%")}`)
+      expect(line).not.toContain('"')
+      expect(line.slice("WorkingDirectory=".length).startsWith("/")).toBe(true)
+      for (const entry of definition.split("\n").filter((row) => /^Standard(Output|Error)=/.test(row))) expect(entry).toMatch(/^Standard(Output|Error)=append:\/[^"]*$/)
+    }
+  })
+
   test.each(["darwin", "linux"])("%s install is opt-in, idempotent start, and uninstall retains exact files", async (platform) => {
     const a = options(platform)
     let loaded = false

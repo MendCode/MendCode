@@ -19,11 +19,11 @@ Children inherit your permission mode (lowered by their agent's cap), work in yo
 Model: task's, agent's, subagent role, else (cheap_subagents, balanced) your provider's mid tier under a large one (Sol → Luna, Opus → Sonnet), else yours.
 
 Limits (a call over one fails by name: wait or continue a task_id, do not retry in a loop):
-  [[setting:subagentDepth]] 1 (0 turns task off) · [[setting:subagentMaxChildren]] 4 running per parent · [[setting:subagentMaxDescendants]] 16 per tree · 256 started per tree.
+  [[setting:subagentDepth]] 1 (0 turns task off) · [[setting:subagentMaxChildren]] 4 running per parent · [[setting:subagentMaxDescendants]] 16 per tree · 256 started per tree · approval wait [[setting:subagentApprovalTimeout]] 10 min.
 
-The user controls (no model tool): /pause [id] finishes the turn, holds the queue; /unpause; /stop [id] cancels it and every child. /tasks lists children (x cancel, b detach, w wait); /bg detaches to Agent View; /tree; /relaunch restarts Claude Code agents esc stopped.
+The user controls (no model tool): /pause [id] finishes the turn, holds the queue; /unpause; /stop [id] cancels it and every child. /tasks lists children (x cancel, b detach, w wait); /bg detaches to Agent View; /tree; /relaunch restarts stopped Claude Code agents.
 
 Retries replay the result (orchestration_receipts); /panel galaxy draws the tree.
-Does not exist: a model pause tool; a default worktree per child; a scratch folder per child (/scratch: one project note); merging children's edits. /fanout compares models. engine: claude|codex|pi|acp:<name> for a child needs the full tier.
+Does not exist: a model pause tool; a default worktree or /scratch per child; merging children's edits. /fanout compares models. engine: claude|codex|pi|acp:<name> for a child needs the full tier.
 
 Check: a task result names its task_id and state. No notice: say so, do not guess.

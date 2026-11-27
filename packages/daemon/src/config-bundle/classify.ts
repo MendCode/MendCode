@@ -123,7 +123,7 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
   "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "memoryPendingDays", "memoryReviewEveryTurns", "memoryReviewIdleMinutes", "memoryReviewDailyCap", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
   "git", "footer", "promptCache", "outputStyle", "language", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
-  "subagentOwnerWake", "subagentCatalog", "processLimits", "resumeAfterRestart", "zeroDataRetention",
+  "subagentOwnerWake", "subagentApprovalTimeout", "subagentCatalog", "processLimits", "resumeAfterRestart", "zeroDataRetention",
 ])
 
 /**

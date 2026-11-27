@@ -23,7 +23,7 @@ export const PERF_CACHE_KEEP = 2
 export const PERF_CACHE_MAX_AGE_MS = 3 * 24 * 60 * 60_000
 const OUTPUT_LIMIT = 64 * 1024
 
-export type PerfRunInput = { directory: string; base: string; head: string; cacheDir: string; tmpDir: string; timeoutMs: number }
+export type PerfRunInput = { directory: string; base: string; head: string; cacheDir: string; tmpDir: string; timeoutMs: number; /** Alternating base/head sessions per side; the script's default (5) when absent. */ rounds?: number | undefined }
 export type PerfRunResult = { code: number | null; out: string; err: string; timedOut: boolean }
 /** Runs `scripts/perf-attrib.ts` for one pair of commits; tests stand in a fake. */
 export type PerfRunner = (input: PerfRunInput) => Promise<PerfRunResult>
@@ -34,12 +34,16 @@ export type PerfOptions = {
   run?: PerfRunner | undefined
   timeoutMs?: number | undefined
   now?: () => number
+  /** Alternating base/head sessions per side (the script's default is 5; at least 5 keeps one outlier from deciding). */
+  rounds?: number | undefined
   /** Whether `bun` can be found; tests pin it. */
   hasBun?: () => boolean
 }
 
 export type PerfOutcome =
-  | { status: "measured"; rose: boolean; markdown: string; verdict: string; base: string; head: string }
+  | { status: "measured"; rose: boolean; markdown: string; verdict: string; base: string; head: string
+      /** A rise only: the second measurement of the same pair rose too. Without it the rise is possible noise and never blocks. */
+      confirmed?: boolean }
   | { status: "not-measured"; reason: string }
 
 /** The checkout is the MendCode repository: its monorepo root and the attribution script are there. */
@@ -119,10 +123,19 @@ export async function measurePerf({ directory, base, head, git, options, fork = 
     const tmpDir = mkdtempSync(path.join(options.dir, "tmp", "run-"))
     const timeoutMs = options.timeoutMs ?? PERF_TIMEOUT_MS
     try {
-      const result = await (options.run ?? perfAttribProcess)({ directory, base: changed.from, head, cacheDir, tmpDir, timeoutMs })
+      const runner = options.run ?? perfAttribProcess
+      const started = now()
+      const result = await runner({ directory, base: changed.from, head, cacheDir, tmpDir, timeoutMs, rounds: options.rounds })
       touchBuilds({ cacheDir, commits: [changed.from, head], now: now() })
       pruneCache({ cacheDir, now: now() })
-      return perfOutcome({ result, from: changed.from, head, timeoutMs })
+      const first = perfOutcome({ result, from: changed.from, head, timeoutMs })
+      if (first.status !== "measured" || !first.rose) return first
+      // A rise blocks only when a second measurement of the same pair (the builds are cached, so only the sessions run) rises too, in the time left.
+      const left = timeoutMs - (now() - started)
+      const second = left > 0 ? perfOutcome({ result: await runner({ directory, base: changed.from, head, cacheDir, tmpDir, timeoutMs: left, rounds: options.rounds }).catch((): PerfRunResult => ({ code: null, out: "", err: "", timedOut: true })), from: changed.from, head, timeoutMs: left }) : undefined
+      if (second?.status === "measured" && second.rose) return { ...first, confirmed: true }
+      if (second?.status === "measured") return { ...first, rose: false, markdown: `${first.markdown}\n\nA second measurement of the same pair did not reproduce the rise (${second.verdict}): the first was noise.` }
+      return { ...first, confirmed: false }
     } finally { rmSync(tmpDir, { recursive: true, force: true }) }
   } catch (error) {
     return { status: "not-measured", reason: `perf-attrib could not run: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}` }
@@ -134,7 +147,7 @@ export async function measurePerf({ directory, base, head, git, options, fork = 
  * group of its own (a timeout kills the daemon and terminal processes the script started too), with a scratch directory under
  * the reviewer's data and an environment of its own: no tokens, no API keys.
  */
-export const perfAttribProcess: PerfRunner = async ({ directory, base, head, cacheDir, tmpDir, timeoutMs }) => {
+export const perfAttribProcess: PerfRunner = async ({ directory, base, head, cacheDir, tmpDir, timeoutMs, rounds }) => {
   const env: Record<string, string> = { PATH: process.env.PATH ?? "/usr/bin:/bin", TMPDIR: tmpDir, CI: "1" }
   for (const name of ["HOME", "BUN_INSTALL", "LANG"]) if (process.env[name]) env[name] = process.env[name]!
   // A review checkout has no dependencies installed, and the script imports the workspace packages: without them it stops at its
@@ -148,7 +161,7 @@ export const perfAttribProcess: PerfRunner = async ({ directory, base, head, cac
       const install = await runBun({ argv: ["install", "--frozen-lockfile"], directory, env, timeoutMs })
       if (install.timedOut || install.code !== 0) return { ...install, out: "", err: `dependencies could not be installed (bun install --frozen-lockfile, exit ${install.code ?? "none"}): ${firstLine(install.err) ?? ""}` }
     }
-    return await runBun({ argv: ["scripts/perf-attrib.ts", "--base", base, "--cand", head, "--markdown", "--cache", cacheDir], directory, env, timeoutMs: Math.max(1_000, timeoutMs - (Date.now() - started)) })
+    return await runBun({ argv: ["scripts/perf-attrib.ts", "--base", base, "--cand", head, "--markdown", "--cache", cacheDir, ...(rounds ? ["--rounds", String(rounds)] : [])], directory, env, timeoutMs: Math.max(1_000, timeoutMs - (Date.now() - started)) })
   } finally { if (installed) rmSync(modules, { recursive: true, force: true }) }
 }
 
@@ -207,6 +220,10 @@ export function perfFinding({ outcome, context }: { outcome: PerfOutcome; contex
   const line = file.touched[0] ?? Math.min(...file.right)
   const metrics = outcome.verdict.replace(/^sube:\s*/, "").split(/\.\s*Causes:/)[0]!.trim()
   const summary = `${MEASURED_RISE} ${metrics}`.slice(0, 160)
-  const detail = `perf-attrib measured this pull request (base ${outcome.base.slice(0, 12)}, head ${outcome.head.slice(0, 12)}) and ${outcome.verdict.slice(0, 700)}. A measured rise without the owner's approval is a blocker: remove the cost, or get the owner to approve this number. The full table is in the review details.`.slice(0, 1200)
-  return { id: findingId({ path: file.path, line, category: "performance", summary }), path: file.path, line, side: "RIGHT", severity: "critical", category: "performance", summary, detail, evidence: [`${file.path}:${line}`], verdict: "confirmed" }
+  // Confirmed means the second measurement reproduced it. A rise seen once only is possible noise: minor, plausible, never a blocker.
+  const confirmed = outcome.confirmed !== false
+  const detail = (confirmed
+    ? `perf-attrib measured this pull request (base ${outcome.base.slice(0, 12)}, head ${outcome.head.slice(0, 12)}) twice and ${outcome.verdict.slice(0, 700)}. A measured rise without the owner's approval is a blocker: remove the cost, or get the owner to approve this number. The full table is in the review details.`
+    : `perf-attrib measured this pull request (base ${outcome.base.slice(0, 12)}, head ${outcome.head.slice(0, 12)}) once and ${outcome.verdict.slice(0, 700)}. The second measurement could not confirm it, so this is possible noise and does not block. The full table is in the review details.`).slice(0, 1200)
+  return { id: findingId({ path: file.path, line, category: "performance", summary }), path: file.path, line, side: "RIGHT", severity: confirmed ? "critical" : "minor", category: "performance", summary, detail, evidence: [`${file.path}:${line}`], verdict: confirmed ? "confirmed" : "plausible" }
 }

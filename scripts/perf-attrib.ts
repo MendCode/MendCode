@@ -3,7 +3,7 @@
 // measured at ready, after one reply and at rest, for each process: physical footprint, JS heap by object type (`heapStats`) and by
 // constructor (heap snapshot), native memory by region (`vmmap --summary` on macOS, `smaps_rollup` on Linux), modules loaded, CPU per phase;
 // plus the binary's size and the session's bytes per table.
-//   bun scripts/perf-attrib.ts --base REF|BINARY --cand REF|BINARY [--rounds 2] [--rest 20] [--json] [--markdown] [--out DIR] [--keep] [--cache DIR]
+//   bun scripts/perf-attrib.ts --base REF|BINARY --cand REF|BINARY [--rounds 5] [--rest 20] [--json] [--markdown] [--out DIR] [--keep] [--cache DIR]
 //   bun scripts/perf-attrib.ts --calibrate BINARY [--rounds 3]     (the same build on both sides; writes scripts/perf-attrib-noise.json)
 // REF is a commit-ish: it is built in a temporary worktree that is removed at the end. BINARY is a compiled mendcode (copied, never touched).
 // --cache DIR keeps the binary built for each REF (one file per full commit id, platform and arch) and reuses it next time, so measuring the same
@@ -21,6 +21,8 @@ import { processStats, spread } from "./perf-proc"
 import { createPtyScreen } from "./pty-screen"
 
 export const SCHEMA_VERSION = 1
+/** Alternating base/cand sessions per side: with five, one outlier moves neither a median nor the range around it. */
+export const DEFAULT_ROUNDS = 5
 const REPO = path.resolve(import.meta.dir, "..")
 const PRELOAD = path.join(import.meta.dir, "perf-attrib-preload.ts")
 const NOISE_FILE = path.join(import.meta.dir, "perf-attrib-noise.json")
@@ -224,16 +226,34 @@ function fallbackNoise(name: string, a: number, b: number) {
 
 export type Row = { name: string; base: number; cand: number; delta: number; threshold: number; status: "up" | "down" | "same" }
 
+/**
+ * The smallest difference of medians worth a flag on the totals a user pays for, on top of the measured noise. Chosen from the
+ * calibration file (18 runs: footprint range at most 1.7 MB, disk 34 B) and from the single outliers seen in review runs (a rest
+ * footprint of 70 to 71 MB against a median of 63; a CPU phase that moves by seconds in one run): a footprint needs 3 MB, a
+ * session's disk 1 KB, CPU 15% of the base or 150 ms, whichever is larger.
+ */
+export function floorOf(name: string, base: number): number {
+  if (/^(total|tui|daemon)\.(ready|after|rest)\.(fp_mb|peak_mb)$/.test(name)) return 3
+  if (/\.cpu_ms\./.test(name)) return Math.max(150, 0.15 * Math.abs(base))
+  if (/^disk\.bytes(_per_session)?$/.test(name)) return 1024
+  return 0
+}
+
 export function compare(base: Flat[], cand: Flat[], noise: Noise | undefined): Row[] {
   const names = new Set([...base.flatMap(Object.keys), ...cand.flatMap(Object.keys)])
-  const median = (runs: Flat[], name: string) => { const values = runs.map((run) => run[name] ?? 0); return spread(values).median }
+  const stats = (runs: Flat[], name: string) => spread(runs.map((run) => run[name] ?? 0))
   const rows: Row[] = []
   for (const name of names) {
-    const a = median(base, name), b = median(cand, name)
+    const before = stats(base, name)
+    const a = before.median, b = stats(cand, name).median
     const seen = noise?.range[name]
     const threshold = seen === undefined ? fallbackNoise(name, a, b) : Math.max(seen * 1.5, unitOf(name) === "MB" ? 0.2 : 0)
     const delta = +(b - a).toFixed(2)
-    rows.push({ name, base: a, cand: b, delta, threshold: +threshold.toFixed(2), status: Math.abs(delta) <= threshold ? "same" : delta > 0 ? "up" : "down" })
+    // A flag needs the cand's median outside everything the base did on its own runs (one outlier sample cannot move a median of
+    // five out of the base's range) and a difference above the metric's floor.
+    const outside = delta > 0 ? b > before.max : b < before.min
+    const settled = outside && Math.abs(delta) >= floorOf(name, a)
+    rows.push({ name, base: a, cand: b, delta, threshold: +threshold.toFixed(2), status: Math.abs(delta) <= threshold || !settled ? "same" : delta > 0 ? "up" : "down" })
   }
   return rows
 }
@@ -271,7 +291,10 @@ function explain(rows: Row[]) {
  */
 const TOTALS = /^(total|tui|daemon)\.(ready|after|rest)\.(fp_mb|peak_mb)$|\.cpu_ms\.|^disk\.bytes(_per_session)?$/
 
-export function verdict(rows: Row[]) {
+/** A rise is implausible when the bytes its causes explain are less than a tenth of it. */
+export const IMPLAUSIBLE_RATIO = 10
+
+export function verdict(rows: Row[], modules?: ReturnType<typeof moduleDiff>) {
   // RSS is shown, never judged: macOS reclaims pages, so it moves 10 MB or more between identical runs (docs/performance.md).
   const judged = (row: Row) => !row.name.includes("rss_mb") && SUMMARY.some(([, re]) => re.test(row.name))
   const ups = rows.filter((row) => row.status === "up" && judged(row))
@@ -281,22 +304,34 @@ export function verdict(rows: Row[]) {
   const fmt = (r: Row) => `${r.name} ${r.delta > 0 ? "+" : ""}${r.delta}${unitOf(r.name) === "n" ? "" : unitOf(r.name)}`
   const causes = () => [...why.regions, ...why.types, ...why.constructors, ...why.tables].map(fmt).join("; ") || "none above noise"
   const top = (list: Row[]) => [...list].sort((a, b) => b.delta / b.threshold - a.delta / a.threshold).slice(0, 3)
-  if (reds.length) return { word: "sube" as const, text: `sube: ${top(reds).map(fmt).join("; ")}. Causes: ${causes()}` }
+  // Bytes the listed causes can account for: native regions (MB), JS heap by constructor, heap size and external memory, stored tables.
+  const explained = [...why.regions.map((r) => r.delta * 1e6), ...[...why.constructors, ...why.tables].map((r) => r.delta), ...rows.filter((r) => r.status === "up" && /\.heap\.(size_b|extra_b)$/.test(r.name)).map((r) => r.delta)].reduce((sum, bytes) => sum + bytes, 0)
+  const anyCause = why.regions.length + why.types.length + why.constructors.length + why.tables.length > 0
+  const startUnchanged = !!modules && modules.baseCount === modules.candCount && modules.baseBytes === modules.candBytes && !modules.addedChunkSizes.length && !modules.removedChunkSizes.length
+  /** A rise whose listed causes are an order of magnitude below it (a few KB for megabytes), or CPU with a few KB of cause and the same start-up modules: noise until a second measurement says otherwise. */
+  const implausible = (row: Row) => {
+    if (!anyCause) return false
+    if (/\.cpu_ms\./.test(row.name)) return startUnchanged && explained < 64 * 1024
+    return explained * IMPLAUSIBLE_RATIO < (unitOf(row.name) === "MB" ? row.delta * 1e6 : row.delta)
+  }
+  const solid = reds.filter((row) => !implausible(row))
+  if (solid.length) return { word: "sube" as const, text: `sube: ${top(solid).map(fmt).join("; ")}. Causes: ${causes()}` }
+  if (reds.length) return { word: "nota" as const, text: `nota: possible noise, not a finding: ${top(reds).map(fmt).join("; ")}; the causes found (${causes()}) are far too small to explain it` }
   if (ups.length) return { word: "nota" as const, text: `nota: no total rose; inside, ${top(ups).map(fmt).join("; ")}${downs.length ? `; lower: ${downs.slice(0, 3).map(fmt).join("; ")}` : ""}` }
   if (downs.length) return { word: "baja" as const, text: `baja: ${downs.slice(0, 3).map(fmt).join("; ")}` }
   return { word: "igual" as const, text: "igual: nothing above the measured noise" }
 }
 
 export function toJson(input: { base: string; cand: string; rounds: number; rows: Row[]; noise: Noise | undefined; extra: Record<string, unknown> }) {
-  return { schema: SCHEMA_VERSION, base: input.base, cand: input.cand, rounds: input.rounds, noise: input.noise ? { runs: input.noise.runs, measuredAt: input.noise.measuredAt } : null, verdict: verdict(input.rows), reference: REFERENCE, ...input.extra, metrics: Object.fromEntries(input.rows.map((r) => [r.name, { base: r.base, cand: r.cand, delta: r.delta, threshold: r.threshold, status: r.status }])) }
+  return { schema: SCHEMA_VERSION, base: input.base, cand: input.cand, rounds: input.rounds, noise: input.noise ? { runs: input.noise.runs, measuredAt: input.noise.measuredAt } : null, verdict: verdict(input.rows, (input.extra as { modules?: ReturnType<typeof moduleDiff> }).modules), reference: REFERENCE, ...input.extra, metrics: Object.fromEntries(input.rows.map((r) => [r.name, { base: r.base, cand: r.cand, delta: r.delta, threshold: r.threshold, status: r.status }])) }
 }
 
 export function toMarkdown(input: { base: string; cand: string; rounds: number; rows: Row[]; noise: Noise | undefined; extra?: { modules?: ReturnType<typeof moduleDiff> } }) {
-  const v = verdict(input.rows)
+  const v = verdict(input.rows, input.extra?.modules)
   const hasDaemon = input.rows.some((row) => row.name.startsWith("daemon."))
   const get = (name: string) => input.rows.find((r) => r.name === name)
   const cell = (r: Row | undefined) => r ? `${r.base} | ${r.cand} | ${r.delta > 0 ? "+" : ""}${r.delta}${r.status === "up" ? " **UP**" : r.status === "down" ? " down" : ""}` : "- | - | -"
-  const lines = [`**perf-attrib: ${v.text}**`, "", `base \`${input.base}\` vs cand \`${input.cand}\`, median of ${input.rounds} faux-engine session(s) per side; flagged = beyond ${input.noise ? `the noise measured on ${input.noise.runs} base-vs-base runs (x1.5)` : "a default threshold (no calibration file)"}.`, "", "| metric | base | cand | diff |", "|---|---:|---:|---:|"]
+  const lines = [`**perf-attrib: ${v.text}**`, "", `base \`${input.base}\` vs cand \`${input.cand}\`, median of ${input.rounds} faux-engine session(s) per side; flagged = beyond ${input.noise ? `the noise measured on ${input.noise.runs} base-vs-base runs (x1.5)` : "a default threshold (no calibration file)"}, outside the base's own min..max, and above the floor (footprint 3 MB, disk 1 KB, CPU 15% or 150 ms).`, "", "| metric | base | cand | diff |", "|---|---:|---:|---:|"]
   for (const [, re] of SUMMARY) for (const r of input.rows.filter((row) => re.test(row.name) && (hasDaemon || !row.name.startsWith("total."))).sort((a, b) => a.name.localeCompare(b.name))) lines.push(`| ${r.name} | ${cell(r)} |`)
   const why = explain(input.rows)
   const block = (title: string, rows: Row[]) => { if (rows.length) { lines.push("", `${title}:`, ...rows.map((r) => `- ${r.name}: ${r.base} -> ${r.cand} (${r.delta > 0 ? "+" : ""}${r.delta})`)) } }
@@ -366,7 +401,7 @@ if (import.meta.main) {
   const argv = process.argv.slice(2)
   const flag = (name: string) => { const at = argv.indexOf(`--${name}`); return at >= 0 ? argv[at + 1] : undefined }
   const has = (name: string) => argv.includes(`--${name}`)
-  const rounds = Number(flag("rounds") ?? (flag("calibrate") ? 3 : 2))
+  const rounds = Number(flag("rounds") ?? (flag("calibrate") ? 3 : DEFAULT_ROUNDS))
   const restSeconds = Number(flag("rest") ?? 20)
   const layout = (flag("layout") ?? "solo") as "solo" | "split"
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "perf-attrib-")))
@@ -411,7 +446,7 @@ if (import.meta.main) {
       if (has("markdown")) console.log(toMarkdown({ ...info, extra: { modules } }))
       if (has("json") || !has("markdown")) console.log(JSON.stringify(toJson({ ...info, extra: { modules } }), null, has("json") ? 0 : 2))
       if (out) { writeFileSync(path.join(out, "report.md"), toMarkdown({ ...info, extra: { modules } })); writeFileSync(path.join(out, "report.json"), JSON.stringify(toJson({ ...info, extra: { modules } }))) }
-      if (verdict(rows).word === "sube") exit = 1
+      if (verdict(rows, modules).word === "sube") exit = 1
     }
   } finally {
     for (const cleanup of cleanups) try { cleanup() } catch {}

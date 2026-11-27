@@ -39,7 +39,12 @@ export type ReviewerDenial = { fingerprint: string; tool: string; summary: strin
 export const RETRY_WINDOW_MS = 10 * 60_000
 const MAX_DENIAL_SESSIONS = 200
 
-export function createGrantStore(now: () => number = Date.now, audit?: PermissionAudit): GrantStore {
+/** The grants a sub-agent shares with its parent: folders outside the project the parent was let into. Nothing else is inherited. */
+const INHERITED_PERMISSION = "external_directory"
+const MAX_ANCESTORS = 16
+
+/** `parentOf`: the session that started `sessionId` as a sub-agent; a sub-agent's folder access is its parent's, never wider. */
+export function createGrantStore(now: () => number = Date.now, audit?: PermissionAudit, parentOf?: (sessionId: SessionId) => SessionId | undefined): GrantStore {
   const key = (tool: string, pattern?: string, permission?: string) => pattern === undefined ? tool : `${permission ?? tool}:${createHash("sha256").update(pattern).digest("hex").slice(0, 24)}`
   const grants = new Map<SessionId, Map<string, PermissionGrant>>()
   const denials = new Map<SessionId, ReviewerDenial>()
@@ -72,7 +77,12 @@ export function createGrantStore(now: () => number = Date.now, audit?: Permissio
     has(sessionId, tool, pattern, permission) {
       const session = grants.get(sessionId)
       if (pattern === undefined) return session?.has(tool) ?? false
-      return [...(session?.values() ?? [])].some((grant) => grant.pattern !== undefined && grant.rulePermission === (permission ?? tool) && permissionMatch(pattern, grant.pattern))
+      const rulePermission = permission ?? tool
+      const held = (owner: SessionId) => [...(grants.get(owner)?.values() ?? [])].some((grant) => grant.pattern !== undefined && grant.rulePermission === rulePermission && permissionMatch(pattern, grant.pattern))
+      if (held(sessionId)) return true
+      if (rulePermission !== INHERITED_PERMISSION || !parentOf) return false
+      for (let parent = parentOf(sessionId), depth = 0; parent && depth < MAX_ANCESTORS; parent = parentOf(parent), depth++) if (held(parent)) return true
+      return false
     },
     hasExact(sessionId, tool, provenance) {
       return [...(grants.get(sessionId)?.values() ?? [])].some((grant) => grant.tool === tool && grant.pattern === undefined && grant.provenance?.authority.fingerprint === provenance.authority.fingerprint && grant.provenance?.action.fingerprint === provenance.action.fingerprint)

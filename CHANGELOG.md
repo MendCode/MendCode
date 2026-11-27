@@ -9,6 +9,13 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- `remote setup` no longer stops when the tailnet has no HTTPS certificates: it makes a private CA on the host with openssl, saves its certificate for the remote and says when the server certificate expires (running setup again renews it).
+- The Linux user service starts again: its systemd unit wrote `WorkingDirectory` in quotes, which systemd rejects as not absolute.
+- `remote setup` and `remote pair` work with Tailscale run without root in userspace networking: they find `tailscale` in `~/.local/bin` and the user's socket, take `--tailscale PATH` and `--tailscale-socket PATH`, and listen on 127.0.0.1 with TLS there.
+- The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
+
 ## v0.0.20 - 2026-11-24
 
 Run MendCode on a server of your own and use it from anywhere: one command prepares a Linux VPS, saved remotes connect to it, sessions and code move between machines, and a domain mode serves several people with passkeys. Switching between chats, bots and sub-agents is faster and the daemon holds less memory. A Claude Code turn cut by a network failure resumes by itself, goals wait for background commands, ACP agents show their models in `/model`, `mendcode upgrade` works on Windows, and workflows tell the session that started them how they ended.
@@ -68,6 +75,7 @@ Run MendCode on a server of your own and use it from anywhere: one command prepa
 - When the daemon is slow to start, the terminal keeps waiting for it; when it cannot start, it prints one readable error and where its logs are instead of a code dump.
 
 - A chat deleted in one MendCode window now leaves the left list of every other window at once.
+- A background sub-agent that waits for an approval is now announced to its parent and to you like any other waiting child, is rejected as timed out after 10 minutes (`subagentApprovalTimeout`) instead of waiting for ever, and may use the folders outside the project its parent was already let into.
 - A chat reopened or reconnected (after a daemon restart, say) keeps the "took ... · ended ..." line under the last answer even when that turn was long enough to start before the first page of history.
 - `mendcode plugins ...` (and `plugin list|enable|disable ...`), `/plugins` and `/reload-plugins` now run the profile (package) command, profile page and `/reload`; `docs --search plugin` finds the profiles card.
 - When a session's shell is refused a profile change, the message now says to use the `profiles` tool (the user approves on a card) and that enabling or disabling needs no reload or restart.

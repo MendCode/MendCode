@@ -6,7 +6,8 @@ import { createChildApprovals } from "../src/child-approvals"
 const launcher = "ses_launcher" as SessionId
 const kids = { a: "ses_a" as SessionId, b: "ses_b" as SessionId, c: "ses_c" as SessionId }
 
-function harness(input: { humans?: SessionId[] } = {}) {
+function harness(input: { humans?: SessionId[]; timeoutMinutes?: number } = {}) {
+  const reasons: Array<{ requestId: string; reason: string | undefined }> = []
   const events: SessionEventDraft[] = []
   const notices: Array<{ launcher: string; text: string }> = []
   const answered: Array<{ child: string; requestId: string; approve: boolean }> = []
@@ -26,7 +27,8 @@ function harness(input: { humans?: SessionId[] } = {}) {
     announce: (waiting) => void announcements.push(waiting),
     mask: (_id, text) => text.replaceAll("sk-secret", "[secret]"),
     notify: async (target, text) => void notices.push({ launcher: target, text }),
-    resolveChild: async ({ child, requestId, decision }) => void (decision.kind === "answer" ? mirrored.push({ child, requestId, text: decision.text }) : answered.push({ child, requestId, approve: decision.kind === "approve" })),
+    timeoutMinutes: () => input.timeoutMinutes ?? 0,
+    resolveChild: async ({ child, requestId, decision }) => void (decision.kind === "deny" && reasons.push({ requestId, reason: decision.reason }), decision.kind === "answer" ? mirrored.push({ child, requestId, text: decision.text }) : answered.push({ child, requestId, approve: decision.kind === "approve" })),
     delayMs: 5,
   })
   const ask = (child: SessionId, requestId: string, detail = "bun scripts/gen.ts", kind: "approval" | "question" = "approval") =>
@@ -35,8 +37,58 @@ function harness(input: { humans?: SessionId[] } = {}) {
   const cards = () => events.filter((event): event is Extract<SessionEventDraft, { type: "server.request" }> => event.type === "server.request")
   const answer = (card: { requestId: RequestId; sessionId: SessionId }, label: string, human = true) =>
     approvals.resolve({ v: 1, id: "cmd", clientId: "cli_user", type: "request.resolve", sessionId: card.sessionId, requestId: card.requestId, decision: { kind: "answer", text: label, answers: [[label]] } } as unknown as Extract<Command, { type: "request.resolve" }>, human)
-  return { approvals, announcements, events, notices, answered, mirrored, ask, settle, cards, answer }
+  return { approvals, announcements, events, notices, answered, mirrored, reasons, ask, settle, cards, answer }
 }
+
+describe("a child's approval that nobody answers", () => {
+  const tiny = 0.0006 // 36 ms
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  test("is rejected as timed out and the launcher is told, once", async () => {
+    const h = harness({ timeoutMinutes: tiny })
+    h.ask(kids.a, "req_a", "bun scripts/gen.ts")
+    await wait(120)
+    expect(h.reasons).toHaveLength(1)
+    expect(h.reasons[0]).toMatchObject({ requestId: "req_a" })
+    expect(h.reasons[0]!.reason).toContain("Timed out")
+    expect(h.answered).toEqual([{ child: kids.a, requestId: "req_a", approve: false }])
+    const told = h.notices.filter((notice) => notice.text.includes("timed out"))
+    expect(told).toHaveLength(1)
+    expect(told[0]).toMatchObject({ launcher })
+    expect(told[0]!.text).toContain("ses_a")
+    expect(told[0]!.text).toContain("bun scripts/gen.ts")
+  })
+
+  test("is not rejected when it was answered in time, and the blocked notice says when it will be", async () => {
+    const h = harness({ timeoutMinutes: tiny })
+    h.ask(kids.a, "req_a")
+    await h.settle()
+    expect(h.notices[0]!.text).toContain("rejected after")
+    h.approvals.observe({ type: "server.request.resolved", sessionId: kids.a, requestId: "req_a", resolution: "answered", seq: 2, at: 2 } as unknown as SessionEvent)
+    await wait(120)
+    expect(h.reasons).toEqual([])
+    expect(h.notices.some((notice) => notice.text.includes("timed out"))).toBe(false)
+  })
+
+  test("waits for ever when the timeout is off, and a question is never timed out", async () => {
+    const h = harness({ timeoutMinutes: 0 })
+    h.ask(kids.a, "req_a")
+    await wait(80)
+    expect(h.reasons).toEqual([])
+    const asking = harness({ timeoutMinutes: tiny })
+    asking.ask(kids.a, "req_q", "which one", "question")
+    await wait(120)
+    expect(asking.reasons).toEqual([])
+  })
+
+  test("stopping the module cancels the pending timers", async () => {
+    const h = harness({ timeoutMinutes: tiny })
+    h.ask(kids.a, "req_a")
+    h.approvals.stop()
+    await wait(120)
+    expect(h.reasons).toEqual([])
+  })
+})
 
 describe("approvals that sessions started from another session wait for", () => {
   test("children that block together are one notice to the launcher and one card for the user", async () => {

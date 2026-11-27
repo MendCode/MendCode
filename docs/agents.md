@@ -220,6 +220,7 @@ Daemon admission limits come from `settings.set`:
 | `subagentDepth` | 1 | 0 disables |
 | `subagentMaxChildren` | 4 | `/settings` → Subagents → `at once` |
 | `subagentMaxDescendants` | 16 | `/settings` → Subagents → `whole tree` |
+| `subagentApprovalTimeout` | 10 | `settings.set` only; minutes a background sub-agent's approval waits before it is rejected as timed out (0 waits for ever) |
 
 The last two are also in `/settings` under Subagents; the limit error names the current number and that row.
 

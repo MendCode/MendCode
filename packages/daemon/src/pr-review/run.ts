@@ -527,7 +527,11 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
     else if (incremental) context.notes.push(`Incremental review: only what changed since the last review at ${range.base.slice(0, 7)}; the rest of the pull request was reviewed then (read other files with your tools when a change depends on them).`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
     // The cost phase: a subprocess with execution, outside the model's read-only pass; it never fails or blocks the review.
-    const perf: PerfOutcome | undefined = input.perf && !nothingLeft ? await measurePerf({ directory: input.directory, base: range.alreadyReviewed ? range.base : input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
+    // An incremental review measures its own increment (the last reviewed head against this head), so a cost already in the pull request
+    // is never attributed to files this increment did not touch. The whole pull request is measured again only while a measured rise
+    // is open: that measurement is what resolves it.
+    const openRise = [...Object.values(input.state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : []), ...(input.recheck ?? [])].some(isMeasuredRise)
+    const perf: PerfOutcome | undefined = input.perf && !nothingLeft ? await measurePerf({ directory: input.directory, base: range.alreadyReviewed || (incremental && !openRise) ? range.base : input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
     if (perf) {
       context.perf = perfPrompt(perf)
       const note = perfNote(perf)
