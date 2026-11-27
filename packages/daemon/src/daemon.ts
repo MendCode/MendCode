@@ -718,7 +718,7 @@ export async function startDaemon(options: DaemonOptions) {
    */
   const resourceLayersFor = (directory: string) => {
     const layers = layersFor(directory)
-    const parents = ancestorLayers({ directory: path.resolve(directory), ...(options.foreignHome ? { home: options.foreignHome } : {}) })
+    const parents = ancestorLayers({ directory: path.resolve(directory), userDir: options.dir, ...(options.foreignHome ? { home: options.foreignHome } : {}) })
     const foreign = store.settings.get().foreignResources === false ? { user: [], project: [] } : foreignLayers({ directory: path.resolve(directory), home: options.foreignHome })
     return withForeignLayers(layers, { user: foreign.user, project: [...parents, ...foreign.project] }, options.dir)
   }

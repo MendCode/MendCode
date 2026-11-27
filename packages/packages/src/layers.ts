@@ -134,7 +134,7 @@ export function foreignLayers({ directory, home }: { directory: string; home?: s
  * the same as `.claude` folders. The walk stops at the folder holding `.git`; without one, at the home folder or the root
  * nothing is inherited, and the home folder itself (where other programs keep data) is never read.
  */
-export function ancestorLayers({ directory, home = homedir() }: { directory: string; home?: string }): ExtensionLayer[] {
+export function ancestorLayers({ directory, home = homedir(), userDir }: { directory: string; home?: string; userDir?: string }): ExtensionLayer[] {
   const chain: string[] = []
   let current = path.dirname(path.resolve(directory))
   // Inside the project's own repository the project folder is the root: nothing above it is read.
@@ -143,7 +143,7 @@ export function ancestorLayers({ directory, home = homedir() }: { directory: str
     chain.push(current)
     if (existsSync(path.join(current, ".git"))) {
       return chain.reverse()
-        .filter((dir) => statSync(path.join(dir, ".mendcode"), { throwIfNoEntry: false })?.isDirectory())
+        .filter((dir) => statSync(path.join(dir, ".mendcode"), { throwIfNoEntry: false })?.isDirectory() && !(userDir && resolved(path.join(dir, ".mendcode")) === resolved(userDir)))
         .map((dir) => ({ dir: path.join(dir, ".mendcode"), source: "project" as const, foreign: { kinds: ["skills", "commands", "agents"] as const, origin: "parent" as const } }))
     }
     current = path.dirname(current)
