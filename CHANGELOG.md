@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `remote token create --bot FOLDER` makes a token for a chat bot on another machine: it can start sessions and run turns only inside that folder, answer their approvals and cancel, and it never hears the daemon's other activity or reaches settings, secrets or other projects.
+
 ### Changed
 
 - On the Claude engine, background commands are no longer stopped after 2 hours ("stopped after reaching its background time limit"): MendCode starts Claude Code with its background cap at the maximum, or at `processLimits.lifetimeMinutes` when you set one, unless you set `BASH_MAX_TIMEOUT_MS` yourself.
