@@ -59,6 +59,19 @@ The preserved backup occupies additional disk until you move it elsewhere. Small
 
 This path converts page layout only. It neither cleans sessions nor drops deltas, and cannot be combined with cleanup flags; existing row packing remains the separate online `--compact` operation.
 
+## Move the data folder's stored paths
+
+Use `--move-dir` after a project or folder moved on disk, so stored sessions, prompt history, workflows and memories point at the new place.
+
+```sh
+mendcode storage --move-dir /old/code=/new/code --offline --dir DATA --dry-run   # count what would move
+mendcode storage --move-dir /old/code=/new/code --offline --dir DATA             # move it
+```
+
+- Both paths must be absolute. Every stored folder at or under `OLD` moves under `NEW`.
+- Stop the daemon first. The command refuses to combine with `--clean`, `--compact`, `--vacuum` or `--worktrees`.
+- It keeps a backup of the data it changed, so the preserved copy takes disk space until you remove it.
+
 ## Folded streaming history
 
 While an item runs, every delta remains durable. A self-contained completion folds those rows into one lossless compressed block in the same transaction.
