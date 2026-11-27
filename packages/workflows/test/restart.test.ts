@@ -35,6 +35,29 @@ describe("restarting one agent of a run (r on /workflows)", () => {
     expect(answers).toBe(2)
     expect(h.get(run).tasks.find((task) => task.id === first.id)!.state).toBe("done")
     expect(h.prompts).toContain("second answer-2")
+    // The agent the old answer started was ended and left the run; only the one asked for from the new answer remains, and it runs.
+    const seconds = h.get(run).tasks.filter((task) => task.title.startsWith("second"))
+    expect(seconds).toHaveLength(1)
+    expect(h.cancelled.length).toBeGreaterThan(0)
+    expect(h.cancelled.some((entry) => entry.sessionId === seconds[0]!.sessionId)).toBe(false)
+    expect(h.get(run).tasks.filter((task) => task.state === "running")).toHaveLength(1)
+    // It did not start from the old answer a second time before the script asked for the new one.
+    expect(h.prompts.filter((prompt) => prompt === "second answer-1")).toHaveLength(1)
+  })
+
+  test("a script whose second call does not depend on the first is not stuck after the first is restarted: both finish", async () => {
+    let answers = 0
+    const h = scriptHarness({ responder: (prompt) => (prompt.startsWith("first") ? `answer-${++answers}` : prompt.startsWith("second") ? (answers < 2 ? "HOLD" : "second-done") : "ok") })
+    const run = h.start(wf(`await agent("first")\nreturn await agent("second")`))
+    await settle(30)
+    const first = h.get(run).tasks.find((task) => task.title === "first")!
+    expect(first.state).toBe("done")
+    expect(h.get(run).tasks.find((task) => task.title === "second")!.state).toBe("running")
+    expect("error" in h.service.control(run.workflowId, "retry", { taskId: first.id })).toBe(false)
+    await settle(60)
+    // The same second task starts again and the script ends: it does not wait for a cancelled agent.
+    expect(h.get(run).tasks.filter((task) => task.title === "second")).toHaveLength(1)
+    expect(h.get(run).state).toBe("completed")
   })
 
   test("a run that is over refuses a restart, and a step that never started has nothing to restart", async () => {

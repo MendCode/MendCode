@@ -73,6 +73,19 @@ const firstLine = (text: string) => {
   return (lines.findLast((line) => /^(error|\w*Error)\b/.test(line)) ?? lines.at(-1))?.slice(0, 200)
 }
 
+/** The metrics a "sube: name +n unit; name +n unit. Causes: ..." verdict names; an unreadable verdict names none. */
+function risingMetrics(verdict: string): string[] {
+  const list = /^sube: (.*?)(?:\. Causes:.*)?$/s.exec(verdict)?.[1]
+  return list ? list.split("; ").map((item) => item.replace(/\s+[+-]?[\d.]+\S*$/, "").trim()).filter(Boolean) : []
+}
+
+/** The second measurement reproduces the first when it rises in a metric the first named; when neither verdict can be read, any second rise counts. */
+function reproduces(first: string, second: string): boolean {
+  const named = risingMetrics(first)
+  const again = risingMetrics(second)
+  return !named.length || !again.length || named.some((name) => again.includes(name))
+}
+
 /** The run's result as an outcome: the markdown and its verdict, or why the table does not exist. */
 export function perfOutcome({ result, from, head, timeoutMs }: { result: PerfRunResult; from: string; head: string; timeoutMs: number }): PerfOutcome {
   if (result.timedOut) return { status: "not-measured", reason: `perf-attrib did not finish in ${Math.round(timeoutMs / 60_000)} minutes` }
@@ -133,7 +146,8 @@ export async function measurePerf({ directory, base, head, git, options, fork = 
       // A rise blocks only when a second measurement of the same pair (the builds are cached, so only the sessions run) rises too, in the time left.
       const left = timeoutMs - (now() - started)
       const second = left > 0 ? perfOutcome({ result: await runner({ directory, base: changed.from, head, cacheDir, tmpDir, timeoutMs: left, rounds: options.rounds }).catch((): PerfRunResult => ({ code: null, out: "", err: "", timedOut: true })), from: changed.from, head, timeoutMs: left }) : undefined
-      if (second?.status === "measured" && second.rose) return { ...first, confirmed: true }
+      if (second?.status === "measured" && second.rose && reproduces(first.verdict, second.verdict)) return { ...first, confirmed: true }
+      if (second?.status === "measured" && second.rose) return { ...first, rose: false, markdown: `${first.markdown}\n\nThe second measurement of the same pair rose in other metrics (${second.verdict}) and not in the first one's: the first was noise.` }
       if (second?.status === "measured") return { ...first, rose: false, markdown: `${first.markdown}\n\nA second measurement of the same pair did not reproduce the rise (${second.verdict}): the first was noise.` }
       return { ...first, confirmed: false }
     } finally { rmSync(tmpDir, { recursive: true, force: true }) }

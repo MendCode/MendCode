@@ -67,6 +67,8 @@ export type BotContext = {
   sessions(name: string): SessionDetail[]
   /** The root sessions on a model id, in every project: the chats of an external bot (`chat`). Absent, external bots list no chats. */
   sessionsOfModel?(model: string): SessionDetail[]
+  /** Whether nobody wrote anything in the chat: no message, draft, attachment, queue entry or label (the store's own check). Absent, its title, state and event count decide. */
+  unusedChat?(sessionId: string): boolean
   connectors(): readonly BotConnector[]
   /** The clock the failure window reads; the wall clock when absent. */
   now?(): number
@@ -88,7 +90,7 @@ const UNUSED_CHAT_EVENTS = 2
  */
 function withChats(bot: ExternalBotInfo, context: BotContext, now: number): ExternalBotInfo {
   // A chat nobody used (no title, idle, nothing queued, a log that stops at its first events) is not listed: the sidebar draws the rest by title, and these would all read `Untitled session`.
-  const sessions = (bot.chat ? context.sessionsOfModel?.(bot.chat) ?? [] : []).filter((session) => session.title.trim() !== "" || session.queued > 0 || session.state !== "idle" || session.lastSeq > UNUSED_CHAT_EVENTS)
+  const sessions = (bot.chat ? context.sessionsOfModel?.(bot.chat) ?? [] : []).filter((session) => context.unusedChat ? !context.unusedChat(session.sessionId) : session.title.trim() !== "" || session.queued > 0 || session.state !== "idle" || session.lastSeq > UNUSED_CHAT_EVENTS)
   if (!sessions.length) return bot
   const byProject = new Map<string, SessionDetail[]>()
   for (const session of sessions) byProject.set(session.directory, [...(byProject.get(session.directory) ?? []), session])

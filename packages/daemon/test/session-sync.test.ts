@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs"
 import { afterEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -594,7 +595,9 @@ test("a run token runs turns and nothing else: no shell, files, settings, permis
   expect(await peer.send({ type: "session.create", directory: folder, agent: "build" })).toMatchObject(refused("no parent"))
   expect(await peer.send({ type: "session.create", directory: tempDir("elsewhere") })).toMatchObject(refused("not a project"))
   expect(await peer.send({ type: "session.create", directory: path.join(folder, "missing") })).toMatchObject(refused("not a project"))
-  expect(await peer.send({ type: "user.submit", sessionId: id, text: "x", attachments: [{ sha256: "a".repeat(64), bytes: 1, mime: "text/plain" }] } as never)).toMatchObject(refused("text only"))
+  expect(await peer.send({ type: "user.submit", sessionId: id, text: "x", attachments: [{ sha256: "a".repeat(64), bytes: 1, mime: "text/plain" }] } as never)).toMatchObject(refused("not uploaded first"))
+  // Pasted images and text ride with the prompt, but only once the device uploaded them: no file may be written here by a run token's file-put without it either.
+  expect(await peer.send({ type: "sync.peer", input: { op: "file-put", sessionId: id, name: "a.txt", size: 1, offset: 0, data: "eA==" } } as never)).toMatchObject({ ok: true })
   expect(await peer.send({ type: "user.submit", sessionId: "ses_01M8C6XPXJAV89A3" as SessionId, text: "x", attachments: [] })).toMatchObject(refused("no such chat"))
   expect(await peer.send({ type: "request.resolve", sessionId: id, requestId: createIdFactory()("request"), decision: { kind: "approve", scope: "once", remember: { level: "user" } } } as never)).toMatchObject(refused("cannot save rules"))
   // What it may do: start a chat in a known folder, prompt it, and the hub's own turn runs.
@@ -693,7 +696,96 @@ test("a chat the hub owns says so in the device's list (the hub's name and its r
   const started = events(device.daemon, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
   await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })
   await until(async () => (await listed()).state === "idle", "the cancelled turn is idle")
+  // The live copy of the hub's events names the folder from this machine's side; the label keeps the hub's own.
+  expect(await listed()).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
   // The prompts ran on the hub, and the mapped folder was never used: it does not even exist here.
   expect(turnsDone(hub.daemon, seed)).toBeGreaterThanOrEqual(2)
   expect(existsSync(here)).toBe(false)
+})
+
+test("a copy made before the hub's folder was kept gets it from the hub's change feed on the next round, without copying its events again", async () => {
+  const { device, hubFolder, seed } = await runPair({ run: false })
+  const listed = async (node: { client: Client }) => ((await node.client.send({ type: "session.list", limit: 50 })) as unknown as { result: { sessions: Array<{ sessionId: string; hub?: string; hubDirectory?: string }> } }).result.sessions.find((session) => session.sessionId === seed)!
+  expect(await listed(device)).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
+  const stored = events(device.daemon, seed).length
+  // The row as an older build left it: mirrored, with no folder of the hub's.
+  const dir = device.dir
+  await device.stop()
+  const db = new Database(path.join(dir, "mendd.db"))
+  db.run("UPDATE sync_sessions SET hub_dir = '' WHERE session_id = ?", [seed])
+  db.close()
+  const restarted = await startDevice(dir)
+  expect(await listed(restarted)).toMatchObject({ hub: "hub" })
+  expect((await listed(restarted)).hubDirectory).toBeUndefined()
+  await syncNow(restarted.client)
+  expect(await listed(restarted)).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
+  expect(events(restarted.daemon, seed).length).toBe(stored)
+})
+
+/** Bytes of a PNG header that the attachment check accepts. */
+const PNG = () => Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(300_000, 7)])
+
+test("a prompt with images and pasted text sent to a chat the hub owns reaches the hub with its attachments and runs there like a text prompt", async () => {
+  const { hub, device, seed } = await runPair({ run: true })
+  const png = PNG()
+  const stored = await device.client.send({ type: "attachment.put", name: "shot.png", data: Buffer.from(png.subarray(0, 120_000)).toString("base64") } as never)
+  expect(stored).toMatchObject({ ok: true })
+  // A bigger one than a frame carries: the whole file is made on the device, then uploaded in chunks.
+  const big = Buffer.concat([png, Buffer.alloc(900_000, 3)])
+  const first = (stored as unknown as { result: { attachment: { sha256: string; bytes: number; mime: string } } }).result.attachment
+  const bigRef = device.daemon.store.putBlob(big, "image/png")
+  const sent = await device.client.send({ type: "user.submit", sessionId: seed, text: "see [Image #1] and [Image #2]", attachments: [{ ...first, name: "shot.png" }, { ...bigRef, name: "big.png" }] } as never)
+  expect(sent).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub.daemon, seed) === 2, "the hub ran the prompt with its images", 4_000)
+  const queued = events(hub.daemon, seed).filter((event): event is Extract<SessionEvent, { type: "queue.added" }> => event.type === "queue.added").at(-1)!
+  expect(queued.attachments.map((ref) => ref.sha256)).toEqual([first.sha256, bigRef.sha256])
+  expect(Buffer.from(hub.daemon.store.readBlob(bigRef.sha256)).equals(big)).toBe(true)
+  await until(() => texts(events(device.daemon, seed)).some((text) => text.startsWith("re: see [Image #1]")), "the reply reached the device")
+  sameElsewhere(events(device.daemon, seed), hubLast(hub, seed))
+})
+
+test("a file attached to a prompt of a hub chat is copied in pieces to the hub's uploads folder for that chat; a local chat keeps the file where it is", async () => {
+  const { hub, device, seed } = await runPair({ run: true })
+  const source = tempDir("files")
+  const file = path.join(source, "board.excalidraw")
+  const body = Buffer.alloc(700_000)
+  for (let i = 0; i < body.length; i++) body[i] = i % 251
+  writeFileSync(file, body)
+  const copied = await device.client.send({ type: "attachment.upload", sessionId: seed, path: file } as never)
+  expect(copied).toMatchObject({ ok: true, result: { copied: true, size: body.length } })
+  const hubPath = (copied as unknown as { result: { path: string } }).result.path
+  expect(hubPath).toBe(path.join(hub.dir, "uploads", seed, "board.excalidraw"))
+  expect(Buffer.from(await Bun.file(hubPath).arrayBuffer()).equals(body)).toBe(true)
+  // The same name again keeps the first file for the message that named it.
+  const again = await device.client.send({ type: "attachment.upload", sessionId: seed, path: file } as never)
+  expect((again as unknown as { result: { path: string } }).result.path).toBe(path.join(hub.dir, "uploads", seed, "board-2.excalidraw"))
+  expect(await Bun.file(hubPath).exists()).toBe(true)
+  expect(readdirSync(path.join(hub.dir, "uploads", seed)).filter((entry) => entry.endsWith(".part"))).toEqual([])
+  // The prompt then tells the hub's model the path there.
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: `read ${hubPath}`, attachments: [] })).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub.daemon, seed) === 2, "the hub ran the prompt")
+  // A chat of this machine uses the file where it is.
+  const local = await newSession(device.client, tempDir("localproject"))
+  expect(await device.client.send({ type: "attachment.upload", sessionId: local, path: file } as never)).toMatchObject({ ok: true, result: { path: file, copied: false } })
+  // Not a file, and a file over the limit, are said plainly.
+  expect(await device.client.send({ type: "attachment.upload", sessionId: seed, path: source } as never)).toMatchObject({ ok: false, error: { message: expect.stringContaining("not a file") } })
+  // Deleting the chat takes its uploads with it.
+  expect(await hub.client.send({ type: "session.delete", sessionId: seed } as never)).toMatchObject({ ok: true })
+  await until(() => !existsSync(path.join(hub.dir, "uploads", seed)), "the uploads of the deleted chat were removed")
+})
+
+test("copying a file to the hub needs a run or full token, stays inside the chat's folder and refuses a file over 100 MB", async () => {
+  const { hub, seed } = await runPair({ run: false })
+  const plain = createClient({ name: "plain", remote: { hostname: "127.0.0.1", port: hub.daemon.remotePort!, token: remoteTokens(hub.dir).create({ name: "plain", sync: true }).token }, reconnect: false })
+  await plain.connect()
+  cleanups.push(() => plain.close())
+  expect(await plain.send({ type: "sync.peer", input: { op: "file-put", sessionId: seed, name: "a.txt", size: 1, offset: 0, data: "eA==" } } as never)).toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("--sync --run") } })
+  const full = createClient({ name: "full", remote: { hostname: "127.0.0.1", port: hub.daemon.remotePort!, token: remoteTokens(hub.dir).create({ name: "full" }).token }, reconnect: false })
+  await full.connect()
+  cleanups.push(() => full.close())
+  // A name with folders in it lands inside the chat's folder, never outside it.
+  const stored = await full.send({ type: "sync.peer", input: { op: "file-put", sessionId: seed, name: "../../escape.txt", size: 1, offset: 0, data: "eA==" } } as never)
+  expect(stored).toMatchObject({ ok: true, result: { stored: true, path: path.join(hub.dir, "uploads", seed, "escape.txt") } })
+  expect(await full.send({ type: "sync.peer", input: { op: "file-put", sessionId: seed, name: "huge.bin", size: 100 * 1024 * 1024 + 1, offset: 0, data: "eA==" } } as never)).toMatchObject({ ok: false })
+  expect(await full.send({ type: "sync.peer", input: { op: "file-put", sessionId: seed, name: "late.bin", size: 5, offset: 3, data: "eA==" } } as never)).toMatchObject({ ok: false, error: { message: expect.stringContaining("out of order") } })
 })

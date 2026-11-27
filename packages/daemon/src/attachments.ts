@@ -123,12 +123,14 @@ export type PastedFile =
   | { kind: "document"; bytes: Uint8Array; mime: "application/pdf"; name: string }
   | { kind: "mention"; path: string }
   | { kind: "text"; name: string; content: string; directory?: true }
+  | { kind: "file"; path: string; name: string; size: number; type: string }
 
 /**
  * Classifies a local path pasted or dropped into the prompt. An image (by its bytes, checked first
  * regardless of location) resolves like `readAttachment`. A non-image file inside `directory` becomes
  * a `mention` (its project-relative path); elsewhere it is inlined as `text` when it is at most
- * `MAX_TEXT_ATTACHMENT_BYTES` and valid UTF-8.
+ * `MAX_TEXT_ATTACHMENT_BYTES` and valid UTF-8. Every other file (large, binary, an image or PDF over its limit) is a `file`: its path,
+ * name, size and type, with no bytes read.
  */
 export async function resolvePastedPath(rawPath: string, options: { home?: string; directory?: string; allowDirectory?: boolean } = {}): Promise<PastedFile> {
   const file = normalizeDroppedPath(rawPath, options.home)
@@ -160,9 +162,9 @@ export async function resolvePastedPath(rawPath: string, options: { home?: strin
   const mime = detectMediaMime(head)
   if (mime) {
     const max = mime === "application/pdf" ? MAX_INLINE_MEDIA_BYTES : MAX_ATTACHMENT_BYTES
-    if (info.size > max) throw new AttachmentError(`${path.basename(file)} exceeds the ${max / 1_048_576} MiB attachment limit`)
+    if (info.size > max) return fileOf(file, info.size)
     const bytes = new Uint8Array(await Bun.file(file).slice(0, max + 1).arrayBuffer())
-    if (bytes.length > max) throw new AttachmentError(`${path.basename(file)} exceeds the ${max / 1_048_576} MiB attachment limit`)
+    if (bytes.length > max) return fileOf(file, bytes.length)
     if (mime === "application/pdf") return { kind: "document", bytes, mime, name: path.basename(file) }
     return { kind: "image", bytes, mime, name: path.basename(file) }
   }
@@ -172,9 +174,14 @@ export async function resolvePastedPath(rawPath: string, options: { home?: strin
     if (mention) return { kind: "mention", path: mention }
   }
 
-  if (info.size > MAX_TEXT_ATTACHMENT_BYTES) throw new AttachmentError(`${path.basename(file)} is not a supported image and is larger than 200 KB (${info.size.toLocaleString("en-US")} bytes; the limit is ${MAX_TEXT_ATTACHMENT_BYTES.toLocaleString("en-US")})`)
+  // A big text file is never put into the prompt: the model reads it by its path.
+  if (info.size > MAX_TEXT_ATTACHMENT_BYTES) return fileOf(file, info.size)
   const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
   const text = decodeUtf8Strict(bytes)
-  if (text === undefined) throw new AttachmentError(`${path.basename(file)} is not a supported image and is not valid UTF-8 text`)
+  if (text === undefined) return fileOf(file, info.size)
   return { kind: "text", name: path.basename(file), content: text }
+}
+
+function fileOf(file: string, size: number): PastedFile {
+  return { kind: "file", path: file, name: path.basename(file), size, type: Bun.file(file).type.split(";")[0] || "application/octet-stream" }
 }

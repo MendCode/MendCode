@@ -48,7 +48,7 @@ export const AGENT_CAPPED_COMMANDS = [
   "session.create", "session.fork", "user.submit", "commands.execute", "turn.cancel", "request.resolve",
   "queue.promote", "queue.remove", "queue.reorder", "queue.edit", "queue.steer",
   "session.permission.set", "session.run.configure", "session.model.set", "session.agent.set",
-  "attachment.add", "attachment.put", "attachment.paste",
+  "attachment.add", "attachment.put", "attachment.paste", "attachment.upload",
   "session.delete", "session.archive", "session.rename",
 ] as const satisfies readonly CommandType[]
 

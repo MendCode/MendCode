@@ -97,6 +97,27 @@ describe("whatsnew.ask", () => {
     expect(calls).toBe(4)
   })
 
+  test("a second terminal asking the same key while the first answer is pending shares it: one model call", async () => {
+    let calls = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const h = await boot({
+      complete: async () => { throw new Error("the counted path is used") },
+      setupComplete: async () => { calls++; await gate; return { text: "- Footer packs fit you => settings {\"outputStyle\": \"terse\"}", usage: { provider: "fake", model: "script-1", input: 10, output: 5 } } },
+    })
+    harnesses.push(h)
+    const ask = { type: "whatsnew.ask", directory: h.project, version: "0.0.3", changes: CHANGES, cacheKey: "0.0.3:pending" } as const
+    const first = h.client.send(ask)
+    while (calls === 0) await Bun.sleep(5)
+    const second = h.client.send(ask)
+    await Bun.sleep(50)
+    release()
+    const [a, b] = await Promise.all([first, second])
+    expect(calls).toBe(1)
+    expect(a).toMatchObject({ ok: true, result: { suggestions: [{ text: "Footer packs fit you" }] } })
+    expect(b).toMatchObject({ ok: true, result: { suggestions: [{ text: "Footer packs fit you" }] } })
+  })
+
   test("is refused in minimalist and without a model", async () => {
     const h = await boot({ complete: async () => "never" })
     harnesses.push(h)

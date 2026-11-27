@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs"
 import type { AppContext } from "./context"
 import { asciiChrome } from "./glyph-mode"
 import type { SlashCommand } from "../../view/commands"
@@ -29,26 +28,36 @@ export function createSlashMenu(ctx: AppContext, actions: { suggestionPool(): Sl
    * the subfolders (`session.dirs`, docs/sync.md). One question per typed directory, asked on first need and kept while the chat is open; the
    * menu draws what is known and comes back when the answer arrives.
    */
-  const hubListings = new Map<string, readonly string[] | "pending">()
+  const hubListings = new Map<string, readonly string[] | "pending" | { failedAt: number }>()
   const MAX_HUB_LISTINGS = 40
+  /** A listing that failed is asked again after this long, not on every frame and not never. */
+  const HUB_RETRY_MS = 3_000
   const hubFolders = (head: string) => {
-    const known = hubListings.get(head)
+    // A listing belongs to the chat and the folder it was asked for: after /cd or a switch to another chat the same typed text asks again.
+    const sessionId = state.sessionId
+    const key = `${sessionId}\0${input.directory ?? ""}\0${head}`
+    const known = hubListings.get(key)
     if (known === "pending") return undefined
-    if (known) return known
+    if (Array.isArray(known)) return known as readonly string[]
+    if (known && Date.now() - (known as { failedAt: number }).failedAt < HUB_RETRY_MS) return []
     if (hubListings.size >= MAX_HUB_LISTINGS) hubListings.clear()
-    hubListings.set(head, "pending")
-    void input.send({ type: "session.dirs", sessionId: state.sessionId, path: head || "." }).then((reply) => {
-      if (reply.ok) hubListings.set(head, Array.isArray(reply.result?.names) ? reply.result.names as string[] : [])
-      else { hubListings.set(head, []); state.notice = reply.error.message.replace(/^\[(SYNC|DAEMON)\]:\s*/, "") }
-    }, () => { hubListings.set(head, []); state.notice = "The hub could not be reached to list its folders" }).then(() => ctx.requestFrame())
+    hubListings.set(key, "pending")
+    const failed = () => { hubListings.set(key, { failedAt: Date.now() }) }
+    void input.send({ type: "session.dirs", sessionId, path: head || "." }).then((reply) => {
+      if (reply.ok) hubListings.set(key, Array.isArray(reply.result?.names) ? reply.result.names as string[] : [])
+      else { failed(); state.notice = reply.error.message.replace(/^\[(SYNC|DAEMON)\]:\s*/, "") }
+    }, () => { failed(); state.notice = "The hub could not be reached to list its folders" }).then(() => {
+      // A failure is shown once the retry time has passed, not forever: the frame that finds it due asks again.
+      if (hubListings.get(key) !== undefined && !Array.isArray(hubListings.get(key))) setTimeout(() => ctx.requestFrame(), HUB_RETRY_MS + 50).unref?.()
+      ctx.requestFrame()
+    })
     return undefined
   }
-  let localFolder: { directory: string; exists: boolean } | undefined
+  /** Whether the open chat is a copy of one the sync hub runs: the daemon's own ownership (the list's `hub`), not whether its folder exists here. */
   const runsOnHub = () => {
-    const directory = input.directory
-    if (!directory || input.remote) return false
-    if (localFolder?.directory !== directory) localFolder = { directory, exists: existsSync(directory) }
-    return !localFolder.exists
+    if (input.remote || !editor.text.startsWith("/cd")) return false
+    const summary = state.sessions.find((listed) => listed.sessionId === state.sessionId) ?? state.paletteSessions.find((listed) => listed.sessionId === state.sessionId)
+    return summary?.hub !== undefined
   }
   function model(width = input.screen.size.width, height = Math.max(3, input.screen.size.height - 9)) {
     // A recalled line is walked past with ↑/↓ and sent with Enter as it was entered; the menu comes back with the first edit.

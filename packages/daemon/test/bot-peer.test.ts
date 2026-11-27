@@ -46,6 +46,14 @@ test("a bot token is created with an absolute folder and listed with it; it surv
   expect(tokens.active({ ...peer, root: "/bots" })).toBe(false)
 })
 
+test("a bot root given as a symlink is stored as the real folder", () => {
+  const dir = temp("mendd-bot-link-")
+  const real = temp("mendd-bot-real-")
+  const link = path.join(dir, "bot")
+  symlinkSync(real, link)
+  expect(remoteTokens(dir).create({ name: "linked", botRoot: link })).toMatchObject({ scope: "bot", root: real })
+})
+
 test("botPeerRefusal names every command a bot may send and refuses the rest", () => {
   const root = "/bots/a"
   const sessions: Record<string, string> = { ses_in: "/bots/a/work", ses_out: "/bots/b" }

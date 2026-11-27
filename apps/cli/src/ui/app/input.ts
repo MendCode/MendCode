@@ -5,13 +5,13 @@ import type { createMemory } from "./memory"
 import { createKeyTokenizer, type KeyToken } from "../keys"
 import { connectPaste, connectPasteAction } from "../lazy-pages"
 import { runningSubagents, stopSubagents as stopSessionSubagents } from "./subagent-stop"
-import { composeSubmission, liveAttachments, pastedPaths } from "../../view/attachments"
+import { composeSubmission, liveAttachments, pastedPaths, type PendingAttachment } from "../../view/attachments"
 import { livePastes } from "../../view/paste-placeholders"
 import { parseSlash, slashRefusal } from "../../view/commands"
 import { removedAliasHint } from "../../view/slash-aliases"
 import { hoistCommand } from "../../view/mentions"
 import type { AppContext } from "./context"
-import type { ItemId, TurnId } from "@mendcode/protocol"
+import type { ItemId, SessionId, TurnId } from "@mendcode/protocol"
 import { DOUBLE_ESC_MS, RETRACT_MAX_STEPS, RETRACT_NARRATION_CHARS } from "./constants"
 import { MAX_DRAFT_CHARS } from "@mendcode/protocol/wire"
 import { moveLongPastes } from "./paste-upload"
@@ -177,6 +177,24 @@ export function createInput(ctx: AppContext, actions: {
   /** The message Esc Esc is taking back: a send waits for it so the resent text does not queue behind a turn that is still stopping. */
   let retracting: Promise<void> | undefined
 
+  /**
+   * The attachments of a prompt with each file's path made readable where the chat runs (the daemon copies it to the hub for a hub's
+   * chat, leaves it for a local one). Images, PDFs and text pass through. The first refusal stops the send with its message.
+   */
+  async function uploadFiles(pending: readonly PendingAttachment[], sessionId: SessionId): Promise<{ attachments: PendingAttachment[] } | { error: string }> {
+    const attachments: PendingAttachment[] = []
+    for (const item of pending) {
+      if (item.kind !== "file") { attachments.push(item); continue }
+      if (input.remote) return { error: "files cannot be attached while remote" }
+      const big = item.size >= 8 * 1024 * 1024
+      if (big) say(`copying ${item.name}…`, "info")
+      const reply = await input.send({ type: "attachment.upload", sessionId, path: item.path })
+      if (!reply.ok) return { error: reply.error.message }
+      attachments.push({ ...item, path: String(reply.result?.path ?? item.path) })
+    }
+    return { attachments }
+  }
+
   async function submit() {
     if (retracting) await retracting
     // A user alias (`slashCommands[].aliases`) is the command it names from here on: the prompt, the history and the recents see `/changes`, not `/d`.
@@ -298,6 +316,8 @@ export function createInput(ctx: AppContext, actions: {
     if (state.sessionId !== submissionSession || input.directory !== submissionDirectory || editor.text.trim() !== text) return
     // What still belongs to the prompt: a deleted token took its attachment with it.
     const live = liveAttachments(state.attachments, editor.text)
+    // What was attached when the message was sent; what is attached to the next one while this one uploads stays.
+    const attachedNow = state.attachments
     editor.clear()
     // A sent prompt is not an edit to undo: the next one starts with a clean history.
     editor.resetHistory()
@@ -327,12 +347,19 @@ export function createInput(ctx: AppContext, actions: {
       }
       if (state.pendingBot === botChat) state.pendingBot = undefined
     }
+    // A file attached as a path is made readable where this chat runs: a chat the hub owns gets it copied there first.
+    const uploaded = await uploadFiles(live, submissionSession)
+    if ("error" in uploaded) {
+      fail(uploaded.error)
+      if (state.sessionId === submissionSession && editor.isEmpty()) { state.attachments = live; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
+      return requestFrame()
+    }
     const sending = live
     // The bot assignment above is awaited: another chat may be open by now, and the message stays bound to the one it was written in.
     const stillHere = state.sessionId === submissionSession
-    if (stillHere) state.attachments = []
+    if (stillHere) state.attachments = state.attachments.filter((attachment) => !attachedNow.includes(attachment))
     const executable = expanded !== undefined && typeof expanded !== "string" ? expanded : undefined
-    const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, sending, executable ? "" : ide.text)
+    const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, uploaded.attachments, executable ? "" : ide.text)
     const contextText = composed.text
     composed.text = ide.text + composed.text
     // What the message was made of (its pastes, its images and files) is kept for this run, so it comes back into the prompt as it was composed.

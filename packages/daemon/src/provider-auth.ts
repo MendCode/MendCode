@@ -42,7 +42,8 @@ export function createProviderAuth(options: { dir: string; providers?: ProviderS
     if (provider && !known(provider)) throw new Error("Unknown provider")
     const own = chatgpt.status()
     // Without a MendCode login, one another tool left on this machine is what requests use: say whether it still works.
-    const imported = own.source === "v2" || own.state === "pending" ? undefined : options.importedLogin?.()
+    // An error of the own login blocks requests before the imported one is considered (subscriptionHeaders), so it is what status shows.
+    const imported = own.source === "v2" || own.state === "pending" || own.error ? undefined : options.importedLogin?.()
     const oauth: ProviderAuthStatus = imported ? { provider: "chatgpt", state: imported.state === "valid" ? "authorized" : "expired", source: "none", imported: "codex", accessTokenPresent: true, refreshTokenPresent: false, accountIdPresent: true, ...(imported.expiresAt !== undefined ? { expiresAt: imported.expiresAt } : {}) } : own
     if (provider === "chatgpt") return [oauth]
     if (provider === "github-copilot") return [copilot.status()]

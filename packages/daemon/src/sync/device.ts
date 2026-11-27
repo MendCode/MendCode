@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { MAX_SYNC_BLOB_CHUNK_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
+import { stat } from "node:fs/promises"
+import path from "node:path"
+import { MAX_SYNC_BLOB_CHUNK_BYTES, MAX_SYNC_UPLOAD_FILE_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
 import type { SyncSessionRow, SyncState } from "@mendcode/store"
 import { PORTABLE_SETTINGS } from "../config-bundle/classify"
 import { hubLacksFolders } from "./run-peer"
@@ -136,16 +138,23 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   }
 
   async function uploadBlobs(events: readonly SessionEvent[]) {
-    for (const ref of blobRefs(events).copied) {
-      if (uploaded.has(ref.sha256)) continue
-      const bytes = ports.store.readBlob(ref.sha256)
-      for (let offset = 0; offset < bytes.length; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
-        const result = await call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } })
-        if (result.stored) break
-      }
-      uploaded.add(ref.sha256)
-      if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+    for (const ref of blobRefs(events).copied) await putBlob(ref, true)
+  }
+  /** Sends one blob to the hub in chunks (the hub keeps it once whole and checked). A prompt's attachments are not counted against the round's requests. */
+  async function putBlob(ref: { sha256: string; bytes: number; mime: string }, counted: boolean) {
+    if (uploaded.has(ref.sha256)) return
+    const bytes = ports.store.readBlob(ref.sha256)
+    for (let offset = 0; offset < bytes.length; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
+      const result = await call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
+      if (result.stored) break
     }
+    uploaded.add(ref.sha256)
+    if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+  }
+  /** The attachments of a prompt for a chat the hub runs: its images, PDFs and pasted text go to the hub first, so the prompt can name them there. */
+  async function putAttachments(command: { type: string }) {
+    if (command.type !== "user.submit") return
+    for (const ref of (command as unknown as { attachments: Array<{ sha256: string; bytes: number; mime: string }> }).attachments) await putBlob(ref, false)
   }
   async function downloadBlobs(events: readonly SessionEvent[]) {
     const refs = blobRefs(events)
@@ -298,6 +307,13 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     // A session made on this machine is never overwritten by a copy.
     if (!row && exists) return 0
     if (!row && !tail && (summary.updatedAt ?? 0) < ports.now() - MIRROR_DAYS * 86_400_000) return 0
+    // The hub's change feed says where the chat is on the hub, even when no event is new: the copy keeps that folder and the lists and the footer follow it.
+    // (A live pull names the folder it guesses from this machine's side, so only the feed is authoritative.)
+    if (row && row.role === "mirror" && !tail && summary.directory && row.hubDir !== summary.directory) {
+      row = { ...row, hubDir: summary.directory }
+      save(row)
+      ports.changed(summary.sessionId)
+    }
     let stored = 0
     let after = row?.remoteSeq ?? 0
     let carry: SessionEvent[] = []
@@ -333,7 +349,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
           ports.release(summary.sessionId)
           ports.changed(summary.sessionId)
         }
-        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(summary.directory ? { hubDir: summary.directory } : {}) }
+        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(!tail && summary.directory ? { hubDir: summary.directory } : {}) }
         if (skippedBlobs) row.note = `${skippedBlobs} attachment${skippedBlobs === 1 ? "" : "s"} over 8 MiB stay on ${hub}`
         save(row)
         after = lastSeq
@@ -425,6 +441,29 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     }
   }
 
+  /** Where the one-time look for the hub's folder of copies made before it was kept has reached; undefined once nothing is missing. */
+  let hubDirCursor: number | undefined = 0
+  /**
+   * A copy made before the hub's own folder was kept has none: the hub's change feed is read once from its start, only for the
+   * folders, so the lists and the footer show it without the events being copied again.
+   */
+  async function backfillHubDirs() {
+    while (hubDirCursor !== undefined) {
+      if (![...rows.values()].some((row) => row.role === "mirror" && !row.hubDir)) { hubDirCursor = undefined; return }
+      const page = await call({ op: "changes", after: hubDirCursor }) as { changes: Summary[]; cursor: number; hasMore: boolean }
+      for (const change of page.changes) {
+        const row = rows.get(change.sessionId)
+        if (!change.deleted && change.directory && row?.role === "mirror" && !row.hubDir) {
+          save({ ...row, hubDir: change.directory })
+          // A terminal that listed the copy before this round shows the hub's folder at once.
+          ports.changed(change.sessionId)
+        }
+      }
+      if (!page.hasMore) { hubDirCursor = undefined; return }
+      hubDirCursor = page.cursor
+    }
+  }
+
   async function pullChanges() {
     for (;;) {
       const after = Number(state.meta.get("session-cursor") ?? 0)
@@ -502,6 +541,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       lastFull = ports.now()
       await syncOwned()
       await pullChanges()
+      await backfillHubDirs()
       await pushLocalMeta()
       if (config.memories) await syncMemories()
       if (config.settings && rounds % 6 === 1) await syncSettings()
@@ -530,7 +570,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   function schedule() {
     if (stopped) return
     if (live.size) startTail()
-    timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, liveTick()) : delay)
+    // A live chat quickens the rounds while the hub answers; while it does not, the round waits its back-off (it doubles up to RECONNECT_MAX_MS) instead of reconnecting three times a second.
+    timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, status.connected ? liveTick() : RECONNECT_MAX_MS) : delay)
     ;(timer as { unref?(): void }).unref?.()
   }
   /** One round now (or the one already running); a failure backs off. */
@@ -568,21 +609,25 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : command.type === "session.cd" ? "a directory change" : command.type === "session.dirs" ? "the folder list" : command.type === "request.resolve" ? "an answer" : "this change to the queue"
     return exclusive(async () => {
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
-      const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare
+      // The model of a hub chat is the hub's: the one this device picked is not sent, and the hub refuses a prompt that names one.
+      const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare.type === "user.submit" && bare.selection?.model ? { ...bare, selection: bare.selection.agent ? { agent: bare.selection.agent } : undefined } : bare
       // A connection the hub's restart ended is found out by this send: it reconnects once before the hub counts as away.
       for (let attempt = 0; ; attempt++) {
         try {
           await connect()
+          await putAttachments(outgoing)
           reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(outgoing)
           // A connection the hub's restart or a dropped network ended answers with this error instead of throwing.
           if (!reply.ok && reply.error.code === "internal" && /connection closed/.test(reply.error.message)) throw new TransportError(reply.error.message)
           break
-        } catch {
+        } catch (error) {
+          // The hub refused an attachment (too large, not accepted): that is its answer, not a lost link.
+          if (error instanceof SyncRefusal) return { ok: false as const, code: "forbidden", message: error.message }
           status.connected = false; try { client?.close() } catch {} ; client = undefined
           if (attempt === 0 && bare.type !== "session.create") continue
           // What belongs to an existing chat waits and goes out, in order, when the link is back.
           if (HUB_COMMANDS.has(bare.type) && held.length < MAX_HELD) {
-            held.push({ command: bare as Command, at: ports.now() })
+            held.push({ command: (bare.type === "user.submit" ? outgoing : bare) as Command, at: ports.now() })
             return { ok: true as const, result: { held: true } }
           }
           return { ok: false as const, code: "forbidden", message: unreachable(what) }
@@ -609,14 +654,47 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
       try {
         await connect()
+        await putAttachments(next.command)
         reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(next.command)
-      } catch (error) { throw new TransportError(error instanceof Error ? error.message : String(error)) }
+      } catch (error) {
+        if (error instanceof SyncRefusal) { held.shift(); ports.log(`[SYNC]: ${next.command.type} held while ${hub} was away was refused: ${error.message.slice(0, 300)}`); continue }
+        throw new TransportError(error instanceof Error ? error.message : String(error)) }
       held.shift()
       if (!reply.ok) ports.log(`[SYNC]: ${next.command.type} held while ${hub} was away was refused: ${reply.error.message.slice(0, 300)}`)
       const sessionId = (next.command as { sessionId?: SessionId }).sessionId
       if (sessionId && live.has(sessionId)) live.get(sessionId)!.since = ports.now()
       else if (sessionId && next.command.type === "user.submit") live.set(sessionId, { directory: live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })
     }
+  }
+
+  /**
+   * Copies a file attached to a prompt for a chat the hub owns into that chat's uploads folder on the hub, in chunks, and answers the
+   * path there. Nothing is read whole: a file of the size limit passes through in pieces.
+   */
+  async function upload(sessionId: SessionId, file: string): Promise<{ path: string; size: number; copied: true }> {
+    const row = rows.get(sessionId)
+    if (row?.role !== "mirror" || row.state !== "ok") throw new SyncRefusal("invalid", "this chat is not one the hub runs")
+    const info = await stat(file).catch(() => undefined)
+    if (!info?.isFile()) throw new SyncRefusal("invalid", `not a file: ${file}`)
+    const name = path.basename(file)
+    if (info.size > MAX_SYNC_UPLOAD_FILE_BYTES) throw new SyncRefusal("invalid", `${name} is ${(info.size / 1_048_576).toFixed(1)} MB; the largest file copied to ${hub} is ${MAX_SYNC_UPLOAD_FILE_BYTES / 1_048_576} MB`)
+    if (info.size === 0) throw new SyncRefusal("invalid", `${name} is empty`)
+    return exclusive(async () => {
+      const source = Bun.file(file)
+      let stored: { path: string } | undefined
+      try {
+        for (let offset = 0; offset < info.size && !stored; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
+          const data = Buffer.from(await source.slice(offset, Math.min(offset + MAX_SYNC_BLOB_CHUNK_BYTES, info.size)).arrayBuffer()).toString("base64")
+          const result = await call({ op: "file-put", sessionId, name, size: info.size, offset, data }, false) as { stored: boolean; path?: string }
+          if (result.stored && result.path) stored = { path: result.path }
+        }
+      } catch (error) {
+        if (error instanceof TransportError) { status.connected = false; try { client?.close() } catch {} ; client = undefined; throw new SyncRefusal("forbidden", `${hub} is not connected, so ${name} cannot be copied there now; try again when it is back`) }
+        throw error
+      }
+      if (!stored) throw new SyncRefusal("invalid", `${hub} did not keep ${name} (it changed while it was copied)`)
+      return { path: stored.path, size: info.size, copied: true as const }
+    })
   }
 
   /** Moves a session's writer, holding off the background rounds meanwhile (one exchange with the hub at a time). */
@@ -657,7 +735,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     if (state.sessionHead(sessionId)!.last_seq > current.remoteSeq) throw new SyncRefusal("busy", "not every turn could be copied yet; try again")
     await call({ op: "lease", action: "release", sessionId, epoch: current.epoch }, false)
     const head = state.sessionHead(sessionId)!
-    save({ ...current, role: "mirror", epoch: 0, leaseUntil: 0, meta: JSON.stringify(metaOf(head)) })
+    save({ ...current, role: "mirror", epoch: 0, leaseUntil: 0, hubDir: projects.toRemote(head.directory), meta: JSON.stringify(metaOf(head)) })
+    ports.changed(sessionId)
     return { sessionId, owner: hub }
   }
 
@@ -670,6 +749,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     },
     routes,
     forward,
+    upload,
     /** A round that starts now, after any one already running (`mendcode sync now`). */
     async fresh() {
       while (round) await round.catch(() => {})

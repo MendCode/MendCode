@@ -96,8 +96,8 @@ export function createWorkflows(ctx: AppContext) {
   }
 
   /** `/workflows <name|file>`: previews what will run (every check command, the applied permission); `--yes` starts it. */
-  async function workflowCommand(args: string) {
-    const parsed = parseWorkflowCommand(args)
+  async function workflowCommand(args: string, forced?: ReturnType<typeof parseWorkflowCommand>) {
+    const parsed = forced ?? parseWorkflowCommand(args)
     if (!parsed.ok) {
       state.notice = parsed.error
       return
@@ -188,7 +188,9 @@ export function createWorkflows(ctx: AppContext) {
 
   /** `/<name> args` of a saved workflow: the user typed it, so it starts at once (its estimate and caps show inline); a model never starts it. */
   async function runSavedWorkflow(command: { name: string; args: string; kind: "script" | "plan" }) {
-    await workflowCommand(command.kind === "script" ? `run ${command.name}${command.args ? ` ${command.args}` : ""} --yes` : `${command.name} --yes`)
+    // A saved plan is started by its name, never parsed as text: a plan called `run` or `saved` is not a /workflows subcommand.
+    if (command.kind === "plan") return workflowCommand("", { ok: true, spec: { kind: "start", source: { ref: command.name }, confirmed: true } })
+    await workflowCommand(`run ${command.name}${command.args ? ` ${command.args}` : ""} --yes`)
   }
 
   /** `/workflows new|convert|update`: script files on this machine. Returns the line to show. */

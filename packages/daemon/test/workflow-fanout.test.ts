@@ -22,6 +22,12 @@ describe("the fanout keyword", () => {
   test("a mention in code, after a backslash, inside a longer word or in a machine notice does not", () => {
     expect(fanoutTrigger("what does `fanout` do?", undefined)).toBeUndefined()
     expect(fanoutTrigger("```\nfanout()\n```", undefined)).toBeUndefined()
+    expect(fanoutTrigger("What does ``fanout`` mean?", undefined)).toBeUndefined()
+    expect(fanoutTrigger("What does ``a ` fanout`` mean?", undefined)).toBeUndefined()
+    expect(fanoutTrigger("```\nfanout()\n````", undefined)).toBeUndefined()
+    expect(fanoutTrigger("```\nfanout()", undefined)).toBeUndefined()
+    expect(fanoutTrigger("```\ncode\n```\nnow fanout this", undefined)).toBe("keyword")
+    expect(fanoutTrigger("an unclosed `` fanout mention", undefined)).toBe("keyword")
     expect(fanoutTrigger("use \\fanout literally", undefined)).toBeUndefined()
     expect(fanoutTrigger("a fanouts and fan-out", undefined)).toBeUndefined()
     expect(fanoutTrigger("", { auto: true })).toBeUndefined()

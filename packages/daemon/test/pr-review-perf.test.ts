@@ -291,6 +291,17 @@ describe("a rise needs a second measurement", () => {
     expect(finding).toMatchObject({ severity: "critical", verdict: "confirmed" })
   })
 
+  test("a second rise in a different metric does not confirm the first: the first was noise", async () => {
+    const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
+    const footprint = { code: 1, out: TABLE("sube: ready.footprint_mb +4MB. Causes: module x") }
+    const cpu = { code: 1, out: TABLE("sube: turn.cpu_ms +300ms. Causes: none above noise") }
+    const outcome = await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), run: scripted([footprint, cpu]).run } })
+    expect(outcome).toMatchObject({ status: "measured", rose: false })
+    expect((outcome as { markdown: string }).markdown).toContain("other metrics")
+    const same = await measurePerf({ directory: repo.dir, base: repo.base, head: repo.head, git: gitRun, options: { dir: temp(), run: scripted([footprint, { code: 1, out: TABLE("sube: ready.footprint_mb +5MB; turn.cpu_ms +300ms. Causes: x") }]).run } })
+    expect(same).toMatchObject({ rose: true, confirmed: true })
+  })
+
   test("a rise the second measurement does not reproduce is noise: no finding, and the details say so", async () => {
     const repo = await pullRequest({ changed: { "apps/cli/src/a.ts": "export const a = 1\n" } })
     const run = await review(repo, { dir: temp(), run: scripted([rise, flat]).run }, child())

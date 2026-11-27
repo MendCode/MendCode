@@ -261,6 +261,25 @@ describe("what a working profile is doing", () => {
     expect(BotListReport.safeParse({ bots: [], external: bots, problems: [] }).success).toBe(true)
   })
 
+  test("a title read from the first question never carries a credential", async () => {
+    const secret = `sk-ant-api03-${"x".repeat(80)}`
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/api/profiles") return Response.json(PROFILES)
+        if (url.pathname === "/api/profiles/sessions") return Response.json({ sessions: [{ id: "s-key", profile: "ada", is_active: false, title: null, preview: `Use ANTHROPIC_API_KEY=${secret} to deploy` }] })
+        return new Response("not found", { status: 404 })
+      },
+    })
+    servers.push(server)
+    const bots = await hermesConnector({ env: { MENDCODE_HERMES_URL: `http://127.0.0.1:${server.port}`, MENDCODE_HERMES_TOKEN: TOKEN } }).list()
+    const title = bots.find((bot) => bot.id === "ada")!.recent![0]!.title!
+    expect(title).not.toContain(secret)
+    expect(title).toContain("to deploy")
+  })
+
   test("a session's messages are read with the same token header: who said what, the tool named, nothing of the system", async () => {
     const hermes = busyHermes()
     const connector = hermesConnector({ env: hermes.env })

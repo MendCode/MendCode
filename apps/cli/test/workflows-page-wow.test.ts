@@ -83,6 +83,10 @@ describe("r, s and f on /workflows", () => {
     expect(out).toContain("cannot run: not readable")
     expect(workflowsPageKey(state, "\r", [], saved).action).toEqual({ type: "runSaved", name: "audit", kind: "script", now: false })
     expect(workflowsPageKey(state, "r", [], saved).action).toEqual({ type: "runSaved", name: "audit", kind: "script", now: true })
+    // Only the Saved tab is highlighted on it, not All projects.
+    const lit = renderWorkflowsPage({ runs: [], saved, state, width: 100, height: 20, now: NOW }).flatMap((line) => line.filter((span) => span.bg === "element" && span.bold).map((span) => span.text.trim()))
+    expect(lit.some((label) => label.startsWith("Saved"))).toBe(true)
+    expect(lit.some((label) => label.startsWith("All"))).toBe(false)
     const second = workflowsPageKey(state, "j", [], saved).state
     expect(workflowsPageKey(second, "\r", [], saved).action.type).toBe("none")
   })

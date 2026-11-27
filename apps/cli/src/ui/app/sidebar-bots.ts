@@ -539,6 +539,7 @@ export function createSidebarBots(ctx: AppContext) {
       base: openedDirectory() || home,
       home,
       remote: Boolean(input.remote),
+      hubFolders: new Set(sessions().filter((session) => session.hub !== undefined && session.archivedAt === undefined && probe.eligible(session.directory)).map((session) => probe.canonical(session.directory))),
       // Asked only when a listed folder is not on this machine: the hub whose project it is, for the mark beside it.
       async hubName() {
         const reply = await input.send({ type: "sync.control", input: { action: "status" } })

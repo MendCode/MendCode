@@ -103,7 +103,8 @@ describe("run --bg against a real daemon", () => {
 })
 
 describe("slash commands", () => {
-  function app(options: { reply?: (command: CommandInput) => unknown; remote?: boolean; settings?: Record<string, unknown>; directory?: string } = {}) {
+  /** `hub`: the open chat is a copy of one the sync hub of that name runs (the list says so). */
+  function app(options: { reply?: (command: CommandInput) => unknown; remote?: boolean; settings?: Record<string, unknown>; directory?: string; hub?: string } = {}) {
     const directory = options.directory ?? tempDir("mendcode-b17-")
     const h = appHarness({
       directory,
@@ -114,6 +115,8 @@ describe("slash commands", () => {
         return options.reply ? reply(options.reply(command)) : undefined
       },
     })
+    // The daemon's push for a copy of a chat the hub runs carries the hub's name, as `session.list` does.
+    if (options.hub) h.app.onGlobal({ type: "session.activity", gseq: 1, at: 1, sessionId: h.sessionId, directory, title: "Hub chat", state: "idle", updatedAt: 2, hub: options.hub })
     return { h, directory }
   }
   const screen = (h: ReturnType<typeof app>["h"]) => h.text().join("\n")
@@ -205,7 +208,7 @@ describe("slash commands", () => {
   })
 
   test("/cd in a chat that runs on the hub asks the hub for its folders once per typed directory and shows them; a hub error is a notice", async () => {
-    const { h } = app({ directory: "/nonexistent-hub/projects", reply: (command) => command.type === "session.dirs" ? { ok: true, result: { directory: "/nonexistent-hub/projects", names: ["APP-NEXT", "docs"], truncated: false } } : undefined })
+    const { h } = app({ directory: "/nonexistent-hub/projects", hub: "vps", reply: (command) => command.type === "session.dirs" ? { ok: true, result: { directory: "/nonexistent-hub/projects", names: ["APP-NEXT", "docs"], truncated: false } } : undefined })
     await h.type("/cd AP")
     await until(() => h.sentOf("session.dirs").length === 1, "the hub was asked")
     expect(h.sentOf("session.dirs")[0]).toEqual({ type: "session.dirs", sessionId: h.sessionId, path: "." })
@@ -213,10 +216,27 @@ describe("slash commands", () => {
     expect(screen(h)).not.toContain("cd docs/")
     await h.type("P")
     expect(h.sentOf("session.dirs")).toHaveLength(1)
-    const down = app({ directory: "/nonexistent-hub/projects", reply: (command) => command.type === "session.dirs" ? { ok: false, error: { code: "forbidden", message: "[SYNC]: hub is not connected, so the folder list cannot run there now" } } : undefined })
+    const down = app({ directory: "/nonexistent-hub/projects", hub: "vps", reply: (command) => command.type === "session.dirs" ? { ok: false, error: { code: "forbidden", message: "[SYNC]: hub is not connected, so the folder list cannot run there now" } } : undefined })
     await down.h.type("/cd F")
     await until(() => screen(down.h).includes("hub is not connected"), "the hub error is shown")
   })
+
+  test("/cd completion follows the chat's ownership, not whether its folder exists here, and asks again after a failure", async () => {
+    // A hub chat whose folder also exists on this machine (a clone at the same path) still lists the hub's folders.
+    const here = app({ hub: "vps", reply: (command) => command.type === "session.dirs" ? { ok: true, result: { directory: "/x", names: ["from-hub"], truncated: false } } : undefined })
+    await here.h.type("/cd fr")
+    await until(() => screen(here.h).includes("cd from-hub/"), "the hub's folder is offered although the folder exists here")
+    // A local chat whose folder is gone is not the hub's: the hub is never asked.
+    const local = app({ directory: "/nonexistent-local/projects", reply: (command) => command.type === "session.dirs" ? { ok: true, result: { directory: "/x", names: ["nope"], truncated: false } } : undefined })
+    await local.h.type("/cd n")
+    await Bun.sleep(50)
+    expect(local.h.sentOf("session.dirs")).toHaveLength(0)
+    // A failed listing is retried, not kept as an empty answer.
+    let calls = 0
+    const flaky = app({ hub: "vps", reply: (command) => command.type === "session.dirs" ? (++calls === 1 ? { ok: false, error: { code: "forbidden", message: "[SYNC]: hub is not connected" } } : { ok: true, result: { directory: "/x", names: ["back"], truncated: false } }) : undefined })
+    await flaky.h.type("/cd b")
+    await until(() => calls >= 2 && screen(flaky.h).includes("cd back/"), "the listing came back after the hub did", 8_000)
+  }, 15_000)
 
   test("/cd sends the move and /pwd shows the directory; a remote terminal is refused before sending", async () => {
     const { h } = app({ directory: "/work/here", reply: (command) => command.type === "session.cd" ? { ok: true, result: { directory: "/work/other", previous: "/work/here" } } : undefined })

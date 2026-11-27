@@ -18,6 +18,7 @@ export const FILES: Record<string, Record<string, unknown>> = {
   "/shots/one.png": { kind: "image", attachment: { sha256: sha("1"), bytes: 315_187, mime: "image/png" }, name: "one.png", width: 1262, height: 540 },
   "/shots/two.png": { kind: "image", attachment: { sha256: sha("2"), bytes: 98_304, mime: "image/png" }, name: "two.png", width: 800, height: 600 },
   "/docs/design-spec.pdf": { kind: "document", attachment: { sha256: sha("3"), bytes: 2_048_000, mime: "application/pdf" }, name: "design-spec.pdf" },
+  "/docs/board.excalidraw": { kind: "file", path: "/docs/board.excalidraw", name: "board.excalidraw", size: 20_230_865, type: "application/json" },
   "/docs/notes.txt": { kind: "text", name: "notes.txt", content: "line one\nline two" },
   "/repos/codeconfig": { kind: "text", name: "codeconfig", content: "<path>/repos/codeconfig</path>\n<type>directory</type>\n<entries>\nAGENTS.md\nclaude/\ncodex/\n</entries>\n(3 of 3 entries)", directory: true },
 }
@@ -47,6 +48,7 @@ export function bench(options: BenchOptions = {}) {
         const found = FILES[String(command.path).replace(/^['"]|['"]$/g, "")]
         return found ? { ok: true, result: found } as CommandReply : { ok: false, error: { code: "invalid_command", message: `[ATTACHMENT]: not a file or directory: ${command.path}` } } as CommandReply
       }
+      if (command.type === "attachment.upload") return { ok: true, result: { path: String(command.path).replace("/docs/", "/hub/uploads/ses/"), size: 20_230_865, copied: true } } as CommandReply
       if (command.type === "attachment.clipboard") {
         clipboard++
         return { ok: true, result: { attachment: { sha256: sha(String(clipboard + 3)), bytes: 20_480, mime: "image/png" }, name: "clipboard.png", width: 640, height: 480 } } as CommandReply

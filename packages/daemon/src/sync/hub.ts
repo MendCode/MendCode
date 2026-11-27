@@ -19,6 +19,7 @@ export function createHub(ports: SyncPorts, state: SyncState) {
   const leases = new Map<string, SyncLease>(state.leases.list().map((lease) => [lease.sessionId, lease]))
   const projects = createProjectIndex({ directories: () => ports.store.listSessions({ limit: 500, roots: true, archived: true }).map((session) => session.directory), rules: [], now: ports.now })
   const staging = createBlobStaging(ports.store)
+  let uploads: ReturnType<typeof import("./uploads").createUploads> | undefined
   const live = (lease: SyncLease | undefined) => lease !== undefined && lease.until > ports.now()
   const store: Store = ports.store
 
@@ -180,6 +181,10 @@ export function createHub(ports: SyncPorts, state: SyncState) {
         return { ok: true }
       }
       case "blob-put": return staging.put(input.input)
+      case "file-put": {
+        root(input.sessionId)
+        return (uploads ??= (await import("./uploads")).createUploads(ports.dir)).put(holder, input)
+      }
       case "blob-read": {
         const info = state.blobInfo(input.input.sha256)
         if (!info || !existsSync(store.blobPath(input.input.sha256))) throw new SyncRefusal("invalid", "no such blob on the hub")

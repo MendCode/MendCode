@@ -128,7 +128,7 @@ export function createPeerOrigin(options: { pid?: number; platform?: string; des
 }
 
 const MAX_CREATED = 2000
-const ATTACHMENTS = new Set<string>(["attachment.add", "attachment.put", "attachment.paste"])
+const ATTACHMENTS = new Set<string>(["attachment.add", "attachment.put", "attachment.paste", "attachment.upload"])
 
 /**
  * What an agent-origin client may do. `open` commands pass, `owner` commands never do, and session work is held to the

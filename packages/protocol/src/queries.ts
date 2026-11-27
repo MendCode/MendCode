@@ -1474,6 +1474,8 @@ export const AttachmentPasteResult = lazySchema(() => z.discriminatedUnion("kind
   z.strictObject({ kind: z.literal("image"), attachment: BlobRef, name: z.string().max(255), width: z.number().int().positive().optional(), height: z.number().int().positive().optional() }),
   z.strictObject({ kind: z.literal("document"), attachment: BlobRef, name: z.string().max(255) }),
   z.strictObject({ kind: z.literal("mention"), path: z.string().min(1).max(4096) }),
+  /** Any other file (not an image or PDF within the limits, not small text): the model gets its path and this note, never its bytes. */
+  z.strictObject({ kind: z.literal("file"), path: z.string().min(1).max(4096), name: z.string().max(255), size: z.number().int().nonnegative(), type: z.string().max(255) }),
   z.strictObject({ kind: z.literal("text"), name: z.string().max(255), content: z.string().max(210_000), directory: z.literal(true).optional() }),
 ]))
 export type AttachmentPasteResult = z.infer<typeof AttachmentPasteResult>
