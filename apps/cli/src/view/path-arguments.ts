@@ -26,13 +26,21 @@ function entriesOf(directory: string): Array<{ name: string; directory: boolean 
  * is a prefix filter. Hidden entries show only once the partial starts with a dot. Directories come first and end with `/`, so Tab walks
  * into them. Empty for a command that takes no path, a remote terminal (`base` undefined) or an unreadable directory. Local only.
  */
-export function pathMatches(input: { command: string; args: string; base: string | undefined }): PathMatch[] {
+export function pathMatches(input: { command: string; args: string; base: string | undefined; /** The subfolder names of a directory typed so far, asked of the sync hub for a chat that runs there; undefined while they are not known. Replaces the local disk. */ hubFolders?: (head: string) => readonly string[] | undefined }): PathMatch[] {
   const kind = PATH_COMMANDS[input.command]
   if (!kind || !input.base) return []
   const typed = input.args.replace(/^\s+/, "")
   const slash = typed.lastIndexOf("/")
   const head = slash >= 0 ? typed.slice(0, slash + 1) : ""
   const partial = typed.slice(slash + 1)
+  if (input.hubFolders) {
+    if (input.command !== "cd") return []
+    const lowerPartial = partial.toLowerCase()
+    return (input.hubFolders(head) ?? [])
+      .filter((name) => name.toLowerCase().startsWith(lowerPartial) && (partial.startsWith(".") || !name.startsWith(".")))
+      .slice(0, MAX_ROWS)
+      .map((name) => ({ name: `${input.command} ${head}${name}/`, summary: "directory", directory: true }))
+  }
   const expanded = head === "~/" || head.startsWith("~/") ? join(homedir(), head.slice(2)) : head
   const directory = resolve(input.base, expanded || ".")
   const lower = partial.toLowerCase()

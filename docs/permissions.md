@@ -304,7 +304,7 @@ Reopening the daemon marks old grants inactive, cancels interrupted reviews and 
 | setting | meaning |
 |---|---|
 | `defaultPermission` | `ask` \| `edits` \| `full` \| `smart` for new sessions (per profile too) |
-| `syncRunPermission` | `ask` \| `edits` \| `full` for chats a device starts on this machine through a sync run token; default `edits` |
+| `syncRunPermission` | `ask` \| `edits` \| `full` for chats a device starts on this machine through a sync run token; default `edits`. The same token may also `/cd` a chat of this machine and list subfolders for `/cd` completion, only inside folders this machine already works in (read only, names only; [docs/sync.md](sync.md#running-on-the-hub)) |
 | `permissionAllow` | extra allow-listed command prefixes for smart mode |
 | `smartSandboxTrust` | `true` lets smart mode run commands it merely does not know (`unlisted-command`, `shell-expansion`) when the OS sandbox (`/sandbox`, `docs/sandbox.md`) is on with `network: off`. Off by default; local clients only |
 | `models.permissionReviewer` | the reviewer's model; unset = no reviewer |
