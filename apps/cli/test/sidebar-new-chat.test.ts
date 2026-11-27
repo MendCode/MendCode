@@ -21,8 +21,8 @@ describe("the folders a new chat can start in", () => {
   })
 
   test("text that starts like a path leaves the known folders: the typed directory itself, then the ones that continue it, once each", () => {
-    for (const query of ["/", "~", "~/co", "./x", "..", "../y"]) expect(looksLikePath(query), query).toBe(true)
-    for (const query of ["", "api", "a/b", ".hidden"]) expect(looksLikePath(query), query).toBe(false)
+    for (const query of ["/", "~", "~/co", "./x", "..", "../y", "a/b"]) expect(looksLikePath(query), query).toBe(true)
+    for (const query of ["", "api", ".hidden"]) expect(looksLikePath(query), query).toBe(false)
     const choices = folderChoices({ folders: FOLDERS, opened: "/work/app", query: "~/code/", home: HOME, typedDirectory: `${HOME}/code`, completions: [{ directory: `${HOME}/code/api`, typed: "~/code/api/" }, { directory: `${HOME}/code/new`, typed: "~/code/new/" }, { directory: `${HOME}/code`, typed: "~/code/" }] })
     expect(choices.map((choice) => [choice.label, choice.kind, choice.typed])).toEqual([["~/code", "path", undefined], ["api/", "path", "~/code/api/"], ["new/", "path", "~/code/new/"]])
     expect(folderChoices({ folders: FOLDERS, query: "/no/such", home: HOME })).toEqual([])

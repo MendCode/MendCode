@@ -539,6 +539,12 @@ export function createSidebarBots(ctx: AppContext) {
       base: openedDirectory() || home,
       home,
       remote: Boolean(input.remote),
+      // Asked only when a listed folder is not on this machine: the hub whose project it is, for the mark beside it.
+      async hubName() {
+        const reply = await input.send({ type: "sync.control", input: { action: "status" } })
+        const status = reply.ok ? reply.result as { mode?: unknown; remote?: unknown } | undefined : undefined
+        return status?.mode === "device" && typeof status.remote === "string" ? status.remote : undefined
+      },
       async start(directory) {
         release()
         if (host === undefined) return startFolderChat(directory, deps)
