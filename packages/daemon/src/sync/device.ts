@@ -3,6 +3,7 @@ import { existsSync } from "node:fs"
 import { MAX_SYNC_BLOB_CHUNK_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
 import type { SyncSessionRow, SyncState } from "@mendcode/store"
 import { PORTABLE_SETTINGS } from "../config-bundle/classify"
+import { hubLacksFolders } from "./run-peer"
 import { blobRefs, canonical, settledPrefix, syncedMessages, SyncRefusal, withDirectory } from "./ingest"
 import { applyMemory, memoryToWire } from "./memories"
 import { createProjectIndex } from "./projects"
@@ -74,9 +75,10 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   /** Whether a command of a local client runs on the hub instead of here: a new chat in the hub's folder, or a prompt, cancel or approval for a chat the hub owns. */
   function routes(command: Command): boolean {
     if (command.type === "session.create") return !command.parentId && remoteFolder(command.directory)
-    if (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve") { const row = rows.get(command.sessionId); return row?.role === "mirror" && row.state === "ok" }
+    if (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.cd" || command.type === "session.dirs") { const row = rows.get(command.sessionId); return row?.role === "mirror" && row.state === "ok" }
     return false
   }
+  const folderRefusal = (name: string, what: string, error: { code: string; message: string }) => hubLacksFolders(error) ? `[SYNC]: ${name} refused ${what}: either this device's token was not made with \`remote token create --sync --run\`, or ${name} runs an older MendCode that does not know it yet (update ${name})` : error.message
   const unreachable = (what: string) => `[SYNC]: ${hub} is not connected, so ${what} cannot run there now; try again when it is back, or clone the project here`
 
   async function connect() {
@@ -460,15 +462,17 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
    */
   async function forward(command: Command): Promise<{ ok: true; result?: Record<string, unknown> } | { ok: false; code: string; message: string }> {
     const { id: _id, clientId: _clientId, ...bare } = command as Command & { id: string; clientId: string }
-    const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : "an answer"
+    const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : command.type === "session.cd" ? "a directory change" : command.type === "session.dirs" ? "the folder list" : "an answer"
     return exclusive(async () => {
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
       try {
         await connect()
-        const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare
+        const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare
         reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(outgoing)
       } catch { status.connected = false; try { client?.close() } catch {} ; client = undefined; return { ok: false as const, code: "forbidden", message: unreachable(what) } }
-      if (!reply.ok) return { ok: false as const, code: reply.error.code, message: reply.error.message }
+      if (!reply.ok) return { ok: false as const, code: reply.error.code, message: bare.type === "session.cd" || bare.type === "session.dirs" ? folderRefusal(hub, what, reply.error) : reply.error.message }
+      // Listing folders changes nothing the mirror shows; a directory change comes back as the hub's workspace event.
+      if (bare.type === "session.dirs") return { ok: true as const, ...(reply.result ? { result: reply.result } : {}) }
       const sessionId = (bare.type === "session.create" ? reply.result?.sessionId : (bare as { sessionId: string }).sessionId) as SessionId | undefined
       if (typeof sessionId === "string") {
         live.set(sessionId, { directory: bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })

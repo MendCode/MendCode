@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs"
 import type { AppContext } from "./context"
 import { asciiChrome } from "./glyph-mode"
 import type { SlashCommand } from "../../view/commands"
@@ -23,6 +24,32 @@ export function createSlashMenu(ctx: AppContext, actions: { suggestionPool(): Sl
       lastLayout = state.tuiProfile.slashMenu
     }
   }
+  /**
+   * `/cd` completion for a chat that runs on the sync hub: its folder is not on this machine (the mirror keeps the hub's path), so the hub lists
+   * the subfolders (`session.dirs`, docs/sync.md). One question per typed directory, asked on first need and kept while the chat is open; the
+   * menu draws what is known and comes back when the answer arrives.
+   */
+  const hubListings = new Map<string, readonly string[] | "pending">()
+  const MAX_HUB_LISTINGS = 40
+  const hubFolders = (head: string) => {
+    const known = hubListings.get(head)
+    if (known === "pending") return undefined
+    if (known) return known
+    if (hubListings.size >= MAX_HUB_LISTINGS) hubListings.clear()
+    hubListings.set(head, "pending")
+    void input.send({ type: "session.dirs", sessionId: state.sessionId, path: head || "." }).then((reply) => {
+      if (reply.ok) hubListings.set(head, Array.isArray(reply.result?.names) ? reply.result.names as string[] : [])
+      else { hubListings.set(head, []); state.notice = reply.error.message.replace(/^\[(SYNC|DAEMON)\]:\s*/, "") }
+    }, () => { hubListings.set(head, []); state.notice = "The hub could not be reached to list its folders" }).then(() => ctx.requestFrame())
+    return undefined
+  }
+  let localFolder: { directory: string; exists: boolean } | undefined
+  const runsOnHub = () => {
+    const directory = input.directory
+    if (!directory || input.remote) return false
+    if (localFolder?.directory !== directory) localFolder = { directory, exists: existsSync(directory) }
+    return !localFolder.exists
+  }
   function model(width = input.screen.size.width, height = Math.max(3, input.screen.size.height - 9)) {
     // A recalled line is walked past with ↑/↓ and sent with Enter as it was entered; the menu comes back with the first edit.
     if (state.recall.index >= 0) return undefined
@@ -31,7 +58,7 @@ export function createSlashMenu(ctx: AppContext, actions: { suggestionPool(): Sl
       state.suggestion = 0
       previous = editor.text
     }
-    return slashMenuModel({ text: editor.text, ...(input.directory && !input.remote ? { directory: input.directory } : {}), custom: actions.suggestionPool(), profile: state.tuiProfile, settings: state.settingsNow, recents, state: navigation, selected: state.suggestion, width, height, bindings: state.bindings, ascii: state.tuiProfile.accessible || asciiChrome(state) })
+    return slashMenuModel({ text: editor.text, ...(input.directory && !input.remote ? { directory: input.directory } : {}), ...(runsOnHub() ? { hubFolders } : {}), custom: actions.suggestionPool(), profile: state.tuiProfile, settings: state.settingsNow, recents, state: navigation, selected: state.suggestion, width, height, bindings: state.bindings, ascii: state.tuiProfile.accessible || asciiChrome(state) })
   }
   /** The public data of a command: what a custom view sees. */
   const publicCommand = ({ name, aliases, summary, group, shortcut, setting, custom, ext, mcp }: { name: string; aliases: readonly string[]; summary: string; group: string; shortcut?: string | undefined; setting?: string | undefined; custom?: true | undefined; ext?: true | undefined; mcp?: true | undefined }) => ({ name, aliases, summary, group, ...(shortcut ? { shortcut } : {}), ...(setting ? { setting } : {}), ...(custom ? { custom } : {}), ...(ext ? { ext } : {}), ...(mcp ? { mcp } : {}) })

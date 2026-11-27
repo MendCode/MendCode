@@ -3958,7 +3958,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
     }
     // A chat the hub owns runs on the hub: this daemon forwards the prompt, the cancel or the answer, and a new chat in the hub's folder, and the turn comes back through the mirror.
-    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create")) {
+    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create" || command.type === "session.cd" || command.type === "session.dirs")) {
       const forward = syncRoute(command)
       if (forward) {
         const done = await forward(command)
@@ -4575,8 +4575,28 @@ export async function startDaemon(options: DaemonOptions) {
         try { return reply(connection, command.id, { ok: true, result: await staticShare.handle(command) as Record<string, unknown> }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[SHARE]: ${redactSecrets(error instanceof Error ? error.message : "Share operation failed").text.slice(0, 500)}` }) }
       }
+      case "session.dirs": {
+        // Subfolder names of a folder, for `/cd` completion of a chat a device runs here (docs/sync.md): local clients and run tokens only, and a run token only inside the folders this machine already works in.
+        const run = connection.peer?.scope === "sync-run"
+        if (connection.remoteAddress && !run) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: listing folders is local only" })
+        const base = store.sessionDirectory(command.sessionId)
+        if (!base) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
+        const listed = await (await import("./sync/run-folders")).listFolders({ base, requested: command.path, allowed: (directory) => !run || knownProjectDirectory(directory) })
+        if ("refusal" in listed) return reply(connection, command.id, { ok: false, code: run ? "forbidden" : "invalid_command", message: listed.refusal })
+        return reply(connection, command.id, { ok: true, result: listed })
+      }
       case "session.cd": {
-        if (connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: changing a session directory is local only" })
+        const run = connection.peer?.scope === "sync-run"
+        if (connection.remoteAddress && !run) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: changing a session directory is local only" })
+        if (run) {
+          // A device moves a chat of this machine only inside the folders it already works in, and not while another machine writes it.
+          const folders = await import("./sync/run-folders")
+          const target = await folders.resolveFolder({ base: store.sessionDirectory(command.sessionId) ?? "/", requested: command.path })
+          if (!target) return reply(connection, command.id, { ok: false, code: "invalid_command", message: folders.FOLDER_MISSING })
+          if (!knownProjectDirectory(target)) return reply(connection, command.id, { ok: false, code: "forbidden", message: folders.FOLDER_OUTSIDE })
+          const held = syncGuard?.(command.sessionId, "session.workspace.changed")
+          if (held) return reply(connection, command.id, { ok: false, code: "forbidden", message: held })
+        }
         try { return reply(connection, command.id, { ok: true, result: (await projectRestService()).cd(command.sessionId, command.path) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: error instanceof ProjectRestError ? error.code : "invalid_command", message: error instanceof ProjectRestError ? `[DAEMON]: ${error.message}` : "[DAEMON]: directory change failed" }) }
       }

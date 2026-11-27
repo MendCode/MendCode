@@ -4,10 +4,11 @@ export const SYNC_TOKEN_REFUSAL = "[SYNC]: a sync token only syncs sessions; to 
 
 /**
  * What a `scope: "sync-run"` token may send besides `hello` and `sync.peer` (docs/sync.md, "Running on the hub"): start a chat in a
- * folder this daemon already works in, send a prompt to one of its root sessions, cancel the turn and answer its approvals. The
- * device sees the result through the mirror. Nothing else: no shell, no files, settings, permission changes, sub-agents or memory.
+ * folder this daemon already works in, send a prompt to one of its root sessions, cancel the turn, answer its approvals, move one of its
+ * root sessions to another folder inside the ones it works in (`session.cd`) and list the subfolders of such a folder (`session.dirs`, names
+ * only). The device sees the result through the mirror. Nothing else: no shell, no files, settings, permission changes, sub-agents or memory.
  */
-const RUN_COMMANDS: ReadonlySet<string> = new Set(["session.create", "user.submit", "turn.cancel", "request.resolve"])
+const RUN_COMMANDS: ReadonlySet<string> = new Set(["session.create", "user.submit", "turn.cancel", "request.resolve", "session.cd", "session.dirs"])
 
 export function syncRunRefusal(input: { command: Command; sessionDirectory(sessionId: string): string | undefined; isRoot(sessionId: string): boolean; knownFolder(directory: string): boolean }): string | undefined {
   const { command } = input
@@ -22,4 +23,9 @@ export function syncRunRefusal(input: { command: Command; sessionDirectory(sessi
   if (command.type === "user.submit" && (command.attachments.length > 0 || command.selection?.agent)) return "[SYNC]: a prompt from a device carries text only"
   if (command.type === "request.resolve" && command.decision.kind === "approve" && (command.decision.remember || command.decision.memoryText || command.decision.memoryAlways)) return "[SYNC]: an approval from a device cannot save rules or memories"
   return undefined
+}
+
+/** Whether a hub's refusal of `/cd` or its folder list means the hub is an older build that does not know them (it takes them for commands a sync token may not send, or answers a protocol error with no `[TAG]:` prefix, which this daemon's own refusals always have). */
+export function hubLacksFolders(reply: { code: string; message: string }): boolean {
+  return reply.message.includes("a sync token only syncs sessions") || reply.code === "invalid_command" && !reply.message.startsWith("[")
 }
