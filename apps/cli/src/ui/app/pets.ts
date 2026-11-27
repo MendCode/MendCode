@@ -1,10 +1,13 @@
 import { createPetPickerState } from "../lazy-pages"
 import type { AppContext } from "./context"
+import { IMAGE_ONLY_REASON, petNeedsImages, usablePetRef } from "../../pets/image-gate"
 import { followPet } from "./pet-follow"
 import type { TuiProfile } from "../../view/tui-profile"
 
 export function createPets(ctx: AppContext, actions: { changeProfile(patch: Partial<TuiProfile>): void }) {
   const { input, state, requestFrame, now, say } = ctx
+  /** Whether this terminal draws pictures (the test the prompt's pet and the start screen use). */
+  const graphicsOn = () => (input.screen.imageProtocol === undefined ? input.pets?.images === true : input.screen.imageProtocol !== "off")
 
   async function packagePets() {
     if (!input.pets || input.remote) return
@@ -32,14 +35,16 @@ export function createPets(ctx: AppContext, actions: { changeProfile(patch: Part
     const choices = input.pets ? await petChoices(input.pets) : []
     // A built-in pet has a layout like an imported one, but it is not the user's to rename or delete.
     const builtIn = (ref: string) => ref.startsWith("builtin:")
-    state.petList = [official, ...choices.map(({ pet: info, image, preview, cells, states }) => ({ ref: info.ref, name: info.displayName, description: info.description, source: builtIn(info.ref) ? "Built-in" : info.layout ? "imported" : info.ref.split(":")[0]!, states, ...(info.generatedStates ? { generated: info.generatedStates } : {}), ...(info.layout && !builtIn(info.ref) ? { imported: true } : {}), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(cells ? { cells } : {}) }))]
+    const noPictures = !graphicsOn()
+    state.petList = [official, ...choices.map(({ pet: info, image, preview, cells, states }) => ({ ref: info.ref, name: info.displayName, ...(noPictures && petNeedsImages(info.ref) ? { disabled: IMAGE_ONLY_REASON } : {}), description: info.description, source: builtIn(info.ref) ? "Built-in" : info.layout ? "imported" : info.ref.split(":")[0]!, states, ...(info.generatedStates ? { generated: info.generatedStates } : {}), ...(info.layout && !builtIn(info.ref) ? { imported: true } : {}), ...(preview ? { preview } : {}), ...(image ? { image } : {}), ...(cells ? { cells } : {}) }))]
     state.petPicker = createPetPickerState(state.petList, state.petPickerMascot ? mascotNow() : state.tuiProfile.pet || state.settingsNow.pet)
     requestFrame()
   }
 
   async function selectPet(requested: string | undefined) {
     // Screen-reader mode shows no pet: it is decoration a reader would only describe.
-    const ref = state.accessible ? "off" : requested
+    // A picture-only pet in a terminal without pictures is MendAscii; the saved choice stays, and shows again where pictures work.
+    const ref = state.accessible ? "off" : usablePetRef(requested, graphicsOn())
     if (ref === "mend") {
       await state.pet?.choose("off")
       requestFrame()

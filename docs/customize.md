@@ -331,7 +331,7 @@ Blank restores defaults.
 
 `/pet` also lists **MendGirl** (`builtin:mendgirl`), MendGirl with neko ears holding her little robot, drawn by MendCode's author and shipped inside MendCode, right after MendAscii. She is drawn in the MendCode theme's black and white: silver hair, a black hoodie with white patches and a white robot.
 
-She is never the default: choose her in `/pet`, with `/pet builtin:mendgirl`, or as the start screen's mascot with `/mascot mendgirl`.
+She needs a terminal that draws images (kitty, iTerm2, WezTerm, Ghostty, sixel): without one `/pet` shows her unavailable and cannot choose her, and a saved choice of her shows MendAscii until images work. An imported pet with her name or id is not listed. She is never the default: choose her in `/pet`, with `/pet builtin:mendgirl`, or as the start screen's mascot with `/mascot mendgirl`.
 
 She behaves like an imported pet: her own frames for idle, thinking, running, waiting, review, failed, waving, jumping, compacting, agents and sleeping, a picture where the terminal draws pictures and half blocks elsewhere (beside the prompt, where half blocks are too coarse for her, the chat shows the ASCII Mend, as for any detailed pet).
 
@@ -1117,7 +1117,7 @@ Every pet is the same height at rest, whatever its sheet's margins: its idle fig
 
 A pet whose frames reach further fits them all and stands lower.
 
-The same rule sizes the start screen's pet mascot (`mascotSize`) and the `/pet` preview, so a pet you make with `/pet import` matches MendAscii, MendSprite and MendGirl.
+The same rule sizes the start screen's pet mascot (`mascotSize`) and the `/pet` preview, so a pet you make with `/pet import` matches MendAscii and MendGirl.
 
 An imported pet that is not square takes a narrower or shorter box of the same proportions.
 

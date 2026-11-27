@@ -7,7 +7,7 @@ import { CONNECT_CHOICES, connectKey, connectPaste, createConnectState, renderCo
 import { CONNECT_PRESETS } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 import { catalogHarness } from "./catalog-harness"
 import { appHarness, conversation } from "./session-ui-harness"
 
@@ -28,8 +28,8 @@ const reply = (command: Record<string, unknown>) => {
 
 describe("B10.12 Perplexity terminal", () => {
   test("preset is appended without moving shortcuts and name opens local proxy form", () => {
-    expect(CONNECT_CHOICES.slice(0, 12)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot"])
-    expect(CONNECT_CHOICES[19]).toBe("perplexity")
+    expect(LEGACY_CHOICES.slice(0, 12)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot"])
+    expect(LEGACY_CHOICES[19]).toBe("perplexity")
     expect(CONNECT_PRESETS.find((preset) => preset.id === "perplexity")).toMatchObject({ name: "Perplexity", keyEnv: "PERPLEXITY_API_KEY", type: "openai-compatible" })
     expect(createConnectState("Perplexity")).toMatchObject({ target: "perplexity", step: "form" })
   })

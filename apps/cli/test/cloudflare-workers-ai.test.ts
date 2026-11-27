@@ -10,7 +10,7 @@ import { presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -25,7 +25,7 @@ const fill = async (h: ReturnType<typeof providersHarness>) => {
 
 describe("B10.21 Workers AI CLI factories", () => {
   test("appends the preset without moving numeric shortcuts and aligns native and UI metadata", () => {
-    expect(CONNECT_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
+    expect(LEGACY_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
     expect(CONNECT_CHOICES.filter((id) => id === CF_ID)).toHaveLength(1)
     expect(CONNECT_CHOICES.indexOf(CF_ID)).toBeGreaterThan(CONNECT_CHOICES.indexOf("mistral"))
     const { id: _id, ...preset } = presetOf(CF_ID)!
@@ -34,7 +34,7 @@ describe("B10.21 Workers AI CLI factories", () => {
     expect(models).toEqual(CF_MODELS)
     expect(defaultEnabled).toBe(false)
     for (const name of [CF_ID, "Cloudflare Workers AI", "cloudflare"]) expect(createConnectState(name).target).toBe(CF_ID)
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("saves a masked token once, tab never submits, retains the catalog and selects a Workers AI model", async () => {

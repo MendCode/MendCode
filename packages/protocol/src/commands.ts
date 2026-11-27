@@ -1937,7 +1937,7 @@ export const ProvidersAuthMethods = lazySchema(() => z.strictObject({ ...base, t
 export const ProvidersAuthStatus = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.status"), provider: CatalogProvider.optional() }))
 export const ProvidersAuthPlan = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.plan"), provider: CatalogProvider, method: ProviderAuthMethod.shape.id.optional() }))
 export const ProvidersAuthAuthorize = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.authorize"), provider: CatalogProvider, method: ProviderAuthMethod.shape.id.optional(), open: z.boolean().optional() }))
-export const ProvidersAuthAction = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.action"), provider: CatalogProvider, action: z.enum(["cancel", "refresh", "logout"]) }))
+export const ProvidersAuthAction = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.action"), provider: CatalogProvider, action: z.enum(["cancel", "refresh", "logout", "complete"]), input: z.string().min(1).max(4096).optional() }))
 export const ProvidersAuthMetadata = lazySchema(() => z.strictObject({ ...base, type: z.literal("providers.auth.metadata"), url: z.string().url().max(2048), execute: z.boolean().optional() }))
 
 export const BudgetStatus = lazySchema(() => z.strictObject({ ...base, type: z.literal("budget.status"), directory: z.string().min(1).max(4096) }))

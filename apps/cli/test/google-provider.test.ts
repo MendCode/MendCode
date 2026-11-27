@@ -9,7 +9,7 @@ import { CONNECT_PRESETS, presetOf, PROVIDER_TYPE_CHOICES } from "../src/view/pr
 import { textWidth } from "../src/view/wrap"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { catalogHarness } from "./catalog-harness"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "gemini-ui-fixture-never-print"
 const dirs: string[] = []
@@ -20,8 +20,8 @@ const report = { ...REPORT, models: [...REPORT.models, { id: "google:gemini-2.5-
 
 describe("B10.03 Gemini terminal", () => {
   test("Google choice is appended, old numeric shortcuts survive and the native format is available", () => {
-    expect(CONNECT_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
-    expect(CONNECT_CHOICES.slice(10, 12)).toEqual(["google", "github-copilot"])
+    expect(LEGACY_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
+    expect(LEGACY_CHOICES.slice(10, 12)).toEqual(["google", "github-copilot"])
     expect(CONNECT_PRESETS.slice(8, 10).map(({ id, type }) => ({ id, type }))).toEqual([{ id: "google", type: "google" }, { id: "github-copilot", type: "github-copilot" }])
     expect(PROVIDER_TYPE_CHOICES[3]).toBe("google")
     expect(createConnectState("Google Gemini").target).toBe("google")

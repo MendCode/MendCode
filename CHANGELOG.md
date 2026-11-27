@@ -9,8 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed in, and puts the cursor on an expired sign-in.
+
 ### Fixed
 
+- An expired ChatGPT sign-in now says so in the chat and points to `/connect chatgpt` instead of another tool, and a ChatGPT browser sign-in on a remote server can be finished by pasting the address the browser ended on.
+- `/pet` lists only MendAscii and MendGirl out of the box: an imported pet that repeats MendGirl's name is no longer listed twice, and in a terminal that cannot draw images MendGirl shows as unavailable and MendAscii takes her place.
 - A streaming reply in a long chat uses less CPU again: each frame works out the transcript's length once instead of several times.
 - Moving `~/.mendcode-v2` to `~/.mendcode` works with an installed Linux or macOS user service whose definition differs from the current one: it is rewritten for the new directory with its listener and TLS flags kept (unit drop-ins are untouched). The move never interrupts work: it waits for a start where the daemon has no turns, jobs or running loops (or none runs), and when it cannot happen MendCode says why once instead of on every command.
 - The Breakout mini-game no longer lets the ball loop forever: the paddle sends it off at an angle that depends on where it lands, it is never exactly vertical or flat, and a ball that keeps bouncing without breaking a brick has its heading turned.

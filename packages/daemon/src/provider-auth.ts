@@ -7,7 +7,7 @@ import { openUrl } from "./open-url"
 const openBrowser = (url: string) => openUrl(url).catch(() => { throw new Error("Could not open browser; retry without --open") })
 
 /** Provider method dispatch stays in the daemon; the UI never handles tokens or OAuth HTTP. */
-export function createProviderAuth(options: { dir: string; providers?: ProviderService | undefined; chatgpt?: ChatgptAuth; copilot?: CopilotAuth; metadata?: ProviderMetadataAuth; env?: Record<string, string | undefined>; openBrowser?(url: string): Promise<void> }) {
+export function createProviderAuth(options: { dir: string; providers?: ProviderService | undefined; chatgpt?: ChatgptAuth; copilot?: CopilotAuth; metadata?: ProviderMetadataAuth; /** The state of a ChatGPT login another tool left here, when requests may use it. */ importedLogin?(): { state: "valid" | "expired"; expiresAt?: number } | undefined; env?: Record<string, string | undefined>; openBrowser?(url: string): Promise<void> }) {
   const env = options.env ?? process.env
   const chatgpt = options.chatgpt ?? createChatgptAuth({ dir: options.dir, clientId: env.MENDCODE_OPENAI_OAUTH_CLIENT_ID ?? env.OPENAI_OAUTH_CLIENT_ID, issuer: env.MENDCODE_OPENAI_OAUTH_ISSUER })
   const copilot = options.copilot ?? options.providers?.copilotAuth ?? createCopilotAuth({ dir: options.dir, clientId: env.MENDCODE_GITHUB_COPILOT_CLIENT_ID, clientSecret: env.MENDCODE_GITHUB_COPILOT_CLIENT_SECRET, issuer: env.MENDCODE_GITHUB_COPILOT_ISSUER })
@@ -40,7 +40,10 @@ export function createProviderAuth(options: { dir: string; providers?: ProviderS
   }
   function status(provider?: string): ProviderAuthStatus[] {
     if (provider && !known(provider)) throw new Error("Unknown provider")
-    const oauth = chatgpt.status()
+    const own = chatgpt.status()
+    // Without a MendCode login, one another tool left on this machine is what requests use: say whether it still works.
+    const imported = own.source === "v2" || own.state === "pending" ? undefined : options.importedLogin?.()
+    const oauth: ProviderAuthStatus = imported ? { provider: "chatgpt", state: imported.state === "valid" ? "authorized" : "expired", source: "none", imported: "codex", accessTokenPresent: true, refreshTokenPresent: false, accountIdPresent: true, ...(imported.expiresAt !== undefined ? { expiresAt: imported.expiresAt } : {}) } : own
     if (provider === "chatgpt") return [oauth]
     if (provider === "github-copilot") return [copilot.status()]
     const apiStatus = inventory().filter((entry) => entry.id !== "github-copilot" && (!provider || entry.id === provider)).map((entry): ProviderAuthStatus => ({ provider: entry.id, state: entry.authReady && entry.configured ? "authorized" : "none", source: entry.credentialStored ? "v2" : "none", accessTokenPresent: entry.credentialStored, refreshTokenPresent: false, accountIdPresent: false }))
@@ -64,10 +67,13 @@ export function createProviderAuth(options: { dir: string; providers?: ProviderS
       }
       return authorization
     },
-    async action(provider: string, action: "cancel" | "refresh" | "logout") {
+    async action(provider: string, action: "cancel" | "refresh" | "logout" | "complete", input?: string) {
       if (!["chatgpt", "github-copilot"].includes(provider)) throw new Error("OAuth actions require provider chatgpt or github-copilot")
       const auth = provider === "github-copilot" ? copilot : chatgpt
-      if (action === "cancel") auth.cancel()
+      if (action === "complete") {
+        if (provider !== "chatgpt" || !input) throw new Error("Only a ChatGPT browser sign-in finishes from a pasted address")
+        await chatgpt.complete(input)
+      } else if (action === "cancel") auth.cancel()
       else if (action === "logout") auth.logout()
       else await auth.refresh()
       return auth.status()

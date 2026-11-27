@@ -10,7 +10,7 @@ import { presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -20,15 +20,15 @@ const report = { ...REPORT, models: [...REPORT.models, ...NVIDIA_MODELS.map((mod
 
 describe("B10.17 NVIDIA CLI factories", () => {
   test("appends the provider, preserves numeric shortcuts and aligns both preset tables", () => {
-    expect(CONNECT_CHOICES.slice(0, 23)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway"])
-    expect(CONNECT_CHOICES[23]).toBe("nvidia")
+    expect(LEGACY_CHOICES.slice(0, 23)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway"])
+    expect(LEGACY_CHOICES[23]).toBe("nvidia")
     const { id: _id, ...preset } = presetOf("nvidia")!
     const { models, defaultEnabled, ...native } = PROVIDER_PRESETS.nvidia!
     expect(preset).toEqual(native)
     expect(models).toEqual([])
     expect(defaultEnabled).toBe(false)
     expect(createConnectState("NVIDIA").target).toBe("nvidia")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("saves the masked token once, refreshes before testing and selects an NVIDIA model", async () => {

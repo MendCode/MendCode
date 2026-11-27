@@ -8,7 +8,7 @@ import { SAP_KEY, SAP_MODELS, SAP_SECRET, SAP_TOKEN, SAP_URL } from "../../../pa
 import { CONNECT_CHOICES, connectKey, connectPaste, createConnectState, renderConnectPage, validateConnect } from "../src/view/connect-page"
 import { presetOf } from "../src/view/provider-presets"
 import { textWidth } from "../src/view/wrap"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -24,15 +24,15 @@ async function fill(h: ReturnType<typeof providersHarness>) {
 
 describe("B10.18 SAP CLI factories", () => {
   test("appends SAP without moving choices/shortcuts and keeps preset copies consistent", () => {
-    expect(CONNECT_CHOICES.slice(0, 24)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia"])
-    expect(CONNECT_CHOICES[24]).toBe("sap-ai-core")
+    expect(LEGACY_CHOICES.slice(0, 24)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia"])
+    expect(LEGACY_CHOICES[24]).toBe("sap-ai-core")
     const { id: _id, ...preset } = presetOf("sap-ai-core")!
     const { models, defaultEnabled, ...native } = PROVIDER_PRESETS["sap-ai-core"]!
     expect(preset).toEqual(native)
     expect(models).toEqual([])
     expect(defaultEnabled).toBe(false)
     expect(createConnectState("SAP AI Core").target).toBe("sap-ai-core")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("masked JSON preserves spaces, is sent once, refreshes before testing and selects a SAP model", async () => {

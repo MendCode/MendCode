@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { codexSubscriptionHeaders } from "../src"
+import { codexSubscriptionHeaders, importedChatgptLogin } from "../src"
 
 const dirs: string[] = []
 afterEach(() => {
@@ -27,14 +27,22 @@ describe("Codex subscription headers", () => {
     expect(await headers()).toEqual({ authorization: `Bearer ${token}`, "chatgpt-account-id": "acct", originator: "mendcode" })
   })
 
-  test("an expired token asks the user to refresh through Codex instead of refreshing itself", async () => {
+  test("an expired token asks for MendCode's own sign-in, never another tool", async () => {
     const headers = codexSubscriptionHeaders({ authFile: authFile({ tokens: { access_token: jwt(NOW / 1_000 - 10), account_id: "acct" } }), now: () => NOW })
-    await expect(headers()).rejects.toThrow("Codex login expired")
+    await expect(headers()).rejects.toThrow("ChatGPT sign-in expired (imported from another tool); sign in with /connect chatgpt again")
+    await expect(headers()).rejects.not.toThrow("codex")
   })
 
-  test("missing file, API-key-only login and malformed JSON give actionable errors", async () => {
-    await expect(codexSubscriptionHeaders({ authFile: "/nonexistent/auth.json" })()).rejects.toThrow("run `codex login`")
-    await expect(codexSubscriptionHeaders({ authFile: authFile({ OPENAI_API_KEY: "k" }) })()).rejects.toThrow("no ChatGPT tokens")
-    await expect(codexSubscriptionHeaders({ authFile: authFile("{not json") })()).rejects.toThrow("no Codex login found")
+  test("missing file, API-key-only login and malformed JSON all point to /connect chatgpt", async () => {
+    await expect(codexSubscriptionHeaders({ authFile: "/nonexistent/auth.json" })()).rejects.toThrow("sign in with /connect chatgpt")
+    await expect(codexSubscriptionHeaders({ authFile: authFile({ OPENAI_API_KEY: "k" }) })()).rejects.toThrow("no ChatGPT account; sign in with /connect chatgpt")
+    await expect(codexSubscriptionHeaders({ authFile: authFile("{not json") })()).rejects.toThrow("not signed in to ChatGPT")
+  })
+
+  test("the imported login's state is reported without a token", () => {
+    expect(importedChatgptLogin({ authFile: authFile({ tokens: { access_token: jwt(NOW / 1_000 + 3_600), account_id: "a" } }), now: () => NOW })).toEqual({ state: "valid", expiresAt: NOW + 3_600_000 })
+    expect(importedChatgptLogin({ authFile: authFile({ tokens: { access_token: jwt(NOW / 1_000 - 10), account_id: "a" } }), now: () => NOW })?.state).toBe("expired")
+    expect(importedChatgptLogin({ authFile: authFile({ OPENAI_API_KEY: "k" }) })).toBeUndefined()
+    expect(importedChatgptLogin({ authFile: "/nonexistent/auth.json" })).toBeUndefined()
   })
 })
