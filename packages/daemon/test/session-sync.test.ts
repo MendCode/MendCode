@@ -1,3 +1,4 @@
+import { readdirSync } from "node:fs"
 import { afterEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
@@ -759,7 +760,7 @@ test("a file attached to a prompt of a hub chat is copied in pieces to the hub's
   const again = await device.client.send({ type: "attachment.upload", sessionId: seed, path: file } as never)
   expect((again as unknown as { result: { path: string } }).result.path).toBe(path.join(hub.dir, "uploads", seed, "board-2.excalidraw"))
   expect(await Bun.file(hubPath).exists()).toBe(true)
-  expect(existsSync(path.join(hub.dir, "uploads", seed, ".board.excalidraw.part"))).toBe(false)
+  expect(readdirSync(path.join(hub.dir, "uploads", seed)).filter((entry) => entry.endsWith(".part"))).toEqual([])
   // The prompt then tells the hub's model the path there.
   expect(await device.client.send({ type: "user.submit", sessionId: seed, text: `read ${hubPath}`, attachments: [] })).toMatchObject({ ok: true })
   await until(() => turnsDone(hub.daemon, seed) === 2, "the hub ran the prompt")

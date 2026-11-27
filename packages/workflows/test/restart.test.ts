@@ -42,6 +42,21 @@ describe("restarting one agent of a run (r on /workflows)", () => {
     expect(h.cancelled.some((entry) => entry.sessionId === seconds[1]!.sessionId)).toBe(false)
   })
 
+  test("a script whose second call does not depend on the first is not stuck after the first is restarted: both finish", async () => {
+    let answers = 0
+    const h = scriptHarness({ responder: (prompt) => (prompt.startsWith("first") ? `answer-${++answers}` : prompt.startsWith("second") ? (answers < 2 ? "HOLD" : "second-done") : "ok") })
+    const run = h.start(wf(`await agent("first")\nreturn await agent("second")`))
+    await settle(30)
+    const first = h.get(run).tasks.find((task) => task.title === "first")!
+    expect(first.state).toBe("done")
+    expect(h.get(run).tasks.find((task) => task.title === "second")!.state).toBe("running")
+    expect("error" in h.service.control(run.workflowId, "retry", { taskId: first.id })).toBe(false)
+    await settle(60)
+    // The same second task starts again and the script ends: it does not wait for a cancelled agent.
+    expect(h.get(run).tasks.filter((task) => task.title === "second")).toHaveLength(1)
+    expect(h.get(run).state).toBe("completed")
+  })
+
   test("a run that is over refuses a restart, and a step that never started has nothing to restart", async () => {
     const h = scriptHarness({ responder: () => "ok" })
     const run = h.start(wf(`return await agent("one")`))
