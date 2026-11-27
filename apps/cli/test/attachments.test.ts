@@ -82,6 +82,20 @@ describe("pastedPaths", () => {
     expect(pastedPaths("/tmp/a.png\nplease look at this")).toBeUndefined()
   })
 
+  test("a screenshot name with a narrow no-break space before PM stays one path", () => {
+    const name = "/tmp/Shot\\ 2026-01-02\\ at\\ 3.04.05 PM.png"
+    expect(pastedPaths(name)).toEqual([name])
+  })
+
+  test("a dropped selection on one line is several paths, quoted or escaped", () => {
+    expect(pastedPaths("/tmp/a\\ b.png '/tmp/c d.pdf' ~/e.txt")).toEqual(["/tmp/a\\ b.png", "'/tmp/c d.pdf'", "~/e.txt"])
+  })
+
+  test("one path ending in an extension keeps plain spaces", () => {
+    expect(pastedPaths("/tmp/My Shot 2026.png")).toEqual(["/tmp/My Shot 2026.png"])
+    expect(pastedPaths("check /tmp/a.png and /tmp/b.png now")).toBeUndefined()
+  })
+
   test("an empty paste is not a paths paste", () => {
     expect(pastedPaths("   \n  ")).toBeUndefined()
   })
