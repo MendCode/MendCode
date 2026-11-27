@@ -70,6 +70,7 @@ import type { ComputerOptions } from "./computer"
 import type { BrowserOptions } from "./browser"
 import { createLazyComputerControl, createLazyBrowserControl } from "./lazy-controls"
 import { parseRemoteAddress } from "@mendcode/protocol/wire"
+import { botPeerRefusal } from "./bot-peer"
 import { remoteBackoff, remoteTokens, tailscaleAddress, validateRemoteListener, type RemoteListenerOptions } from "./remote"
 import { isLoopbackHost, isReadOnlyCommand } from "@mendcode/protocol/wire"
 import type { createHttpAdapter, HttpPeer } from "./http"
@@ -330,7 +331,7 @@ type Connection = {
   directory?: string
   trace?: boolean
   remoteAddress?: string
-  peer?: { name: string; hash: string; readOnly: boolean; scope?: "sync" }
+  peer?: { name: string; hash: string; readOnly: boolean; scope?: "sync" | "bot"; root?: string }
   /** The client was started by a session's own shell: it reads, and works only inside that session's authority (agent-origin.ts). */
   agent?: AgentOrigin | undefined
   /** What `hello` said of the client: its name and whether it runs inside another agent's shell (`caller:agent`). Only ever lowers the origin from `cli` to `agent`; see `connectionOrigin`. */
@@ -1783,6 +1784,8 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   function send(connection: Connection, frame: Frame) {
+    // A bot hears only the sessions it subscribed to: the daemon's broadcasts (other projects, settings, quota) are not for it.
+    if (connection.peer?.scope === "bot" && frame.kind === "global") return
     // The whole settings object (proxy URL credentials, provider parameters) is not for a read-only peer; `settings.get` is denied to it as well.
     if (connection.peer?.readOnly && frame.kind === "global" && frame.body.type === "settings.changed") return
     // A read-only token cannot read drafts (`draft.get`, `draft.list`), so it does not hear of one in an activity push either.
@@ -3923,6 +3926,11 @@ export async function startDaemon(options: DaemonOptions) {
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
     // A device daemon's sync token syncs sessions and nothing else (docs/sync.md).
     if (connection.peer?.scope === "sync" && command.type !== "hello" && command.type !== "sync.peer") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: a sync token only syncs sessions" })
+    // A chat bot's token runs turns inside its own folder and nothing else (docs/remote.md, "Bot bridge").
+    if (connection.peer?.scope === "bot") {
+      const refusal = botPeerRefusal({ command, root: connection.peer.root ?? "/nonexistent", sessionDirectory: (id) => store.sessionDirectory(id as SessionId), canonical: canonicalDir })
+      if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+    }
     if (syncGuard && command.type === "user.submit") {
       const refusal = syncGuard(command.sessionId, "queue.added")
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })

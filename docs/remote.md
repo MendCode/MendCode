@@ -47,6 +47,16 @@ mendcode remote token revoke laptop --dir /srv/mendcode
 
 Tokens are stored as SHA-256 hashes in `<dir>/remote-tokens.json`, mode 0600. Names use 1–64 letters, digits, `_` or `-`.
 
+### Bot tokens
+
+`mendcode remote token create --dir DIR --name vorlen --bot /home/coder/bots/vorlen` makes a token for a chat bot (another program on another machine that sends each of its turns to this daemon). `list` shows it as `bot FOLDER`. The token may only:
+
+- create sessions whose folder is inside `FOLDER` (symlinks are followed before the check), with no parent and no custom agent;
+- on sessions inside `FOLDER`: subscribe, send text messages (no attachments), cancel a turn or take a waiting message out of the queue, answer approvals and questions (`request.resolve`), set the session's permission mode and run limits (`session.run.configure`, for example a system prompt), and delete the session;
+- list the models (`models.list`).
+
+Everything else is refused as `forbidden`, and the daemon's broadcasts (other projects, settings, quota, activity) are never sent to it. The turns still run as the daemon's own user with the daemon's own logins, so give the bot a folder of its own and keep the daemon's container or user as small as the bot deserves.
+
 ### Start the daemon
 
 Start a foreground daemon that listens (`daemon start` and a background service installed without `--listener` stay local-only, so a stray `remote.json` never opens a port on their own; see [Remote daemon as a service](#remote-daemon-as-a-service)):
