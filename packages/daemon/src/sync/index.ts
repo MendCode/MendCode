@@ -1,4 +1,4 @@
-import type { SessionEvent, SessionId, SyncControlInput, SyncPeerInput } from "@mendcode/protocol"
+import type { Command, SessionEvent, SessionId, SyncControlInput, SyncPeerInput } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { createSyncState } from "@mendcode/store/sync-state"
 import { markHub, readSyncConfig, unmarkHub } from "./config"
@@ -56,6 +56,8 @@ export function createSync(ports: SyncPorts) {
   return {
     /** Why this machine may not write the session now (it is another machine's), or undefined. */
     guard,
+    /** A local client's command that runs on the hub (a chat in the hub's folder, a prompt, cancel or approval of its chats), or undefined. */
+    route(command: Command) { return device?.routes(command) ? (device.forward as (command: Command) => ReturnType<Device["forward"]>) : undefined },
     /** At daemon start: the role the data dir says, if any. */
     boot(asHub: boolean) {
       startDevice()

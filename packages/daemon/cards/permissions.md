@@ -10,8 +10,8 @@ Smart mode runs reads, edits inside the project, and allow-listed commands (ls, 
 
 Change (your shell's change commands and --approve are refused in all modes; when the user asks, propose it with mendcode_settings, e.g. {"defaultPermission":"edits"}, saved on their Apply):
   shift+tab or the permission picker changes the current session; {{program}} control-plane permissions status
-  {{program}} control-plane permissions set-default approval|smart|full_access|ask|edits|full     new sessions
-  {{program}} control-plane permissions set-reviewer-role <model role>     optional reviewer of uncertain smart calls (off by default)
+  {{program}} control-plane permissions set-default approval|smart|full_access|ask|edits|full     new sessions; sync: [[setting:syncRunPermission]]
+  {{program}} control-plane permissions set-reviewer-role <model role>     optional reviewer of smart calls
 Rules and allow list are daemon settings in the user's /settings: [[setting:permission]] (ordered tool and path rules, ask/deny/allow) and [[setting:permissionAllow]] (command prefixes such as ["make test","git commit"]; they never override a risk rule or the forbidden list). Remote clients cannot.
 Sandbox (opt-in, shell commands of the model run inside an OS sandbox; approvals still apply): /sandbox off | read-only | workspace-write, /sandbox network on|off, /sandbox allow <abs path>. Setting [[setting:sandbox]]: { "mode": "workspace-write", "network": "off", "writableRoots": [] }.
 Trust: a project's tools, hooks, MCP servers, agents and extensions run only after the user trusts the directory in /tools or /trust. Never widen permissions, the sandbox or trust unless the user asked for that exact change.

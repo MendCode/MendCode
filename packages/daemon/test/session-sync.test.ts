@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
+import { createIdFactory } from "@mendcode/protocol"
 import type { EnginePort } from "@mendcode/kernel"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
@@ -60,13 +61,13 @@ async function startHub() {
   return boot(dir, { listen: "127.0.0.1:0", sync: { leaseMs: LEASE_MS } })
 }
 /** A device paired with `hub` through a sync-scoped token; rounds run only when the test asks (`sync now`). */
-function pairDevice(hubDir: string, port: number, name = "laptop", connect?: string) {
+function pairDevice(hubDir: string, port: number, name = "laptop", connect?: string, options: { run?: boolean; pathMap?: Array<{ from: string; to: string }> } = {}) {
   const dir = tempDir("device")
-  const token = remoteTokens(hubDir).create({ name, sync: true }).token
+  const token = remoteTokens(hubDir).create({ name, sync: true, ...(options.run ? { run: true } : {}) }).token
   mkdirSync(path.join(dir, "remote"), { recursive: true })
   writeFileSync(path.join(dir, "remote", "hub.sync-token"), `${token}\n`, { mode: 0o600 })
   writeFileSync(path.join(dir, "remotes.json"), JSON.stringify({ remotes: { hub: { connect: connect ?? `127.0.0.1:${port}` } } }), { mode: 0o600 })
-  writeFileSync(path.join(dir, "sync.json"), JSON.stringify({ remote: "hub", tokenFile: path.join(dir, "remote", "hub.sync-token") }), { mode: 0o600 })
+  writeFileSync(path.join(dir, "sync.json"), JSON.stringify({ remote: "hub", tokenFile: path.join(dir, "remote", "hub.sync-token"), ...(options.pathMap ? { pathMap: options.pathMap } : {}) }), { mode: 0o600 })
   return { dir, token }
 }
 const startDevice = (dir: string) => boot(dir, { sync: { tickMs: 600_000, leaseMs: LEASE_MS, idleReleaseMs: 600_000 } })
@@ -488,4 +489,124 @@ test("without sync.json nothing of sync exists: no tables, no triggers, no hub f
   try { expect(db.query("SELECT name FROM sqlite_master WHERE name LIKE 'sync_%'").all()).toEqual([]) } finally { db.close() }
   expect(await Bun.file(path.join(node.dir, "sync-hub.json")).exists()).toBe(false)
   expect(await node.client.send({ type: "sync.control", input: { action: "status" } } as never)).toMatchObject({ ok: true, result: { mode: "off" } })
+})
+
+/** An engine that asks for an approval on "ask …" and waits for a cancel on "wait …"; every other prompt is echoed. */
+const scripted = () => ({
+  ...echo(),
+  async runTurn(input: { text: string; signal: AbortSignal; newItemId(): string; emit(event: unknown): void; ask(request: unknown): Promise<{ kind: string }> }) {
+    const itemId = input.newItemId()
+    input.emit({ type: "item.started", itemId, kind: "agent_message" })
+    if (input.text.startsWith("wait")) {
+      await new Promise<void>((resolve) => input.signal.addEventListener("abort", () => resolve(), { once: true }))
+      input.emit({ type: "item.completed", itemId, status: "ok", text: "stopped" })
+      return { status: "ok" }
+    }
+    const answer = input.text.startsWith("ask") ? (await input.ask({ kind: "approval", title: "run it", detail: "echo hi", tool: "bash", permission: "execute" })).kind : "none"
+    input.emit({ type: "item.completed", itemId, status: "ok", text: `re: ${input.text} (${answer})` })
+    return { status: "ok" }
+  },
+}) as unknown as EnginePort
+
+/** A hub whose project exists only there, and a device that knows it under a path that does not exist on this machine. */
+async function runPair(options: { run: boolean }) {
+  const hubFolder = path.join(tempDir("hubroot"), "app")
+  mkdirSync(hubFolder, { recursive: true })
+  const hub = await boot(tempDir("hub"), { listen: "127.0.0.1:0", sync: { leaseMs: LEASE_MS }, engine: scripted })
+  const seed = await newSession(hub.client, hubFolder)
+  await turn(hub, seed, "first")
+  const here = path.join(tempDir("deviceroot"), "app")
+  const device = await startDevice(pairDevice(hub.dir, hub.daemon.remotePort!, "laptop", undefined, { run: options.run, pathMap: [{ from: here, to: hubFolder }] }).dir)
+  await syncNow(device.client)
+  return { hub, device, here, hubFolder, seed }
+}
+/** The same events with the project folder left out: a device knows the hub's folder under its own path. */
+const sameElsewhere = (a: SessionEvent[], b: SessionEvent[]) => { const bare = (list: SessionEvent[]) => list.map((event) => canonical(event.type === "session.created" ? { ...event, directory: "" } : event)); expect(bare(a)).toEqual(bare(b)) }
+const hubLast = (hub: { daemon: Daemon }, id: SessionId) => events(hub.daemon, id)
+const texts = (list: SessionEvent[]) => list.flatMap((event) => event.type === "item.completed" && event.text ? [event.text] : [])
+
+test("a device with a run token starts a chat in the hub's folder, the hub runs it, and the turn streams back through the mirror", async () => {
+  const { hub, device, here } = await runPair({ run: true })
+  const created = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
+  expect(created).toMatchObject({ ok: true })
+  const id = (created as unknown as { result: { sessionId: SessionId } }).result.sessionId
+  // The chat exists on the hub (it owns it), is a mirror here, and no chat was made in the missing local folder.
+  expect(hub.daemon.store.hasSession(id)).toBe(true)
+  expect(device.daemon.store.hasSession(id)).toBe(true)
+  expect(device.daemon.store.sessionDirectory(id)).toBe(here)
+  expect(hub.daemon.store.sessionDirectory(id)).not.toBe(here)
+  // A chat a device starts begins in the hub's run-token mode (edits by default), whatever the hub's own default is; the hub can change it.
+  expect(hub.daemon.store.permissionModeOf(id)).toBe("edits")
+  expect(await hub.client.send({ type: "settings.set", patch: { syncRunPermission: "full" } } as never)).toMatchObject({ ok: true })
+  const second = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
+  expect(hub.daemon.store.permissionModeOf((second as unknown as { result: { sessionId: SessionId } }).result.sessionId)).toBe("full")
+  const sent = await device.client.send({ type: "user.submit", sessionId: id, text: "hello hub", attachments: [] })
+  expect(sent).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub.daemon, id) === 1, "the turn ran on the hub", 3_000)
+  await until(() => texts(events(device.daemon, id)).includes("re: hello hub (none)"), "the reply reached the device")
+  sameElsewhere(events(device.daemon, id), hubLast(hub, id))
+  // The device wrote nothing of its own: its usage statistics stay empty, the hub's engine ran the turn.
+  expect(userTexts(events(hub.daemon, id))).toEqual(["hello hub"])
+})
+
+test("a prompt to a mirrored hub chat runs on the hub; its approval is answered from the device and a running turn is cancelled from it", async () => {
+  const { hub, device, seed } = await runPair({ run: true })
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "ask first", attachments: [] })).toMatchObject({ ok: true })
+  await until(() => events(device.daemon, seed).some((event) => event.type === "server.request"), "the approval reached the device")
+  const request = events(device.daemon, seed).find((event) => event.type === "server.request") as Extract<SessionEvent, { type: "server.request" }>
+  expect(turnsDone(hub.daemon, seed)).toBe(1)
+  expect(await device.client.send({ type: "request.resolve", sessionId: seed, requestId: request.requestId, decision: { kind: "approve", scope: "once" } })).toMatchObject({ ok: true })
+  await until(() => texts(events(device.daemon, seed)).includes("re: ask first (approve)"), "the approved turn finished and came back")
+  sameElsewhere(events(device.daemon, seed), hubLast(hub, seed))
+
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "wait forever", attachments: [] })).toMatchObject({ ok: true })
+  await until(() => events(device.daemon, seed).some((event) => event.type === "turn.started" && hub.daemon.store.lastTurnStatus(seed) === "running"), "the second turn runs")
+  const started = events(device.daemon, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
+  expect(await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
+  await until(() => hub.daemon.store.lastTurnStatus(seed) !== "running" && device.daemon.store.lastTurnStatus(seed) !== "running", "the cancel ended the turn on both")
+  expect(events(hub.daemon, seed).some((event) => event.type === "turn.cancelled")).toBe(true)
+  sameElsewhere(events(device.daemon, seed), hubLast(hub, seed))
+})
+
+test("a plain sync token cannot run anything on the hub: the refusal names the hub and the way to allow it", async () => {
+  const { hub, device, here, seed } = await runPair({ run: false })
+  const created = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
+  expect(created).toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("--sync --run") } })
+  const refused = await device.client.send({ type: "user.submit", sessionId: seed, text: "here", attachments: [] })
+  expect(refused).toMatchObject({ ok: false, error: { message: expect.stringContaining("owned by hub") } })
+  expect(turnsDone(hub.daemon, seed)).toBe(1)
+})
+
+test("a run token runs turns and nothing else: no shell, files, settings, permission changes, sub-agents, attachments or folders outside the hub's projects", async () => {
+  const hub = await boot(tempDir("hub"), { listen: "127.0.0.1:0", sync: { leaseMs: LEASE_MS }, engine: scripted })
+  const folder = tempDir("project")
+  const id = await newSession(hub.client, folder)
+  const token = remoteTokens(hub.dir).create({ name: "runner", sync: true, run: true }).token
+  const peer = createClient({ name: "runner", remote: { hostname: "127.0.0.1", port: hub.daemon.remotePort!, token }, reconnect: false })
+  await peer.connect()
+  cleanups.push(() => peer.close())
+  const refused = (message: string) => ({ ok: false, error: { code: "forbidden", message: expect.stringContaining(message) } })
+  expect(await peer.send({ type: "settings.get" } as never)).toMatchObject(refused("--sync --run"))
+  expect(await peer.send({ type: "session.permission.set", sessionId: id, mode: "full" } as never)).toMatchObject(refused("--sync --run"))
+  expect(await peer.send({ type: "session.list", limit: 5 })).toMatchObject(refused("--sync --run"))
+  expect(await peer.send({ type: "session.create", directory: folder, parentId: id })).toMatchObject(refused("no parent"))
+  expect(await peer.send({ type: "session.create", directory: folder, agent: "build" })).toMatchObject(refused("no parent"))
+  expect(await peer.send({ type: "session.create", directory: tempDir("elsewhere") })).toMatchObject(refused("not a project"))
+  expect(await peer.send({ type: "session.create", directory: path.join(folder, "missing") })).toMatchObject(refused("not a project"))
+  expect(await peer.send({ type: "user.submit", sessionId: id, text: "x", attachments: [{ sha256: "a".repeat(64), bytes: 1, mime: "text/plain" }] } as never)).toMatchObject(refused("text only"))
+  expect(await peer.send({ type: "user.submit", sessionId: "ses_01M8C6XPXJAV89A3" as SessionId, text: "x", attachments: [] })).toMatchObject(refused("no such chat"))
+  expect(await peer.send({ type: "request.resolve", sessionId: id, requestId: createIdFactory()("request"), decision: { kind: "approve", scope: "once", remember: { level: "user" } } } as never)).toMatchObject(refused("cannot save rules"))
+  // What it may do: start a chat in a known folder, prompt it, and the hub's own turn runs.
+  const made = await peer.send({ type: "session.create", directory: folder })
+  expect(made).toMatchObject({ ok: true })
+  const mine = (made as unknown as { result: { sessionId: SessionId } }).result.sessionId
+  expect(await peer.send({ type: "user.submit", sessionId: mine, text: "run", attachments: [] })).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub.daemon, mine) === 1, "the hub ran the prompt")
+})
+
+test("with the hub unreachable, a chat in the hub's folder is refused saying the hub is not connected", async () => {
+  const { hub, device, here } = await runPair({ run: true })
+  await hub.stop()
+  const created = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
+  expect(created).toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("hub is not connected") } })
 })

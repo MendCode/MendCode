@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./remote": "./src/remote.ts",
     "./storage-compact": "./src/storage-compact.ts",
+    "./move-session-dirs": "./src/move-session-dirs.ts",
     "./config-bundle": "./src/config-bundle/index.ts",
     "./http-launch": "./src/http-launch.ts",
     "./project-identity": "./src/project-identity.ts",

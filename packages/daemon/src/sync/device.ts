@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
-import { MAX_SYNC_BLOB_CHUNK_BYTES, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
+import { existsSync } from "node:fs"
+import { MAX_SYNC_BLOB_CHUNK_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
 import type { SyncSessionRow, SyncState } from "@mendcode/store"
 import { PORTABLE_SETTINGS } from "../config-bundle/classify"
 import { blobRefs, canonical, settledPrefix, syncedMessages, SyncRefusal, withDirectory } from "./ingest"
@@ -44,6 +45,9 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   let budget = 0
   let rounds = 0
   const status = { connected: false, lastOkAt: 0, lastError: "" }
+  /** Chats this machine started or prompted on the hub: their running turn is copied as it happens (not only once settled) until it ends. */
+  const live = new Map<string, { directory: string; since: number }>()
+  const LIVE_TICK_MS = 300
   const uploaded = new Set<string>()
   const partials = new Map<string, Buffer[]>()
 
@@ -59,11 +63,24 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     return undefined
   }
 
+  /** The folder is a project of the hub (missing here, known from the hub's mirrored chats): a chat started in it runs on the hub. */
+  function remoteFolder(directory: string): boolean {
+    if (existsSync(directory)) return false
+    return ports.store.listSessions({ directory, limit: 50, roots: false, archived: true }).some((session) => rows.get(session.sessionId)?.role === "mirror")
+  }
+  /** Whether a command of a local client runs on the hub instead of here: a new chat in the hub's folder, or a prompt, cancel or approval for a chat the hub owns. */
+  function routes(command: Command): boolean {
+    if (command.type === "session.create") return !command.parentId && remoteFolder(command.directory)
+    if (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve") { const row = rows.get(command.sessionId); return row?.role === "mirror" && row.state === "ok" }
+    return false
+  }
+  const unreachable = (what: string) => `[SYNC]: ${hub} is not connected, so ${what} cannot run there now; try again when it is back, or clone the project here`
+
   async function connect() {
     if (client) return
     const target = syncTarget(ports.dir, config)
     const { createClient } = await import("@mendcode/client")
-    const next = createClient({ name: "sync", remote: target, reconnect: false, timeoutMs: 30_000, onConnection: (value) => { if (value === "closed") { status.connected = false; if (client === next) client = undefined } } })
+    const next = createClient({ name: "sync", remote: target, reconnect: false, timeoutMs: 30_000, onConnection: (value) => { if (value === "closed" && client === next) client = undefined } })
     await next.connect()
     client = next as unknown as typeof client
     status.connected = true
@@ -242,13 +259,14 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   }
 
   /** Copies the hub's settled new events of one session here. Returns false when the round's budget ran out before its end. */
-  async function pull(summary: Summary) {
+  async function pull(summary: Summary, tail = false): Promise<number> {
     let row = rows.get(summary.sessionId)
     const exists = ports.store.hasSession(summary.sessionId)
-    if (row && (row.role === "owned" || row.state !== "ok")) return
+    if (row && (row.role === "owned" || row.state !== "ok")) return 0
     // A session made on this machine is never overwritten by a copy.
-    if (!row && exists) return
-    if (!row && (summary.updatedAt ?? 0) < ports.now() - MIRROR_DAYS * 86_400_000) return
+    if (!row && exists) return 0
+    if (!row && !tail && (summary.updatedAt ?? 0) < ports.now() - MIRROR_DAYS * 86_400_000) return 0
+    let stored = 0
     let after = row?.remoteSeq ?? 0
     let carry: SessionEvent[] = []
     let carryBytes = 0
@@ -257,7 +275,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       if (after >= summary.lastSeq! && !carry.length) break
       const page = await call({ op: "history", sessionId: summary.sessionId, after: carry.at(-1)?.seq ?? after }) as { events: SessionEvent[]; hasMore: boolean; lastSeq: number }
       for (const event of page.events) { carry.push(event); carryBytes += JSON.stringify(event).length }
-      const count = settledPrefix(carry)
+      // `tail`: a chat running on the hub for this machine is copied as it runs, so its approvals and output show here at once.
+      const count = tail ? carry.length : settledPrefix(carry)
       const complete = !page.hasMore && count === carry.length
       if (count) {
         const ready = carry.slice(0, count)
@@ -272,6 +291,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
         if (!create && !ports.store.hasSession(summary.sessionId)) throw new SyncRefusal("invalid", "the hub's history of this session does not start with its creation")
         const lastSeq = complete ? Math.max(page.lastSeq, events.at(-1)!.seq) : events.at(-1)!.seq
         const added = ports.store.projectSync.ingest({ sessionId: summary.sessionId, events, messages: syncedMessages(events), lastSeq, ...(create ? { create } : {}) })
+        stored += added.length
         for (const event of added) ports.publish(event as SessionEvent)
         ports.release(summary.sessionId)
         ports.changed(summary.sessionId)
@@ -284,11 +304,21 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       }
       if (carry.length > MAX_CARRY_EVENTS || carryBytes > MAX_CARRY_BYTES) {
         save({ ...(row ?? { sessionId: summary.sessionId, role: "mirror", remoteSeq: after, epoch: 0, leaseUntil: 0, meta: "", activeAt: 0 }), state: "unsyncable", note: "one of its turns is too large to copy" } as SyncSessionRow)
-        return
+        return stored
       }
       if (!page.hasMore) break
     }
     if (row && summary.title !== undefined) await mergeMeta(row, { title: summary.title, archived: summary.archived === true, pinned: summary.pinned === true })
+    return stored
+  }
+
+  /** Copies what the hub has written of the chats this machine runs there; a chat leaves the list once its turn has ended here. */
+  async function pullLive() {
+    for (const [sessionId, entry] of [...live]) {
+      const stored = await pull({ sessionId: sessionId as SessionId, cseq: 0, directory: entry.directory, lastSeq: Number.MAX_SAFE_INTEGER }, true)
+      const running = ports.store.hasSession(sessionId as SessionId) && (ports.store.lastTurnStatus(sessionId as SessionId) === "running" || ports.store.queueOf(sessionId as SessionId).length > 0)
+      if (!stored && !running && ports.now() - entry.since > 2 * LIVE_TICK_MS) live.delete(sessionId)
+    }
   }
 
   async function pullChanges() {
@@ -361,22 +391,26 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     budget = ROUND_REQUESTS
     rounds++
     try {
+      await pullLive()
+      // While a chat runs on the hub for this machine, rounds are quick and carry only that chat; the full round comes every few.
+      if (live.size && rounds % 10 !== 0) { delay = LIVE_TICK_MS; status.connected = true; status.lastOkAt = ports.now(); status.lastError = ""; return }
       await syncOwned()
       await pullChanges()
       await pushLocalMeta()
       if (config.memories) await syncMemories()
       if (config.settings && rounds % 6 === 1) await syncSettings()
-      delay = ports.tickMs
+      delay = live.size ? LIVE_TICK_MS : ports.tickMs
     } catch (error) {
       if (!(error instanceof RoundDone)) throw error
       delay = Math.min(ports.tickMs, 250)
     }
+    status.connected = true
     status.lastOkAt = ports.now()
     status.lastError = ""
   }
   function schedule() {
     if (stopped) return
-    timer = setTimeout(() => void now().catch(() => {}), delay)
+    timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, LIVE_TICK_MS) : delay)
     ;(timer as { unref?(): void }).unref?.()
   }
   /** One round now (or the one already running); a failure backs off. */
@@ -392,6 +426,40 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       throw error
     }).finally(() => { round = undefined; schedule() })
     return round
+  }
+
+  /** Work that talks to the hub on its own, after the round running now and before the next. */
+  async function exclusive<T>(work: () => Promise<T>): Promise<T> {
+    while (round) await round.catch(() => {})
+    clearTimeout(timer)
+    budget = Number.MAX_SAFE_INTEGER
+    const running = work()
+    round = running.then(() => {}, () => {}).finally(() => { round = undefined; schedule() })
+    return running
+  }
+
+  /**
+   * Sends a local client's command to the hub, which runs it there (a chat, a prompt, a cancel, an approval); the result comes back
+   * through the mirror. Only what the hub's `sync-run` token allows goes through; the hub's own refusal is passed on as it is.
+   */
+  async function forward(command: Command): Promise<{ ok: true; result?: Record<string, unknown> } | { ok: false; code: string; message: string }> {
+    const { id: _id, clientId: _clientId, ...bare } = command as Command & { id: string; clientId: string }
+    const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : "an answer"
+    return exclusive(async () => {
+      let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
+      try {
+        await connect()
+        const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare
+        reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(outgoing)
+      } catch { status.connected = false; try { client?.close() } catch {} ; client = undefined; return { ok: false as const, code: "forbidden", message: unreachable(what) } }
+      if (!reply.ok) return { ok: false as const, code: reply.error.code, message: reply.error.message }
+      const sessionId = (bare.type === "session.create" ? reply.result?.sessionId : (bare as { sessionId: string }).sessionId) as SessionId | undefined
+      if (typeof sessionId === "string") {
+        live.set(sessionId, { directory: bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })
+        try { await pullLive() } catch (error) { if (!roundError(error)) throw error }
+      }
+      return { ok: true as const, ...(reply.result ? { result: reply.result } : {}) }
+    })
   }
 
   /** Moves a session's writer, holding off the background rounds meanwhile (one exchange with the hub at a time). */
@@ -438,6 +506,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
 
   return {
     guard,
+    routes,
+    forward,
     /** A round that starts now, after any one already running (`mendcode sync now`). */
     async fresh() {
       while (round) await round.catch(() => {})
@@ -445,6 +515,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     },
     control,
     start() { delay = Math.min(ports.tickMs, 1000); schedule() },
+    liveCount: () => live.size,
     async stop() {
       stopped = true
       clearTimeout(timer)

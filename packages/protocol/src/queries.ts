@@ -547,6 +547,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   view: z.enum(["minimal", "balanced", "full"]).optional(),
   /** Permission mode for new sessions. */
   defaultPermission: z.enum(["ask", "edits", "full", "smart", "plan"]).optional(),
+  /** Permission mode of a chat a device starts here through a `sync-run` token (default `edits`: file edits run, commands ask the device). */
+  syncRunPermission: z.enum(["ask", "edits", "full"]).optional(),
   /** `smart` mode: command prefixes (e.g. "bun test", "git status") that run without asking, on top of the built-in read-only list. Risky patterns still ask. */
   permissionAllow: z.array(z.string().min(1).max(200)).max(100).optional(),
   /** `smart` mode: with the OS `sandbox` on and its network off, shell commands smart mode merely does not know run without asking (rules that flag a risk still ask). Off by default; local clients only. */

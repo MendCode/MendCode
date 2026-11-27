@@ -16,11 +16,11 @@ const DEFAULT_PORT = 9876
 export type SetupCommand = Provision | Unpair
 type Unpair = { action: "unpair"; dir: string; device: string; remote?: string; ssh?: string; remoteDir: string; dryRun: boolean }
 type Provision =
-  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number; sync: boolean; tailscale?: string; tailscaleSocket?: string }
+  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number; sync: boolean; syncRun: boolean; tailscale?: string; tailscaleSocket?: string }
 
 const VALUE_FLAGS = ["--dir", "--ssh", "--name", "--device", "--port", "--remote-dir", "--channel", "--installer-url", "--expires-days", "--path-map", "--search-root", "--session-limit", "--remote", "--tailscale", "--tailscale-socket"]
-const BOOLEAN_FLAGS = ["--upgrade", "--dry-run", "--migrate-settings", "--migrate-sessions", "--acp-agents", "--clone-missing", "--no-default", "--rotate", "--reinstall-service", "--sync"]
-export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--sync [--path-map LOCAL=REMOTE]] [--tailscale PATH] [--tailscale-socket PATH] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default] [--sync] [--tailscale PATH] [--tailscale-socket PATH]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
+const BOOLEAN_FLAGS = ["--upgrade", "--dry-run", "--migrate-settings", "--migrate-sessions", "--acp-agents", "--clone-missing", "--no-default", "--rotate", "--reinstall-service", "--sync", "--run"]
+export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--sync [--run] [--path-map LOCAL=REMOTE]] [--tailscale PATH] [--tailscale-socket PATH] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default] [--sync] [--tailscale PATH] [--tailscale-socket PATH]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
 
 const HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,251}$/
 const SSH_TARGET = /^[A-Za-z0-9_][A-Za-z0-9._@:[\]-]{0,252}$/
@@ -59,7 +59,7 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
   const device = one("--device") ?? (hostName().split(".")[0] ?? "device").toLowerCase().replace(/[^a-z0-9_-]/g, "-").replace(/^-+|-+$/g, "").slice(0, 60)
   if (!NAME.test(device)) throw new Error("--device uses 1–64 letters, digits, _ or -")
   if (action === "unpair") {
-    const unpairOnly = ["--migrate-settings", "--migrate-sessions", "--acp-agents", "--upgrade", "--clone-missing", "--rotate", "--reinstall-service", "--no-default", "--sync"].find((flag) => flags.has(flag))
+    const unpairOnly = ["--migrate-settings", "--migrate-sessions", "--acp-agents", "--upgrade", "--clone-missing", "--rotate", "--reinstall-service", "--no-default", "--sync", "--run"].find((flag) => flags.has(flag))
     const tailscaleFlag = ["--tailscale", "--tailscale-socket"].find((flag) => values.has(flag))
     if (tailscaleFlag) throw new Error(`${tailscaleFlag} does not apply to remote unpair`)
     if (unpairOnly) throw new Error(`${unpairOnly} does not apply to remote unpair`)
@@ -80,6 +80,7 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
   const limit = one("--session-limit") === undefined ? 100 : Number(one("--session-limit"))
   if (!Number.isInteger(limit) || limit < 1 || limit > 500) throw new Error("--session-limit needs 1–500")
   const migrateSessions = flags.has("--migrate-sessions")
+  if (flags.has("--run") && !flags.has("--sync")) throw new Error("--run needs --sync: it lets the sync token also run turns on the host")
   if (!migrateSessions && values.has("--path-map") && !flags.has("--sync")) throw new Error("--path-map needs --migrate-sessions or --sync")
   if (!migrateSessions && (values.has("--search-root") || values.has("--session-limit") || flags.has("--clone-missing"))) throw new Error("--path-map, --search-root, --session-limit and --clone-missing need --migrate-sessions")
   if (action === "pair" && (migrateSessions || flags.has("--migrate-settings") || flags.has("--acp-agents") || flags.has("--upgrade") || values.has("--port") || values.has("--channel"))) throw new Error("remote pair only adds this device; migration, upgrades and the port belong to remote setup")
@@ -89,6 +90,7 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
     migrateSettings: flags.has("--migrate-settings"), migrateSessions, acpAgents: flags.has("--acp-agents"), pathMaps: (values.get("--path-map") ?? []).map(parsePathRule),
     cloneMissing: flags.has("--clone-missing"), searchRoots: (values.get("--search-root") ?? []).map((root) => checkRemotePath(root, "--search-root")), sessionLimit: limit,
     sync: flags.has("--sync"),
+    syncRun: flags.has("--run"),
     ...(one("--tailscale") ? { tailscale: checkRemotePath(one("--tailscale")!, "--tailscale") } : {}),
     ...(one("--tailscale-socket") ? { tailscaleSocket: checkRemotePath(one("--tailscale-socket")!, "--tailscale-socket") } : {}),
   }
@@ -163,7 +165,7 @@ export function setupPlan(command: SetupCommand): string[] {
   } else lines.push(`read ${command.remoteDir}/remote.json on the host for the address and port`)
   lines.push(`create the token ${command.device}${command.expiresDays ? ` (expires in ${command.expiresDays} days)` : ""} on the host and save it to ${tokenFile(command.dir, command.name, command.device)} (mode 0600, never printed)`)
   if (command.action === "setup") lines.push(`install the daemon service with a listener (\`daemon service install --listener\`) and start it${command.reinstallService ? " (reinstalling)" : ""}`)
-  if (command.sync) lines.push(`create the sync token ${command.device}-sync (it may only sync sessions) on the host and save it to ${syncTokenFile(command.dir, command.name)}`)
+  if (command.sync) lines.push(`create the sync token ${command.device}-sync (it may only sync sessions${command.syncRun ? " and run turns in the host's projects" : ""}) on the host and save it to ${syncTokenFile(command.dir, command.name)}`)
   lines.push(`save the remote ${command.name} (${command.host}:${command.port ?? DEFAULT_PORT}) in ${path.join(command.dir, "remotes.json")}${command.makeDefault ? " as the default, so a bare mendcode connects" : ""}`, "check that the host answers over the tailnet")
   if (command.sync) lines.push(`turn on session sync with ${command.name} (${path.join(command.dir, "sync.json")}): the host's sessions appear here, \`mendcode sync take ID\` continues one on this machine`)
   if (command.action === "setup") {
@@ -456,7 +458,7 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
     if (listed.includes(syncName) && existsSync(syncFile) && !command.rotate) say(`  sync token ${syncName} already exists`)
     else {
       if (listed.includes(syncName)) await must("could not revoke the old sync token", `"$MC" remote token revoke ${shq(syncName)} --dir "$D"`)
-      const created = (await must("could not create the sync token", `"$MC" remote token create --sync --dir "$D" --name ${shq(syncName)}${command.expiresDays ? ` --expires-days ${command.expiresDays}` : ""}`)).trim()
+      const created = (await must("could not create the sync token", `"$MC" remote token create --sync${command.syncRun ? " --run" : ""} --dir "$D" --name ${shq(syncName)}${command.expiresDays ? ` --expires-days ${command.expiresDays}` : ""}`)).trim()
       if (!/^[A-Za-z0-9_-]{20,}$/.test(created)) throw new SetupError("the host returned something that is not a token")
       writePrivate(syncFile, `${created}\n`)
       say(`  saved ${syncFile}`)

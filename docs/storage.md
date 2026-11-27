@@ -14,6 +14,7 @@ mendcode --dir DATA worktrees list|size|gc [--yes] [--artifacts] [--idle 14d]   
 mendcode --dir DATA storage --worktrees           worktrees the daemon created: size, merged or not, why one is kept
 mendcode --dir DATA storage --compact [--dry-run] pack old data, drop finished deltas (--delta-idle 3d)
 mendcode --dir DATA storage --compact --offline [--dry-run] convert pages without starting a daemon
+mendcode storage --move-dir OLD=NEW --offline --dir DATA [--dry-run] move stored folders (daemon stopped, backup kept)
 mendcode --dir DATA storage --clean [--older-than 90d] [--worktrees [--worktree-idle 14d]] [--dry-run] [--vacuum]
 ```
 

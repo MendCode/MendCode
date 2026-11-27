@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Work on a sync hub (a VPS) from this machine: with a sync token made by `remote setup HOST --sync --run` (or `remote token create --sync --run`), a new chat in the hub's project folder, a prompt to a mirrored chat, a cancel and an approval answer run on the hub and stream back into this machine's copy. A chat started this way begins in the hub's `syncRunPermission` mode (default `edits`). The token may do only those four things; without `--run`, or with the hub unreachable, they are refused with a short message naming the hub instead of starting a chat here that fails on the missing folder.
+- `mendcode storage --move-dir OLD=NEW --offline --dir DATA` moves every stored folder at or under OLD (sessions, prompt history, workflows, memories) to NEW while the daemon is stopped; it keeps a backup and `--dry-run` counts what would move.
 - `remote token create --bot FOLDER` makes a token for a chat bot on another machine: it can start sessions and run turns only inside that folder, answer their approvals and cancel, and it never hears the daemon's other activity or reaches settings, secrets or other projects.
 
 ### Changed
@@ -22,6 +24,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- `sync status` no longer shows the hub as not connected between rounds that succeed.
 - An expired ChatGPT sign-in now says so in the chat and points to `/connect chatgpt` instead of another tool, and a ChatGPT browser sign-in on a remote server can be finished by pasting the address the browser ended on.
 - `/pet` lists only MendAscii and MendGirl out of the box: an imported pet that repeats MendGirl's name is no longer listed twice, and in a terminal that cannot draw images MendGirl shows as unavailable and MendAscii takes her place.
 - A streaming reply in a long chat uses less CPU again: each frame works out the transcript's length once instead of several times.

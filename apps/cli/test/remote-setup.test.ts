@@ -284,6 +284,8 @@ test("pair --sync adds a sync-only token beside the device token and turns sync 
   const sync = JSON.parse(readFileSync(path.join(second, "sync.json"), "utf8"))
   expect(sync).toMatchObject({ remote: "vps", tokenFile, pathMap: [expect.anything()] })
   expect(() => parseSetupCommand(["remote", "pair", HOST, "--path-map", "/a=/b"], second)).toThrow("--sync")
+  expect(parseSetupCommand(["remote", "pair", HOST, "--dir", second, "--sync", "--run"], second)).toMatchObject({ sync: true, syncRun: true })
+  expect(() => parseSetupCommand(["remote", "pair", HOST, "--dir", second, "--run"], second)).toThrow("--run needs --sync")
 })
 
 test("unpair revokes on the host and removes the local token file and remote", async () => {

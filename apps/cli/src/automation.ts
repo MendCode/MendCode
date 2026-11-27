@@ -61,7 +61,7 @@ export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage
 const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast", "no-memories", "no-settings"])
 /** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
 const WORKFLOW_LIST_LIMIT = 50
-const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes", "sync-token-file"])
+const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes", "sync-token-file", "move-dir"])
 /** Flags that may be given several times; their values are collected in order. */
 const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude", "path-map"])
 const DEFAULT_LIST_LIMIT = 50
@@ -108,7 +108,7 @@ export type Automation = Common &
     | { kind: "workflow.control"; id: string; action: "pause" | "resume" | "stop" | "verify" | "delete" | "retry" | "accept" | "approve" | "reject"; taskId?: string; reason?: string; wait?: true; timeoutMs?: number }
     | { kind: "usage" | "stats"; days?: number; tools?: number; models?: true | number; scope?: "global" | "project" | "directory"; project?: string; waste?: true }
     | { kind: "usage.recover"; session: string; engine: "claude" | "codex" | "pi"; action: "preview" | "apply" | "undo"; file?: string; fingerprint?: string }
-    | { kind: "storage"; clean: boolean; olderThanDays?: number; dryRun: boolean; vacuum: boolean; compact: boolean; offline?: boolean; deltaIdleDays?: number; worktrees: boolean; worktreeIdleDays?: number }
+    | { kind: "storage"; clean: boolean; olderThanDays?: number; dryRun: boolean; vacuum: boolean; compact: boolean; offline?: boolean; moveDir?: { from: string; to: string }; deltaIdleDays?: number; worktrees: boolean; worktreeIdleDays?: number }
     | { kind: "profile.list" }
     | { kind: "recipe.list" }
     | { kind: "area.list" }
@@ -662,7 +662,12 @@ export function parseAutomation(argv: string[]): ParseResult {
     const clean = flags.has("clean")
     const compactData = flags.has("compact")
     const offline = offlineOption
-    if (offline && (!compactData || clean || flags.has("worktrees") || flags.has("vacuum") || str("delta-idle") !== undefined || !str("dir"))) return bad("--offline requires --compact and --dir; cannot combine with cleanup options")
+    const moveText = str("move-dir")
+    const moveAt = moveText?.indexOf("=") ?? -1
+    if (flags.has("move-dir") && (moveAt < 1 || moveAt === moveText!.length - 1)) return bad("--move-dir needs OLD=NEW (absolute folders)")
+    const moveDir = moveText === undefined ? undefined : { from: moveText.slice(0, moveAt), to: moveText.slice(moveAt + 1) }
+    if (moveDir && (!offline || !str("dir") || compactData || clean || flags.has("worktrees") || flags.has("vacuum") || str("delta-idle") !== undefined)) return bad("--move-dir needs --offline and --dir DATA; cannot combine with cleanup options")
+    if (!moveDir && offline && (!compactData || clean || flags.has("worktrees") || flags.has("vacuum") || str("delta-idle") !== undefined || !str("dir"))) return bad("--offline requires --compact and --dir; cannot combine with cleanup options")
     const worktrees = flags.has("worktrees")
     const idle = (flag: string) => {
       const value = str(flag)
@@ -674,7 +679,7 @@ export function parseAutomation(argv: string[]): ParseResult {
     if ("error" in deltaIdle) return bad(deltaIdle.error)
     if ("error" in worktreeIdle) return bad(worktreeIdle.error)
     if (!clean && olderThan !== undefined) return bad("--older-than and --dry-run need --clean")
-    if (!clean && !compactData && flags.has("dry-run")) return bad("--older-than and --dry-run need --clean or --compact")
+    if (!clean && !compactData && !moveDir && flags.has("dry-run")) return bad("--older-than and --dry-run need --clean or --compact")
     if (!compactData && deltaIdle.days !== undefined) return bad("--delta-idle needs --compact")
     if (!worktrees && worktreeIdle.days !== undefined) return bad("--worktree-idle needs --worktrees")
     if (flags.has("dry-run") && flags.has("vacuum")) return bad("--dry-run cannot vacuum")
@@ -686,6 +691,7 @@ export function parseAutomation(argv: string[]): ParseResult {
       vacuum: flags.has("vacuum"),
       compact: compactData,
       ...(offline ? { offline: true } : {}),
+      ...(moveDir ? { moveDir } : {}),
       ...(deltaIdle.days === undefined ? {} : { deltaIdleDays: deltaIdle.days }),
       worktrees,
       ...(worktreeIdle.days === undefined ? {} : { worktreeIdleDays: worktreeIdle.days }),
