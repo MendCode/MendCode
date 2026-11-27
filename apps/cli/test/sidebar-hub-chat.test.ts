@@ -10,18 +10,18 @@ const lines = (sessions: MultiSession[]) => renderMultiSidebar(input(sessions)).
 
 describe("a chat the hub runs is marked in the sidebar and its project says it has one", () => {
   test("the row and the project group carry the hub's name; a local chat and a local project do not", () => {
-    const mixed = lines([chat("a"), chat("b", { hub: "hostinger-dev" })])
-    expect(mixed.find((line) => line.includes("chat b"))).toContain("@hostinger")
+    const mixed = lines([chat("a"), chat("b", { hub: "work-hub" })])
+    expect(mixed.find((line) => line.includes("chat b"))).toContain("@work")
     expect(mixed.find((line) => line.includes("chat a"))).not.toContain("@")
-    expect(mixed.find((line) => /[▾▸] app/.test(line))).toContain("@hostinger")
+    expect(mixed.find((line) => /[▾▸] app/.test(line))).toContain("@work")
     expect(lines([chat("a")]).join("\n")).not.toContain("@")
   })
 })
 
 describe("where a chat's folder reads in the footer", () => {
   test("a hub chat shows the hub's own folder under the hub's name, a local one its folder", () => {
-    expect(chatFolder({ hub: "hostinger-dev", hubDirectory: "/home/dev/projects/shop/web" }, "~/Code/shop/web")).toBe("hostinger-dev:~/projects/shop/web")
-    expect(chatFolder({ hub: "hostinger-dev", hubDirectory: "/srv/app" }, "~/Code/app")).toBe("hostinger-dev:/srv/app")
+    expect(chatFolder({ hub: "work-hub", hubDirectory: "/home/dev/projects/shop/web" }, "~/Code/shop/web")).toBe("work-hub:~/projects/shop/web")
+    expect(chatFolder({ hub: "work-hub", hubDirectory: "/srv/app" }, "~/Code/app")).toBe("work-hub:/srv/app")
     expect(chatFolder({}, "~/Code/app")).toBe("~/Code/app")
     expect(chatFolder(undefined, undefined)).toBeUndefined()
   })
