@@ -47,7 +47,7 @@ mendcode sync release SESSION_ID    # give it back to the VPS
 mendcode sync handoff SESSION_ID    # give the VPS a session made here
 ```
 
-One machine writes a session at a time, and a refused prompt names the one that does. Credentials, tokens and authority settings never sync. Details: [sync.md](sync.md).
+One machine writes a session at a time, and a refused prompt names the one that does. Credentials, tokens and authority settings never sync. To stop copying, run `mendcode sync follow off` (configuration only) or `mendcode sync disable` (all sync); what is already on the VPS stays there. Details: [sync.md](sync.md#stop-copying).
 
 ## 3. Move your code
 

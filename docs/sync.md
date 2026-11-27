@@ -45,6 +45,23 @@ A lease lasts a minute and is renewed while this machine is online. If this mach
 
 Never synced: provider credentials, tokens, `environment.enc`, keys, channel and Console state, engine bindings (ACP session ids), and authority or machine settings (permissions, tier, models, shell, remote engines). The hub refuses them even when asked.
 
+## Stop copying
+
+Pick the smallest step that does what you want. Each one leaves what is already on the hub where it is.
+
+| You want | Run | What happens |
+|---|---|---|
+| No configuration copied, sessions still sync | `mendcode sync follow off` | The parity check and its `--apply` stop running on their own. Sessions, memories and settings keep syncing. |
+| No memories or settings copied | `mendcode sync enable REMOTE --no-memories --no-settings` | Rewrites the sync settings with both skipped. Re-enabling turns `--follow` off unless you pass it again. |
+| All sync off | `mendcode sync disable` | Removes the sync settings from `sync.json`. Nothing more is copied in either direction. Copies already here stay here. |
+| Also stop the hub accepting this device | On the hub: `mendcode remote token revoke DEVICE-sync --dir DATA` | Revokes the sync token. Use the name you gave it, `<device>-sync` by default. A `--run` token is revoked the same way. |
+
+Notes:
+
+- `sync disable` does not delete the sync-token file (`remote/<remote>.sync-token`) and does not touch the hub. Revoke the token on the hub if the device should lose access.
+- Sessions this machine took (`sync take`) hold a lease on the hub. Run `mendcode sync release ID` first so the hub owns them again. Otherwise the hub takes them back when the lease ends, a minute after this machine stops renewing it.
+- Turning sync back on later with `mendcode sync enable REMOTE` picks the hub's sessions up again; a session that diverged here stays a separate copy.
+
 ## Running on the hub
 
 A device whose sync token was made with `--run` (`remote setup HOST --sync --run`, or `remote token create --sync --run` on the hub) can work on the hub's chats and projects from here. A chat started in a folder that is only the hub's, a prompt, a cancel or an approval answer for a chat the hub owns goes to the hub, which runs it there; the turn streams back into this machine's copy while it runs, so the transcript, the approval card and the cancel work as in any chat. The tools and model are the hub's. A chat started from a device begins in the hub's `syncRunPermission` mode (`ask`, `edits` or `full`; default `edits`: file edits run, commands ask for approval, answered from the device); the device cannot change it.

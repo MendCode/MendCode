@@ -95,6 +95,10 @@ Stalled goals restart when the user sends a message, or with `/goal resume`, whi
 
 Both counts start over after a turn that acted, a user message, `/goal resume`, an edited objective or budget, and a new goal.
 
+### Waiting for background commands
+
+While a command the agent started in the background still runs, the goal does not start its next turn. The next turn starts when that command ends, when it prints a line the agent watches for, when you write a message, or when `processLimits.goalWaitMinutes` has passed (default 30, a setting from 1 to 525600). The goal stays `active` during the wait. See [interactive tools](interactive-tools.md) for the background command limits.
+
 ### Progress
 
 A goal turn makes progress when one of its tool calls succeeds with a call and a result this goal has not seen before.

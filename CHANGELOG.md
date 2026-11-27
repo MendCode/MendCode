@@ -23,7 +23,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - On the Claude engine, background commands are no longer stopped after 2 hours ("stopped after reaching its background time limit"): MendCode starts Claude Code with its background cap at the maximum, or at `processLimits.lifetimeMinutes` when you set one, unless you set `BASH_MAX_TIMEOUT_MS` yourself.
 - The `shell_session` tool description no longer tells the model its terminals stop after 15 minutes idle or 2 hours: they have no time cap unless `processLimits` sets one, as for background commands.
 - `/whatsnew` asks the model once per version and changelog content and reuses the saved answer after that, and its page is shorter: at most 8 changes grouped New, Fixed and Changed, with `/whatsnew all` for the rest.
-- `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed in, and puts the cursor on an expired sign-in.
+- `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed
+- Docs: the sync pages say how to stop copying (`sync follow off`, `sync disable`, revoking the device token), and the storage page covers `--move-dir`. in, and puts the cursor on an expired sign-in.
+- Docs: the automation page indexes every top-level command with its page, the `ps`, `logs` and `kill` shorthands and the missing subcommands, and the what's-new page lists the latest versions.
 
 ### Fixed
 
@@ -44,6 +46,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
+- Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
 
 ## v0.0.20 - 2026-11-24
 
