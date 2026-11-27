@@ -29,7 +29,8 @@ The picker is drawn in the list's own cells:
 ```text
    New chat in…                      │
    > ap▌                           2 │
-   ↵ start  type a name or a path    │
+   type ~/ or a path to browse       │
+   ↵ start  tab completes  esc back  │
                                      │
  › app                          open │
    api                               │
@@ -37,8 +38,11 @@ The picker is drawn in the list's own cells:
    /work/app                         │
 ```
 
-- The open folder comes first, then every project the list knows, in the list's ranking. Typing filters by the words of the path.
-- Text that starts like a path (`/`, `~`, `./`, `../`) lists directories from the disk instead, as `/cd` completes them, so a folder that has no session yet can be chosen. `Tab` walks into the picked directory; Enter starts the chat in it.
+- The open folder comes first, then `Browse folders…` (it opens the folder most of your projects share, such as `~/Code/`, in the field), then every project the list knows, in the list's ranking. Typing a name filters by the words of the path. A project that lives on the sync hub and not on this machine carries the hub's name (`· my-hub`); a chat started in it runs on the hub when the token allows it ([Running on the hub](sync.md#running-on-the-hub)).
+- Text that starts like a path (`~`, `/`, `./`, `../`, or any text with a slash) browses the disk instead, so a folder that has no session yet can be chosen. The list shows the subfolders of what is typed up to the last slash, filtered by the name after it (names that start with it first, then names that hold it, then letters in order). Hidden folders show only when the name starts with a dot; a git repository is marked `git`. The first row is the typed folder itself when it exists, so Enter starts right there.
+  - `Tab` completes the typed name: one match is completed and entered, several complete to their common prefix, and when there is nothing to add it enters the picked folder. `→` enters the picked folder. `←` goes to the parent folder (from `~/` to the folder above home), and Backspace at the end of a folder takes its last name away.
+  - A path that does not exist offers `+ create folder <name>`, after the names that start like what was typed (first when none does). Enter on it asks once more (`↵ again makes the folder`; any other key cancels); the second Enter makes the folder with its parents and starts the chat in it. Nothing is made before that.
+  - Each folder is read once when the path first names it, at most 500 subfolders (looking at no more than 5000 entries), on the key press and never while drawing; the readings are dropped when the picker closes. Browsing is always on this machine's disk, and a terminal attached to another machine does not browse.
 - `↑` `↓` move, Enter or a click starts the chat, `Esc` (or Backspace on an empty field) gives the list back, `ctrl+u` clears the field.
 - It loads with the first picker opened and keeps no timer.
 
