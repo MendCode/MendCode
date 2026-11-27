@@ -34,7 +34,7 @@ export const AGENT_OPEN_COMMANDS = [
   "memory.list", "memory.search", "memory.graph", "memory.categories", "memory.workspaces", "memory.browse", "memory.sharing.status",
   "memory.assistant.get", "memory.extraction.list", "evolution.list", "dream.list",
   "loop.list", "loop.templates", "loop.snapshot", "loop.events", "loop.artifacts", "loop.receipt", "loop.export",
-  "workflow.list", "workflow.get", "workflow.preview", "workflow.definitions", "workflow.revision.get", "workflow.events", "workflow.artifacts",
+  "workflow.list", "workflow.get", "workflow.preview", "workflow.definitions", "workflow.saved", "workflow.revision.get", "workflow.events", "workflow.artifacts",
   "workflow.receipt", "workflow.export",
   // the project and the machine
   "git.status", "git.branch", "git.pr.view", "codegraph.overview", "files.search", "files.query", "file.view", "file.rest.read", "changes.query",

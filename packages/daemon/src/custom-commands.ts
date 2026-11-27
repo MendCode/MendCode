@@ -248,6 +248,12 @@ export async function loadCustomCommands(options: { directory: string; userDir: 
     }
     byName.set(skill.name, { name: skill.name, body: "", description: skill.description.slice(0, 120), argumentHint: (skill.argumentHint ?? "").slice(0, 60), source: skill.source, skill: true, foreign: true, ...(skill.model ? { model: skill.model } : {}), ...(skill.allowedTools?.length ? { allowedTools: skill.allowedTools } : {}), ...(skill.pkg ? { pkg: skill.pkg } : {}) })
   }
+  // A saved workflow runs as `/name args` (the terminal starts it); a command, a skill or a built-in of the same name wins.
+  const { workflowCommandEntries } = await import("./workflow-files")
+  for (const saved of workflowCommandEntries(layers)) {
+    if (byName.has(saved.name) || !SLASH_NAME.test(saved.name)) continue
+    byName.set(saved.name, { name: saved.name, body: "", description: saved.description, argumentHint: saved.kind === "script" ? "[key=value ...]" : "", source: saved.source, workflow: saved.kind, ...(saved.pkg ? { pkg: saved.pkg } : {}) })
+  }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name))
 }
 

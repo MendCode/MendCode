@@ -3,6 +3,20 @@ import { defineTool, fail } from "@mendcode/tools"
 import { z } from "zod"
 
 /**
+ * Sessions whose latest message asked for a workflow (the word `fanout`, or automatic workflows on): their `workflow_script` call
+ * starts without a prompt, because the user's own words asked for it. Set by the daemon at each message (workflow-trigger.ts).
+ */
+const asked = new Set<string>()
+export const fanoutAsked = (sessionId: string | undefined) => sessionId !== undefined && asked.has(sessionId)
+export function noteFanout(sessionId: string, on: boolean) {
+  asked.delete(sessionId)
+  if (!on) return
+  asked.add(sessionId)
+  // Bounded: the oldest sessions are forgotten first.
+  if (asked.size > 500) asked.delete(asked.values().next().value!)
+}
+
+/**
  * The model proposes a workflow through ordinary tools (§3.7): `workflow_start` asks for approval unless the session
  * is in full mode, and its approval lists every check command verbatim; `workflow_status` only reads.
  */
@@ -31,9 +45,9 @@ export const workflowStartTool = defineTool({
     const started = await context.workflows.start(plan)
     if (!started.ok) return fail({ title: "workflow", message: started.message })
     return {
-      output: `Workflow "${started.name}" started (${started.workflowId}) with ${started.tasks} tasks. It runs on its own; the user follows it in /workflows. Do not poll it.`,
+      output: `Workflow "${started.name}" started (${started.workflowId}) with ${started.tasks} tasks${started.estimate ? `. Expected: ${started.estimate}` : ""}. It runs on its own; the user follows it in /workflows. Do not poll it.`,
       truncated: false,
-      title: `◇ Workflow ${started.name} · ${started.tasks} tasks · started — /workflows`,
+      title: `◇ Workflow ${started.name} · ${started.tasks} tasks · started${started.estimate ? ` · ${started.estimate}` : ""} — /workflows`,
       isError: false,
       meta: { workflowId: started.workflowId, tasks: started.tasks },
     }
@@ -65,7 +79,9 @@ export const workflowScriptTool = defineTool({
   // Outside full access every script asks and shows its source, whatever the allow rules or saved grants say. In full access (the user
   // chose to run unattended, and the shell already runs without asking) a script starts like any other tool: it runs isolated, within
   // its caps and the project's trust, and its agents get no more than the session's permission.
-  approvalFor: (args, context) => args.help !== true && context?.mode !== "full",
+  approvalFor: (args, context) => args.help !== true && context?.mode !== "full" && !fanoutAsked(context?.sessionId),
+  // The user's own message asked for a workflow (`fanout`): it starts at once and shows its estimate, never a prompt.
+  preApproved: (args, context) => args.help !== true && fanoutAsked(context?.sessionId),
   async preview(args, context) {
     if (args.help === true || !context.workflows) return undefined
     const checked = await context.workflows.preview(scriptInput(args)).catch(() => undefined)
@@ -81,9 +97,9 @@ export const workflowScriptTool = defineTool({
     const started = await context.workflows.start(scriptInput(args))
     if (!started.ok) return fail({ title: "workflow_script", message: started.message })
     return {
-      output: `Script workflow "${started.name}" started (${started.workflowId}). It runs on its own; the user follows it in /workflows and can raise its caps there. Do not poll it.`,
+      output: `Script workflow "${started.name}" started (${started.workflowId})${started.estimate ? `. Expected: ${started.estimate}` : ""}. It runs on its own; the user follows it in /workflows and can raise its caps there. Do not poll it.`,
       truncated: false,
-      title: `◇ Script workflow ${started.name} · started — /workflows`,
+      title: `◇ Script workflow ${started.name} · started${started.estimate ? ` · ${started.estimate}` : ""}${started.notice ? ` · large run` : ""} — /workflows`,
       isError: false,
       meta: { workflowId: started.workflowId },
     }

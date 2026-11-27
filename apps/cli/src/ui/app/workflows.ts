@@ -1,5 +1,6 @@
 import { createWorkflowsPageState, parseWorkflowCommand, preload } from "../lazy-pages"
 import { inProject } from "../../view/project-scope"
+import { SLASH_COMMANDS } from "../../view/commands"
 import type { SessionId, WorkflowId, WorkflowSummary } from "@mendcode/protocol"
 import type { WorkflowControlAction } from "../../view/workflows-page"
 import type { AppContext } from "./context"
@@ -11,8 +12,21 @@ export function createWorkflows(ctx: AppContext) {
    * Asks the daemon for the runs of the page's scope. The page never waits on it: while the page has no list yet it draws the
    * last one it got for this scope (or the runs of this project it already follows), and the reply replaces it.
    */
+  /** The saved workflows (user, packages, project) for the Saved tab; the runs of the other tabs stay as they are. */
+  async function loadSaved() {
+    const reply = await input.send({ type: "workflow.saved", directory: input.directory ?? "" })
+    if (reply.ok) state.workflowSaved = (reply.result?.saved ?? []) as typeof state.workflowSaved
+    else fail(reply.error.message)
+    requestFrame()
+  }
+
   async function loadWorkflows() {
     const scope = state.workflowsState.scope
+    if (scope === "saved") {
+      state.workflowsLoaded = true
+      state.workflowsError = ""
+      return loadSaved()
+    }
     if (!state.workflowsLoaded) {
       const known = state.workflows.filter((run) => scope === "all" || inProject(run.directory, input.directory))
       const seed = state.workflowsSeen[scope] ?? (known.length ? known : undefined)
@@ -46,6 +60,7 @@ export function createWorkflows(ctx: AppContext) {
     state.workflowsLoaded = false
     state.workflowsError = ""
     requestFrame()
+    void loadSaved()
     await loadWorkflows()
   }
 
@@ -106,6 +121,21 @@ export function createWorkflows(ctx: AppContext) {
       else fail(reply.error.message)
       return
     }
+    if (spec.kind === "save") {
+      if (input.remote) return say("saving writes a file on the machine that runs the daemon; this terminal is connected to a remote one", "warning")
+      if (SLASH_COMMANDS.some((entry) => entry.name === spec.name || entry.aliases.includes(spec.name))) return fail(`/${spec.name} is a built-in command; choose another name`)
+      const reply = await input.send({ type: "workflow.script", workflowId: spec.workflowId as WorkflowId, action: "save", name: spec.name })
+      if (reply.ok) say(`saved as ${spec.name}: run it with /${spec.name}${state.workflows.find((run) => run.workflowId === spec.workflowId)?.script ? " key=value ..." : ""}`, "success")
+      else fail(reply.error.message)
+      return
+    }
+    if (spec.kind === "saved") {
+      const reply = await input.send({ type: "workflow.saved", directory: input.directory ?? "" })
+      if (!reply.ok) return fail(reply.error.message)
+      const saved = (reply.result?.saved ?? []) as Array<{ name: string; source: string; pkg?: string }>
+      state.notice = saved.length ? `saved workflows: ${saved.map((entry) => `/${entry.name}${entry.pkg ? ` (${entry.pkg})` : ""}`).join(" ")}` : "no saved workflows yet: s on a run in /workflows saves it"
+      return
+    }
     if (spec.kind === "update" || spec.kind === "new" || spec.kind === "convert") {
       if (input.remote) return say("script files are local; this terminal is connected to a remote daemon", "warning")
       const message = await scriptFileCommand(spec)
@@ -134,11 +164,11 @@ export function createWorkflows(ctx: AppContext) {
     if (!preview.ok) return fail(preview.error.message)
     const problems = (preview.result?.problems ?? []) as string[]
     if (problems.length) return fail(problems.slice(0, 3).join(" · "))
-    const summary = preview.result?.summary as { name: string; tasks: Array<{ kind?: string; map?: { maxItems: number } }>; checks: string[]; permission: string; phases?: unknown[]; overlapPolicy?: string; maxConcurrent?: number; script?: { hash: string; origin: string; meta: { phases?: unknown[]; budget?: Record<string, number> } } } | undefined
+    const summary = preview.result?.summary as { estimate?: { line: string; notice: string }; name: string; tasks: Array<{ kind?: string; map?: { maxItems: number } }>; checks: string[]; permission: string; phases?: unknown[]; overlapPolicy?: string; maxConcurrent?: number; script?: { hash: string; origin: string; meta: { phases?: unknown[]; budget?: Record<string, number> } } } | undefined
     if (!spec.confirmed && summary?.script) {
       // What a script may spend and what it is, before it runs: the user's approval is the `--yes` that follows this line.
       const caps = Object.entries(summary.script.meta.budget ?? {}).map(([key, value]) => `${key} ${value}`).join(", ") || "no caps declared (10 agent calls)"
-      state.notice = `${summary.name}: script ${scriptName ?? ""} · ${summary.script.origin} · sha256 ${summary.script.hash.slice(0, 12)} · caps ${caps} · up to ${summary.maxConcurrent ?? 16} agents at once · ${summary.permission}${summary.checks.length ? ` · checks: ${summary.checks.join(", ")}` : ""} — add --yes to start`
+      state.notice = `${summary.name}: script ${scriptName ?? ""} · ${summary.script.origin} · sha256 ${summary.script.hash.slice(0, 12)} · caps ${caps} · up to ${summary.maxConcurrent ?? 16} agents at once · ${summary.permission}${summary.checks.length ? ` · checks: ${summary.checks.join(", ")}` : ""}${summary.estimate ? ` · expected ${summary.estimate.line}` : ""} — add --yes to start`
       return
     }
     if (!spec.confirmed) {
@@ -150,8 +180,15 @@ export function createWorkflows(ctx: AppContext) {
     const reply = await input.send({ type: "workflow.start", directory, plan: plan as never, ...(spec.permission ? { permission: spec.permission } : {}), ...(state.sessionId ? { originSessionId: state.sessionId } : {}) })
     if (!reply.ok) return fail(reply.error.message)
     const workflow = reply.result?.workflow as WorkflowSummary | undefined
-    say(`workflow ${workflow?.name ?? ""} · ${workflow?.state ?? "running"}`, "success")
+    // What it is expected to use, inline: the run is already going, this is for the user to know, not to answer.
+    const estimate = (reply.result?.estimate ?? summary?.estimate) as { line: string; notice: string } | undefined
+    say(`workflow ${workflow?.name ?? ""} · ${workflow?.state ?? "running"}${estimate ? ` · expected ${estimate.line}` : ""}${estimate?.notice ? ` · ${estimate.notice}` : ""}`, estimate?.notice ? "warning" : "success")
     await openWorkflows()
+  }
+
+  /** `/<name> args` of a saved workflow: the user typed it, so it starts at once (its estimate and caps show inline); a model never starts it. */
+  async function runSavedWorkflow(command: { name: string; args: string; kind: "script" | "plan" }) {
+    await workflowCommand(command.kind === "script" ? `run ${command.name}${command.args ? ` ${command.args}` : ""} --yes` : `${command.name} --yes`)
   }
 
   /** `/workflows new|convert|update`: script files on this machine. Returns the line to show. */
@@ -200,5 +237,5 @@ export function createWorkflows(ctx: AppContext) {
     else state.liveWorkflows.delete(run.workflowId)
   }
 
-  return { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow }
+  return { loadWorkflows, loadSaved, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, runSavedWorkflow, loadLiveWorkflows, noteWorkflow }
 }

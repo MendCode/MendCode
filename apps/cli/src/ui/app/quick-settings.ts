@@ -1,5 +1,5 @@
 import { EXPERIMENTAL_FLAGS, FEATURES, OUTPUT_STYLES, TIERS, TIER_BUNDLES, effectiveSettings, featureOn, isFeatureId, isTier, tierRows, type ExperimentalFlag, type OutputStyle } from "@mendcode/protocol/wire"
-import { ADVISOR_DEFAULTS } from "@mendcode/protocol/wire"
+import { ADVISOR_DEFAULTS, DEFAULT_WORKFLOW_SIZE, WORKFLOW_SIZES, WORKFLOW_SIZE_GUIDE, type WorkflowSize } from "@mendcode/protocol/wire"
 import type { AIConfigInspection, ModelChoice, ModelsReport, Settings } from "@mendcode/protocol"
 import { ADVISOR_USAGE, advisorAccount, advisorStatusText } from "../../view/advisor-status"
 import type { TuiProfile } from "../../view/tui-profile"
@@ -22,6 +22,7 @@ export const EXPERIMENTAL_USAGE = "usage: /experimental [flag [on|off]]"
 export const GRAPH_USAGE = "usage: /graph [on|off|auto] · /graph default on|off|auto"
 /** What `/language next` (the /customize row) steps through; any other language name is typed: `/language Deutsch`. */
 export const LANGUAGE_PRESETS = ["auto", "English", "Español", "Português", "Français"] as const
+export const AUTOFLOW_USAGE = `usage: /autoflow [on|off|${WORKFLOW_SIZES.join("|")}]`
 export const LANGUAGE_USAGE = "usage: /language [auto|<language name>|next]"
 const LANGUAGE_NAME = /^\p{L}[\p{L}\p{M} ()-]{0,39}$/u
 const flagIds = new Set<string>(EXPERIMENTAL_FLAGS.map((flag) => flag.id))
@@ -316,6 +317,28 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     say(`reply language: ${next} · applies from the next message`, "success")
   }
 
+  /**
+   * `/autoflow [on|off|small|medium|large|unrestricted]`: automatic workflows (`workflows.auto`) and the size guideline the model follows
+   * when it writes a script (`workflows.size`). Bare `/autoflow` says where both stand. Without it, the word `fanout` in a prompt asks for
+   * one workflow, and `--no-fanout` in a prompt skips that (docs/workflows.md, "Ask for a workflow").
+   */
+  async function autoflowCommand(args: string) {
+    const word = args.trim().toLowerCase()
+    const current = state.settingsNow.workflows ?? {}
+    const size: WorkflowSize = current.size ?? DEFAULT_WORKFLOW_SIZE
+    const status = () => `workflows: ${current.auto ? "automatic" : "on request (the word fanout)"} · size ${size}, ${WORKFLOW_SIZE_GUIDE[size].agents === undefined ? "no agent limit" : `up to ${WORKFLOW_SIZE_GUIDE[size].agents} agents`}`
+    if (!word) { say(`${status()} · ${AUTOFLOW_USAGE}`); return }
+    const isSize = (WORKFLOW_SIZES as readonly string[]).includes(word)
+    if (word !== "on" && word !== "off" && !isSize) { say(AUTOFLOW_USAGE, "warning"); return }
+    if (readOnly()) { say("settings are read-only for this terminal", "warning"); return }
+    const next = isSize ? { ...current, size: word as WorkflowSize } : { ...current, auto: word === "on" }
+    const saved = await save({ workflows: next })
+    if (!saved) return
+    const now = saved.workflows ?? next
+    state.settingsNow = saved
+    say(isSize ? `workflow size ${word}: ${WORKFLOW_SIZE_GUIDE[word as WorkflowSize].text}` : now.auto ? "workflows are automatic: the model may write and run one for any request that fans out (--no-fanout in a prompt skips it)" : "workflows run on request: put the word fanout in a prompt", "success")
+  }
+
   async function cdCommand(args: string) {
     const target = args.trim()
     if (!target) { say(`in ${input.directory ?? "."} · usage: /cd <directory>`); return }
@@ -327,7 +350,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
 
   /** True when the text was one of these commands. */
   async function quickCommand(text: string): Promise<boolean> {
-    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph|language)(?:\s+(.*))?$/s.exec(text.trim())
+    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph|language|autoflow)(?:\s+(.*))?$/s.exec(text.trim())
     if (!match) return false
     const args = match[2] ?? ""
     switch (match[1]) {
@@ -341,6 +364,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       case "pwd": say(input.directory ?? "."); break
       case "graph": await graphCommand(args); break
       case "language": await languageCommand(args); break
+      case "autoflow": await autoflowCommand(args); break
     }
     return true
   }

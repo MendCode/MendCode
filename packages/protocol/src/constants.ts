@@ -236,3 +236,15 @@ export const GOAL_INLINE_OBJECTIVE_CHARS = 4_000
 export const GOAL_MAX_OBJECTIVE_CHARS = 60_000
 /** The most tokens a goal budget may name. */
 export const GOAL_MAX_TOKEN_BUDGET = 1_000_000_000_000
+
+/** The size guideline a workflow script follows (`workflows.size`, `/autoflow small|medium|large|unrestricted`); `medium` when unset. */
+export const WORKFLOW_SIZES = ["small", "medium", "large", "unrestricted"] as const
+export type WorkflowSize = (typeof WORKFLOW_SIZES)[number]
+export const DEFAULT_WORKFLOW_SIZE: WorkflowSize = "medium"
+/** What each size asks of a script: the most agents and phases it should plan (unrestricted has none), and how the model is told. */
+export const WORKFLOW_SIZE_GUIDE: Record<WorkflowSize, { agents?: number; phases?: number; text: string }> = {
+  small: { agents: 6, phases: 2, text: "small: at most 6 agents in 2 phases, no nested fan-out" },
+  medium: { agents: 20, phases: 4, text: "medium: at most 20 agents in 4 phases" },
+  large: { agents: 60, phases: 6, text: "large: at most 60 agents in 6 phases" },
+  unrestricted: { text: "unrestricted: as many agents as the work needs, still with declared budget caps" },
+}

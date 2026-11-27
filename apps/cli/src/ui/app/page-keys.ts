@@ -140,6 +140,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   diagramLayout: ReturnType<typeof createDiagram>["diagramLayout"]
   controlWorkflow: ReturnType<typeof createWorkflows>["controlWorkflow"]
   loadWorkflows: ReturnType<typeof createWorkflows>["loadWorkflows"]
+  runSavedWorkflow: ReturnType<typeof createWorkflows>["runSavedWorkflow"]
   loadContext: ReturnType<typeof createContext>["loadContext"]
   saveReview: ReturnType<typeof createChanges>["saveReview"]
   loadChanges: ReturnType<typeof createChanges>["loadChanges"]
@@ -149,7 +150,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   ensureSelectedDiff: ReturnType<typeof createChanges>["ensureSelectedDiff"]
 }) {
   const { input, state, now, editor, localDay, requestFrame, copyText, setupChoice } = ctx
-  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
+  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, runSavedWorkflow, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
 
   async function handlePageKey(key: string) {
     if (state.automationLedger) return actions.automationLedgerKey(key)
@@ -526,7 +527,7 @@ export function createPageKeys(ctx: AppContext, actions: {
       if (!state.workflowsLoaded) {
         if (key === "\x1b" || key === "q") state.page = "chat"
       } else {
-        const result = workflowsPageKey(state.workflowsState, key, state.workflows)
+        const result = workflowsPageKey(state.workflowsState, key, state.workflows, state.workflowSaved)
         state.workflowsState = result.state
         const { action } = result
         if (action.type === "close") state.page = "chat"
@@ -543,6 +544,19 @@ export function createPageKeys(ctx: AppContext, actions: {
           editor.clear()
           editor.insert(`/workflows accept ${action.workflowId} `)
           state.notice = "type why the workflow is done, then enter"
+        } else if (action.type === "save") {
+          state.page = "chat"
+          editor.clear()
+          editor.insert(`/workflows save ${action.workflowId} `)
+          state.notice = "type a name for it, then enter: it will run as /name"
+        } else if (action.type === "runSaved") {
+          state.page = "chat"
+          editor.clear()
+          if (action.now) await runSavedWorkflow({ name: action.name, args: "", kind: action.kind })
+          else {
+            editor.insert(`/${action.name} `)
+            state.notice = action.kind === "script" ? "add key=value arguments if it takes any, then enter" : "enter starts it"
+          }
         } else if (action.type === "scope") {
           state.workflowsLoaded = false
           await loadWorkflows()

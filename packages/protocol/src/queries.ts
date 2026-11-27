@@ -12,7 +12,7 @@ import { PackageAuthorManifest } from "./package-authoring"
 import { z } from "zod"
 import { CompoundPricing } from "./compound"
 import { QuotaSnapshot, SessionEvent } from "./events"
-import { ADVISOR_CHECKPOINTS, AGENT_MODES, BOT_COLORS, BOT_SHAPES,EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
+import { ADVISOR_CHECKPOINTS, AGENT_MODES, BOT_COLORS, BOT_SHAPES,EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS, WORKFLOW_SIZES } from "./constants"
 import { FEATURE_IDS, TIERS } from "./tier-data"
 import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data"
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
@@ -685,6 +685,11 @@ const SharedSettings = lazySchema(() => z.strictObject({
    * the language of the user's latest message. A name (`Español`, `English`) holds whatever the conversation or tool output is in.
    */
   language: z.string().regex(/^\p{L}[\p{L}\p{M} ()-]{0,39}$/u).optional(),
+  /**
+   * Workflow orchestration (docs/workflows.md, "Ask for a workflow"): `auto` lets the model write and run a workflow script for any
+   * request that fans out, without the keyword; `size` is the guideline it follows when it writes one (`medium` when unset).
+   */
+  workflows: z.strictObject({ auto: z.boolean().optional(), size: z.enum(WORKFLOW_SIZES).optional() }).optional(),
   /** Set once the first-run setup page was completed or dismissed. */
   onboarded: z.boolean().optional(),
   memoryGlobalCompactionMaxEntries: intIn(1, 10_000).optional(),

@@ -12,10 +12,12 @@ export type WorkflowCommandSpec =
   | { kind: "update"; workflowId: string; file: string }
   | { kind: "resume"; workflowId: string }
   | { kind: "accept"; workflowId: string; reason: string }
+  | { kind: "save"; workflowId: string; name: string }
+  | { kind: "saved" }
 
 export type WorkflowCommandParse = { ok: true; spec: WorkflowCommandSpec } | { ok: false; error: string }
 
-export const WORKFLOW_USAGE = "usage: /workflows<name|file.json> [--permission ask|edits|full] [--yes] | run <file.js|name> [args] [--yes] | new <name> | convert <file.json> | budget <id> agents=N tokens=N usd=N minutes=N | update <id> <file.js> | resume <id>"
+export const WORKFLOW_USAGE = "usage: /workflows<name|file.json> [--permission ask|edits|full] [--yes] | run <file.js|name> [args] [--yes] | new <name> | convert <file.json> | budget <id> agents=N tokens=N usd=N minutes=N | update <id> <file.js> | resume <id> | save <id> <name> | saved"
 
 const PERMISSIONS = new Set(["ask", "edits", "full"])
 const NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/
@@ -73,7 +75,7 @@ export function parseWorkflowCommand(args: string): WorkflowCommandParse {
     const reason = accept[2]?.trim()
     return reason ? { ok: true, spec: { kind: "accept", workflowId: accept[1]!, reason: reason.slice(0, 500) } } : { ok: false, error: "accept needs a reason: /workflows accept <id> <why it is done>" }
   }
-  const verb = /^(run|new|convert|budget|update|resume)(?:\s+([\s\S]*))?$/.exec(text)
+  const verb = /^(run|new|convert|budget|update|resume|save|saved)(?:\s+([\s\S]*))?$/.exec(text)
   if (verb) {
     const rest = verb[2] ?? ""
     const words = rest.trim().split(/\s+/).filter(Boolean)
@@ -88,6 +90,10 @@ export function parseWorkflowCommand(args: string): WorkflowCommandParse {
         return parseBudget(rest)
       case "update":
         return words.length === 2 && (isScriptFile(words[1]!) || words[1]!.includes("/")) ? { ok: true, spec: { kind: "update", workflowId: words[0]!, file: words[1]! } } : { ok: false, error: "usage: /workflows update <id> <file.js>" }
+      case "save":
+        return words.length === 2 && NAME.test(words[1]!) ? { ok: true, spec: { kind: "save", workflowId: words[0]!, name: words[1]! } } : { ok: false, error: "usage: /workflows save <id> <name> (a-z 0-9 . _ -)" }
+      case "saved":
+        return words.length === 0 ? { ok: true, spec: { kind: "saved" } } : { ok: false, error: "usage: /workflows saved" }
       default:
         return words.length === 1 ? { ok: true, spec: { kind: "resume", workflowId: words[0]! } } : { ok: false, error: "usage: /workflows resume <id>" }
     }

@@ -1,4 +1,4 @@
-b7237555ef92554a
+2f40007ad352dcdb
   git /work/app
     │ return cache.get(key) ?? load(key)
 
@@ -17,7 +17,7 @@ b7237555ef92554a
 
     took 7s · ended 11:50 AM
 
-  [suggested] 6  session 25  context 15  code 16  agents 12  setup 31  look 9  more 24
+  [suggested] 6  session 25  context 15  code 16  agents 13  setup 31  look 9  more 24
   ┃ /new       Start a session                                                           ctrl+x n
   ┃ /sessions  Switch session                                                            ctrl+x l
   ┃ /model     Switch model                                                              ctrl+x m

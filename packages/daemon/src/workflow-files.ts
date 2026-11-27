@@ -60,6 +60,16 @@ export function readWorkflowScripts(layers: readonly ExtensionLayer[]): Workflow
   return [...byName.values()]
 }
 
+/** The saved workflows as slash commands (`/name args`): every `workflows/<name>.js|.json` of MendCode's own layers, a later layer replacing a name. No parsing beyond the description line. */
+export function workflowCommandEntries(layers: readonly ExtensionLayer[]): Array<{ name: string; description: string; source: ExtensionSource; pkg?: string; kind: "script" | "plan" }> {
+  const own = layers.filter((layer) => !layer.foreign)
+  const plans = readWorkflowPlans(own).filter((entry) => entry.plan).map((entry) => ({ name: entry.name, description: entry.plan!.objective.replace(/\s+/g, " ").slice(0, 120), source: entry.source, ...(entry.pkg ? { pkg: entry.pkg } : {}), kind: "plan" as const }))
+  const scripts = readWorkflowScripts(own).filter((entry) => entry.text !== undefined).map((entry) => ({ name: entry.name, description: /\bdescription\s*:\s*(["'`])((?:\\.|(?!\1).)*)\1/.exec(entry.text!.slice(0, 4_000))?.[2]?.slice(0, 120) ?? "Saved workflow", source: entry.source, ...(entry.pkg ? { pkg: entry.pkg } : {}), kind: "script" as const }))
+  const byName = new Map<string, (typeof plans)[number] | (typeof scripts)[number]>(plans.map((entry) => [entry.name, entry]))
+  for (const entry of scripts) byName.set(entry.name, entry)
+  return [...byName.values()]
+}
+
 function readScriptFile(file: string, name: string): { text: string } | { problem: string } {
   if (!FILE_NAME.test(name)) return { problem: "names use lowercase letters, digits, . _ - (max 40)" }
   try {
