@@ -25,6 +25,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/whatsnew` asks the model once per version and changelog content and reuses the saved answer after that, and its page is shorter: at most 8 changes grouped New, Fixed and Changed, with `/whatsnew all` for the rest.
 - `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed
 - Docs: the sync pages say how to stop copying (`sync follow off`, `sync disable`, revoking the device token), and the storage page covers `--move-dir`. in, and puts the cursor on an expired sign-in.
+- Docs: the automation page indexes every top-level command with its page, the `ps`, `logs` and `kill` shorthands and the missing subcommands, and the what's-new page lists the latest versions.
 
 ### Fixed
 

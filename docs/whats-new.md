@@ -15,6 +15,14 @@ The changelog is packed into the build: nothing is fetched to show it.
 
 Minimalist has no `/whatsnew`; use the prompt on the release page to get the same answer.
 
+## Latest versions
+
+- **Unreleased** (the next nightly): the "New chat in…" picker browses folders (type `~/`, `/` or a path, `Tab` completes, `←` goes up, a missing folder offers `create folder`); `sync follow on|off` keeps a hub level in step; `sync parity` shows what differs from a hub. See [the sidebar](sidebar.md#new-chat) and [sync](sync.md).
+- **v0.0.20** (2026-11-24): saved remotes and `remote setup` for a Linux VPS, session sync with a VPS, domain mode for several people, ACP models in `/model`, `mendcode upgrade` on Windows, and goals that wait for background commands. See [the v0.0.20 notes](../CHANGELOG.md#v0020---2026-11-24) and [VPS setup](vps.md).
+- **v0.0.19** (2026-11-21): bots with their own page, memory and schedules, `+` on a project row for a new chat in that folder, `/today`, and Mermaid diagrams. See [the v0.0.19 notes](../CHANGELOG.md#v0019---2026-11-21) and [today](today.md).
+
+Each version's full list is in [CHANGELOG.md](../CHANGELOG.md); the page above is the place for what you can use now.
+
 ## The copyable prompt
 
 1. Find the short English request right under Install on a release page, before the folded details, or at the end of `/changelog`.

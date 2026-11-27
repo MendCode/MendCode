@@ -12,6 +12,59 @@ Choose the data directory with `--dir D`. Local support commands and [uninstall]
 
 For GitHub install/run and PR checkout, see [GitHub automation](github.md). Workflows, publication and tool approvals are opt-in; GitHub commands require a local daemon.
 
+## Command index
+
+Every top-level command of `mendcode --help`, with the page that explains it. Subcommands are listed under [Commands](#commands); run `mendcode <command> --help` for the exact flags.
+
+| Command | Does | Read |
+|---|---|---|
+| `mendcode [PROJECT]` | open the terminal UI (`--continue`, `--session ID`, `--fork`, `--prompt`, `--process`, `--accessible`, `--safe-mode`) | [layout](layout.md), [setup](setup.md) |
+| `run MESSAGE...` | one headless turn; `--bg` runs it in the background | [headless](#headless-and-startup-parity-b16) |
+| `attach ID` | open the terminal UI on a session | [sessions](sessions.md) |
+| `ps`, `logs ID [-f]`, `kill ID` | shorthands for `session list --active`, `session events` and `session cancel` | [Commands](#commands) |
+| `session <command>` | list, create, send to, watch and control sessions | [Commands](#commands) |
+| `export [ID]`, `import FILE\|URL` | write a session as json, markdown or html; bring one in | [sessions](sessions.md) |
+| `apply [ID]` | apply a session's file changes to another checkout | [apply](#apply-changes-to-another-checkout) |
+| `context ID` | what fills the context of a session | [compaction](compaction.md) |
+| `worktree <command>`, `worktrees` | git worktrees for sessions and their disk use | [worktrees](worktrees.md), [storage](storage.md) |
+| `memory <command>` | saved and proposed memories, Dream | [memory](memory.md) |
+| `backlog <command>` | this project's to-do list | [Commands](#commands) |
+| `loop <command>` (`loops`) | scheduled and goal loops | [loops](loops.md) |
+| `workflow <command>` (`workflows`) | multi-step workflows and scripts | [workflows](workflows.md) |
+| `mflow <command>` | MendCode flow rooms | [mflow](mflow.md) |
+| `models`, `providers` | list models; signed-in providers and logout | [providers](providers.md) |
+| `mcp <command>` | MCP servers: list, add, auth, logout, debug | [MCP OAuth](mcp-oauth.md) |
+| `agent`, `bot` | agents and bots | [agents](agents.md) |
+| `recipe <command>` | model recipes: list, apply | [ai-config](ai-config.md) |
+| `prompt <command>` | how the system prompt is built | [prompt modes](prompt-modes.md) |
+| `cache <command>` | prompt cache on or off | [prompt cache](prompt-cache.md#scoped-policy-b49) |
+| `theme <command>` | validate, install and select themes | [customize](customize.md) |
+| `pet new TEXT` | create a pet from a description | [customize](customize.md#experimental-custom-pet-generator) |
+| `profile`, `package`, `plugins` | profiles: list, enable, disable | [profiles](profiles.md) |
+| `plugin MODULE`, `plugin-auth` | install an extension module; sign in through one | [extensions](extensions.md) |
+| `area <command>` | areas of folders (memory, roles, permission) | [areas](areas.md) |
+| `customize restore [id]` | restore saved terminal settings | [customize](customize.md) |
+| `config-bundle <command>` | export and import settings | [config bundle](config-bundle.md) |
+| `ai-config <command>` | inspect, plan, validate and apply AI config files | [ai-config](ai-config.md) |
+| `tsm <command>` | terminal multiplexer setup | [TSM](tsm.md) |
+| `usage`, `stats` | tokens and cost per day; totals over all time | [usage](usage.md) |
+| `storage`, `worktrees gc` | where disk goes; clean and compact | [storage](storage.md) |
+| `status`, `doctor` | daemon, models and project at a glance; check this installation | [Inspect context and system readiness](#inspect-context-and-system-readiness) |
+| `debug <command>`, `db [SQL]` | diagnostics; read-only SQL shell on the database | [local support](#local-support-commands-b18) |
+| `control-plane <area>` | settings by area: ai, system, tui, project | [native TUI control plane](#native-tui-control-plane) |
+| `daemon <command>` | start, stop, status, logs, service | [user daemon service](#user-daemon-service-b68) |
+| `gateway <command>` | several people on one server: HTTPS, passkeys | [gateway](gateway.md) |
+| `console <command>`, `share <command>` | MendCode console; share a session | [console](console.md) |
+| `sync <command>` | sessions and the hub's setup in step | [sync](sync.md) |
+| `github install\|run` | GitHub workflow and action | [GitHub](github.md) |
+| `pr NUMBER`, `pr setup` | work on a pull request | [PR setup](pr-review-setup.md) |
+| `acp`, `app-server` | Agent Client Protocol on stdio; JSON-RPC on stdio | [editor](editor.md), [embedding](embedding.md) |
+| `completion SHELL` | shell completion script | [completions](#completions) |
+| `generate [--httpapi]` | protocol schema or HTTP API contract | [schemas](#generate-protocol-schemas) |
+| `docs [TOPIC]` | reference cards of this version | [reference cards](#reference-cards-mendcode-docs) |
+| `uninstall` | remove MendCode | [uninstall](uninstall.md) |
+| `help [COMMAND]` | the help text, or the help of one command | `mendcode help` |
+
 ### Cache and plugin commands
 
 `cache status|enable|on|disable|off` controls passive prompt-cache policies. See [scopes, exact-model selectors and
@@ -405,7 +458,11 @@ mendcode session list [--all] [--all-projects] [--max-count N] [--search TEXT]
 mendcode session create [--title T] [--parent ID] [--agent A] [--model P/M] [--variant V] [--effort LEVEL] [--fast]
 mendcode session get|status|inspect|export <id>
 mendcode session rename <id> <title...>
-mendcode session fork <id> [--message-id ITEM]
+mendcode session fork <id> [--message-id ID]
+mendcode ps                                    # = session list --active
+mendcode logs <id> [-f]                        # = session events <id> [--follow]
+mendcode kill <id>                             # = session cancel <id>
+mendcode attach <id>                           # open the terminal UI on a session
 mendcode session delete <id>
 mendcode session send <id> "text" [--async|--wait] [--approve|--dangerously-skip-permissions] [--timeout-ms MS]
 mendcode session wait <id> [--timeout-ms MS] [--interval-ms MS]
@@ -418,6 +475,23 @@ mendcode session list [--archived]             # include archived sessions
 mendcode memory list [--status saved|pending|archived]
 mendcode memory add [--user] [--category C] "text"
 mendcode memory search "query" [--limit N]
+mendcode memory propose "text" [--scope global|project] [--tags a,b] [--category C]
+mendcode memory edit|delete|apply|reject <id> [--scope global|project]
+mendcode memory preview [query] [--mode request|after-compaction|manual]
+mendcode memory index                          # rebuild the memory index
+mendcode memory dream [status|tick|run|consolidate] [--preview|--auto]
+
+mendcode mcp list
+mendcode mcp add NAME --url URL [--scope user|project] [--dry-run]   # or: mcp add NAME -- COMMAND ARG...
+mendcode mcp auth [NAME] | logout [NAME] | debug NAME
+mendcode cache status|enable|on|disable|off [--global] [--provider ID] [--session ID]
+mendcode worktree status|plan|create|open|adopt|remove|reset|doctor
+mendcode theme validate|install|select <file or name> [--scope project|user|global]
+mendcode pet new "description" [--usd N]
+mendcode status [--json]
+mendcode doctor [--json]
+mendcode db [SQL] [--format json|tsv]          # read-only; `db` alone opens a shell
+mendcode completion bash|zsh|fish|powershell
 
 mendcode backlog [list]                        # this directory's project backlog, open items first
 mendcode backlog add [--file PATH] [--commit SHA] [--session ID] "text"
@@ -436,6 +510,8 @@ mendcode loops draft [NAME OBJECTIVE] [--template ID] [--name N] [--objective O]
 mendcode loops show|tail|monitor <id> [--limit N | --once --interval-ms N]
 mendcode loops tick [id] [--limit N] [--execute] [--report-only]
 mendcode loops activate <id> [--reason TEXT] [--no-service]
+mendcode loop fire <id> [--note "what happened"]   # start an external loop now (cron or CI)
+mendcode loop events|artifacts|receipt|export <id> [--run N] [--limit 1..100] [--before SEQ] [--format json|markdown]
 
 mendcode workflow list [--all]
 mendcode workflow preview <file.json|name>
@@ -445,10 +521,11 @@ mendcode workflow pause|resume|stop|verify|delete <id>
 mendcode workflow retry <id> --task <taskId>
 mendcode workflow approve|reject <id> --task <taskId> [--reason TEXT]   # answer a human task or gate
 mendcode workflow accept <id> --reason "why it is done"
-mendcode workflow run <file.js|name> [key=value ...] [--permission P] [--yes] [--wait [--timeout S]]
+mendcode workflow run <file.js|name> [key=value ...] [--permission ask|edits|full] [--yes] [--wait [--timeout S]]
 mendcode workflow new <name> [--out FILE]      # a commented starter script
-mendcode workflow convert <plan.json> [--out FILE]
-mendcode workflow budget <id> [--agents N] [--tokens N] [--usd N] [--minutes N]
+mendcode workflow convert <plan.json> [--out FILE]   # turn a JSON plan into a script
+mendcode workflow save <file.json|name> [--name NAME] [--description TEXT]
+mendcode workflow budget <id> [--agents N] [--tokens N] [--usd N] [--minutes N]   # raise a paused run's caps, then resume
 mendcode workflow update <id> <file.js>        # swap in an edited script (paused or failed run)
 mendcode workflow retry-task <id> --task-id <taskId> [--reason TEXT]
 mendcode workflow events|artifacts|receipt <id> [--limit N] [--before SEQ]
