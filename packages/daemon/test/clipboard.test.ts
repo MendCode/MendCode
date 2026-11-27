@@ -7,7 +7,30 @@ const ok = (stdout: Uint8Array = new Uint8Array()): CommandOutput => ({ code: 0,
 const fail = (stderr = ""): CommandOutput => ({ code: 1, stdout: new Uint8Array(), stderr })
 const text = (s: string) => new TextEncoder().encode(s)
 
+/** A runner for the AppleScript way: the JavaScript for Automation attempt that comes first does not run. */
+const withoutJxa = (run: CommandRunner): CommandRunner => async (command, timeoutMs) => command.includes("JavaScript") ? fail("no JXA") : run(command, timeoutMs)
+
 describe("clipboard: darwin", () => {
+  test("one JavaScript for Automation process reads a PNG or a screenshot's TIFF off the pasteboard", async () => {
+    const calls: string[][] = []
+    const run: CommandRunner = async (command) => {
+      calls.push(command)
+      await Bun.write(command.at(-1)!, PNG)
+      return ok(text("ok\n"))
+    }
+    const image = await createClipboardReader({ platform: "darwin", run, which: () => null }).read()
+    expect(image).toEqual({ bytes: PNG, mime: "image/png" })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.slice(0, 3)).toEqual(["osascript", "-l", "JavaScript"])
+  })
+
+  test("an empty pasteboard answers none without trying the slower way", async () => {
+    const calls: string[][] = []
+    const run: CommandRunner = async (command) => { calls.push(command); return ok(text("none\n")) }
+    await expect(createClipboardReader({ platform: "darwin", run, which: () => "/usr/bin/sips" }).read()).rejects.toThrow("no image in the clipboard")
+    expect(calls).toHaveLength(1)
+  })
+
   test("reads a PNG straight off the clipboard via osascript", async () => {
     const calls: string[][] = []
     const run: CommandRunner = async (command) => {
@@ -19,7 +42,7 @@ describe("clipboard: darwin", () => {
       if (file) await Bun.write(file, PNG)
       return ok(text("ok"))
     }
-    const reader = createClipboardReader({ platform: "darwin", run, which: () => "/usr/bin/sips" })
+    const reader = createClipboardReader({ platform: "darwin", run: withoutJxa(run), which: () => "/usr/bin/sips" })
     const image = await reader.read()
     expect(image).toEqual({ bytes: PNG, mime: "image/png" })
     expect(calls).toHaveLength(1)
@@ -41,14 +64,14 @@ describe("clipboard: darwin", () => {
       await Bun.write(out, PNG)
       return ok()
     }
-    const reader = createClipboardReader({ platform: "darwin", run, which: () => "/usr/bin/sips" })
+    const reader = createClipboardReader({ platform: "darwin", run: withoutJxa(run), which: () => "/usr/bin/sips" })
     const image = await reader.read()
     expect(image).toEqual({ bytes: PNG, mime: "image/png" })
   })
 
   test("no image on the clipboard at all", async () => {
     const run: CommandRunner = async () => ok(text("none"))
-    const reader = createClipboardReader({ platform: "darwin", run, which: () => "/usr/bin/sips" })
+    const reader = createClipboardReader({ platform: "darwin", run: withoutJxa(run), which: () => "/usr/bin/sips" })
     await expect(reader.read()).rejects.toThrow("no image in the clipboard")
   })
 
@@ -61,7 +84,7 @@ describe("clipboard: darwin", () => {
       await Bun.write(file, new Uint8Array([0, 1, 2]))
       return ok(text("ok"))
     }
-    const reader = createClipboardReader({ platform: "darwin", run, which: () => null })
+    const reader = createClipboardReader({ platform: "darwin", run: withoutJxa(run), which: () => null })
     await expect(reader.read()).rejects.toThrow("clipboard tool not found: install sips")
   })
 })

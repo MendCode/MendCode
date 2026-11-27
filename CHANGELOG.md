@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- On a Mac, pasting a screenshot from the clipboard is instant instead of taking seconds, and no longer fails with "no image in the clipboard" for a large one.
 - On a Mac, Cmd+V attaches an image that is alone on the clipboard, in terminals with the kitty keyboard protocol (Ghostty, for one); it used to do nothing.
 - Pasting or dropping files into the prompt attaches them when the name holds a narrow no-break space (macOS screenshots), when several files arrive on one line, and when a single path keeps plain spaces.
 - In a Claude Code session, background sub-agents keep using MendCode's tools (image generation and the rest) after the turn that started them ended, including several calls at once, instead of failing with "No turn is running".
