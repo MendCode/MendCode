@@ -103,6 +103,8 @@ export type Automation = Common &
     | { kind: "workflow.save"; target: string; definitionId?: string; name?: string; description?: string; source?: import("@mendcode/protocol").WorkflowDefinition["source"] }
     | { kind: "workflow.definitions"; limit: number }
     | { kind: "workflow.revision"; revisionId: string }
+    | { kind: "workflow.saved" }
+    | { kind: "workflow.save-run"; id: string; name: string }
     | { kind: "workflow.start"; target: string; permission?: WorkflowPermission; yes: boolean; wait: boolean; timeoutMs?: number; script?: ScriptRun }
     | { kind: "workflow.show"; id: string }
     | { kind: "workflow.control"; id: string; action: "pause" | "resume" | "stop" | "verify" | "delete" | "retry" | "accept" | "approve" | "reject"; taskId?: string; reason?: string; wait?: true; timeoutMs?: number }
@@ -281,8 +283,13 @@ export const USAGE: Record<string, string> = {
     "  update <id> <file.js>   swap in an edited script (paused or failed run)",
     "  show <id>               tasks, contract, last verification",
     "  pause|resume|stop|verify|delete <id>",
-    "  retry <id> --task <taskId>      run one task and what depends on it again",
+    "  retry <id> --task <taskId>      run one task again, and what depends on it;",
+    "                          also restarts an agent that runs or has finished",
+    "  restart <id> --task <taskId>    same as retry",
     "  retry-task <id> --task-id <taskId> [--reason TEXT]",
+    "  saved                   saved workflows: yours, packages' and the project's",
+    "  save-run <id> <name>    keep a run's script as a saved workflow, runnable",
+    "                          as `workflow run <name>` and /<name>",
     "  approve|reject <id> --task <taskId> [--reason TEXT]   answer a human gate",
     '  accept <id> --reason "..."      declare it done despite the contract',
     "  events|artifacts|receipt|export <id>",
@@ -841,6 +848,13 @@ export function parseAutomation(argv: string[]): ParseResult {
         if (isError(limit) || (limit ?? 50) > 100) return bad("--limit must be 1–100")
         return ok({ kind: "workflow.definitions", limit: limit ?? 50 })
       }
+      case "saved":
+        return rest.length ? bad("workflow saved takes no arguments") : ok({ kind: "workflow.saved" })
+      case "save-run": {
+        const name = rest[1]
+        if (!id || !name || rest.length > 2 || !WORKFLOW_NAME.test(name)) return bad("workflow save-run needs <id> <name> (a-z 0-9 . _ -)")
+        return ok({ kind: "workflow.save-run", id, name })
+      }
       case "revision":
         return id && /^wfr_[a-zA-Z0-9_-]{1,80}$/.test(id) ? ok({ kind: "workflow.revision", revisionId: id }) : bad("workflow revision needs a revision id")
       case "save": {
@@ -884,6 +898,7 @@ export function parseAutomation(argv: string[]): ParseResult {
       case "delete":
         return id ? ok({ kind: "workflow.control", id, action: sub }) : bad(`workflow ${sub} needs <id>`)
       case "retry":
+      case "restart":
       case "retry-task": {
         if (!id) return bad("workflow retry needs <id>")
         const task = str("task") ?? str("task-id")
@@ -1162,6 +1177,7 @@ export function previewText({ target, plan, summary, granted }: { target: string
     for (const command of checkNames) lines.push(`  check: ${String(command)}`)
     const applied = permissionOf(info?.permission) ?? granted
     lines.push(`permission: ${applied ?? "set by the daemon at start"}`)
+    lines.push(...estimateLines(info?.estimate))
     return `${lines.join("\n")}\n`
   }
   const taskList = (inline?.tasks ?? info?.tasks) as unknown
@@ -1180,7 +1196,15 @@ export function previewText({ target, plan, summary, granted }: { target: string
   for (const check of checks) lines.push(`  check${word(check.id) ? ` ${word(check.id)}` : ""}: ${word(check.command) ?? "?"}`)
   const applied = permissionOf(info?.permission) ?? granted
   lines.push(applied ? `permission: ${applied}` : "permission: set by the daemon at start")
+  lines.push(...estimateLines(info?.estimate))
   return `${lines.join("\n")}\n`
+}
+
+/** `expected: up to 12 agents · ~480k tokens · ~$2.40 · ~6 min`, and the large-run notice when the daemon sent one. */
+function estimateLines(estimate: unknown): string[] {
+  const info = record(estimate)
+  const line = word(info?.line)
+  return line ? [`expected: ${line}`, ...(word(info?.notice) ? [word(info?.notice)!] : [])] : []
 }
 
 export function usageText(report: UsageReport, days: number) {
@@ -1853,6 +1877,18 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
       const definitions = (reply.result.definitions ?? []) as import("@mendcode/protocol").WorkflowDefinition[]
       return result({ definitions }, definitions.length ? definitions.map((d) => `${d.definitionId}  #${d.currentRevision}  ${d.currentRevisionId}  ${d.saved ? "saved" : "session"}  ${oneLine(d.name)}\n`).join("") : "No workflow definitions\n")
+    }
+    case "workflow.saved": {
+      const reply = await daemon({ type: "workflow.saved", directory: dir })
+      if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
+      const saved = (reply.result.saved ?? []) as Array<{ name: string; kind: string; source: string; pkg?: string; description?: string; problem?: string }>
+      const rows = saved.map((entry) => `${entry.name.padEnd(24)} ${entry.kind.padEnd(7)} ${(entry.pkg ? `package ${entry.pkg}` : entry.source).padEnd(18)} ${oneLine(entry.problem ? `problem: ${entry.problem}` : entry.description ?? "")}`.trimEnd())
+      return result({ saved }, saved.length ? `${rows.join("\n")}\nRun one with: workflow run <name> --yes   (or /<name> in the terminal)\n` : "No saved workflows (workflow save-run <id> <name> saves a run)\n")
+    }
+    case "workflow.save-run": {
+      const reply = await daemon({ type: "workflow.script", workflowId: command.id as never, action: "save", name: command.name })
+      if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
+      return result({ saved: reply.result }, `Saved ${command.id} as ${command.name}: run it with workflow run ${command.name} --yes, or /${command.name} in the terminal\n`)
     }
     case "workflow.revision": {
       const reply = await daemon({ type: "workflow.revision.get", directory: dir, revisionId: command.revisionId })

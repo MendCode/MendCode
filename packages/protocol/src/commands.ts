@@ -1593,6 +1593,8 @@ export const WorkflowSave = lazySchema(() => z.strictObject({
 }))
 /** Metadata only; revision plans travel through workflow.revision.get. */
 export const WorkflowDefinitions = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.definitions"), directory: z.string().min(1).max(4096), limit: z.number().int().min(1).max(100).default(50) }))
+/** Read-only. Ack: `{ saved: [{ name, kind: "script" | "plan", source, pkg?, description?, problem? }] }`: the saved workflows of this project's layers (user, packages, project), newest layer winning a name. */
+export const WorkflowSaved = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.saved"), directory: z.string().min(1).max(4096) }))
 export const WorkflowRevisionGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.revision.get"), directory: z.string().min(1).max(4096), revisionId: WorkflowRevisionId }))
 
 /** Read-only. Ack: `{ tasks: BackgroundTaskEntry[] }`, running first then the latest finished; one session's or all. */
@@ -2046,7 +2048,9 @@ export const WorkflowScriptCommand = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("workflow.script"),
   workflowId: WorkflowId,
-  action: z.enum(["budget", "update"]),
+  action: z.enum(["budget", "update", "save"]),
+  /** `save`: the run's script (or plan) becomes the saved workflow `workflows/<name>.js` of the user layer, runnable as `/<name>`. */
+  name: WorkflowSlug.optional(),
   budget: WorkflowScriptBudget.optional(),
   script: z.string().min(1).max(WORKFLOW_SCRIPT_MAX_BYTES).optional(),
   args: z.record(z.string(), z.unknown()).optional(),
@@ -2345,6 +2349,7 @@ export const COMMAND_SCHEMAS = {
   "workflow.save": WorkflowSave,
   "workflow.definitions": WorkflowDefinitions,
   "workflow.revision.get": WorkflowRevisionGet,
+  "workflow.saved": WorkflowSaved,
   "loop.review": LoopReview,
   "workflow.events": WorkflowEvents,
   "workflow.artifacts": WorkflowArtifacts,

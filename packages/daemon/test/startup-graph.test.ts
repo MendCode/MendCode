@@ -41,7 +41,7 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "pr-review/already-reviewed", "pr-review/commit-status", "pr-review/pr-states",
     "pr-review/context", "pr-review/readers", "pr-review/readers-graft",
     "extensions/plugin-adapter", "extensions/plugin-tool", "extensions/session-api", "extensions/dialogs", "usage-breakdown",
-    "restart-drain", "reply-language",
+    "restart-drain", "reply-language", "workflow-trigger", "workflow-estimate",
     // Memory review loads at the first turn with generation on, a waiting job or the Extraction tab.
     "memory-extraction",
     // Experimental bots (off by default): the service loads with the first bot command, the memory reader with the first turn that runs with the flag on.

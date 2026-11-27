@@ -26,6 +26,8 @@ export type CommandSummary = {
   foreign?: boolean
   /** A skill run as `/name`; its body is read when the command runs. */
   skill?: boolean
+  /** A saved workflow (`workflows/<name>.js` or `.json`) run as `/name args`: the terminal starts it, no model turn. */
+  workflow?: "script" | "plan"
   /** Several packages define this name: it runs none of them and names these (`<package>:<name>`), each its own command. */
   choices?: string[]
 }

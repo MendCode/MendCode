@@ -38,6 +38,7 @@ export function memoryJournal(rows = new Map<string, string>()): ScriptJournalPo
     rows,
     get: (workflowId, key) => rows.get(id(workflowId, key)),
     set: (workflowId, key, payload) => void rows.set(id(workflowId, key), payload),
+    delete: (workflowId, key) => void rows.delete(id(workflowId, key)),
     list: (workflowId, prefix = "") => [...rows].filter(([k]) => k.startsWith(`${workflowId}\u0000${prefix}`)).map(([k, payload]) => ({ key: k.slice(workflowId.length + 1), payload })),
     removeRun: (workflowId) => void [...rows.keys()].filter((k) => k.startsWith(`${workflowId}\u0000`)).forEach((k) => rows.delete(k)),
   }

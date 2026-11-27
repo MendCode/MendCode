@@ -314,6 +314,7 @@ A built-in command has at most one other name, only for a word people bring from
 | `/extensions` | `/ext` |
 | `/profiles` | `/pkg` |
 | `/workflows` | `/wf` |
+| `/autoflow [on\|off\|small\|medium\|large\|unrestricted]` | |
 | `/loops` | `/loop` |
 | `/bg` | `/background` |
 | `/permissions` | `/perm` |

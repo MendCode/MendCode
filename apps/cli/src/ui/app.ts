@@ -308,6 +308,7 @@ export function createApp(input: AppInput) {
     workflowsLoaded: false,
     workflowsError: "",
     workflowsSeen: {},
+    workflowSaved: [],
     liveWorkflows: new Map<string, boolean>(),
     permissionGrants: undefined,
     permissionGrantsError: "",
@@ -716,7 +717,7 @@ export function createApp(input: AppInput) {
   const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
-  const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
+  const { expandedWith, chipped, composedAttachments, rememberComposed, attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn(), runWorkflow: (command) => runSavedWorkflow(command) })
   const slashMenu = createSlashMenu(ctx, { suggestionPool, extOn: () => extOn() })
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx, { onProtocol: () => void choosePet(featureOn(appState.settingsNow, "pets") ? appState.tuiProfile.pet || appState.settingsNow.pet : undefined) })
@@ -761,7 +762,7 @@ export function createApp(input: AppInput) {
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
   const composer = createComposerRecovery(ctx, { chipped, composedAttachments, attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
   const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
-  const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
+  const { loadWorkflows, openWorkflows, openWorkflowOf, controlWorkflow, workflowCommand, runSavedWorkflow, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
   const { diagramLayout, openDiagram } = createDiagram(ctx)
@@ -1036,6 +1037,7 @@ export function createApp(input: AppInput) {
     diagramLayout,
     controlWorkflow,
     loadWorkflows,
+    runSavedWorkflow,
     loadContext,
     saveReview,
     orderReview,

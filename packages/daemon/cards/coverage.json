@@ -52,7 +52,7 @@
     "troubleshooting": "feature:storage_compact feature:single_process flag:openTelemetry command:changelog command:debug-config command:terminal-setup command:tutorial command:accessible command:doctor command:fetch command:setup command:status command:daemon command:restart command:reload command:storage command:mend-assets command:intro command:release-channel file:upgrade.json",
     "viewer": "feature:file_viewer command:add-dir command:open command:diagram",
     "web": "feature:webfetch_modes feature:web_routing setting:proxy setting:web tool:webfetch tool:websearch",
-    "workflows": "feature:fanout command:fanout command:workflows command:compound tool:workflow_control tool:workflow_save tool:workflow_script tool:workflow_start tool:workflow_status file:ai.json file:plan.json"
+    "workflows": "feature:fanout command:fanout command:autoflow setting:workflows command:workflows command:compound tool:workflow_control tool:workflow_save tool:workflow_script tool:workflow_start tool:workflow_status file:ai.json file:plan.json"
   },
   "internal": [
     {

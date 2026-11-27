@@ -77,7 +77,7 @@ import { createReviewConfigTool, type ReviewSetupPort } from "./review-config-to
 import { createPrReviewTool } from "./pr-review-tool-definition"
 import type { ConfigControl } from "./pr-review/config-control"
 import type { ReviewSetup, SetupMemory } from "./pr-review/setup"
-import { workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
+import { noteFanout, workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
 import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
 import { BOT_TOOLS } from "./bot-tools"
@@ -573,7 +573,16 @@ export const daemon = await startDaemon({
     let replyLanguageLine: Promise<ReturnType<typeof import("./reply-language").createReplyLanguage>> | undefined
     const replyLanguage = async (sessionId: import("@mendcode/protocol").SessionId, text: string) => {
       const line = await (replyLanguageLine ??= import("./reply-language").then(({ createReplyLanguage }) => createReplyLanguage()))
-      return line(sessionId, runLimits.get(sessionId)?.responseLanguage ?? store.settings.get().language, text)
+      const language = line(sessionId, runLimits.get(sessionId)?.responseLanguage ?? store.settings.get().language, text)
+      // `fanout` in the message, or automatic workflows: the model is told to write a workflow script, and it starts without a prompt.
+      const workflows = store.settings.get().workflows
+      if (!workflows?.auto && !/fanout|ultracode/i.test(text)) {
+        noteFanout(sessionId, false)
+        return language
+      }
+      const trigger = await import("./workflow-trigger").then((module) => ({ module, why: module.fanoutTrigger(text, workflows) }))
+      noteFanout(sessionId, trigger.why !== undefined)
+      return trigger.why ? `${language} ${trigger.module.fanoutNote({ trigger: trigger.why, size: workflows?.size })}` : language
     }
     const memoryFor = (root: string, context: SystemContext | undefined) => {
       const block = memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })

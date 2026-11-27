@@ -333,6 +333,7 @@ export const renderWorkflowsPage: WorkflowsMod["renderWorkflowsPage"] = (...args
 export const selectedWorkflow: WorkflowsMod["selectedWorkflow"] = (...args) => workflows.get().selectedWorkflow(...args)
 /** Only meaningful on the workflows page, which is loaded by then; false before that. */
 export const workflowsNeedTick: WorkflowsMod["needsTick"] = (...args) => (workflows.loaded() ? workflows.get().needsTick(...args) : false)
+export const workflowsMoving: WorkflowsMod["isMoving"] = (...args) => (workflows.loaded() ? workflows.get().isMoving(...args) : false)
 type WorkflowCommandMod = typeof import("../view/workflow-command")
 export const parseWorkflowCommand: WorkflowCommandMod["parseWorkflowCommand"] = (...args) => workflowCommand.get().parseWorkflowCommand(...args)
 type LoopsMod = typeof import("../view/loops-page")

@@ -15,7 +15,7 @@ import { worthKeeping, type RecallEntry, type RecallKind } from "../../view/prom
 import type { AppContext } from "./context"
 import { preload } from "../lazy-pages"
 
-export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
+export function createPrompt(ctx: AppContext, actions: { extOn(): boolean; /** A saved workflow typed as `/name args`: started by the terminal, no model turn. */ runWorkflow(command: { name: string; args: string; kind: "script" | "plan" }): Promise<void> }) {
   const { input, state, drafts, editor, requestFrame, fail, say, stash, env } = ctx
   const { extOn } = actions
 
@@ -494,8 +494,8 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
     customLoad ??= (async () => {
       if (!input.directory) return
       const reply = await input.send({ type: "commands.list", directory: input.directory })
-      const list = reply.ok ? ((reply.result?.commands as Array<{ name: string; description: string; argumentHint: string; source?: string }>) ?? []) : []
-      customCommands = list.filter((c) => !(c.source === "builtin" && COMMIT_TEMPLATES.has(c.name))).map((c) => ({ name: c.name, group: "more", aliases: [], summary: [c.argumentHint, c.description].filter(Boolean).join("  "), custom: true as const, ...(c.source === "mcp" ? { mcp: true as const } : {}) }))
+      const list = reply.ok ? ((reply.result?.commands as Array<{ name: string; description: string; argumentHint: string; source?: string; workflow?: "script" | "plan" }>) ?? []) : []
+      customCommands = list.filter((c) => !(c.source === "builtin" && COMMIT_TEMPLATES.has(c.name))).map((c) => ({ name: c.name, group: "more", aliases: [], summary: [c.argumentHint, c.description].filter(Boolean).join("  "), custom: true as const, ...(c.workflow ? { workflow: c.workflow } : {}), ...(c.source === "mcp" ? { mcp: true as const } : {}) }))
       requestFrame()
       if (!input.remote?.readOnly) void input.send({ type: "commands.discover", directory: input.directory }).then((discovered) => {
         if (!discovered.ok) return
@@ -583,6 +583,14 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
       const reply = await input.send({ type: "commands.expand", directory: input.directory, name: match[1]!.toLowerCase(), args: match[2] ?? "" })
       if (reply.ok) return String(reply.result?.prompt ?? "")
       state.notice = reply.error.message
+      return null
+    }
+    const saved = customCommands.find((command) => command.name === match[1]!.toLowerCase())?.workflow
+    if (saved) {
+      await actions.runWorkflow({ name: match[1]!.toLowerCase(), args: (match[2] ?? "").trim(), kind: saved })
+      editor.clear()
+      editor.resetHistory()
+      requestFrame()
       return null
     }
     return { name: match[1]!.toLowerCase(), args: match[2] ?? "" }

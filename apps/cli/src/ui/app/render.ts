@@ -420,7 +420,7 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "diagram") body = renderDiagramView({ layout: diagramLayout(), state: state.diagramView, count: state.diagramSources.length, width, height: bodyHeight })
     else if (state.page === "workflows")
       body = state.workflowsLoaded
-        ? renderWorkflowsPage({ runs: state.workflows, state: state.workflowsState, width, height: bodyHeight, now: now(), glyphs: g, ...(input.directory ? { directory: input.directory } : {}) })
+        ? renderWorkflowsPage({ runs: state.workflows, saved: state.workflowSaved, state: state.workflowsState, width, height: bodyHeight, now: now(), glyphs: g, frame: state.spinFrame, still: state.reducedMotion, ...(input.directory ? { directory: input.directory } : {}) })
         : [[{ text: state.workflowsError || "loading workflows…", fg: state.workflowsError ? "warning" : "muted" }], [], [{ text: "esc back", fg: "muted", dim: true }]]
     else if (state.page === "theme") body = renderThemePicker({ state: state.themePicker, entries: themeEntries({ themes: themeList(), query: state.themePicker.query, mode: themeModeState() }), current: state.themeRestore ?? themeSelection(), mode: themeModeState(), width, height: bodyHeight, glyphs: g })
     else if (state.page === "agent") body = renderAgentPicker({ report: state.agentReport, error: state.agentError, state: state.agentPicker, width, height: bodyHeight, glyphs: g })
