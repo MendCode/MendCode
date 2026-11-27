@@ -20,6 +20,14 @@ test("Caps Lock letters arrive as capitals in both keyboard encodings", () => {
   expect(foldLetter("QQ")).toBe("QQ")
 })
 
+test("Cmd+V, which a terminal sends only when it had no text to paste, is Ctrl+V (the image paste), with or without a lock on", () => {
+  expect(translateKey("\x1b[118;9u")).toBe("\x16")
+  expect(translateKey("\x1b[118;73u")).toBe("\x16")
+  expect(translateKey("\x1b[118;9;118u")).toBe("\x16")
+  expect(translateKey("\x1b[99;9u")).toBe("\x1b[99;9u")
+  expect(translateKey("\x1b[118;10u")).toBe("\x1b[118;10u")
+})
+
 test("settings: capital Q closes, J and K move, L and H change a value", () => {
   expect(press({ row: 0 }, "Q").action).toEqual({ type: "close" })
   expect(press({ row: 0 }, "J").state.row).toBe(1)

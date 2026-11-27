@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- On a Mac, Cmd+V attaches an image that is alone on the clipboard, in terminals with the kitty keyboard protocol (Ghostty, for one); it used to do nothing.
 - Pasting or dropping files into the prompt attaches them when the name holds a narrow no-break space (macOS screenshots), when several files arrive on one line, and when a single path keeps plain spaces.
 - In a Claude Code session, background sub-agents keep using MendCode's tools (image generation and the rest) after the turn that started them ended, including several calls at once, instead of failing with "No turn is running".
 - In a Claude Code session whose process stays alive for background agents, the sub-agent tool (`delegate_task`) no longer stops working after an hour with an "Authorization header rejected" error: the token lasts as long as the session keeps having turns.

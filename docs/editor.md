@@ -422,7 +422,7 @@ Because a slash command is itself the text in the prompt, `/stash` cannot stash 
 | `/stash drop [n]` | delete the newest, or number `n` |
 | `/stash clear` | delete them all |
 
-Ctrl+V asks the daemon for text first, falling back to image attachments. Bracketed pastes and clipboard text at the configured threshold display a compact summary while preserving the full submitted text; any editing key expands it.
+Ctrl+V asks the daemon for text first, falling back to image attachments. On a Mac, Cmd+V does the same when the clipboard holds only an image: a terminal with the kitty keyboard protocol (Ghostty, for one) sends the key to MendCode when it has no text to paste (the Key reports setting is on `auto`). Bracketed pastes and clipboard text at the configured threshold display a compact summary while preserving the full submitted text; any editing key expands it.
 
 ## External editor
 
