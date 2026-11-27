@@ -111,6 +111,10 @@ A headless run targeting a session with an earlier pending approval exits instea
 
 ### Page keys
 
+A run that is live shows its agents working: a spinner on each running agent (a dot with reduced motion), a bar per phase of how many of its agents are done, running or waiting, the run's tokens and cost so far, and what each agent is doing now. A finished phase folds into one row with the first lines of what its agents produced; `space` opens its steps. A run that ended opens on a summary: totals, then what each phase produced.
+
+The `3` tab lists the workflows you saved, those of your packages and the project's. `enter` writes `/name ` in the prompt for its arguments, `r` starts it now.
+
 The page opens with workflows from all projects; tab, `1` and `2` switch between this project and all. Its keys sit on the
 title row and change with what the cursor is on; `?` lists them all.
 
@@ -139,12 +143,15 @@ After opening a step's session, press ↑ at an empty prompt to return to the pa
 | `p` | Pause/resume |
 | `x` | Stop |
 | `t` | Retry the failed step |
+| `r` | Run the step under the cursor again (asks first; a step the script already used re-runs the script from it) |
+| `s` | Keep the run as a saved workflow: type a name, then run it as `/name` |
+| `f` | Filter the list: active, needs you, failed, finished, all |
 | `y` `n` | Approve or reject the step that waits for you |
 | `v` | Verify |
 | `a` | Accept |
 | `b` | Evidence ledger |
 | `d` | Delete |
-| `tab` `1` `2` | This project / all |
+| `tab` `1` `2` `3` | This project / all / saved workflows |
 
 ### Evidence ledger
 
@@ -422,6 +429,16 @@ Queued time does not consume runtime budgets. Pause/resume cannot bypass the que
 Policies use existing approved workflow commands and authenticated local transport. No listener, network service, read-only remote command or dependency is added.
 
 The `/workflows` page shows phase progress, map child counts and queue status, with tasks under their phase; `i` names the barrier of the phase under the cursor.
+
+## Ask for a workflow
+
+Write `fanout` (or `ultracode`) in a prompt and the model may write a workflow script for the request and start it. The word is your consent: the script starts right away, with no approval prompt (deny rules and plan mode still apply), and you follow it in `/workflows`. A word inside backticks or after a backslash is only a mention, and `--no-fanout` skips the trigger for one prompt.
+
+`/autoflow on` makes every prompt eligible (the `workflows.auto` setting); `/autoflow off` turns it off. `/autoflow small|medium|large|unrestricted` sets the size guideline (`workflows.size`, default medium) that the model is told: small is about 6 agents in 2 phases, medium 20 in 4, large 60 in 6, unrestricted has no limit.
+
+Before a script starts, its preview and the start result say what it is expected to use: agents, tokens, cost and time, from your finished runs here or plain defaults. A big run adds a large-run notice with the caps that will pause it. This only informs: a run inside your permission starts at once, and only a cap the script declares pauses it.
+
+Keep a run you liked with `s` on its page, `mendcode workflow save-run <id> <name>` or `/workflows save <id> <name>`: it is written to `<data dir>/workflows/<name>.js` and runs as `/<name> key=value`. `mendcode workflow saved` (`/workflows saved`) lists the saved ones. `mendcode workflow restart <id> --task <taskId>` runs one agent again.
 
 ## Script workflows
 

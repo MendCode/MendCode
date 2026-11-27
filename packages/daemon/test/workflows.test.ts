@@ -189,7 +189,7 @@ describe("workflow tools", () => {
     expect(await workflowStartTool.preview!(broken, context)).toContain("Problems:")
     expect(await workflowStartTool.execute(broken, context)).toMatchObject({ isError: true })
     const started = await workflowStartTool.execute(WorkflowPlan.parse(plan()), context)
-    expect(started).toMatchObject({ isError: false, title: "◇ Workflow ship · 2 tasks · started — /workflows" })
+    expect(started).toMatchObject({ isError: false, title: expect.stringMatching(/^◇ Workflow ship · 2 tasks · started · 2 agents · .* — \/workflows$/), output: expect.stringContaining("Expected: 2 agents") })
     const run = daemon.store.workflows.all()[0]!
     expect(run.originSessionId).toBe(sessionId)
     expect((await workflowStatusTool.execute({}, context)).output).toContain(`${run.workflowId} "ship"`)

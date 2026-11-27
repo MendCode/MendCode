@@ -1425,7 +1425,7 @@ export function createNativeEngine(options: {
    */
   async function permit(input: TurnInput, tool: Tool, call: ToolCall, itemId: ItemId, toolset: Toolset, frozen: ReturnType<typeof freezeAction>, explicitApproval = false): Promise<PermitResult> {
     const parsedPermission = tool.args.safeParse(call.args)
-    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId), ...botFor(input.sessionId, tool.name) }
+    const permissionContext = { sessionId: input.sessionId, threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId), ...botFor(input.sessionId, tool.name) }
     if (parsedPermission.success && tool.permissionFor) tool = { ...tool, permission: tool.permissionFor(parsedPermission.data, permissionContext) }
     tool = sessionRecallPermission(tool, call.args)
     const mode = modeOf(input, toolset)
@@ -1476,6 +1476,8 @@ export function createNativeEngine(options: {
       // A session-scoped answer must not become consent to read other sessions or later pages.
       return settle(answer.kind === "approve" ? { kind: "approve", scope: "once" } : answer, "manual", "Individual user decision")
     }
+    // The user's own words asked for this call (`fanout` in their message): it starts without a prompt, inside the rules above.
+    if (!always && parsedPermission.success && tool.preApproved?.(parsedPermission.data, permissionContext) === true) return settle({ kind: "approve", scope: "once" }, "deterministic", "The user's message asked for it")
     if (tool.name === "image_gen") {
       const refs = (call.args as { referenced_image_paths?: unknown })?.referenced_image_paths
       if (Array.isArray(refs)) {

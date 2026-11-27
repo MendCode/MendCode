@@ -25,6 +25,7 @@ export type WorkflowCommand =
   | { type: "workflow.preview"; directory: string; plan: WorkflowPlanInput; permission?: Permission | undefined; originSessionId?: SessionId | undefined }
   | Omit<import("@mendcode/protocol").Command & { type: "workflow.save" }, "id" | "clientId">
   | { type: "workflow.definitions"; directory: string; limit?: number }
+  | { type: "workflow.saved"; directory: string }
   | { type: "workflow.revision.get"; directory: string; revisionId: string }
   | Omit<Extract<import("@mendcode/protocol").Command, { type: "workflow.permissions" }>, "id" | "clientId">
   | Omit<Extract<import("@mendcode/protocol").Command, { type: "workflow.retry-phase" }>, "id" | "clientId">
@@ -76,6 +77,8 @@ export function createWorkflowsHost(options: {
   /** Tests: a host other than the sandboxed process one. */
   scriptHost?: ScriptHostPort
   defaultPermission(directory: string): PermissionMode | undefined
+  /** The size guideline the user set (`workflows.size`). */
+  size?(): import("@mendcode/protocol").WorkflowSize | undefined
   sessionPermission?(sessionId: SessionId): PermissionMode | undefined
   createSession(input: import("@mendcode/workflows").WorkflowSessionInput): SessionId
   prepareTask?: Parameters<typeof import("@mendcode/workflows").createWorkflowService>[0]["prepareTask"]
@@ -225,6 +228,29 @@ export function createWorkflowsHost(options: {
     return resolved.ok ? { plan: resolved.plan, ...(packageRoot ? { packageRoot } : {}) } : { problems: resolved.problems }
   }
 
+  /** The saved workflows of the layers (a script `workflows/<name>.js` or a plan `workflows/<name>.json`), a later layer replacing a name. Sources are read, never run. */
+  async function savedWorkflows(directory: string) {
+    const [{ readWorkflowPlans, readWorkflowScripts }, { parseScript }] = await Promise.all([import("./workflow-files"), import("@mendcode/workflows")])
+    const layers = options.layersFor(directory)
+    const scripts = readWorkflowScripts(layers).map((entry) => {
+      const parsed = entry.text === undefined ? undefined : parseScript(entry.text)
+      const problem = entry.problem ?? (parsed && !parsed.ok ? parsed.problems[0] : undefined)
+      return { name: entry.name, kind: "script" as const, source: entry.source, ...(entry.pkg ? { pkg: entry.pkg } : {}), ...(parsed?.ok && parsed.meta.description ? { description: parsed.meta.description.slice(0, 120) } : {}), ...(problem ? { problem } : {}) }
+    })
+    const plans = readWorkflowPlans(layers).filter((entry) => !scripts.some((script) => script.name === entry.name)).map((entry) => ({ name: entry.name, kind: "plan" as const, source: entry.source, ...(entry.pkg ? { pkg: entry.pkg } : {}), ...(entry.plan?.objective ? { description: entry.plan.objective.slice(0, 120) } : {}), ...(entry.problem ? { problem: entry.problem } : {}) }))
+    return [...scripts, ...plans].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** What a plan is expected to use, from the finished runs on this machine; loaded with the first preview. */
+  async function estimateOf(plan: WorkflowPlan, maxConcurrent?: number) {
+    const { estimateRun, estimateLine, largeRunNotice } = await import("./workflow-estimate")
+    const agentTasks = plan.tasks.reduce((sum, task) => sum + (task.kind === "agent" ? 1 : task.kind === "map" ? task.map.maxItems : 0), 0)
+    const history = options.store.all().sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 12).flatMap((run) => run.tasks.map((task) => ({ kind: task.kind, state: task.state, usage: task.usage, startedAt: task.startedAt, endedAt: task.endedAt })))
+    const size = options.size?.()
+    const estimate = estimateRun({ ...(plan.script ? { script: { source: plan.script.source, budget: plan.script.meta.budget } } : { planAgents: agentTasks }), maxConcurrent: maxConcurrent ?? plan.maxConcurrent, history, ...(size ? { size } : {}) })
+    return { ...estimate, line: estimateLine(estimate), notice: largeRunNotice(estimate) }
+  }
+
   function summaryOf(plan: WorkflowPlan, permission: Permission) {
     const contract = typeof plan.contract === "object" ? plan.contract : undefined
     return {
@@ -253,6 +279,19 @@ export function createWorkflowsHost(options: {
   }
 
   async function handle(command: WorkflowCommand, access: WorkflowAccess = LOCAL): Promise<Reply> {
+      if (command.type === "workflow.saved") {
+        if (!access.local) return fail("forbidden", SCRIPT_LOCAL_ONLY)
+        return { ok: true, result: { saved: await savedWorkflows(command.directory) } }
+      }
+      if (command.type === "workflow.script" && command.action === "save") {
+        if (!access.local) return fail("forbidden", SCRIPT_LOCAL_ONLY)
+        const run = options.store.all().find((entry) => entry.workflowId === command.workflowId)
+        if (!run) return fail("target_mismatch", "unknown workflow")
+        if (!command.name) return fail("invalid_command", "give the name to save it under")
+        if (!options.dataDir) return fail("invalid_command", "this daemon has no folder to save workflows in")
+        const saved = await saveWorkflowFile({ dir: options.dataDir, name: command.name, run })
+        return "error" in saved ? fail("busy", saved.error) : { ok: true, result: saved }
+      }
       if (command.type === "workflow.script") {
         if (!access.local) return fail("forbidden", SCRIPT_LOCAL_ONLY)
         const workflows = await load()
@@ -290,7 +329,7 @@ export function createWorkflowsHost(options: {
         }
         if (command.type === "workflow.preview") {
           if ("problems" in resolved) return { ok: true, result: { problems: resolved.problems } }
-          return { ok: true, result: { problems: [], summary: { ...summaryOf(resolved.plan, workflowPermission(resolved.plan, command)), ...(resolved.receipt ? { definitionId: resolved.receipt.definitionId, revisionId: resolved.receipt.revisionId, revision: resolved.receipt.revision, planHash: resolved.receipt.planHash } : {}) } } }
+          return { ok: true, result: { problems: [], summary: { ...summaryOf(resolved.plan, workflowPermission(resolved.plan, command)), estimate: await estimateOf(resolved.plan), ...(resolved.receipt ? { definitionId: resolved.receipt.definitionId, revisionId: resolved.receipt.revisionId, revision: resolved.receipt.revision, planHash: resolved.receipt.planHash } : {}) } } }
         }
         if ("problems" in resolved) return fail("invalid_command", resolved.problems.join("; "))
         const workflows = await load()
@@ -304,7 +343,7 @@ export function createWorkflowsHost(options: {
         const receipt = resolved.receipt ?? (await savedPlans()).save({ directory: command.directory, plan: resolved.plan, source: "session-generated", saved: false })
         try {
           const run = workflows.create({ plan: receipt.plan, planHash: receipt.planHash, definitionId: receipt.definitionId, revisionId: receipt.revisionId, revision: receipt.revision, name: receipt.definition.name, directory: command.directory, permission, ...(resolved.packageRoot ? { packageRoot: resolved.packageRoot } : {}), ...(command.originSessionId ? { originSessionId: command.originSessionId } : {}), ...(command.startKey ? { startKey: command.startKey } : {}), ...(command.loopId ? { loopId: command.loopId } : {}), ...(command.loopRunId ? { loopRunId: command.loopRunId } : {}) })
-          return { ok: true, result: { workflow: summarizeWorkflow(run) } }
+          return { ok: true, result: { workflow: summarizeWorkflow(run), estimate: await estimateOf(resolved.plan) } }
         } catch (error) { return fail("busy", error instanceof Error ? error.message : String(error)) }
       }
       // Reads need no service when nothing was ever started: the store has the rows.
@@ -360,14 +399,15 @@ export function createWorkflowsHost(options: {
           const reply = await handle({ type: "workflow.preview", directory, plan: plan as WorkflowPlanInput, originSessionId: sessionId }, MODEL)
           if (!reply.ok) return { problems: [reply.message] }
           const problems = (reply.result?.problems ?? []) as string[]
-          const summary = reply.result?.summary as ReturnType<typeof summaryOf> | undefined
-          return summary ? { problems, detail: previewDetail(summary) } : { problems }
+          const summary = reply.result?.summary as (ReturnType<typeof summaryOf> & { estimate?: { line: string; notice: string } }) | undefined
+          return summary ? { problems, detail: `${previewDetail(summary)}${summary.estimate ? `\nExpected: ${summary.estimate.line}${summary.estimate.notice ? `\n${summary.estimate.notice}` : ""}` : ""}` } : { problems }
         },
         async start(plan) {
           const reply = await handle({ type: "workflow.start", directory, plan: plan as WorkflowPlanInput, originSessionId: sessionId }, MODEL)
           if (!reply.ok) return { ok: false, message: reply.message.replace(/^\[WORKFLOWS\]: /, "") }
           const workflow = reply.result!.workflow as WorkflowSummary
-          return { ok: true, workflowId: workflow.workflowId, name: workflow.name, tasks: workflow.tasks.length }
+          const estimate = reply.result!.estimate as { line: string; notice: string } | undefined
+          return { ok: true, workflowId: workflow.workflowId, name: workflow.name, tasks: workflow.tasks.length, ...(estimate ? { estimate: estimate.line, ...(estimate.notice ? { notice: estimate.notice } : {}) } : {}) }
         },
         async status(workflowId) {
           const runs = (workflowId ? [service?.get(workflowId as WorkflowId) ?? options.store.all().find((run) => run.workflowId === workflowId)] : (service?.list(directory) ?? options.store.all()).slice(0, 5)).filter((run): run is WorkflowRun => run !== undefined && run.directory === directory)
@@ -408,6 +448,22 @@ export function createWorkflowsHost(options: {
     },
   }
 }
+/** Writes a run's script (or plan) as a saved workflow of the user layer, never over a file that is there. */
+async function saveWorkflowFile(input: { dir: string; name: string; run: WorkflowRun }): Promise<{ file: string; kind: "script" | "plan" } | { error: string }> {
+  const { mkdirSync, writeFileSync } = await import("node:fs")
+  const script = input.run.plan.script
+  const kind = script ? "script" : "plan"
+  const folder = path.join(input.dir, "workflows")
+  const file = path.join(folder, `${input.name}.${script ? "js" : "json"}`)
+  try {
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(file, script ? (script.source.endsWith("\n") ? script.source : `${script.source}\n`) : `${JSON.stringify(input.run.plan, null, 2)}\n`, { flag: "wx" })
+  } catch (error) {
+    return { error: (error as NodeJS.ErrnoException).code === "EEXIST" ? `workflows/${input.name}.${script ? "js" : "json"} already exists; choose another name` : `cannot save: ${error instanceof Error ? error.message : String(error)}` }
+  }
+  return { file, kind }
+}
+
 /** The approval text of `workflow_start`: exactly what will run. */
 /** The approval text of a script: what it is, what it may spend, where it came from, its hash and the source itself (clipped). */
 const SCRIPT_DETAIL_LINES = 80

@@ -17,6 +17,8 @@ export type SlashCommand = {
   hiddenAliases?: string[]
   summary: string
   shortcut?: string
+  /** A saved workflow (`workflows/<name>.js` or `.json`): typed as `/name args`, the terminal starts it. */
+  workflow?: "script" | "plan"
   /** From .mendcode/commands: inserted as text so its arguments can follow. */
   custom?: true
   /** From a terminal extension (`api.command`): runs in this terminal, and is inserted as text like a custom one. */
@@ -135,6 +137,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "reviews", group: "code", feature: "pr_review", aliases: [], summary: "Manage PR review jobs and reviewers" },
   { name: "loops", group: "agents", aliases: ["loop"], summary: "Manage loops" },
   { name: "workflows", group: "agents", aliases: ["wf"], summary: "Manage workflows" },
+  { name: "autoflow", group: "agents", aliases: [], summary: "Set automatic workflows: on, off, size" },
   { name: "storage", group: "more", aliases: [], summary: "Inspect storage and cleanup" },
   { name: "acp", group: "setup", aliases: [], summary: "Configure ACP agents" },
   { name: "mcps", group: "setup", feature: "mcp", aliases: ["mcp"], summary: "Manage MCP servers" },
@@ -201,7 +204,7 @@ export function runsOnSelect(command: SlashCommand) {
   return command.custom !== true && command.ext !== true && !ARGUMENT_COMMANDS.has(command.name)
 }
 
-const OPTIONAL_ARGUMENTS = new Set(["bot", "limit","daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "language", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
+const OPTIONAL_ARGUMENTS = new Set(["bot", "limit","daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "autoflow", "advisor", "output-style", "language", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
 export function takesArguments(command: SlashCommand) {
   return command.name === "panel" || !runsOnSelect(command) || OPTIONAL_ARGUMENTS.has(command.name)
 }

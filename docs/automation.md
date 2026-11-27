@@ -528,6 +528,9 @@ mendcode workflow save <file.json|name> [--name NAME] [--description TEXT]
 mendcode workflow budget <id> [--agents N] [--tokens N] [--usd N] [--minutes N]   # raise a paused run's caps, then resume
 mendcode workflow update <id> <file.js>        # swap in an edited script (paused or failed run)
 mendcode workflow retry-task <id> --task-id <taskId> [--reason TEXT]
+mendcode workflow restart <id> --task <taskId>   # run one agent again, even a running or finished one
+mendcode workflow saved                        # saved workflows: yours, packages' and the project's
+mendcode workflow save-run <id> <name>         # keep a run's script as a saved workflow, runnable as /<name>
 mendcode workflow events|artifacts|receipt <id> [--limit N] [--before SEQ]
 mendcode workflow export <id> [--format json|markdown]
 

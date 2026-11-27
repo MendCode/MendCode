@@ -1,5 +1,5 @@
 import { HOME_WORKING, inProject } from "../../view/project-scope"
-import { needsTick, workflowsNeedTick } from "../lazy-pages"
+import { needsTick, workflowsMoving, workflowsNeedTick } from "../lazy-pages"
 import { topbarAnimates } from "../../view/topbar"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import type { AppContext } from "./context"
@@ -35,7 +35,7 @@ export function createTicks(ctx: AppContext, actions: {
     const thread = state.page === "chat" && state.agentView !== undefined && (state.agentRoot ?? state.transcript).agentThreads().some((each) => each.itemId === state.agentView && each.running)
     // A PR review of the open session's watch: its activity status and running step move until the run ends (nothing at rest).
     // `/reviews` with a review running turns the same spinner on its running rows.
-    const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0
+    const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId) || state.page === "reviews" && state.reviewActivity.length > 0 || state.page === "workflows" && workflowsMoving(state.workflows)
     // The sessions sidebar shows another session of this project running or waiting for approval: its row's symbol moves on this same tick.
     // The all-projects and bots list keeps the other folders' sessions and the bots' chats itself, so it says whether one of its rows moves.
     const listed = state.page === "chat" && (state.sidebarBots?.moving() || (state.sessions ?? []).some((s) => !restingWorkflow(s) && (BUSY.has(s.state) || s.state === "waiting_approval" || (s.agents ?? 0) > 0) && (s.directory === (ctx.input.directory ?? "") || sidebarListsAll(state.tuiProfile.sidebarProjects, state.settingsNow.experimental?.bots === true)))) && sidebarShown(ctx.input.screen.size.width)

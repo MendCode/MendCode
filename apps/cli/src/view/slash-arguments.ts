@@ -113,6 +113,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   ],
   ...Object.fromEntries(PANEL_WORDS.map((word) => [`panel ${word}`, () => [{ word: "default", summary: `Show the built-in ${word}${customPanels.has(word) ? ", not your custom one" : ""}`, feature: word === "galaxy" ? "panel_orbit" as const : "panel" as const }]])),
   workflows: () => [{ word: "run", summary: "Run a workflow: <file.js|name> [args]" }, { word: "new", summary: "Create one: <name>" }, { word: "convert", summary: "Convert a plan: <plan.json>" }, { word: "budget", summary: "Set a run's budget: <id> …" }, { word: "update", summary: "Update a run: <id> <file.js>" }, { word: "resume", summary: "Resume a run: <id>" }],
+  autoflow: () => [...onOff("workflows"), ...words("Size guideline", ["small", "medium", "large", "unrestricted"])],
   agents: () => words("Act on a sub-agent: <session-id>", ["summary", "rename", "tag", "pause", "stop", "message"]),
   mcp: () => [{ word: "auth", summary: "Sign in to a server: <server>" }],
 }

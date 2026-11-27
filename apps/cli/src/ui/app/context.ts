@@ -494,6 +494,8 @@ export type AppState = {
   workflowsError: string
   /** The last list the daemon sent per scope: drawn at once when the page opens again while a fresh one is asked for. */
   workflowsSeen: { project?: WorkflowSummary[]; all?: WorkflowSummary[] }
+  /** The Saved tab's workflows, asked for when the tab opens. */
+  workflowSaved: import("../../view/workflows-page").SavedWorkflow[]
   /** Live workflows of this project (id → waits for the user), from `workflow.list` and `workflow.changed`. */
   liveWorkflows: Map<string, boolean>
   permissionGrants: PermissionGrant[] | undefined

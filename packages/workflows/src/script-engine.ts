@@ -35,6 +35,8 @@ export type ScriptJournalPort = {
   get(workflowId: string, key: string): string | undefined
   set(workflowId: string, key: string, payload: string): void
   list(workflowId: string, prefix?: string): Array<{ key: string; payload: string }>
+  /** Drops one row (a restarted agent's answer). */
+  delete?(workflowId: string, key: string): void
   removeRun(workflowId: string): void
 }
 
@@ -711,6 +713,11 @@ export function createScriptEngine(ctx: Context) {
     replaceScript,
     capReason,
     pauseForCap,
+    /** Restarting an agent: its journaled answer goes, so the replay waits for the new one. */
+    forgetCall(workflowId: WorkflowId, taskId: string) {
+      const entry = specEntry(workflowId, taskId)
+      if (entry) journal?.delete?.(workflowId, `call:${entry.key}`)
+    },
     /** The frozen spec of a script task (journal-backed). */
     specOf: (workflowId: string, taskId: string) => specEntry(workflowId, taskId)?.spec,
     /** A run was deleted: its journal and spec views go. */

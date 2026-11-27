@@ -259,11 +259,17 @@ function reopen(run: WorkflowRun, ids: readonly string[], feedback?: string): Wo
   }
 }
 
-/** Manual retry of a failed, skipped, stopped or input-waiting task and its dependents. Refused while verifying or when finished. */
+/** The states a manual retry may start from: a failed or waiting task, and (restart) an agent that is running or finished. */
+export const RETRYABLE_STATES: readonly WorkflowTask["state"][] = ["failed", "skipped", "stopped", "needs_input", "running", "done"]
+
+/**
+ * Manual retry of a task and its dependents: a failed, skipped, stopped or input-waiting one, or a restart of one that runs or has
+ * finished (`r` on /workflows). Refused while verifying or when the run is over.
+ */
 export function retryTask(run: WorkflowRun, taskId: string, at: number, reason?: string): WorkflowRun {
   const task = run.tasks.find((candidate) => candidate.id === taskId)
   if (!task) throw new RangeError(`[WORKFLOWS]: unknown task ${taskId}`)
-  if (!["failed", "skipped", "stopped", "needs_input"].includes(task.state)) throw new RangeError(`[WORKFLOWS]: task ${taskId} is ${task.state}, not retryable`)
+  if (!RETRYABLE_STATES.includes(task.state)) throw new RangeError(`[WORKFLOWS]: task ${taskId} is ${task.state}, not retryable`)
   if (run.state === "verifying" || run.state === "completed" || run.state === "stopped") throw new RangeError(`[WORKFLOWS]: cannot retry while the run is ${run.state}`)
   const { reason: _reason, endedAt: _endedAt, ...rest } = reopen(run, [task.mapParentId ?? taskId], reason)
   return settle({ ...rest, state: "running" }, at)

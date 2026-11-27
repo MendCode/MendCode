@@ -3000,6 +3000,7 @@ export async function startDaemon(options: DaemonOptions) {
       return (store.settings.get().trustedToolDirs ?? []).some((trusted) => trusted === canonical || canonicalDir(trusted) === canonical)
     },
     defaultPermission: (directory) => defaultPermissionFor(store.settings.get(), directory),
+    size: () => store.settings.get().workflows?.size,
     sessionPermission: (sessionId) => store.hasSession(sessionId) ? livePermission(sessionId) : undefined,
     prepareTask: workflowRouter.prepare,
     routingProblems: workflowRouter.problems,
@@ -6472,6 +6473,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "workflow.preview":
       case "workflow.save":
       case "workflow.definitions":
+      case "workflow.saved":
       case "workflow.revision.get":
       case "workflow.permissions":
       case "workflow.retry-phase":

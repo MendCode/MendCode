@@ -141,7 +141,7 @@ export type LoopPort = {
 }
 
 /** What the per-call permission hooks of a tool may look at. */
-export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined }
+export type ToolPermissionContext = { threads?: ThreadPort | undefined; peers?: PeerPort | undefined; bot?: BotPort | undefined; /** The calling session, for a tool whose permission depends on what the user asked in this turn. */ sessionId?: string | undefined }
 
 export type BotResult = { ok: true; text: string; /** Short facts for the transcript card. */ meta?: Record<string, string | number | boolean> } | { ok: false; message: string }
 export type BotSkillInput = { name: string; description?: string | undefined; body?: string | undefined }
@@ -297,7 +297,8 @@ export type ThreadPort = {
 export type WorkflowPort = {
   /** Problems (empty when the plan can start) and, when valid, the approval text: tasks, every check command, applied permission. */
   preview(plan: unknown): Promise<{ problems: string[]; detail?: string }>
-  start(plan: unknown): Promise<{ ok: true; workflowId: string; name: string; tasks: number } | { ok: false; message: string }>
+  /** `estimate` is what the run is expected to use (agents, tokens, cost, time), `notice` the large-run line when it applies. */
+  start(plan: unknown): Promise<{ ok: true; workflowId: string; name: string; tasks: number; estimate?: string; notice?: string } | { ok: false; message: string }>
   /** A bounded receipt of one run, or of this project's recent runs. */
   status(workflowId?: string): Promise<string>
   previewControl?(workflowId: string): Promise<string>
@@ -362,6 +363,8 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   /** `always`, or `approvalFor` per call: the call asks, showing `preview`, in every permission mode and whatever the allow rules or saved grants say. */
   approval?: "always"
   approvalFor?(args: z.infer<Args>, context?: ToolPermissionContext & { /** The session's permission mode for this call (`full`, `smart`, `ask`…). */ mode?: string | undefined }): boolean
+  /** The user's own message in this turn already asked for this call (a keyword they typed): it runs without a prompt. Deny rules and plan mode still apply. */
+  preApproved?(args: z.infer<Args>, context?: ToolPermissionContext): boolean
   /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
   refusalFor?(args: z.infer<Args>, context?: ToolPermissionContext): string | undefined
   /** The tool's own claim that it changes nothing (an MCP server's `readOnlyHint`): a read-only workflow task keeps it, and its approval still applies. */

@@ -530,6 +530,8 @@ export type WorkflowContractSummary = z.infer<typeof WorkflowContractSummary>
 export const WorkflowTaskSummary = lazySchema(() => WorkflowTask.omit({ result: true, reason: true, feedback: true, output: true, mapItem: true }).extend({
   reason: z.string().max(SUMMARY_TEXT_CHARS).optional(),
   outputKind: z.enum(["text", "json", "artifact"]).optional(),
+  /** What a finished agent step produced, as one short line (the first of its answer): the run's summary card shows it per phase. */
+  produced: z.string().max(PRODUCED_CHARS).optional(),
 }))
 export type WorkflowTaskSummary = z.infer<typeof WorkflowTaskSummary>
 
@@ -609,6 +611,13 @@ export const WorkflowSummary = lazySchema(() => z.strictObject({
 export type WorkflowSummary = z.infer<typeof WorkflowSummary>
 
 const clipped = (text: string, max: number) => (text.length > max ? text.slice(0, max) : text)
+const PRODUCED_CHARS = 100
+
+/** The first line with words in an answer, markdown marks and JSON braces dropped: what the step made, in about a line. */
+function producedLine(result: string | undefined): string | undefined {
+  const line = result?.split("\n").map((entry) => entry.replace(/^[\s#>*`\-{\["]+|[\s`}\]",]+$/g, "").trim()).find((entry) => entry.length > 1)
+  return line ? clipped(line, PRODUCED_CHARS) : undefined
+}
 
 /** The pushed form of a run (pure). */
 export function summarizeWorkflow(run: WorkflowRun): WorkflowSummary {
@@ -631,9 +640,10 @@ export function summarizeWorkflow(run: WorkflowRun): WorkflowSummary {
     rootSessionId: run.rootSessionId,
     ...(run.originSessionId ? { originSessionId: run.originSessionId } : {}),
     ...(subjectOf(run.plan.script?.args) ? { subject: subjectOf(run.plan.script?.args)! } : {}),
-    tasks: (script ? script.listed : run.tasks).map(({ result: _result, reason, feedback: _feedback, output, mapItem: _mapItem, ...task }) => ({
+    tasks: (script ? script.listed : run.tasks).map(({ result, reason, feedback: _feedback, output, mapItem: _mapItem, ...task }) => ({
       ...task,
       ...(reason !== undefined ? { reason: clipped(reason, SUMMARY_TEXT_CHARS) } : {}),
+      ...(task.state === "done" && task.kind === "agent" && producedLine(result) ? { produced: producedLine(result)! } : {}),
       ...(output ? { outputKind: output.kind } : {}),
     })),
     rounds: run.verifications.length,
