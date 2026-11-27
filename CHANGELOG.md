@@ -9,6 +9,19 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.21 - 2026-11-26
+
+Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.
+
+### Upgrade notes
+
+- Same code as v0.0.21-beta.1.
+
+## v0.0.21-beta.1 - 2026-11-26
+
+Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.
+
+
 ### New
 
 - Say `fanout` (or `ultracode`) in a prompt and the model can write and run a workflow for it, with no approval prompt; `--no-fanout` skips it for one prompt, `/autoflow on|off` does it for every prompt and `/autoflow small|medium|large|unrestricted` sets the size guideline the model follows.
@@ -31,9 +44,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - On the Claude engine, background commands are no longer stopped after 2 hours ("stopped after reaching its background time limit"): MendCode starts Claude Code with its background cap at the maximum, or at `processLimits.lifetimeMinutes` when you set one, unless you set `BASH_MAX_TIMEOUT_MS` yourself.
 - The `shell_session` tool description no longer tells the model its terminals stop after 15 minutes idle or 2 hours: they have no time cap unless `processLimits` sets one, as for background commands.
 - `/whatsnew` asks the model once per version and changelog content and reuses the saved answer after that, and its page is shorter: at most 8 changes grouped New, Fixed and Changed, with `/whatsnew all` for the rest.
-- `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed
-- Docs: the sync pages say how to stop copying (`sync follow off`, `sync disable`, revoking the device token), and the storage page covers `--move-dir`. in, and puts the cursor on an expired sign-in.
+- `/connect` lists the subscription sign-ins (ChatGPT, Claude Code, GitHub Copilot) first and API keys after, shows each one as signed in, expired or not signed in, and puts the cursor on an expired sign-in.
+- Docs: the sync pages say how to stop copying (`sync follow off`, `sync disable`, revoking the device token), and the storage page covers `--move-dir`.
 - Docs: the automation page indexes every top-level command with its page, the `ps`, `logs` and `kill` shorthands and the missing subcommands, and the what's-new page lists the latest versions.
+- MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
+- Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
 
 ### Fixed
 
@@ -52,11 +67,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The Linux user service starts again: its systemd unit wrote `WorkingDirectory` in quotes, which systemd rejects as not absolute.
 - `remote setup` and `remote pair` work with Tailscale run without root in userspace networking: they find `tailscale` in `~/.local/bin` and the user's socket, take `--tailscale PATH` and `--tailscale-socket PATH`, and listen on 127.0.0.1 with TLS there.
 - The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
-
-### Changed
-
-- MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
-- Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
 
 ## v0.0.20 - 2026-11-24
 
