@@ -1,5 +1,6 @@
 import { featureOn } from "@mendcode/protocol/wire"
 import { gradientSpans, reservedHomePetBoxes } from "../../pets/home-pet-layout"
+import { usablePetRef } from "../../pets/image-gate"
 import type { HomeMascot, HomeMascotBox } from "../../view/home"
 import { MEND_SPRITE_SIZE, mendSpriteLines } from "../../view/mend-sprite"
 import type { ImagePlacement } from "../image-layer"
@@ -43,7 +44,9 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
   let drawing: HomeMascotBox | undefined
   const focus = (input.screen as { focus?: { state: string; subscribe(listener: () => void): () => void } }).focus
 
-  const wanted = () => isPetMascot(state.tuiProfile.homeMascot) && input.pets !== undefined && (state.tuiProfile.logoKind === "both" || state.tuiProfile.logoKind === "mascot") && state.mode !== "minimal" && !state.accessible && featureOn(state.settingsNow, "pets")
+  /** The mascot that can show here: a picture-only pet in a terminal without pictures is the built-in Mend (the saved choice is kept). */
+  const mascotRef = () => usablePetRef(state.tuiProfile.homeMascot, graphics())
+  const wanted = () => isPetMascot(mascotRef()) && input.pets !== undefined && (state.tuiProfile.logoKind === "both" || state.tuiProfile.logoKind === "mascot") && state.mode !== "minimal" && !state.accessible && featureOn(state.settingsNow, "pets")
   const protocol = () => input.screen.imageProtocol
   const graphics = () => (protocol() === undefined ? input.pets?.images === true : protocol() !== "off")
   const moving = () => visible && state.tuiProfile.mascotMotion && !state.reducedMotion && focus?.state !== "unfocused" && protocol() !== "iterm2" && protocol() !== "sixel"
@@ -110,7 +113,7 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       const textOnly = options.ascii() || theme.ansi !== undefined
       // The title fades from the theme's primary to its secondary: under MendCode that is ink (#fafafa) to grey, with no hue the brand lacks.
       const title = (row: string, width: number) => gradientSpans(row, width, theme.colors.primary, theme.colors.secondary)
-      if (state.tuiProfile.homeMascot === "mend") {
+      if (mascotRef() === "mend") {
         // A pet chosen before in this run stops: its picture and timer are not the built-in Mend's.
         if (visible) {
           visible = false
@@ -120,7 +123,7 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       }
       // A chosen pet that cannot be shown (not installed, feature off, no pictures or colors here) leaves the slot empty: the default Mend stays for those who chose it.
       const none: HomeMascot = { none: true }
-      if (!wanted()) return isPetMascot(state.tuiProfile.homeMascot) ? none : undefined
+      if (!wanted()) return isPetMascot(mascotRef()) ? none : undefined
       const reserved = (): HomeMascot | undefined => (textOnly ? none : {
         pixel: { boxes: reservedHomePetBoxes(state.tuiProfile.mascotSize), lines: blankCells },
         title,
@@ -139,7 +142,7 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       }
       const dirs = input.pets!
       pet ??= module.createHomePet({ dirs: dirs.dirs, cacheDir: dirs.cacheDir, now, moving, onChange: requestFrame })
-      void pet.choose(state.tuiProfile.homeMascot)
+      void pet.choose(mascotRef())
       if (pet.missing) return none
       if (!pet.ready) return reserved()
       const shown = pet
@@ -165,7 +168,7 @@ export function createHomeMascot(ctx: AppContext, options: { working(): boolean;
       if (!drawing || !graphics()) return []
       const cell = state.imageCellPixels ?? { width: 8, height: 16 }
       // The built-in Mend's own picture; a pet loaded earlier in this run must not lay its picture over it.
-      if (state.tuiProfile.homeMascot === "mend") {
+      if (mascotRef() === "mend") {
         if (!mendPet) return []
         const mend = mendPet.mendPicture(options.working() ? "running" : "idle", drawing.cols, drawing.rows, cell)
         return [{ slot: "home-pet", key: mend.key, image: mend.image, row: top + drawing.row, col: drawing.col, cols: drawing.cols, rows: drawing.rows }]

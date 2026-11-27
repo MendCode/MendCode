@@ -26,7 +26,7 @@ describe("B10.20 GitLab terminal flow", () => {
     expect(ui).toEqual(native)
     expect(defaultEnabled).toBe(false)
     expect(models.length).toBeGreaterThan(0)
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("masked token is saved once, catalog precedes test and models can be selected", async () => {

@@ -9,7 +9,7 @@ import { CONNECT_PRESETS, PROVIDER_TYPE_CHOICES } from "../src/view/provider-pre
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "mistral-ui-private-fixture-never-print"
 const dirs: string[] = []
@@ -24,8 +24,8 @@ const report: ModelsReport = { ...REPORT, models: [{ id: "mistral:mistral-small-
 
 describe("B10.07 Mistral terminal", () => {
   test("Mistral appends to choices and schema-free types without moving earlier shortcuts", () => {
-    expect(CONNECT_CHOICES.slice(0, 17)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai"])
-    expect(CONNECT_CHOICES[17]).toBe("mistral")
+    expect(LEGACY_CHOICES.slice(0, 17)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai"])
+    expect(LEGACY_CHOICES[17]).toBe("mistral")
     expect(CONNECT_PRESETS.find((preset) => preset.id === "mistral")).toMatchObject({ type: "mistral", keyEnv: "MISTRAL_API_KEY", baseUrl: "https://api.mistral.ai/v1" })
     expect(PROVIDER_TYPE_CHOICES[6]).toBe("mistral")
     expect(createConnectState("Mistral").target).toBe("mistral")

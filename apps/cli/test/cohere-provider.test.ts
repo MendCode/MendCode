@@ -9,7 +9,7 @@ import { CONNECT_PRESETS } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "cohere-ui-fixture-never-print"
 const MODEL = "command-a-03-2025"
@@ -22,7 +22,7 @@ const report: ModelsReport = { ...REPORT, models: [{ id: `cohere:${MODEL}`, name
 
 describe("B10.10 Cohere terminal", () => {
   test("appends choices without moving existing shortcuts; schema-free UI metadata matches engine", async () => {
-    expect(CONNECT_CHOICES.slice(0, 18)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral"])
+    expect(LEGACY_CHOICES.slice(0, 18)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral"])
     expect(CONNECT_CHOICES.filter((id) => id === "cohere")).toHaveLength(1)
     expect(CONNECT_CHOICES.indexOf("cohere")).toBeGreaterThan(CONNECT_CHOICES.indexOf("mistral"))
     const { PROVIDER_PRESETS } = await import("../../../packages/engine-native/src/provider-presets")

@@ -12,7 +12,7 @@ import { actionRow, renderPetPlan } from "./pet-plan"
 import { PET_GENERATED_STATES, type PetPlan, type PetProgress } from "../../../../packages/protocol/src/pet-data"
 
 /** One installed pet as `/pet` lists it; `image` is native RGBA; `preview` is text-cell art. */
-export type PetChoice = { ref: string; name: string; description: string; source?: string; states?: string[]; /** States the generator drew; the other atlas rows repeat idle. */ generated?: string[]; /** Made by `/pet import`: `preview` is its half-block picture, already resized for its kind of art. */ imported?: boolean; preview?: Line[]; image?: PetImage; /** The cells `image` is drawn in: every pet's share of the preview box (`pet-slot.ts`). */ cells?: { cols: number; rows: number } }
+export type PetChoice = { ref: string; name: string; description: string; /** Why it cannot be chosen in this terminal (shown, and enter does nothing). */ disabled?: string; source?: string; states?: string[]; /** States the generator drew; the other atlas rows repeat idle. */ generated?: string[]; /** Made by `/pet import`: `preview` is its half-block picture, already resized for its kind of art. */ imported?: boolean; preview?: Line[]; image?: PetImage; /** The cells `image` is drawn in: every pet's share of the preview box (`pet-slot.ts`). */ cells?: { cols: number; rows: number } }
 export type PetPickerState = { selected: number; /** The generated pet's highlighted state, for `r`. */ state?: number }
 /** `fill` closes the page and puts a slash command in the editor: regenerate, rename and delete reuse the commands that already confirm. */
 export type PetPickerAction = { type: "none" } | { type: "close" } | { type: "choose"; ref: string } | { type: "fill"; text: string }
@@ -49,8 +49,8 @@ export function petPickerKey(state: PetPickerState, key: string, choices: readon
     if (key === "d") return { state, action: { type: "fill", text: `/pet delete ${chosen.ref} --confirm` } }
   }
   const showing = current !== undefined && current !== "" && current !== "off"
-  if (key === " " && showing) return { state, action: { type: "choose", ref: "off" } }
-  if ((key === "\r" || key === " ") && chosen) return { state, action: { type: "choose", ref: chosen.ref } }
+  if (key === " " && showing && !chosen?.disabled) return { state, action: { type: "choose", ref: "off" } }
+  if ((key === "\r" || key === " ") && chosen && !chosen.disabled) return { state, action: { type: "choose", ref: chosen.ref } }
   return { state, action: { type: "none" } }
 }
 
@@ -114,7 +114,7 @@ export function renderPetPicker(input: { choices: readonly PetChoice[] | undefin
   const listRows = choices?.map((choice, index): Line => [
     { text: index === state.selected ? "❯ " : "  ", fg: "primary" },
     { text: choice.ref === input.current ? "● " : "  ", fg: "success" },
-    { text: terminalText(choice.name), fg: index === state.selected ? "primary" : "text", bold: index === state.selected },
+    { text: terminalText(choice.name), fg: choice.disabled ? "muted" : index === state.selected ? "primary" : "text", bold: index === state.selected && !choice.disabled },
   ]) ?? [[{ text: "Loading pets…", fg: "muted" }]]
   const list = boxPanel({ title: "Pets", body: focusedWindow(listRows, state.selected, panel.listHeight - 3), width: panel.listWidth, height: panel.listHeight, compact: true })
   const cols = panel.width - 4
@@ -130,6 +130,7 @@ export function renderPetPicker(input: { choices: readonly PetChoice[] | undefin
   }
   const info: Line[] = selected ? [
     [{ text: terminalText(selected.name), fg: "primary", bold: true }, { text: terminalText(` · Source: ${selected.source ?? selected.ref}`), fg: "muted" }],
+    ...(selected.disabled ? wordRows(`Unavailable here: ${selected.disabled}`, cols) : []),
     ...(height >= 26 ? wordRows(selected.description, cols) : []),
     ...wordRows(`States: ${(selected.states ?? []).join(", ")}`, cols),
   ] : []

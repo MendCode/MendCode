@@ -8,7 +8,7 @@ import { CONNECT_CHOICES, createConnectState, connectFields, renderConnectPage }
 import { createModelPageState, renderModelPage } from "../src/view/model-page"
 import { parseAutomation } from "../src/automation"
 import { textWidth } from "../src/view/wrap"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 import { catalogHarness } from "./catalog-harness"
 
 const ID = "google-vertex-anthropic", MODEL = "claude-haiku-4-5@20251001"
@@ -35,8 +35,8 @@ function harness(width = 100, height = 30) {
 
 describe("B10.05 Vertex Anthropic CLI factories", () => {
   test("choice is appended, names resolve, ADC form has no secret field or API-key toggle", () => {
-    expect(CONNECT_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
-    expect(CONNECT_CHOICES[15]).toBe(ID)
+    expect(LEGACY_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
+    expect(LEGACY_CHOICES[15]).toBe(ID)
     expect(CONNECT_PRESETS.find((preset) => preset.id === ID)).toMatchObject({ id: ID, type: ID })
     for (const name of [ID, "Vertex Anthropic"]) {
       const state = createConnectState(name)

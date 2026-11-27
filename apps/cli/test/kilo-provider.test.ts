@@ -10,7 +10,7 @@ import { CONNECT_PRESETS, presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -20,7 +20,7 @@ const report = { ...REPORT, models: [...REPORT.models, ...KILO_MODELS.map((model
 
 describe("B10.23 Kilo CLI factories", () => {
   test("appends the provider, preserves numeric shortcuts and aligns both preset tables", () => {
-    expect(CONNECT_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
+    expect(LEGACY_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
     expect(CONNECT_CHOICES.indexOf("kilo")).toBeGreaterThan(CONNECT_CHOICES.indexOf("togetherai"))
     expect(CONNECT_CHOICES.filter((id) => id === "kilo")).toHaveLength(1)
     expect(CONNECT_PRESETS.map((preset) => preset.id).sort()).toEqual(Object.keys(PROVIDER_PRESETS).sort())
@@ -30,7 +30,7 @@ describe("B10.23 Kilo CLI factories", () => {
     expect(models).toEqual([])
     expect(defaultEnabled).toBe(false)
     expect(createConnectState("Kilo").target).toBe("kilo")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("saves the masked token once, refreshes before testing and selects a gateway model", async () => {

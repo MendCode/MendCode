@@ -3,7 +3,7 @@ import { PROVIDER_PRESETS } from "../../../packages/engine-native/src/provider-p
 import { CONNECT_CHOICES, connectKey, connectMatches, connectPaste, createConnectState, maskSecret, renderConnectPage, validateConnect, type ConnectState } from "../src/view/connect-page"
 import { CONNECT_PRESETS } from "../src/view/provider-presets"
 import { textWidth } from "../src/view/wrap"
-import { info, plain, providersHarness, REPORT } from "./providers-harness"
+import { info, LEGACY_CHOICES, plain, providersHarness, REPORT } from "./providers-harness"
 
 const SECRET = "sk-ant-api03-TOPSECRET-0123456789abcdef"
 const CTRL_E = "\x05"
@@ -35,14 +35,16 @@ describe("connect presets", () => {
     }
   })
   test("new presets follow the existing choices, preserving digits 1-9", () => {
-    expect(CONNECT_CHOICES).toHaveLength(CONNECT_PRESETS.length + 3)
+    expect(CONNECT_CHOICES).toHaveLength(CONNECT_PRESETS.length + 4)
     expect(CONNECT_CHOICES.at(-1)).toBe("opencode-free")
-    expect(CONNECT_CHOICES[8]).toBe("custom")
-    expect(CONNECT_CHOICES[9]).toBe("chatgpt")
-    expect(CONNECT_CHOICES[10]).toBe("google")
-    expect(CONNECT_CHOICES[11]).toBe("github-copilot")
-    expect(CONNECT_CHOICES.slice(12)).toEqual(["azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", "fireworks", "huggingface", "baseten", "moonshotai", "minimax", "xiaomi", "zai", "opencode-go", "ant-ling", "nearai", "foundry", "atomic-chat", "opencode-free"])
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    // Subscription sign-ins lead; the API-key providers keep their relative order after them.
+    expect(CONNECT_CHOICES.slice(0, 3)).toEqual(["chatgpt", "claude-code", "github-copilot"])
+    expect(LEGACY_CHOICES[8]).toBe("custom")
+    expect(LEGACY_CHOICES[9]).toBe("chatgpt")
+    expect(LEGACY_CHOICES[10]).toBe("google")
+    expect(LEGACY_CHOICES[11]).toBe("github-copilot")
+    expect(LEGACY_CHOICES.slice(12)).toEqual(["azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "cerebras", "cohere", "cloudflare-workers-ai", "cloudflare-ai-gateway", "togetherai", "kilo", "fireworks", "huggingface", "baseten", "moonshotai", "minimax", "xiaomi", "zai", "opencode-go", "ant-ling", "nearai", "foundry", "atomic-chat", "opencode-free"])
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 })
 
@@ -140,12 +142,13 @@ describe("/connect: a keyed preset", () => {
     await h.run("/connect")
     const out = h.text()
     for (const name of ["OpenAI", "Anthropic", "OpenRouter", "Vercel AI Gateway", "Groq", "DeepSeek", "Ollama", "LM Studio", "Custom endpoint"]) expect(out).toContain(name)
-    expect(out).toMatch(/ChatGPT subscription\s+2 models/)
-    expect(out).toMatch(/Claude Code\s+1 model/)
-    expect(out).toContain("❯ 1 OpenAI")
+    expect(out).toMatch(/ChatGPT\s+\S+ available · 2 models/)
+    expect(out).toMatch(/Claude Code\s+\S+ ready · 1 model/)
+    expect(out).not.toContain("Model catalogs")
+    expect(out).toContain("❯ 1 ChatGPT")
     // Moving the cursor never connects a provider.
-    for (let i = 0; i < CONNECT_CHOICES.indexOf("github-copilot"); i++) await h.type("\x1b[B")
-    expect(h.text()).toContain("❯ 12 GitHub Copilot")
+    for (let i = 0; i < CONNECT_CHOICES.indexOf("openai"); i++) await h.type("\x1b[B")
+    expect(h.text()).toContain("❯ 4 OpenAI")
     expect(h.app.page).toBe("connect")
   })
 
@@ -158,7 +161,7 @@ describe("/connect: a keyed preset", () => {
   test("the key is typed masked, sent once in providers.set, and never appears in a frame or another command", async () => {
     const h = providersHarness({ reply: accepting() })
     await h.run("/connect")
-    await h.type("2")
+    await h.type("5")
     expect(h.text()).toContain("Connect Anthropic")
     await h.type(SECRET)
     expect(h.text()).toContain("•".repeat(32))
@@ -341,7 +344,8 @@ describe("/connect: a local server", () => {
   test("Ollama needs no key: the URL is filled in and Enter twice connects", async () => {
     const h = providersHarness({ reply: accepting() })
     await h.run("/connect")
-    await h.type("7")
+    for (let i = 0; i < CONNECT_CHOICES.indexOf("ollama"); i++) await h.type("\x1b[B")
+    await h.type("\r")
     expect(h.text()).toContain("Connect Ollama")
     expect(h.text()).toContain("http://127.0.0.1:11434/v1")
     expect(h.text()).not.toContain("API key")
@@ -380,7 +384,8 @@ describe("/connect: a local server", () => {
 describe("/connect: a custom endpoint", () => {
   const custom = async (h: ReturnType<typeof providersHarness>) => {
     await h.run("/connect")
-    await h.type("9")
+    for (let i = 0; i < CONNECT_CHOICES.indexOf("custom"); i++) await h.type("\x1b[B")
+    await h.type("\r")
   }
 
   test("asks for name, format, base URL, key and optional models, and sends them together", async () => {

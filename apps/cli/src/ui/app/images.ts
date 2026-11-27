@@ -4,7 +4,7 @@ import { colorDepth } from "../theme"
 import type { AppContext } from "./context"
 
 /** Terminal-local image protocol: encoders load only when graphics are enabled. */
-export function createImages(ctx: AppContext) {
+export function createImages(ctx: AppContext, options: { /** The terminal's picture support changed: a pet that needs pictures is chosen again. */ onProtocol?: () => void } = {}) {
   const { input, state, env, say, fail, requestFrame } = ctx
   let chosen: ImageProtocol | undefined
   let ready = Promise.resolve()
@@ -28,6 +28,7 @@ export function createImages(ctx: AppContext) {
       state.imageCellPixels = undefined
       state.imageCards?.invalidate()
       state.pet?.syncMotion()
+      options.onProtocol?.()
       return ready = Promise.resolve()
     }
     ready = import("../image-layer").then(async ({ createImageLayer }) => {
@@ -39,6 +40,7 @@ export function createImages(ctx: AppContext) {
       state.imageCellPixels = cellPixels
       state.imageCards?.invalidate()
       state.pet?.syncMotion()
+      options.onProtocol?.()
       requestFrame()
     }).catch((error: unknown) => {
       if (current !== epoch) return

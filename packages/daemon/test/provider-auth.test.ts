@@ -7,6 +7,7 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import { createChatgptAuth } from "@mendcode/engine-native"
 import { Command, createIdFactory, isReadOnlyCommand } from "@mendcode/protocol"
 import { startDaemon } from "../src"
+import { remoteTokens } from "../src/remote"
 import { createProviderService } from "../src/providers"
 import { createProviderAuth } from "../src/provider-auth"
 import { createProviderMetadataAuth } from "../src/provider-metadata-auth"
@@ -25,6 +26,29 @@ describe("B10 protocol and daemon", () => {
     for (const type of ["providers.auth.authorize", "providers.auth.action", "providers.auth.metadata", "providers.logout", "providers.set"] as const) expect(isReadOnlyCommand(type)).toBe(false)
     expect(Command.safeParse({ ...base, type: "providers.auth.action", provider: "chatgpt", action: "print-tokens" }).success).toBe(false)
     expect(Command.safeParse({ ...base, type: "providers.set", provider: "openai", npm: "https://code.example/sdk.ts" }).success).toBe(false)
+  })
+  test("a login another tool left is reported as expired or usable, never as a MendCode login, and a MendCode login hides it", () => {
+    const dir = temp()
+    const providers = createProviderService({ dir, env: {} })
+    let imported: { state: "valid" | "expired"; expiresAt?: number } | undefined = { state: "expired", expiresAt: 5 }
+    const auth = createProviderAuth({ dir, providers, env: {}, importedLogin: () => imported })
+    cleanups.push(() => auth.stop())
+    expect(auth.status("chatgpt")[0]).toMatchObject({ provider: "chatgpt", state: "expired", source: "none", imported: "codex", expiresAt: 5 })
+    imported = { state: "valid" }
+    expect(auth.status("chatgpt")[0]).toMatchObject({ state: "authorized", source: "none", imported: "codex" })
+    imported = undefined
+    expect(auth.status("chatgpt")[0]).toMatchObject({ state: "none", source: "none" })
+    expect(auth.status("chatgpt")[0]!.imported).toBeUndefined()
+  })
+  test("a pasted sign-in address from another machine reaches the pending ChatGPT login; other providers refuse it", async () => {
+    const dir = temp()
+    const seen: string[] = []
+    const chatgpt = { status: () => ({ provider: "chatgpt", state: "authorized", source: "v2", accessTokenPresent: true, refreshTokenPresent: true, accountIdPresent: true }), complete: async (input: string) => { seen.push(input) }, stop() {} } as unknown as ReturnType<typeof createChatgptAuth>
+    const auth = createProviderAuth({ dir, providers: createProviderService({ dir, env: {} }), env: {}, chatgpt })
+    expect((await auth.action("chatgpt", "complete", "http://127.0.0.1:1455/auth/callback?code=c&state=s")).state).toBe("authorized")
+    expect(seen).toEqual(["http://127.0.0.1:1455/auth/callback?code=c&state=s"])
+    await expect(auth.action("chatgpt", "complete")).rejects.toThrow("pasted address")
+    await expect(auth.action("github-copilot", "complete", "x")).rejects.toThrow("pasted address")
   })
   test("method labels, default OAuth plan and unknown methods are resolved without HTTP", () => {
     const dir = temp()
@@ -81,6 +105,36 @@ describe("B10 protocol and daemon", () => {
     expect(readFileSync(donor, "utf8")).toBe("untouched-donor")
     expect(readFileSync(path.join(dir, "providers.json"), "utf8")).toBe(original)
   }, 15_000)
+  test("a paired remote client starts a sign-in and finishes it with the pasted address; read-only, sync and wrong tokens cannot, and metadata stays local", async () => {
+    const dir = temp()
+    let callbackState = ""
+    const providers = createProviderService({ dir, env: {} })
+    const chatgpt = createChatgptAuth({ dir, clientId: "fixture-client", issuer: "https://oauth.example", fetch: async () => Response.json({ access_token: "private-access", refresh_token: "private-refresh", id_token: `x.${Buffer.from(JSON.stringify({ chatgpt_account_id: "private-account" })).toString("base64url")}.y` }), startCallback: () => ({ redirectUri: "http://localhost:1455/auth/callback", close() {} }) })
+    const logs: string[] = []
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), listen: "127.0.0.1:0", log: (_level, message) => { logs.push(message) }, providers, providerAuth: createProviderAuth({ dir, providers, chatgpt }), engine: ({ clock }) => createFauxEngine({ clock }), info: { engine: "native" } })
+    cleanups.push(() => daemon.stop())
+    const tokens = remoteTokens(dir)
+    const attach = async (token: string) => { const client = createClient({ name: "remote", remote: { hostname: "127.0.0.1", port: daemon.remotePort!, token }, reconnect: false }); await client.connect(); cleanups.push(() => client.close()); return client }
+    const paired = await attach(tokens.create({ name: "mac" }).token)
+    const start = await paired.authorizeProvider("chatgpt", "browser")
+    if (!start.ok) throw new Error(start.error.message)
+    callbackState = new URL(start.authorization.url).searchParams.get("state")!
+    // The browser on the user's machine ended on its own 127.0.0.1; the address is pasted into the terminal.
+    const done = await paired.send({ type: "providers.auth.action", provider: "chatgpt", action: "complete", input: `http://127.0.0.1:1455/auth/callback?${new URLSearchParams({ state: callbackState, code: "fixture-code" })}` })
+    expect(done).toMatchObject({ ok: true })
+    expect(await paired.providerAuthStatus("chatgpt")).toMatchObject({ ok: true, statuses: [{ state: "authorized", source: "v2" }] })
+    expect(logs.some((line) => line.includes("[AUTH]: providers.auth.authorize chatgpt by remote token mac"))).toBe(true)
+    expect(logs.some((line) => line.includes("providers.auth.action complete chatgpt by remote token mac"))).toBe(true)
+    expect(logs.join("\n")).not.toContain("fixture-code")
+    // A read-only token and a sync token cannot change credentials, and metadata login stays on the daemon's own machine.
+    const readOnly = await attach(tokens.create({ name: "viewer", readOnly: true }).token)
+    expect(await readOnly.authorizeProvider("chatgpt", "browser")).toMatchObject({ ok: false })
+    const sync = await attach(tokens.create({ name: "device", sync: true }).token)
+    expect(await sync.authorizeProvider("chatgpt", "browser")).toMatchObject({ ok: false })
+    expect(await paired.send({ type: "providers.auth.metadata", url: "http://127.0.0.1:1234", execute: true })).toMatchObject({ ok: false, error: { code: "invalid_command" } })
+    // An unpaired client never gets as far as a command.
+    await expect(attach("not-a-paired-token")).rejects.toThrow("auth failed")
+  }, 20_000)
   test("metadata plans are offline, default off, and remote or unauthenticated execution is refused", async () => {
     const auth = createProviderMetadataAuth({ dir: temp(), env: {}, fetch: async () => { throw new Error("must not request") }, runCommand: async () => { throw new Error("must not spawn") } })
     expect(await auth.login({ url: "http://127.0.0.1:1234" })).toMatchObject({ executesNow: false, enabled: false, callsProvider: false })

@@ -5651,13 +5651,20 @@ export async function startDaemon(options: DaemonOptions) {
       case "providers.auth.action":
       case "providers.auth.metadata": {
         try {
-          if (connection.remoteAddress && ["providers.auth.authorize", "providers.auth.action", "providers.auth.metadata"].includes(command.type)) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Provider credential changes are local only" })
+          // A client paired with a full remote token already saves provider keys (`providers.set`) and runs sessions here, so it may also
+          // sign this daemon in to a subscription (a ChatGPT login that has to finish on the machine the daemon runs on). Every other
+          // remote connection, a read-only or sync token, and `providers.auth.metadata` (which fetches and runs a login command) stay local.
+          if (connection.remoteAddress && ["providers.auth.authorize", "providers.auth.action", "providers.auth.metadata"].includes(command.type)) {
+            const paired = command.type !== "providers.auth.metadata" && connection.remoteAddress !== "http" && connection.peer !== undefined && !connection.peer.readOnly && connection.peer.scope === undefined && activePeer(connection)
+            if (!paired) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Provider credential changes need the machine that runs MendCode or a paired remote with a full token" })
+            logLine("info", `[AUTH]: ${command.type}${"action" in command ? ` ${command.action}` : ""} ${"provider" in command ? command.provider : ""} by remote token ${connection.peer!.name} from ${connection.remoteAddress}`)
+          }
           const result = command.type === "providers.auth.methods" ? { methods: providerAuth.methods(command.provider) }
             : command.type === "providers.auth.status" ? { statuses: providerAuth.status(command.provider) }
             : command.type === "providers.auth.plan" ? { plan: providerAuth.plan(command.provider, command.method) }
             : command.type === "providers.auth.authorize" ? { authorization: await providerAuth.authorize(command.provider, command.method, command.open) }
             : command.type === "providers.auth.metadata" ? { metadata: await providerAuth.metadata.login(command) }
-            : { status: await providerAuth.action(command.provider, command.action) }
+            : { status: await providerAuth.action(command.provider, command.action, command.input) }
           return reply(connection, command.id, { ok: true, result })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${error instanceof Error ? error.message : "Provider authentication failed"}` })

@@ -190,3 +190,42 @@ describe("Sign in with ChatGPT (own login, no configured client)", () => {
     expect(h.exchanges).toHaveLength(0)
   })
 })
+
+describe("Sign in with ChatGPT from another machine (the daemon's loopback is unreachable)", () => {
+  test("the full address the browser ended on completes the login in the daemon, with the same checks", async () => {
+    const h = fixture()
+    const { params } = await h.start()
+    // The browser on the other machine ended on its own 127.0.0.1:1455; the user copies that address.
+    const address = `http://127.0.0.1:1455/auth/callback?${new URLSearchParams({ state: params.get("state")!, code: "fixture-code", client_id: ISSUED, scope: SCOPE })}`
+    await h.auth.complete(address)
+    expect(h.exchanges).toHaveLength(1)
+    expect(h.exchanges[0]!.get("client_id")).toBe(ISSUED)
+    expect(h.exchanges[0]!.get("redirect_uri")).toBe("http://127.0.0.1:1455/auth/callback")
+    expect(h.auth.status()).toMatchObject({ state: "authorized", source: "v2" })
+  })
+
+  test("a pasted address with another state, another path or no text is refused and nothing is exchanged", async () => {
+    const h = fixture()
+    const { params } = await h.start()
+    const query = (state: string) => new URLSearchParams({ state, code: "c", client_id: ISSUED, scope: SCOPE })
+    await expect(h.auth.complete(`http://127.0.0.1:1455/auth/callback?${query("someone-else")}`)).rejects.toThrow("did not complete")
+    await expect(h.auth.complete(`http://127.0.0.1:1455/other?${query(params.get("state")!)}`)).rejects.toThrow("/auth/callback")
+    await expect(h.auth.complete("   ")).rejects.toThrow("paste the full address")
+    expect(h.exchanges).toHaveLength(0)
+  })
+
+  test("a bare code finishes a returning sign-in whose client is already registered", async () => {
+    const h = fixture()
+    const first = await h.start()
+    await h.back({ state: first.params.get("state")!, code: "first", client_id: ISSUED, scope: SCOPE })
+    h.auth.logout()
+    await h.start()
+    await h.auth.complete("fixture-code")
+    expect(h.auth.status().state).toBe("authorized")
+  })
+
+  test("without a pending browser sign-in there is nothing to complete", async () => {
+    const h = fixture()
+    await expect(h.auth.complete("http://127.0.0.1:1455/auth/callback?code=x")).rejects.toThrow("no pending browser authorization")
+  })
+})

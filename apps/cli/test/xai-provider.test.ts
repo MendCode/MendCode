@@ -9,7 +9,7 @@ import { CONNECT_PRESETS, PROVIDER_TYPE_CHOICES } from "../src/view/provider-pre
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const KEY = "xai-ui-private-fixture-never-print"
 const dirs: string[] = []
@@ -20,8 +20,8 @@ const report = { ...REPORT, models: [{ id: "xai:grok-3-mini", name: "Grok 3 Mini
 
 describe("B10.06 xAI terminal", () => {
   test("choice and wire format append without moving old shortcuts; /connect xAI resolves the preset", () => {
-    expect(CONNECT_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
-    expect(CONNECT_CHOICES[16]).toBe("xai")
+    expect(LEGACY_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
+    expect(LEGACY_CHOICES[16]).toBe("xai")
     expect(CONNECT_PRESETS[14]).toMatchObject({ id: "xai", type: "xai", keyEnv: "XAI_API_KEY" })
     expect(PROVIDER_TYPE_CHOICES[5]).toBe("xai")
     expect(createConnectState("xAI").target).toBe("xai")

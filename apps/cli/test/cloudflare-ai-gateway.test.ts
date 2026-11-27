@@ -10,7 +10,7 @@ import { presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -26,7 +26,7 @@ describe("B10.22 Cloudflare AI Gateway CLI factories", () => {
   test("appends the preset and preserves numeric shortcuts and native preset parity", () => {
     expect(CONNECT_CHOICES.filter((id) => id === AIG_ID)).toHaveLength(1)
     expect(CONNECT_CHOICES.indexOf(AIG_ID)).toBeGreaterThan(CONNECT_CHOICES.indexOf("mistral"))
-    expect(CONNECT_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
+    expect(LEGACY_CHOICES.slice(0, 10)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt"])
     const { id: _id, ...preset } = presetOf(AIG_ID)!
     const { models, defaultEnabled, ...native } = PROVIDER_PRESETS[AIG_ID]!
     expect(preset).toEqual(native)

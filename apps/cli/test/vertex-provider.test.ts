@@ -5,7 +5,7 @@ import path from "node:path"
 import type { ProviderInfo } from "@mendcode/protocol"
 import { CONNECT_CHOICES, connectKey, createConnectState, renderConnectPage, validateConnect } from "../src/view/connect-page"
 import { textWidth } from "../src/view/wrap"
-import { providersHarness, plain, REPORT } from "./providers-harness"
+import { providersHarness, plain, REPORT, LEGACY_CHOICES } from "./providers-harness"
 import { catalogHarness } from "./catalog-harness"
 import { parseAutomation } from "../src/automation"
 
@@ -17,8 +17,8 @@ const catalog = { providers: [{ id: "google-vertex", name: "Google Vertex AI", t
 
 describe("B10.04 Vertex terminal and automation", () => {
   test("appended choice preserves numeric shortcuts; public ADC form validates and Tab only focuses", () => {
-    expect(CONNECT_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
-    expect(CONNECT_CHOICES[14]).toBe("google-vertex")
+    expect(LEGACY_CHOICES.slice(0, 9)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom"])
+    expect(LEGACY_CHOICES[14]).toBe("google-vertex")
     for (const name of ["vertex", "google-vertex", "Google Vertex AI"]) expect(createConnectState(name)).toMatchObject({ step: "form", target: "google-vertex" })
     const base = createConnectState("vertex")
     expect(validateConnect(base)).toMatchObject({ ok: true, submit: { enabled: true, apiKey: "", vertex: { project: null, location: null, endpoint: null, allowMetadata: false, tokenEnv: "GOOGLE_OAUTH_ACCESS_TOKEN" } } })

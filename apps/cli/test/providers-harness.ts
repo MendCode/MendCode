@@ -1,8 +1,16 @@
 import { createIdFactory, type ModelsReport, type ProviderInfo } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
+import { CONNECT_CHOICES } from "../src/view/connect-page"
 
 const ids = createIdFactory()
+/** The pick list before subscriptions moved to the top: the API-key providers keep this relative order, which the "appended, not moved" tests pin. */
+export const LEGACY_CHOICES: readonly string[] = (() => {
+  const rest = CONNECT_CHOICES.filter((id) => !["chatgpt", "claude-code", "github-copilot"].includes(id))
+  rest.splice(rest.indexOf("custom") + 1, 0, "chatgpt")
+  rest.splice(rest.indexOf("google") + 1, 0, "github-copilot")
+  return rest
+})()
 export const plain = (line: Line) => line.map((span) => span.text).join("")
 
 /** A provider as `providers.list` reports it. */

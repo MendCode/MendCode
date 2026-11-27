@@ -10,7 +10,7 @@ import { CONNECT_PRESETS, presetOf } from "../src/view/provider-presets"
 import { renderProvidersPage } from "../src/view/providers-page"
 import { textWidth } from "../src/view/wrap"
 import { catalogHarness } from "./catalog-harness"
-import { plain, providersHarness, REPORT } from "./providers-harness"
+import { plain, providersHarness, REPORT, LEGACY_CHOICES } from "./providers-harness"
 
 const dirs: string[] = []
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
@@ -20,15 +20,15 @@ const report = { ...REPORT, models: [...REPORT.models, ...ZEN_MODELS.map((model)
 
 describe("B10.15 OpenCode Zen connection", () => {
   test("appends Zen without moving existing shortcuts and keeps native and CLI presets aligned", () => {
-    expect(CONNECT_CHOICES.slice(0, 21)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba"])
-    expect(CONNECT_CHOICES[21]).toBe("opencode")
+    expect(LEGACY_CHOICES.slice(0, 21)).toEqual(["openai", "anthropic", "openrouter", "vercel", "groq", "deepseek", "ollama", "lmstudio", "custom", "chatgpt", "google", "github-copilot", "azure", "amazon-bedrock", "google-vertex", "google-vertex-anthropic", "xai", "mistral", "deepinfra", "perplexity", "alibaba"])
+    expect(LEGACY_CHOICES[21]).toBe("opencode")
     const { id: _id, ...preset } = presetOf("opencode")!
     const { models: _models, defaultEnabled, ...native } = PROVIDER_PRESETS.opencode!
     expect(preset).toEqual(native)
     expect(defaultEnabled).toBe(false)
     expect(CONNECT_PRESETS[19]!.id).toBe("opencode")
     for (const alias of ["opencode", "OpenCode Zen", "zen", "OpenCode/Zen"]) expect(createConnectState(alias).target).toBe("opencode")
-    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id)
+    for (const [index, id] of CONNECT_CHOICES.slice(0, 9).entries()) expect(connectKey(createConnectState(), String(index + 1)).state.target).toBe(id === "claude-code" ? undefined : id)
   })
 
   test("app saves a masked token once, loads the catalog before testing and exposes models", async () => {

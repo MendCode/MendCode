@@ -57,7 +57,7 @@ export function createImageApi(input: {
         base = (cfg.base_url ?? credentials.baseUrl).replace(/\/+$/, "")
       }
     } catch {
-      return { ok: false, message: "Codex login unavailable or expired; run codex login or refresh with codex" }
+      return { ok: false, message: "ChatGPT sign-in unavailable or expired; sign in with /connect chatgpt" }
     }
     const secrets = [...Object.values(headers), ...Object.values(headers).map((value) => value.replace(/^Bearer\s+/i, ""))]
     const operation = request.references.length ? "edits" : "generations"
