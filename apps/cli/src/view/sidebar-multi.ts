@@ -4,7 +4,7 @@ import type { ImagePlacement } from "../ui/image-layer"
 import { botIcon, type BotIcon, type IconFaces } from "./bot-icon"
 import { fit, spread } from "./deck"
 import { relativeTime, truncateEnd } from "./session-list"
-import { labelSpans, rowLabel, sessionActivityAt, sessionOrderAt } from "./session-label"
+import { hubBadge, labelSpans, rowLabel, sessionActivityAt, sessionOrderAt } from "./session-label"
 import { ICON_SIDEBAR_WIDTH, markSymbol, projectSessions, restingWorkflow, SIDEBAR_WIDTH, sessionMark, waitsOnYou, type SessionMark } from "./sidebar"
 import { agentsSpans, elapsedLabel, isCompacting, prSpans } from "./sidebar-marks"
 import { FRESH_MS, rankProjects, type SidebarProjectsFrom } from "./sidebar-projects"
@@ -19,7 +19,7 @@ import { lineWidth, wrap } from "./wrap"
  *
  * Every row that can be picked has an id: a session's own id, `group:<directory>` or `bot:<name>`.
  */
-export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting" | "named" | "createdAt">> & { /** A bot's chat known only from the bot list: where it stands in the order (see `sessionOrderAt`). */ orderAt?: number | undefined }
+export type MultiSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt" | "directory"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "lastSeq" | "agent" | "model" | "since" | "pending" | "pendingKind" | "origin" | "lastHumanAt" | "agents" | "compacting" | "named" | "createdAt" | "hub">> & { /** A bot's chat known only from the bot list: where it stands in the order (see `sessionOrderAt`). */ orderAt?: number | undefined }
 
 /**
  * The rows held still while the pointer or the selection is in the list (docs/sidebar.md "A list that holds still"). The first
@@ -338,7 +338,7 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
       const pr = session.lifecycle?.pr
       // Compacting takes the time's place, and the sub-agents at work follow it (`↳2`), as in the one-folder list.
       const clock: Span = isCompacting(session) ? { text: "compacting", fg: "info" } : { text: age, fg: "muted" }
-      const metaOf = (withNumber: boolean): Line => [clock, ...agentsSpans(session, input.ascii), ...(pr ? prSpans(pr, withNumber) : [])]
+      const metaOf = (withNumber: boolean): Line => [clock, ...hubBadge(session), ...agentsSpans(session, input.ascii), ...(pr ? prSpans(pr, withNumber) : [])]
       const used = indent.length + 2 + room
       // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
       const meta = pr && inner - used - lineWidth(metaOf(true)) - 2 < 10 ? metaOf(false) : metaOf(true)
@@ -496,7 +496,9 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
           const holdsCurrent = list.some((session) => session.sessionId === input.current)
           const drawn = new Set(rows.map((session) => session.sessionId))
           // The sessions that work or wait without a row of their own (folded, or past the preview) are counted here, never added as rows.
-          const right: Line = [...headerCount(list.filter((session) => ownBusy(session) && !drawn.has(session.sessionId)).length, list.length), ...plus]
+          // A project that holds chats the hub runs says so after its count, with the hub's name.
+          const hubChat = list.find((session) => session.hub)
+          const right: Line = [...(hubChat ? hubBadge(hubChat) : []), ...headerCount(list.filter((session) => ownBusy(session) && !drawn.has(session.sessionId)).length, list.length), ...plus]
           push(spread([{ text: `${open ? (input.ascii ? "v" : "▾") : (input.ascii ? ">" : "▸")} `, fg: "muted" }, { text: truncateEnd(labels.get(directory) ?? baseName(directory), inner - lineWidth(right) - 4), fg: "text", bold: holdsCurrent || id === picked }], right, inner), id, undefined, { col: 0, open }, { holds: !open && holdsCurrent, plus: true })
         }
         if (open) {

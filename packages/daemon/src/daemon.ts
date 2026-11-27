@@ -2223,7 +2223,9 @@ export async function startDaemon(options: DaemonOptions) {
       quietEmpties.delete(sessionId)
     }
     const queued = actors.get(sessionId)?.snapshot().queue.length
-    activity.push({ sessionId, directory: info.directory, title: info.title, state, updatedAt: info.updatedAt, archivedAt: info.archivedAt, lifecycle: lifecycleOf(store, sessionId), ...(queued ? { queued } : {}), ...(draft !== undefined ? { draft } : {}), ...liveInfo(sessionId) }, { force })
+    // A chat the hub runs has no actor here: whoever asks, its state is what its copied events say.
+    if (syncHubOf?.(sessionId)) state = mirrorForeground(sessionId)
+    activity.push({ sessionId, directory: info.directory, title: info.title, state,updatedAt: info.updatedAt, archivedAt: info.archivedAt, lifecycle: lifecycleOf(store, sessionId), ...(queued ? { queued } : {}), ...(draft !== undefined ? { draft } : {}), ...liveInfo(sessionId) }, { force })
   }
   const scheduler = createJobScheduler({ clock, scope: root.child("jobs"), sink: globalSink, ids })
 
@@ -3871,9 +3873,18 @@ export async function startDaemon(options: DaemonOptions) {
   /** Set once sync has loaded: a prompt to a session another machine owns is refused before it is queued, with that machine's name. */
   let syncGuard: import("./sync").Sync["guard"] | undefined
   let syncRoute: import("./sync").Sync["route"] | undefined
+  /** Set with `syncRoute`: the hub's name and folder of a chat the hub owns, which lists and the footer show. */
+  let syncHubOf: import("./sync").Sync["hubOf"] | undefined
+  /**
+   * What a chat the hub runs is doing, read from its copied events (this machine has no actor for it): an open approval or question
+   * waits, a turn without its end is running. The same states a local chat shows, so lists and the footer treat both alike.
+   */
+  const mirrorForeground = (id: SessionId): ForegroundState => store.pendingRequestsOf(id).length ? "waiting_approval" : store.lastTurnStatus(id) === "running" ? "generating" : "idle"
+  const foregroundOf = (id: SessionId): ForegroundState | undefined => syncHubOf?.(id) ? mirrorForeground(id) : actors.get(id)?.snapshot().foreground
   const syncService = () => sync ??= import("./sync").then(({ createSync }) => {
     const service = createSync(syncPorts())
     syncGuard = service.guard
+    syncHubOf = service.hubOf
     syncRoute = service.route
     return service
   })
@@ -3889,7 +3900,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
     },
     observe: (listener) => { sessionObservers.push(listener) },
-    changed: (id) => publishActivity(id, "idle", true),
+    changed: (id) => publishActivity(id, mirrorForeground(id), true),
     release: (id) => {
       if (actors.get(id)?.snapshot().turnId) return
       actors.delete(id)
@@ -4056,7 +4067,7 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
-  const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, held: (id) => { const snapshot = actors.get(id)?.snapshot(); /* No actor yet: a stored queue is restored held (createSessionActor), so it waits for the user. */ return snapshot === undefined || snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
+  const sessionAutomation = createSessionAutomation({ store, foreground: foregroundOf, held: (id) => { const snapshot = actors.get(id)?.snapshot(); /* No actor yet: a stored queue is restored held (createSessionActor), so it waits for the user. */ return snapshot === undefined || snapshot.held && !snapshot.paused && snapshot.turnId === undefined }, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
   const loopControl = async (command: Parameters<ReturnType<typeof import("./loop-control").createLoopControl>>[0]) => {
     const { createLoopControl } = await import("./loop-control")
     return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)
@@ -6280,7 +6291,7 @@ export async function startDaemon(options: DaemonOptions) {
         const listed = sessionAutomation.list(command)
         // The unsent drafts, in one query, so a list can label an untitled session; whoever may not call `draft.get` (a read-only token) does not get them here.
         const heads = connection.peer?.readOnly ? new Map() : store.drafts.heads(listed.map((summary) => summary.sessionId))
-        const sessions = listed.map((summary) => ({ ...summary, ...liveInfo(summary.sessionId), ...(heads.has(summary.sessionId) ? { draft: heads.get(summary.sessionId) } : {}) }))
+        const sessions = listed.map((summary) => ({ ...summary, ...liveInfo(summary.sessionId), ...(syncHubOf?.(summary.sessionId) ?? {}), ...(heads.has(summary.sessionId) ? { draft: heads.get(summary.sessionId) } : {}) }))
         return reply(connection, command.id, { ok: true, result: { sessions } })
       }
       case "session.get":

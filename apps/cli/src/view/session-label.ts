@@ -92,3 +92,16 @@ export function withPushedDraft(session: SessionSummary, pushed: SessionDraft | 
   const { draft: _old, ...rest } = session
   return pushed === null ? rest : { ...rest, draft: pushed }
 }
+
+/** A chat the sync hub owns and runs (its copy here shows the mapped folder): ` @name` after the age, so no list reads it as a local chat. */
+export const hubBadge = (session: { hub?: string | undefined }): Span[] => session.hub ? [{ text: ` @${truncateEnd(session.hub, 10)}`, fg: "info" }] : []
+
+/**
+ * Where a chat's folder reads in the footer and the top bar: a hub's chat shows the hub's own folder as `<hub>:~/projects/app` (the
+ * folder here is only the mapped copy and runs nothing); a local chat shows `local`.
+ */
+export function chatFolder(session: { hub?: string | undefined; hubDirectory?: string | undefined } | undefined, local: string | undefined): string | undefined {
+  if (!session?.hub) return local
+  const folder = session.hubDirectory?.replace(/^\/(?:home|Users)\/[^/]+(?=\/|$)/, "~")
+  return folder ? `${session.hub}:${folder}` : `${session.hub}:`
+}
