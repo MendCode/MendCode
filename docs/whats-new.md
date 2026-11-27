@@ -41,7 +41,9 @@ Run `/whatsnew` without arguments to open a page with two parts:
 | **For you** | At most five picks from one model call, each one line on the change and why it fits you. |
 | **The changes since your last look** | Changes grouped by version (`Unreleased · in <build>` for a nightly or local build). With nothing new, or on a first look, it takes the newest section. |
 
-The call carries one line per change, at most 80 lines; the page says how many more were left out.
+The page lists at most 8 changes, grouped New, Fixed, Changed, one line each, and ends with `more: N other changes` pointing to `/whatsnew all`. The call carries one line per change, at most 80 lines.
+
+The answer is saved in the data directory (`whats-new-cache.json`) under the installed version and a hash of the newest changelog section. Running `/whatsnew` again, in any terminal, reuses it with no model call and the page says `saved summary`; a new version or changed changelog content asks again. Your settings checks run again on every use. If the model is unavailable, the page shows the error and the top changes without picks.
 
 While the call runs, the page shows the model and estimated tokens. When it ends, it shows the tokens the provider counted (input and output) and the cost when known.
 
@@ -85,7 +87,7 @@ The page follows the standard [pages](layout.md#pages-one-set-of-keys) keys:
 | Settings | The settings in effect with secrets hidden, as `mendcode_settings get` shows them. |
 | Recent sessions | The titles of the project's recent sessions. |
 
-Those sources, the copyable prompt and the list of changes go to the provider of the model the call runs on, and nowhere else. Nothing is stored.
+Those sources, the copyable prompt and the list of changes go to the provider of the model the call runs on, and nowhere else. Only the model's answer is stored (see above); the sources are not.
 
 A remote terminal cannot ask; `/whatsnew all` still works there.
 

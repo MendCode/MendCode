@@ -4471,7 +4471,7 @@ export async function startDaemon(options: DaemonOptions) {
         const saved = store.settings.get()
         if (!featureOn(saved, "whats_new", { safeMode: options.safeMode })) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew is off in this tier (/tier whats_new on)" })
         if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew needs the native engine; /whatsnew all lists the changes" })
-        const { checkSuggestions, parseWhatsNew, whatsNewContext, whatsNewRequest, WHATS_NEW_TIMEOUT_MS } = await import("./whats-new")
+        const { checkSuggestions, parseWhatsNew, readWhatsNewCache, whatsNewContext, whatsNewRequest, writeWhatsNewCache, WHATS_NEW_TIMEOUT_MS } = await import("./whats-new")
         const directory = command.directory
         const memoryOn = memorySettings(saved, directory).memoryEnabled !== false
         const context = whatsNewContext({
@@ -4483,11 +4483,15 @@ export async function startDaemon(options: DaemonOptions) {
         const roles = rolesFor(saved, directory)
         const session = command.sessionId && store.hasSession(command.sessionId) ? store.sessionModel(command.sessionId) : undefined
         const model = resolveModel({ role: "aside", session, roles, catalog })
-        const shown = { model: model.model, estimate: request.estimate, memories: context.memories.length, sessions: context.sessions.length }
+        const savedAnswer = command.cacheKey ? readWhatsNewCache(options.dir, command.cacheKey) : undefined
+        const shown = { model: savedAnswer?.model ?? model.model, estimate: request.estimate, memories: context.memories.length, sessions: context.sessions.length, ...(savedAnswer ? { cached: true } : {}) }
         if (command.dryRun) return reply(connection, command.id, { ok: true, result: shown })
+        // The same version and changelog content were summarized before: no model call (docs/whats-new.md).
+        if (savedAnswer) return reply(connection, command.id, { ok: true, result: { ...shown, suggestions: checkSuggestions(parseWhatsNew(savedAnswer.text), { settings: saved, check: (patch) => store.settings.check(patch) }) } })
         let usage: BudgetUsage | undefined
         try {
           const text = redactSecrets(await completeBudgeted({ system: request.system, prompt: request.prompt, signal: AbortSignal.timeout(WHATS_NEW_TIMEOUT_MS), ...(options.models?.selectable ? { model } : {}), auxiliary: { role: "whatsNew", directory, ...(command.sessionId ? { sessionId: command.sessionId } : {}) }, onUsage: (value) => { usage = value } })).text
+          if (command.cacheKey && text.trim()) writeWhatsNewCache(options.dir, { key: command.cacheKey, model: model.model, text })
           const suggestions = checkSuggestions(parseWhatsNew(text), { settings: saved, check: (patch) => store.settings.check(patch) })
           const cost = usage ? usage.costMicros ?? budgets.price(usage) : undefined
           return reply(connection, command.id, { ok: true, result: { ...shown, suggestions, ...(usage ? { usage: { input: usage.input, output: usage.output, ...(cost !== undefined ? { costMicros: cost } : {}) } } : {}) } })

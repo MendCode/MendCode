@@ -74,6 +74,29 @@ describe("whatsnew.ask", () => {
     expect(h.store.usageAuxiliary.report({ from: "0000-01-01", to: "9999-12-31" }).some((row) => row.role === "whatsNew")).toBe(true)
   })
 
+  test("the same version and changelog content ask the model once; another content or version asks again; an answer is reused with today's checks", async () => {
+    let calls = 0
+    const h = await boot({
+      complete: async () => { throw new Error("the counted path is used") },
+      setupComplete: async () => { calls++; return { text: "- Footer packs fit you => settings {\"outputStyle\": \"terse\"}", usage: { provider: "fake", model: "script-1", input: 10, output: 5 } } },
+    })
+    harnesses.push(h)
+    const ask = { type: "whatsnew.ask", directory: h.project, version: "0.0.3", changes: CHANGES, cacheKey: "0.0.3:abc" } as const
+    expect(await h.client.send(ask)).toMatchObject({ ok: true, result: { suggestions: [{ text: "Footer packs fit you" }] } })
+    expect(calls).toBe(1)
+    // The terminal sends fewer changes the second time (the first look is over): the key, not the text, decides.
+    const again = await h.client.send({ ...ask, changes: "- [v0.0.3] One line" })
+    expect(again).toMatchObject({ ok: true, result: { cached: true, suggestions: [{ text: "Footer packs fit you", patch: { outputStyle: "terse" } }] } })
+    expect(await h.client.send({ ...ask, dryRun: true })).toMatchObject({ ok: true, result: { cached: true } })
+    expect(calls).toBe(1)
+    await h.client.send({ ...ask, cacheKey: "0.0.3:def" })
+    expect(calls).toBe(2)
+    await h.client.send({ ...ask, version: "0.0.4", cacheKey: "0.0.4:def" })
+    expect(calls).toBe(3)
+    await h.client.send({ type: "whatsnew.ask", directory: h.project, version: "0.0.4", changes: CHANGES })
+    expect(calls).toBe(4)
+  })
+
   test("is refused in minimalist and without a model", async () => {
     const h = await boot({ complete: async () => "never" })
     harnesses.push(h)
