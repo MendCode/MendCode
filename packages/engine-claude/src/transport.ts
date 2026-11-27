@@ -22,6 +22,22 @@ export function claudeCacheEnv(settings: { claudeCacheTtl?: boolean | undefined;
   return { CLAUDE_CODE_PROMPT_CACHE_TTL: "1h", CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: "1h" }
 }
 
+/** The longest wait a Claude Code timer accepts (a 32-bit setTimeout), about 24.8 days: past it the timer fires at once. */
+export const CLAUDE_MAX_TIMEOUT_MS = 2_147_483_647
+
+/**
+ * `BASH_MAX_TIMEOUT_MS` for the Claude Code process: how long its Bash may run in the background before it stops it ("stopped after
+ * reaching its background time limit"). With no `processLimits.lifetimeMinutes` it is the largest value Claude Code takes, so a command
+ * runs until it ends or is stopped; with one, that many minutes. Nothing when the user already set the variable in the daemon's
+ * environment. `BASH_DEFAULT_TIMEOUT_MS` is left alone: a foreground command keeps its default.
+ */
+export function claudeBackgroundEnv(options: { lifetimeMinutes?: number | undefined; inherited?: string | undefined }): Record<string, string> | undefined {
+  if (options.inherited) return undefined
+  const minutes = options.lifetimeMinutes
+  const ms = minutes !== undefined && minutes > 0 ? Math.min(Math.round(minutes * 60_000), CLAUDE_MAX_TIMEOUT_MS) : CLAUDE_MAX_TIMEOUT_MS
+  return { BASH_MAX_TIMEOUT_MS: String(ms) }
+}
+
 /** The child's environment: the daemon's own, with `extra` on top. Undefined (inherit) when there is nothing to add. */
 export function claudeProcessEnv(extra: Record<string, string> | undefined, base: Record<string, string | undefined> = process.env): Record<string, string | undefined> | undefined {
   return extra && Object.keys(extra).length ? { ...base, ...extra } : undefined

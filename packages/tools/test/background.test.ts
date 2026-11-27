@@ -67,6 +67,9 @@ describe("background tasks", () => {
     const none = registry({})
     const free = none.tasks.forSession("s1").start({ command: "sleep 30", cwd: tempDir() })
     expect(free.ok && free.task.status).toBe("running")
+    await Bun.sleep(400)
+    expect(none.exits).toEqual([])
+    expect(free.ok && none.tasks.forSession("s1").list().find((task) => task.id === free.task.id)?.status).toBe("running")
     let capMs: number | undefined = 120
     const exits: BackgroundTaskInfo[] = []
     const capped = createBackgroundTasks({ lifetimeMs: () => capMs, onExit: (_, task) => void exits.push(task) })

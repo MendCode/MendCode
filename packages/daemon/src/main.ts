@@ -674,7 +674,7 @@ export const daemon = await startDaemon({
           usesClaude: (sessionId, override) => modelEngine(turnModel(sessionId, override), modelCatalog) === "claude",
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
-            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits, claudeContextArgs } = await import("@mendcode/engine-claude")
+            const { createClaudeEngine, claudeCacheEnv, claudeBackgroundEnv, claudeRunLimits, claudeContextArgs } = await import("@mendcode/engine-claude")
             // `claudeContext` (lean when unset): read when each process starts, so a change takes effect with the session's next Claude Code process.
             const lean = () => claudeContextArgs(store.settings.get().claudeContext ?? "lean")
             const harnessText = await harnessSystem()
@@ -747,7 +747,9 @@ export const daemon = await startDaemon({
                 const compact = claudeCompactEnv({ model: model.model, settings, on: featureOn(settings, "claude_compact", { safeMode }) })
                 const limited = claudeRunLimits(runLimits.get(sessionId)).env
                 const leanEnv = lean().env
-                return cache || subagent || compact || limited || leanEnv ? { ...cache, ...subagent, ...compact, ...limited, ...leanEnv } : undefined
+                // Claude Code's background Bash is not cut by default: its cap follows `processLimits.lifetimeMinutes` (none unset), unless the user's own environment sets one.
+                const background = claudeBackgroundEnv({ lifetimeMinutes: settings.processLimits?.lifetimeMinutes, inherited: process.env.BASH_MAX_TIMEOUT_MS })
+                return { ...cache, ...subagent, ...compact, ...limited, ...leanEnv, ...background }
               },
               environment: credentialsFor,
               readBlob: async (ref) => new Uint8Array(store.readBlob(ref.sha256)),
