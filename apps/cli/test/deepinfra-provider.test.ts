@@ -55,6 +55,8 @@ describe("B10.08 DeepInfra terminal", () => {
     await h.type("r")
     expect(h.commands("providers.refresh")).toHaveLength(1)
     await h.type("m")
+    // The page opens when the model list arrives: wait for that, not for a fixed time.
+    for (let waited = 0; h.app.page !== "model" && waited < 5_000; waited += 10) await Bun.sleep(10)
     expect(h.app.page).toBe("model")
     await h.type("/")
     expect(h.text()).toContain("DeepSeek V4 Flash")

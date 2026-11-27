@@ -54,7 +54,7 @@ Pick the smallest step that does what you want. Each one leaves what is already 
 | You want | Run | What happens |
 |---|---|---|
 | No configuration copied, sessions still sync | `mendcode sync follow off` | The parity check and its `--apply` stop running on their own. Sessions, memories and settings keep syncing. |
-| No memories or settings copied | `mendcode sync enable REMOTE --no-memories --no-settings` | Rewrites the sync settings with both skipped. Re-enabling turns `--follow` off unless you pass it again. |
+| No memories or settings copied | `mendcode sync enable REMOTE --no-memories --no-settings` | Rewrites the whole sync configuration with both skipped. Repeat every option you had set (`--path-map`, `--sync-token-file`, `--follow`): enabling again drops the ones you leave out. |
 | All sync off | `mendcode sync disable` | Removes the sync settings from `sync.json`. Nothing more is copied in either direction. Copies already here stay here. |
 | Also stop the hub accepting this device | On the hub: `mendcode remote token revoke DEVICE-sync --dir DATA` | Revokes the sync token. Use the name you gave it, `<device>-sync` by default. A `--run` token is revoked the same way. |
 

@@ -21,6 +21,8 @@ export type PickRequest = {
   base: string
   home: string
   remote: boolean
+  /** The listed folders that hold a chat the sync hub owns: only these can be the hub's projects (a folder deleted or moved on this machine is not). */
+  hubFolders?: ReadonlySet<string>
   /** The name of the sync hub this machine works with, asked only when some listed folder is not on this machine. */
   hubName?(): Promise<string | undefined>
   start(directory: string): Promise<void>
@@ -92,8 +94,22 @@ export function createNewChatPicker(ctx: AppContext) {
     }
   }
 
+  /** The newest rebuild of the rows. A key or a click waits for it (`settled`): the rows of an older query are never acted on. */
+  let refreshing: Promise<void> = Promise.resolve()
+  async function settled() {
+    for (let current = refreshing; ; current = refreshing) {
+      await current
+      if (current === refreshing) return
+    }
+  }
+
   /** Rebuilds the rows for the field; a typed path waits for its directory, and a newer key makes the older answer void. */
-  async function refresh(focus?: string) {
+  function refresh(focus?: string) {
+    const run = rebuild(focus)
+    refreshing = run
+    return run
+  }
+  async function rebuild(focus?: string) {
     const from = request
     if (!from) return
     const mine = ++generation
@@ -125,7 +141,8 @@ export function createNewChatPicker(ctx: AppContext) {
   /** Marks the listed folders that are not on this machine with the hub's name: asked once the picker is up, and only when one is missing. */
   async function markHub(from: PickRequest) {
     if (from.remote || !from.hubName) return
-    const missing = (await Promise.all(from.folders.map(async (folder) => await stat(folder).then(() => undefined, () => folder)))).filter((folder): folder is string => folder !== undefined)
+    const candidates = from.hubFolders ? from.folders.filter((folder) => from.hubFolders!.has(folder)) : from.folders
+    const missing = (await Promise.all(candidates.map(async (folder) => await stat(folder).then(() => undefined, () => folder)))).filter((folder): folder is string => folder !== undefined)
     if (!missing.length || request !== from) return
     const name = await from.hubName().catch(() => undefined)
     if (!name || request !== from) return
@@ -167,11 +184,12 @@ export function createNewChatPicker(ctx: AppContext) {
    * `+ create folder` row asks once more, and makes the folder (with its parents) only on the second Enter. With no row, a remote
    * terminal (which reads no disk) starts in the typed absolute path.
    */
-  async function start(index: number) {
+  async function start() {
+    await settled()
     const from = request
     if (!from) return
     const typed = query.trim()
-    const choice = choices[index]
+    const choice = choices[selected]
     if (choice?.kind === "browse") return void await setQuery(choice.typed ?? "~/")
     if (choice?.kind === "create") {
       if (confirming !== choice.directory) {
@@ -193,7 +211,15 @@ export function createNewChatPicker(ctx: AppContext) {
   /** A click on a row. */
   async function activate(id: string) {
     const index = id.startsWith("pick:") ? Number(id.slice("pick:".length)) : Number.NaN
-    if (Number.isInteger(index) && choices[index]) await start(index)
+    const row = choices[index]
+    if (!Number.isInteger(index) || !row) return
+    await settled()
+    // The rows were rebuilt for a newer query while the click waited: the row that was clicked is no longer there.
+    const now = choices[index]
+    if (!now || now.kind !== row.kind || now.directory !== row.directory) return
+    // The clicked row becomes the picked one first, so a creation row's confirmation (drawn only on the picked row) is the one the next click confirms.
+    selected = index
+    await start()
   }
 
   /** What Tab and `→` put in the field to go into a row: a directory's path, the root of `Browse folders…`; nothing for a hub folder or a folder to create. */
@@ -203,13 +229,16 @@ export function createNewChatPicker(ctx: AppContext) {
   async function key(key: string): Promise<boolean> {
     if (!request) return false
     if (key.startsWith("\x1b[<")) return false
+    // Rows of an older query (a pasted path still being read) are never acted on: the key waits for the newest rows.
+    await settled()
+    if (!request) return true
     const arrow = APPLICATION_ARROWS[key] ?? key
     const waiting = confirming !== undefined
     if (key !== "\r") confirming = undefined
     if (key === "\x1b" || key === "\x03") { if (waiting) requestFrame(); else close(true) }
     else if (arrow === "\x1b[A" || key === "\x10") selected = choices.length ? (selected - 1 + choices.length) % choices.length : 0
     else if (arrow === "\x1b[B" || key === "\x0e") selected = choices.length ? (selected + 1) % choices.length : 0
-    else if (key === "\r") await start(selected)
+    else if (key === "\r") await start()
     else if (key === "\t") {
       // Tab completes the typed name, then walks into the picked directory, as it does after `/cd`; on a known folder it puts its path in the field to go on from.
       const choice = choices[selected]

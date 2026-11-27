@@ -325,6 +325,18 @@ describe("a merged or closed PR settles its session", () => {
   })
 })
 
+describe("the pushed hub labels reach the list", () => {
+  test("a chat the push introduces, or one the list already holds, takes the hub's name and folder; a push without them keeps them", () => {
+    const push = (extra: Record<string, unknown>) => ({ type: "session.activity", sessionId: "h", directory: "/d", title: "Hub chat", state: "idle", updatedAt: NOW, ...extra }) as never
+    const added = mergeActivity([], push({ hub: "vps", hubDirectory: "/srv/app" }), { cap: 50, keep: "x" })
+    expect(added[0]).toMatchObject({ sessionId: "h", hub: "vps", hubDirectory: "/srv/app" })
+    const known = mergeActivity([row("h", "Hub chat")] as never, push({ hub: "vps", hubDirectory: "/srv/app" }), { cap: 50, keep: "x" })
+    expect(known[0]).toMatchObject({ hub: "vps", hubDirectory: "/srv/app" })
+    expect(mergeActivity(added, push({}), { cap: 50, keep: "x" })[0]).toMatchObject({ hub: "vps", hubDirectory: "/srv/app" })
+    expect(createActivityMemory().changed(push({ hub: "vps" }))).toBe(true)
+  })
+})
+
 describe("the pushed live detail reaches the list", () => {
   test("since and the kind of request follow each push and go with the turn", () => {
     const base = [row("a", "One")] as never

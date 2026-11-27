@@ -307,6 +307,13 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     // A session made on this machine is never overwritten by a copy.
     if (!row && exists) return 0
     if (!row && !tail && (summary.updatedAt ?? 0) < ports.now() - MIRROR_DAYS * 86_400_000) return 0
+    // The hub's change feed says where the chat is on the hub, even when no event is new: the copy keeps that folder and the lists and the footer follow it.
+    // (A live pull names the folder it guesses from this machine's side, so only the feed is authoritative.)
+    if (row && row.role === "mirror" && !tail && summary.directory && row.hubDir !== summary.directory) {
+      row = { ...row, hubDir: summary.directory }
+      save(row)
+      ports.changed(summary.sessionId)
+    }
     let stored = 0
     let after = row?.remoteSeq ?? 0
     let carry: SessionEvent[] = []
@@ -342,7 +349,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
           ports.release(summary.sessionId)
           ports.changed(summary.sessionId)
         }
-        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(summary.directory ? { hubDir: summary.directory } : {}) }
+        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(!tail && summary.directory ? { hubDir: summary.directory } : {}) }
         if (skippedBlobs) row.note = `${skippedBlobs} attachment${skippedBlobs === 1 ? "" : "s"} over 8 MiB stay on ${hub}`
         save(row)
         after = lastSeq
@@ -446,7 +453,11 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       const page = await call({ op: "changes", after: hubDirCursor }) as { changes: Summary[]; cursor: number; hasMore: boolean }
       for (const change of page.changes) {
         const row = rows.get(change.sessionId)
-        if (!change.deleted && change.directory && row?.role === "mirror" && !row.hubDir) save({ ...row, hubDir: change.directory })
+        if (!change.deleted && change.directory && row?.role === "mirror" && !row.hubDir) {
+          save({ ...row, hubDir: change.directory })
+          // A terminal that listed the copy before this round shows the hub's folder at once.
+          ports.changed(change.sessionId)
+        }
       }
       if (!page.hasMore) { hubDirCursor = undefined; return }
       hubDirCursor = page.cursor
@@ -559,7 +570,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   function schedule() {
     if (stopped) return
     if (live.size) startTail()
-    timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, liveTick()) : delay)
+    // A live chat quickens the rounds while the hub answers; while it does not, the round waits its back-off (it doubles up to RECONNECT_MAX_MS) instead of reconnecting three times a second.
+    timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, status.connected ? liveTick() : RECONNECT_MAX_MS) : delay)
     ;(timer as { unref?(): void }).unref?.()
   }
   /** One round now (or the one already running); a failure backs off. */
@@ -597,7 +609,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : command.type === "session.cd" ? "a directory change" : command.type === "session.dirs" ? "the folder list" : command.type === "request.resolve" ? "an answer" : "this change to the queue"
     return exclusive(async () => {
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
-      const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare
+      // The model of a hub chat is the hub's: the one this device picked is not sent, and the hub refuses a prompt that names one.
+      const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare.type === "user.submit" && bare.selection?.model ? { ...bare, selection: bare.selection.agent ? { agent: bare.selection.agent } : undefined } : bare
       // A connection the hub's restart ended is found out by this send: it reconnects once before the hub counts as away.
       for (let attempt = 0; ; attempt++) {
         try {
@@ -614,7 +627,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
           if (attempt === 0 && bare.type !== "session.create") continue
           // What belongs to an existing chat waits and goes out, in order, when the link is back.
           if (HUB_COMMANDS.has(bare.type) && held.length < MAX_HELD) {
-            held.push({ command: bare as Command, at: ports.now() })
+            held.push({ command: (bare.type === "user.submit" ? outgoing : bare) as Command, at: ports.now() })
             return { ok: true as const, result: { held: true } }
           }
           return { ok: false as const, code: "forbidden", message: unreachable(what) }
@@ -722,7 +735,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     if (state.sessionHead(sessionId)!.last_seq > current.remoteSeq) throw new SyncRefusal("busy", "not every turn could be copied yet; try again")
     await call({ op: "lease", action: "release", sessionId, epoch: current.epoch }, false)
     const head = state.sessionHead(sessionId)!
-    save({ ...current, role: "mirror", epoch: 0, leaseUntil: 0, meta: JSON.stringify(metaOf(head)) })
+    save({ ...current, role: "mirror", epoch: 0, leaseUntil: 0, hubDir: projects.toRemote(head.directory), meta: JSON.stringify(metaOf(head)) })
+    ports.changed(sessionId)
     return { sessionId, owner: hub }
   }
 

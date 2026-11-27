@@ -22,6 +22,7 @@ export function syncRunRefusal(input: { command: Command; sessionDirectory(sessi
     if (!input.sessionDirectory(command.sessionId) || !input.isRoot(command.sessionId)) return "[SYNC]: no such chat on this machine"
   }
   if (command.type === "user.submit" && command.selection?.agent) return "[SYNC]: a prompt from a device cannot pick an agent"
+  if (command.type === "user.submit" && command.selection?.model) return "[SYNC]: a prompt from a device runs on the model of the chat on this machine and cannot pick another"
   // Images, PDFs and pasted text come with the prompt: the device uploaded them first, so they must be here whole.
   if (command.type === "user.submit" && command.attachments.some((ref) => !input.blobStored(ref.sha256, ref.bytes))) return "[SYNC]: an attachment of this prompt was not uploaded first"
   if (command.type === "request.resolve" && command.decision.kind === "approve" && (command.decision.remember || command.decision.memoryText || command.decision.memoryAlways)) return "[SYNC]: an approval from a device cannot save rules or memories"

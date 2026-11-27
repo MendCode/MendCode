@@ -323,3 +323,13 @@ describe("subjectOf", () => {
     expect(subjectOf({ item: "x".repeat(300) })!.length).toBeLessThanOrEqual(120)
   })
 })
+
+describe("saving a run under a name", () => {
+  test("the save command takes every name the terminal accepts, digits and dots included, and refuses the rest", () => {
+    const save = (name: string) => Command.safeParse({ id: id("command"), clientId, type: "workflow.script", workflowId: id("workflow"), action: "save", name }).success
+    expect(save("2024.audit")).toBe(true)
+    expect(save("audit-all")).toBe(true)
+    expect(save("../escape")).toBe(false)
+    expect(save("Upper")).toBe(false)
+  })
+})

@@ -17,7 +17,7 @@ const TOKEN = "T".repeat(8) + "0123456789abcdefghijklmnopqrstuvwxyz"
 
 /** A pretend Linux host: it answers the scripts of a setup run from its own small state and records what ran. */
 function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; userspace?: boolean; noHttps?: boolean; noOpenssl?: boolean; tsPath?: string; tsSocket?: string; certFails?: string; repos?: string; missing?: string[] } = {}) {
-  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, localOnly: false, acp: "", calls: [] as string[], timers: 0, scripts: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
+  const state = { version: undefined as string | undefined, tokens: new Set<string>(), remoteJson: "", installed: false, loaded: false, localOnly: false, acp: "", calls: [] as string[], timers: 0, lingers: 0, privateCa: false, scripts: [] as string[], imports: [] as string[], inputs: [] as Array<string | Uint8Array | undefined> }
   const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" })
   const run: SshRunner = async ({ script, input }) => {
     state.inputs.push(input)
@@ -28,7 +28,9 @@ function fakeHost(options: { tailscale?: boolean; os?: string; dns?: string; use
     if (script.includes("curl -fsSL")) { state.calls.push("install"); state.version = "1.2.3 (stable)"; return ok() }
     if (script.endsWith('"$MC" --version')) return ok(`${state.version}\n`)
     if (script.includes("mendcode-cert.service")) { state.timers++; return ok() }
-    if (script.includes("openssl genpkey")) { state.calls.push("private-ca"); return options.noOpenssl ? { code: 127, stdout: "", stderr: "openssl is not installed on the host" } : ok("abs=/home/u/.mendcode\nexpires=Feb  3 10:00:00 2029 GMT\n") }
+    if (script.includes("enable-linger")) { state.lingers++; return ok() }
+    if (script.includes("openssl verify")) return ok(state.privateCa ? "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n" : "")
+    if (script.includes("openssl genpkey")) { state.calls.push("private-ca"); state.privateCa = !options.noOpenssl; return options.noOpenssl ? { code: 127, stdout: "", stderr: "openssl is not installed on the host" } : ok("abs=/home/u/.mendcode\nexpires=Feb  3 10:00:00 2029 GMT\n") }
     if (script.includes("openssl is not installed")) { state.calls.push("private-ca"); return { code: 127, stdout: "", stderr: "openssl is not installed on the host" } }
     if (script.includes('cat "$D/tls/ca.pem"')) return ok("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
     if (script.includes("ts cert")) {
@@ -175,6 +177,7 @@ test("a tailnet without HTTPS certificates falls back to a private CA made on th
   expect(result.code).toBe(0)
   expect(host.state.calls).toContain("private-ca")
   expect(host.state.timers).toBe(0)
+  expect(host.state.lingers).toBe(1)
   const script = host.state.scripts.find((entry) => entry.includes("openssl genpkey"))!
   expect(script).toContain("ec_paramgen_curve:P-256")
   expect(script).toContain("DNS:vps.example.ts.net,DNS:vps,IP:100.64.0.9,IP:127.0.0.1")
@@ -187,6 +190,23 @@ test("a tailnet without HTTPS certificates falls back to a private CA made on th
   expect(out.text()).toContain("valid until Feb  3 10:00:00 2029 GMT")
   expect(out.text()).toContain("run the same `remote setup` command again")
   expect(out.text()).toContain("enable HTTPS certificates in the Tailscale admin console")
+})
+
+test("pairing with a host that uses a private CA saves the CA with the remote; a host with real certificates saves none", async () => {
+  const hostDir = temp()
+  const host = fakeHost({ noHttps: true })
+  await runSetup(command(hostDir), { ssh: () => host.run, local: fakeLocal(hostDir), out: output() })
+  const second = temp()
+  const pair = parseSetupCommand(["remote", "pair", HOST, "--ssh", "user@vps", "--dir", second, "--device", "phone-pad"], second)!
+  expect((await runSetup(pair, { ssh: () => host.run, local: fakeLocal(second), out: output() })).code).toBe(0)
+  const caFile = path.join(second, "remote", "vps.ca.pem")
+  expect(readFileSync(caFile, "utf8")).toContain("BEGIN CERTIFICATE")
+  expect(JSON.parse(readFileSync(path.join(second, "remotes.json"), "utf8")).remotes.vps).toMatchObject({ ca: caFile, tls: true })
+  const plain = fakeHost()
+  const third = temp()
+  await runSetup(command(temp()), { ssh: () => plain.run, local: fakeLocal(temp()), out: output() })
+  await runSetup(parseSetupCommand(["remote", "pair", HOST, "--ssh", "user@vps", "--dir", third, "--device", "tablet"], third)!, { ssh: () => plain.run, local: fakeLocal(third), out: output() })
+  expect(JSON.parse(readFileSync(path.join(third, "remotes.json"), "utf8")).remotes.vps.ca).toBeUndefined()
 })
 
 test("without HTTPS certificates and without openssl, setup stops and says to enable HTTPS certificates", async () => {

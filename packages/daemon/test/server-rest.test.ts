@@ -194,6 +194,12 @@ test("HTTP logging redacts opaque and short credentials in text and nested extra
   expect(logged).toContain("[redacted:secret]")
 })
 
+test("a chat bot's token is not accepted by the HTTP routes: they check no folder", async () => {
+  const h = await boot()
+  const bot = h.tokens.create({ name: "bot", botRoot: h.project }).token
+  expect((await h.request("/global/event", { token: bot })).status).toBe(401)
+})
+
 test("B82 global SSE wraps live v2 events, filters projects, and releases cancelled/revoked subscriptions", async () => {
   const h = await boot(), other = await h.register()
   const controller = new AbortController()

@@ -783,12 +783,14 @@ export function createWorkflowService(options: {
             if (run.script && action === "retry-phase") return { error: "script workflows have no static phases; retry a task" }
             const next = resetScriptHost(action === "retry-phase" ? retryPhase(run, extra.phaseId!, now, extra.reason) : retryTask(run, extra.taskId!, now, extra.reason))
             // A script agent that had finished is asked again: its journaled answer goes, so the replay waits for the new one.
+            let hostStopped = false
             if (run.script && action === "retry") {
               scripts.forgetCall(workflowId, extra.taskId!)
               // The script may already have used the old answer: it replays from its journal and waits for the new one.
-              if (run.tasks.find((task) => task.id === extra.taskId)?.state === "done") scripts.stopHost(workflowId, "an agent was restarted")
+              if (run.tasks.find((task) => task.id === extra.taskId)?.state === "done") { scripts.stopHost(workflowId, "an agent was restarted"); hostStopped = true }
             }
-            cancelTasks(run, run.tasks.filter((task) => (!next.tasks.some((entry) => entry.id === task.id) || next.tasks.find((entry) => entry.id === task.id)?.state === "pending") && (task.state === "running" || task.state === "needs_input")).map((task) => task.id))
+            // Agents the stopped script started with the old answer (a script's tasks list no `needs`) are still running: the replay asks for them again, so they end here instead of running beside their replacements.
+            cancelTasks(run, run.tasks.filter((task) => (hostStopped && task.id !== extra.taskId || !next.tasks.some((entry) => entry.id === task.id) || next.tasks.find((entry) => entry.id === task.id)?.state === "pending") && (task.state === "running" || task.state === "needs_input")).map((task) => task.id))
             return { run: change(workflowId, () => next)! }
           }
           case "approve":

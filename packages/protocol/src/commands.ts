@@ -32,7 +32,7 @@ import { LoopBudget, LoopTrigger, LoopCostBudget, LoopRubric, LoopApprovalPolicy
 import { ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule } from "./providers"
 import { BotActivity, BotCreate, BotDelete, BotDraft, BotDuplicate, BotFile, BotList, BotMemory, BotSave, MemoryLinkKind, MemoryScope, MemoryStatus, ModelChoice } from "./queries"
 import { JobType, MAX_INLINE_TEXT, PermissionMode, PROTOCOL_VERSION, QueueDelivery, ResourceMode, TurnOptions } from "./states"
-import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
+import { WORKFLOW_SCRIPT_MAX_BYTES, WorkflowDefinition, WorkflowDefinitionId, WorkflowPlanInput, WorkflowRevisionId, WorkflowName, WorkflowScriptBudget, WorkflowSlug } from "./workflows"
 import { RestWorkflowPlan } from "./workflow-http"
 import { LedgerQuery } from "./automation-ledger"
 import { CompactionOverrideInput } from "./compaction"
@@ -2062,7 +2062,7 @@ export const WorkflowScriptCommand = lazySchema(() => z.strictObject({
   workflowId: WorkflowId,
   action: z.enum(["budget", "update", "save"]),
   /** `save`: the run's script (or plan) becomes the saved workflow `workflows/<name>.js` of the user layer, runnable as `/<name>`. */
-  name: WorkflowSlug.optional(),
+  name: WorkflowName.optional(),
   budget: WorkflowScriptBudget.optional(),
   script: z.string().min(1).max(WORKFLOW_SCRIPT_MAX_BYTES).optional(),
   args: z.record(z.string(), z.unknown()).optional(),

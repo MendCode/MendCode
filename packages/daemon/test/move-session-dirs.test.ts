@@ -3,7 +3,9 @@ import { Database } from "bun:sqlite"
 import { mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { createIdFactory } from "@mendcode/protocol"
+import { createIdFactory, WorkflowPlan } from "@mendcode/protocol"
+import { openStore } from "@mendcode/store"
+import { createRun } from "@mendcode/workflows"
 import { moveStoredDirectories } from "../src/move-session-dirs"
 
 const dirs: string[] = []
@@ -44,6 +46,24 @@ test("moving a folder prefix rewrites whole path segments only, keeps a backup, 
   // Nothing left to move: no second backup is written.
   expect(moveStoredDirectories({ dir, from: "/home/dev/Code", to: "/home/dev/projects" })).toMatchObject({ total: 0 })
   expect(readdirSync(dir).filter((name) => name.includes("before-move"))).toHaveLength(1)
+})
+
+test("a workflow moves with its stored folder and its tasks' folders, not only the indexed column", () => {
+  const dir = temp()
+  const ids = createIdFactory()
+  const store = openStore({ dir })
+  const rootSessionId = ids("session")
+  store.createSession({ id: rootSessionId, directory: "/home/dev/Code/app", title: "t" })
+  const plan = WorkflowPlan.parse({ name: "ship", objective: "Say hi.", tasks: [{ kind: "agent", id: "hello", title: "Say hello", prompt: "say hi", mode: "read" }] })
+  const run = createRun({ workflowId: ids("workflow"), plan, planHash: "0".repeat(64), directory: "/home/dev/Code/app", permission: "ask", rootSessionId, at: 1_000 })
+  store.workflows.save(run)
+  store.close()
+  expect(moveStoredDirectories({ dir, from: "/home/dev/Code", to: "/home/dev/projects" })).toMatchObject({ moved: { workflows: 1 } })
+  const after = openStore({ dir })
+  try {
+    expect(after.workflows.all().map((item) => item.directory)).toEqual(["/home/dev/projects/app"])
+    expect(JSON.stringify(after.workflows.all())).not.toContain("/home/dev/Code")
+  } finally { after.close() }
 })
 
 test("a relative folder, the root and an identical pair are refused", () => {

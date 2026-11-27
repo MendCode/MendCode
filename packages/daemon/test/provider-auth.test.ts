@@ -40,6 +40,13 @@ describe("B10 protocol and daemon", () => {
     expect(auth.status("chatgpt")[0]).toMatchObject({ state: "none", source: "none" })
     expect(auth.status("chatgpt")[0]!.imported).toBeUndefined()
   })
+  test("an error of the own login is shown even when an imported login exists, as requests fail on it first", () => {
+    const dir = temp()
+    const chatgpt = { status: () => ({ provider: "chatgpt", state: "none", source: "none", error: "sign-in failed", accessTokenPresent: false, refreshTokenPresent: false, accountIdPresent: false }), stop() {} } as unknown as ReturnType<typeof createChatgptAuth>
+    const auth = createProviderAuth({ dir, providers: createProviderService({ dir, env: {} }), env: {}, chatgpt, importedLogin: () => ({ state: "valid" }) })
+    expect(auth.status("chatgpt")[0]).toMatchObject({ state: "none", error: "sign-in failed" })
+    expect(auth.status("chatgpt")[0]!.imported).toBeUndefined()
+  })
   test("a pasted sign-in address from another machine reaches the pending ChatGPT login; other providers refuse it", async () => {
     const dir = temp()
     const seen: string[] = []

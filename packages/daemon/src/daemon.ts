@@ -2226,7 +2226,7 @@ export async function startDaemon(options: DaemonOptions) {
     const queued = actors.get(sessionId)?.snapshot().queue.length
     // A chat the hub runs has no actor here: whoever asks, its state is what its copied events say.
     if (syncHubOf?.(sessionId)) state = mirrorForeground(sessionId)
-    activity.push({ sessionId, directory: info.directory, title: info.title, state,updatedAt: info.updatedAt, archivedAt: info.archivedAt, lifecycle: lifecycleOf(store, sessionId), ...(queued ? { queued } : {}), ...(draft !== undefined ? { draft } : {}), ...liveInfo(sessionId) }, { force })
+    activity.push({ sessionId, directory: info.directory, title: info.title, state,updatedAt: info.updatedAt, archivedAt: info.archivedAt, lifecycle: lifecycleOf(store, sessionId), ...(queued ? { queued } : {}), ...(draft !== undefined ? { draft } : {}), ...(syncHubOf?.(sessionId) ?? {}), ...liveInfo(sessionId) }, { force })
   }
   const scheduler = createJobScheduler({ clock, scope: root.child("jobs"), sink: globalSink, ids })
 
@@ -3804,6 +3804,8 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** A retry that arrives while the original is still running waits for it and gets the same answer. */
   const inflight = new Map<string, Promise<void>>()
+  /** The model answer being written for a `/whatsnew` cache key, shared by every terminal that asks the same key meanwhile. */
+  const whatsNewInflight = new Map<string, Promise<string>>()
   /** The running `user.submit` of each `clientRequestId` (by session), so a concurrent retry waits for it. */
   const submitsInflight = new Map<string, Promise<void>>()
   const cacheKey = (connection: Connection, id: string) => `${connection.peer?.hash ?? "unix"}:${connection.clientId ?? connection.id}:${connection.directory ?? ""}:${id}`
@@ -3970,20 +3972,11 @@ export async function startDaemon(options: DaemonOptions) {
     }
     // A chat bot's token runs turns inside its own folder and nothing else (docs/remote.md, "Bot bridge").
     if (connection.peer?.scope === "bot") {
-      const refusal = botPeerRefusal({ command, root: connection.peer.root ?? "/nonexistent", sessionDirectory: (id) => store.sessionDirectory(id as SessionId), canonical: canonicalDir })
+      const refusal = botPeerRefusal({ command, root: connection.peer.root ? canonicalDir(connection.peer.root) : "/nonexistent", sessionDirectory: (id) => store.sessionDirectory(id as SessionId), canonical: canonicalDir })
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
     }
-    // A chat the hub owns runs on the hub: this daemon forwards the prompt, the cancel or the answer, and a new chat in the hub's folder, and the turn comes back through the mirror.
-    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create" || command.type === "session.cd" || command.type === "session.dirs" || command.type.startsWith("queue."))) {
-      const forward = syncRoute(command)
-      if (forward) {
-        const done = await forward(command)
-        if (done.ok) return reply(connection, command.id, { ok: true, ...(done.result ? { result: done.result } : {}) })
-        const refused = command.type === "user.submit" && syncGuard?.(command.sessionId, "queue.added")
-        return reply(connection, command.id, { ok: false, code: "forbidden", message: refused ? `${refused} (${done.message.replace(/^\[SYNC\]: /, "")})` : done.message })
-      }
-    }
-    if (syncGuard && command.type === "user.submit") {
+    // A prompt for a chat the hub runs is forwarded (see `handle`), so the guard that keeps a mirror from running turns here does not apply to it.
+    if (syncGuard && command.type === "user.submit" && !(syncRoute && !connection.peer && syncRoute(command))) {
       const refusal = syncGuard(command.sessionId, "queue.added")
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
     }
@@ -4209,6 +4202,19 @@ export async function startDaemon(options: DaemonOptions) {
     const cached = recentCommands.get(cacheKey(connection, command.id))
     if (cached && command.type !== "trace.configure") return send(connection, cached)
     if (!connection.clientId) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: hello required first" })
+    // A chat the hub owns runs on the hub: this daemon forwards the prompt, the cancel or the answer, and a new chat in the hub's folder, and the turn comes back through the mirror.
+    // It happens here, after the admission checks and the command deduplication of handleOnce: an agent-origin client is held to its own rules, and a retry gets the first answer.
+    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create" || command.type === "session.cd" || command.type === "session.dirs" || command.type.startsWith("queue."))) {
+      const forward = syncRoute(command)
+      if (forward) {
+        // A chat started from a session's shell is capped by that session's mode and registered as its child; the hub knows neither.
+        if (connection.agent && command.type === "session.create") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: a session's shell cannot start a chat on the hub; start it from a terminal" })
+        const done = await forward(command)
+        if (done.ok) return reply(connection, command.id, { ok: true, ...(done.result ? { result: done.result } : {}) })
+        const refused = command.type === "user.submit" && syncGuard?.(command.sessionId, "queue.added")
+        return reply(connection, command.id, { ok: false, code: "forbidden", message: refused ? `${refused} (${done.message.replace(/^\[SYNC\]: /, "")})` : done.message })
+      }
+    }
     if (command.type.startsWith("loop.") && command.type !== "loop.list") await lazyLoops.load()
     switch (command.type) {
       case "tui.control.register":
@@ -4550,8 +4556,20 @@ export async function startDaemon(options: DaemonOptions) {
         if (savedAnswer) return reply(connection, command.id, { ok: true, result: { ...shown, suggestions: checkSuggestions(parseWhatsNew(savedAnswer.text), { settings: saved, check: (patch) => store.settings.check(patch) }) } })
         let usage: BudgetUsage | undefined
         try {
-          const text = redactSecrets(await completeBudgeted({ system: request.system, prompt: request.prompt, signal: AbortSignal.timeout(WHATS_NEW_TIMEOUT_MS), ...(options.models?.selectable ? { model } : {}), auxiliary: { role: "whatsNew", directory, ...(command.sessionId ? { sessionId: command.sessionId } : {}) }, onUsage: (value) => { usage = value } })).text
-          if (command.cacheKey && text.trim()) writeWhatsNewCache(options.dir, { key: command.cacheKey, model: model.model, text })
+          // A second terminal asking the same version and content while the first answer is being written waits for it: one model call per key.
+          const waiting = command.cacheKey ? whatsNewInflight.get(command.cacheKey) : undefined
+          const answer = waiting ?? (async () => {
+            const text = redactSecrets(await completeBudgeted({ system: request.system, prompt: request.prompt, signal: AbortSignal.timeout(WHATS_NEW_TIMEOUT_MS), ...(options.models?.selectable ? { model } : {}), auxiliary: { role: "whatsNew", directory, ...(command.sessionId ? { sessionId: command.sessionId } : {}) }, onUsage: (value) => { usage = value } })).text
+            if (command.cacheKey && text.trim()) writeWhatsNewCache(options.dir, { key: command.cacheKey, model: model.model, text })
+            return text
+          })()
+          if (!waiting && command.cacheKey) {
+            const key = command.cacheKey
+            whatsNewInflight.set(key, answer)
+            const clear = () => { whatsNewInflight.delete(key) }
+            answer.then(clear, clear)
+          }
+          const text = await answer
           const suggestions = checkSuggestions(parseWhatsNew(text), { settings: saved, check: (patch) => store.settings.check(patch) })
           const cost = usage ? usage.costMicros ?? budgets.price(usage) : undefined
           return reply(connection, command.id, { ok: true, result: { ...shown, suggestions, ...(usage ? { usage: { input: usage.input, output: usage.output, ...(cost !== undefined ? { costMicros: cost } : {}) } } : {}) } })
@@ -6634,6 +6652,7 @@ export async function startDaemon(options: DaemonOptions) {
           agents: () => agents.report({ directory: options.dir }),
           sessions: (name) => sessionAutomation.list({ agent: name, roots: true, limit: 100 }),
           sessionsOfModel: (model) => sessionAutomation.list({ model, roots: true, limit: 100, hideEmpty: true }),
+          unusedChat: (sessionId) => store.emptySessions.has(sessionId as SessionId, { anyModel: true }),
           connectors: () => options.botConnectors ?? [],
           // Schedules are loops the bot owns; read only when loops already exist (nothing is loaded for this).
           schedules: (name) => loops.list().filter((loop) => loop.agent === name && loop.state !== "stopped" && loop.state !== "completed").map((loop) => ({ loopId: loop.loopId, name: loop.name, trigger: describeTrigger(loop.trigger), directory: loop.directory, state: loop.state, runs: loop.runs, ...(loop.nextWakeAt !== undefined ? { nextWakeAt: loop.nextWakeAt } : {}) })),
@@ -7543,7 +7562,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (options.mflowListen) {
       const address = mflowListenerAddress(options.mflowListen)
       const backoff = remoteBackoff()
-      const handle = createMflowHttp({ service: mflow, directory: options.defaultDirectory ?? process.cwd(), authenticate: (token) => tokens.authenticate(token), allowed: () => !backoff.blocked("loopback"), failed: () => backoff.fail("loopback") })
+      const handle = createMflowHttp({ service: mflow, directory: options.defaultDirectory ?? process.cwd(), authenticate: (token) => { const peer = tokens.authenticate(token); return peer?.scope === "bot" ? undefined : peer }, allowed: () => !backoff.blocked("loopback"), failed: () => backoff.fail("loopback") })
       mflowListener = Bun.serve({ ...address, maxRequestBodySize: 32_768, fetch: handle })
     }
   } catch (error) {

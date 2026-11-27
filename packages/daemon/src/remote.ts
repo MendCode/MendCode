@@ -1,9 +1,15 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto"
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 
 export const REMOTE_TOKENS_FILE = "remote-tokens.json"
+
+/** A folder with symlinks resolved; one that does not exist (yet) keeps its normalized spelling. */
+function canonicalFolder(folder: string): string {
+  const absolute = path.resolve(folder)
+  try { return realpathSync(absolute) } catch { return absolute }
+}
 /** `expiresAt` (epoch ms): after it the token no longer authenticates and an open connection drops; absent means it never expires. */
 /**
  * `scope: "sync-run"`: a sync token that may also start chats, send prompts, cancel and answer approvals in the hub's own projects
@@ -62,11 +68,14 @@ export function remoteTokens(dir: string) {
       if (input.run && !input.sync) throw new Error("a run token is a sync token that may also run turns: use sync and run together")
       if (input.botRoot !== undefined && (input.sync || input.readOnly)) throw new Error("a bot token cannot also be sync or read-only")
       if (input.botRoot !== undefined && (!path.isAbsolute(input.botRoot) || path.resolve(input.botRoot) === path.parse(input.botRoot).root)) throw new Error("a bot token needs an absolute folder that is not the filesystem root")
+      // The daemon compares session folders with symlinks resolved, so the stored root is the real folder too (a root given as a link keeps working).
+      const botRoot = input.botRoot === undefined ? undefined : canonicalFolder(input.botRoot)
+      if (botRoot !== undefined && botRoot === path.parse(botRoot).root) throw new Error("a bot token needs an absolute folder that is not the filesystem root")
       const token = randomBytes(32).toString("base64url")
       return update((entries) => {
         if (entries.some((e) => e.name === name)) throw new Error("token name already exists")
         if (entries.length >= 1000) throw new Error("remote token limit reached")
-        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: input.run ? "sync-run" as const : "sync" as const } : {}), ...(input.botRoot !== undefined ? { scope: "bot" as const, root: path.resolve(input.botRoot) } : {}) }
+        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: input.run ? "sync-run" as const : "sync" as const } : {}), ...(botRoot !== undefined ? { scope: "bot" as const, root: botRoot } : {}) }
         entries.push(entry)
         return { token, ...info(entry) }
       })

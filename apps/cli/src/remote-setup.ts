@@ -404,11 +404,12 @@ Persistent=true
 WantedBy=timers.target
 EOF
 systemctl --user daemon-reload
-systemctl --user enable --now mendcode-cert.timer >&2
-if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
+systemctl --user enable --now mendcode-cert.timer >&2`)
       if (timer.code !== 0) throw new SetupError(`could not set up the certificate renewal timer: ${scrub(timer.stderr || timer.stdout) || `exit ${timer.code}`}`)
-      if (fields(timer.stdout).get("linger") === "failed") say("  warning: loginctl enable-linger failed; run `sudo loginctl enable-linger $USER` on the host so the service survives a logout and reboot")
     }
+    // The daemon is a systemd user service whichever certificate it uses: without linger it stops at the last logout and does not start at boot.
+    const linger = await remote(`if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
+    if (fields(linger.stdout).get("linger") === "failed") say("  warning: loginctl enable-linger failed; run `sudo loginctl enable-linger $USER` on the host so the service survives a logout and reboot")
 
     begin("listener settings")
     const existingText = (await remote(`cat "$D/remote.json" 2>/dev/null || true`)).stdout.trim()
@@ -438,6 +439,13 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
     if (!found) throw new SetupError("the host has no listener configured: run `remote setup` from the first device before pairing another")
     port = found
     say(`  listener ${listen as string}`)
+    // A host that made its own CA (no Tailscale certificates) serves a certificate this device trusts only with that CA: fetch it when that CA signed the certificate in use.
+    const ca = (await remote(`if [ -s "$D/tls/ca.pem" ] && command -v openssl >/dev/null 2>&1 && openssl verify -CAfile "$D/tls/ca.pem" "$D/tls/cert.pem" >/dev/null 2>&1; then cat "$D/tls/ca.pem"; fi`)).stdout.trim()
+    if (ca.startsWith("-----BEGIN CERTIFICATE-----")) {
+      caFile = caFileOf(command.dir, command.name)
+      writePrivate(caFile, `${ca}\n`)
+      say(`  saved ${caFile} (the host's private CA)`)
+    }
   }
 
   begin("device token")

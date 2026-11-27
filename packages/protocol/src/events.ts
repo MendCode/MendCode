@@ -507,6 +507,9 @@ export const SessionActivity = lazySchema(() => z.strictObject({
   archivedAt: z.number().int().nonnegative().nullable().optional(),
   /** The session's unsent draft, so other terminals can label an untitled session; null says it was cleared; omitted by older daemons and for peers. */
   draft: SessionDraft.nullable().optional(),
+  /** Set on a copy of a chat the sync hub owns and runs: the hub's name and its folder of the chat, as `session.list` carries them, so a terminal that was open before the copy appeared labels it. */
+  hub: z.string().max(64).optional(),
+  hubDirectory: z.string().max(4096).optional(),
 }))
 
 /** A loop changed (created, woke, finished a run, paused…); carries the whole bounded record. */

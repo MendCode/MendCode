@@ -695,6 +695,8 @@ test("a chat the hub owns says so in the device's list (the hub's name and its r
   const started = events(device.daemon, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
   await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })
   await until(async () => (await listed()).state === "idle", "the cancelled turn is idle")
+  // The live copy of the hub's events names the folder from this machine's side; the label keeps the hub's own.
+  expect(await listed()).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
   // The prompts ran on the hub, and the mapped folder was never used: it does not even exist here.
   expect(turnsDone(hub.daemon, seed)).toBeGreaterThanOrEqual(2)
   expect(existsSync(here)).toBe(false)

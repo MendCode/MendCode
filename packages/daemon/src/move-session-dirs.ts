@@ -9,6 +9,28 @@ const clean = (value: string, label: string) => {
   return trimmed
 }
 
+/** The folder fields (`directory`, `cwd`) of a stored JSON value that are `from` or inside it, moved under `to`; everything else is left as it is. */
+function movePaths(value: unknown, from: string, to: string): { value: unknown; changed: boolean } {
+  const move = (text: string) => (text === from || text.startsWith(`${from}/`) ? `${to}${text.slice(from.length)}` : text)
+  let changed = false
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk)
+    if (node && typeof node === "object") {
+      return Object.fromEntries(Object.entries(node).map(([key, child]) => {
+        if ((key === "directory" || key === "cwd") && typeof child === "string") {
+          const moved = move(child)
+          if (moved !== child) changed = true
+          return [key, moved]
+        }
+        return [key, walk(child)]
+      }))
+    }
+    return node
+  }
+  const result = walk(value)
+  return { value: result, changed }
+}
+
 /**
  * Explicit offline maintenance: every stored folder at or under `from` moves under `to` (sessions, prompt history, workflows, project
  * memories: each table with a `directory` column). Whole path segments only (`/a/Code` never matches `/a/Codex`). The lock excludes
@@ -42,6 +64,20 @@ export function moveStoredDirectories(input: { dir: string; from: string; to: st
     db.run("BEGIN IMMEDIATE")
     try {
       for (const table of Object.keys(counts)) db.query(`UPDATE "${table}" SET directory = $to || substr(directory, length($from) + 1) WHERE ${matches}`).run({ from, to })
+      // A workflow's folder and its tasks' folders live in its stored payload (the column is only an index of it), and the journal of a script run records them too.
+      for (const [table, key] of [["workflows", "id"], ["workflow_journal", "workflow_id, key"]] as const) {
+        if (!db.query<{ name: string }, [string]>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) continue
+        const columns = key.split(", ")
+        const update = db.query(`UPDATE "${table}" SET payload = $payload${table === "workflow_journal" ? ", bytes = $bytes" : ""} WHERE ${columns.map((column) => `${column} = $${column}`).join(" AND ")}`)
+        for (const row of db.query<Record<string, string>, [string]>(`SELECT ${key}, payload FROM "${table}" WHERE instr(payload, ?) > 0`).all(from)) {
+          let parsed: unknown
+          try { parsed = JSON.parse(row.payload!) } catch { continue }
+          const moved = movePaths(parsed, from, to)
+          if (!moved.changed) continue
+          const payload = JSON.stringify(moved.value)
+          update.run({ payload, ...(table === "workflow_journal" ? { bytes: Buffer.byteLength(payload) } : {}), ...Object.fromEntries(columns.map((column) => [column, row[column]!])) })
+        }
+      }
       db.run("COMMIT")
     } catch (error) {
       db.run("ROLLBACK")
