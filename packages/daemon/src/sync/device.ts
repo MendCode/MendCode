@@ -333,7 +333,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
           ports.release(summary.sessionId)
           ports.changed(summary.sessionId)
         }
-        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq }
+        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(summary.directory ? { hubDir: summary.directory } : {}) }
         if (skippedBlobs) row.note = `${skippedBlobs} attachment${skippedBlobs === 1 ? "" : "s"} over 8 MiB stay on ${hub}`
         save(row)
         after = lastSeq
@@ -663,6 +663,11 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
 
   return {
     guard,
+    /** A chat the hub owns (this machine holds only its copy): the hub's name and the hub's own folder, for the lists and the footer. */
+    hubOf(sessionId: string): { hub: string; hubDirectory?: string } | undefined {
+      const row = rows.get(sessionId)
+      return row?.role === "mirror" ? { hub, ...(row.hubDir ? { hubDirectory: row.hubDir } : {}) } : undefined
+    },
     routes,
     forward,
     /** A round that starts now, after any one already running (`mendcode sync now`). */

@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- A chat that runs on your sync hub now looks like it: its sidebar row carries the hub's name, its project group says it holds hub chats, and the footer and top bar show the hub's own folder (`hub:~/projects/app`) instead of the mapped local one.
+
+### Fixed
+
+- A hub chat's sidebar row shows what the hub is doing with it: running while its turn runs, waiting while it asks for approval, and a reply mark only once the turn has finished.
+
 ## v0.0.21 - 2026-11-26
 
 Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.

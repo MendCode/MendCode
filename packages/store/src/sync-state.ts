@@ -20,7 +20,7 @@ const TABLES = `
 CREATE TABLE IF NOT EXISTS sync_changes (kind TEXT NOT NULL, id TEXT NOT NULL, cseq INTEGER NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, PRIMARY KEY (kind, id)) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS sync_changes_seq ON sync_changes(kind, cseq);
 CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
-CREATE TABLE IF NOT EXISTS sync_sessions (session_id TEXT PRIMARY KEY, role TEXT NOT NULL, remote_seq INTEGER NOT NULL DEFAULT 0, epoch INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ok', note TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', active_at INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS sync_sessions (session_id TEXT PRIMARY KEY, role TEXT NOT NULL, remote_seq INTEGER NOT NULL DEFAULT 0, epoch INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ok', note TEXT NOT NULL DEFAULT '', meta TEXT NOT NULL DEFAULT '', active_at INTEGER NOT NULL DEFAULT 0, hub_dir TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS sync_leases (session_id TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL, until INTEGER NOT NULL) WITHOUT ROWID;
 `
 const TRIGGERS = `
@@ -36,7 +36,7 @@ CREATE TRIGGER IF NOT EXISTS sync_session_delete AFTER DELETE ON sessions WHEN o
 const DROP = ["sync_session_insert", "sync_session_update", "sync_session_delete", "sync_memory_insert", "sync_memory_update", "sync_memory_delete"]
 
 export type SyncRole = "mirror" | "owned"
-export type SyncSessionRow = { sessionId: SessionId; role: SyncRole; remoteSeq: number; epoch: number; leaseUntil: number; state: "ok" | "diverged" | "unsyncable"; note: string; meta: string; activeAt: number }
+export type SyncSessionRow = { sessionId: SessionId; role: SyncRole; remoteSeq: number; epoch: number; leaseUntil: number; state: "ok" | "diverged" | "unsyncable"; note: string; meta: string; activeAt: number; /** The hub's own folder of a mirrored session (the folder here is the mapped one); absent until known. */ hubDir?: string }
 export type SyncLease = { sessionId: SessionId; holder: string; epoch: number; until: number }
 export type SyncChange = { id: string; cseq: number; deleted: boolean; at: number }
 export type MemoryRecord = {
@@ -44,8 +44,8 @@ export type MemoryRecord = {
   kind: string; target_id: string | null; reason: string; profile: string; session_id: string | null; pinned: number; model_data: string | null
 }
 
-type SessionRowDb = { session_id: string; role: string; remote_seq: number; epoch: number; lease_until: number; state: string; note: string; meta: string; active_at: number }
-const toSession = (row: SessionRowDb): SyncSessionRow => ({ sessionId: row.session_id as SessionId, role: row.role === "owned" ? "owned" : "mirror", remoteSeq: row.remote_seq, epoch: row.epoch, leaseUntil: row.lease_until, state: row.state === "diverged" || row.state === "unsyncable" ? row.state : "ok", note: row.note, meta: row.meta, activeAt: row.active_at })
+type SessionRowDb = { session_id: string; role: string; remote_seq: number; epoch: number; lease_until: number; state: string; note: string; meta: string; active_at: number; hub_dir?: string }
+const toSession = (row: SessionRowDb): SyncSessionRow => ({ sessionId: row.session_id as SessionId, role: row.role === "owned" ? "owned" : "mirror", remoteSeq: row.remote_seq, epoch: row.epoch, leaseUntil: row.lease_until, state: row.state === "diverged" || row.state === "unsyncable" ? row.state : "ok", note: row.note, meta: row.meta, activeAt: row.active_at, ...(row.hub_dir ? { hubDir: row.hub_dir } : {}) })
 
 /** Raise it when a trigger's SQL changes: a database that holds an older number has its triggers recreated on open (CREATE TRIGGER IF NOT EXISTS keeps old ones). */
 const TRIGGER_VERSION = "2"
@@ -65,6 +65,8 @@ function migrateTriggers(db: Database) {
 
 export function createSyncState(db: Database, now: () => number) {
   db.run(TABLES)
+  // A database made before the hub's folder was kept gets its column once.
+  if (!db.query<{ name: string }, []>("PRAGMA table_info(sync_sessions)").all().some((column) => column.name === "hub_dir")) db.run("ALTER TABLE sync_sessions ADD COLUMN hub_dir TEXT NOT NULL DEFAULT ''")
   migrateTriggers(db)
   return {
     /** Hub role: session triggers, and every existing root session enters the feed once. */
@@ -122,7 +124,7 @@ export function createSyncState(db: Database, now: () => number) {
         return db.query<SessionRowDb, []>("SELECT * FROM sync_sessions WHERE role = 'owned' ORDER BY session_id").all().map(toSession)
       },
       put(row: SyncSessionRow) {
-        db.query("INSERT OR REPLACE INTO sync_sessions(session_id, role, remote_seq, epoch, lease_until, state, note, meta, active_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.sessionId, row.role, row.remoteSeq, row.epoch, row.leaseUntil, row.state, row.note, row.meta, row.activeAt)
+        db.query("INSERT OR REPLACE INTO sync_sessions(session_id, role, remote_seq, epoch, lease_until, state, note, meta, active_at, hub_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(row.sessionId, row.role, row.remoteSeq, row.epoch, row.leaseUntil, row.state, row.note, row.meta, row.activeAt, row.hubDir ?? "")
       },
       delete: (sessionId: string) => void db.query("DELETE FROM sync_sessions WHERE session_id = ?").run(sessionId),
     },

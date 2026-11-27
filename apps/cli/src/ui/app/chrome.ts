@@ -1,4 +1,5 @@
 import { agentColor } from "../../view/agent-color"
+import { chatFolder } from "../../view/session-label"
 import { botAccent } from "./bot-accent"
 import { compactFallback } from "./compact-fallback"
 import type { createSession } from "./session"
@@ -73,6 +74,11 @@ export function createChrome(ctx: AppContext, actions: {
     return summary?.title.trim() ?? ""
   }
 
+  /** The open chat's listed summary, when this terminal has it. */
+  const openSummary = () => state.sessions.find((listed) => listed.sessionId === state.sessionId) ?? state.paletteSessions.find((listed) => listed.sessionId === state.sessionId)
+  /** The folder as the footer reads it: home-shortened, or `<hub>:~/folder` for a chat the hub runs (its folder here is only the mapped copy). */
+  const shownFolder = () => chatFolder(openSummary(), input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory)
+
   /** The top bar; a branch is asked for the first time it shows. */
   function topbarRow(width: number): Line {
     if (state.gitBranch === undefined && !state.branchRequested) {
@@ -86,12 +92,13 @@ export function createChrome(ctx: AppContext, actions: {
     // The stat parts the profile places in the bar (`topbarStats`), drawn by the registry like every other surface.
     const topbarStats = state.tuiProfile.topbarStats ? partsLine(state.tuiProfile.topbarStats.split(","), ctx.stats.read(), { quiet: true }) : []
     const bar = {
-      path: !state.tuiProfile.showProject ? "" : input.remote ? `remote ${input.remote.host}${input.remote.readOnly ? " · read-only" : ""}` : input.directory ?? "",
+      path: !state.tuiProfile.showProject ? "" : input.remote ? `remote ${input.remote.host}${input.remote.readOnly ? " · read-only" : ""}` : chatFolder(openSummary(), input.directory) ?? "",
       hideProject: !state.tuiProfile.showProject,
       ...(input.dev ? { dev: true } : {}),
       ...(state.tuiProfile.showDiffFiles && state.diffTotals ? { files: state.changedFiles.length } : {}),
       ...(input.home ? { home: input.home } : {}),
-      ...(state.tuiProfile.showProject && state.gitBranch ? { branch: state.gitBranch } : {}),
+      // The local folder's branch is not the hub folder's: a hub chat's bar says where it runs instead.
+      ...(state.tuiProfile.showProject && openSummary()?.hub ? { branch: "hub" } : state.tuiProfile.showProject && state.gitBranch ? { branch: state.gitBranch } : {}),
       title: state.tuiProfile.showSessionTitle ? title : "",
       ...(state.tuiProfile.showDiffLines && state.diffTotals ? { diff: state.diffTotals } : {}),
       ...(state.tuiProfile.showContext && context !== undefined ? { context: { tokens: context, limit: contextLimit(usageInForce(state), compactFallback(state)), ...(usageInForce(state)?.contextApprox ? { approx: true } : {}) } } : {}),
@@ -140,7 +147,7 @@ export function createChrome(ctx: AppContext, actions: {
       subagents: agentSubtasks().map((task) => ({ label: task.title.replace(/^task:\s*/, "") || "subagent", status: task.latest ? "working" : "starting", tone: "warning" as const })),
       info: {
         ...(state.gitBranch ? { branch: state.gitBranch } : {}),
-        cwd: input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : (input.directory ?? ""),
+        cwd: shownFolder() ?? "",
         ...(percent !== undefined ? { context: `${percent}%` } : {}),
         permission: state.transcript.permissionMode,
         ...(model ? { model: modelWithEffort(model, state.effectiveModel?.effort, state.modelReport) } : {}),
@@ -202,7 +209,7 @@ export function createChrome(ctx: AppContext, actions: {
       }
     }
     // A session whose PR is merged or closed settles by itself (see `autoSettled`), unless it is the open one, pinned or busy.
-    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId).map(({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, lastHumanAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind, agents, compacting, named }) => ({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, ...(lastHumanAt !== undefined ? { lastHumanAt } : {}), ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}), ...(agents ? { agents } : {}), ...(compacting ? { compacting } : {}), ...(named ? { named } : {}) }))
+    const sessions = projectSessions(autoSettled(state.sessions, state.sessionId), input.directory ?? "", state.sessionId).map(({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, lastHumanAt, archivedAt, lifecycle, draft, parentId, tool, paused, since, pending, pendingKind, agents, compacting, named, hub }) => ({ sessionId, title, state: sessionState, queued, updatedAt, createdAt, ...(lastHumanAt !== undefined ? { lastHumanAt } : {}), ...(since !== undefined ? { since } : {}), ...(pending ? { pending } : {}), ...(pendingKind ? { pendingKind } : {}), ...(archivedAt !== undefined ? { archivedAt } : {}), ...(lifecycle ? { lifecycle } : {}), ...(draft ? { draft } : {}), ...(parentId ? { parentId } : {}), ...(tool ? { tool } : {}), ...(paused ? { paused } : {}), ...(agents ? { agents } : {}), ...(compacting ? { compacting } : {}), ...(named ? { named } : {}), ...(hub ? { hub } : {}) }))
     const drawn = ctx.views.draw("sessions.sidebar", { sessions, current: state.sessionId, ...(state.sidebarSelected ? { selected: state.sidebarSelected } : {}), focused: state.sidebarFocus === true, unread: unreadSessions(sessions), ...sidebarMotion(), ...(state.sidebarSettledOpen ? { settledOpen: true } : {}) }, { width: SIDEBAR_WIDTH, height, extra: { header: state.tuiProfile.sidebarHeader, settledShown: state.sidebarSettledShown ?? SETTLED_FIRST, folder: sidebarFolder(), scroll: sidebarScrollNow() } })
     state.sidebarImages = undefined
     state.sidebarHits = drawn.hits.flatMap((hit) => hit.action === "toggle" ? [{ row: hit.row, sessionId: SETTLED_ROW }] : hit.action === "more" ? [{ row: hit.row, sessionId: SETTLED_MORE }] : hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, sessionId: hit.arg }] : [])
@@ -327,7 +334,7 @@ export function createChrome(ctx: AppContext, actions: {
     const profile = state.tuiProfile
     const icons = profile.footerIcons !== "none"
     if (!rowsOn() && !icons && !profile.statusColors && !segments.some((segment) => segment === "directory" || segment === "codegraph" || segment === "time")) return {}
-    const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
+    const directory = shownFolder()
     const graphShown = segments.includes("codegraph") || rowsNow().rows.some((row) => row.includes("codegraph"))
     // The saved tokens cost a `session.savings` request per model call: only a graph the user placed asks it, never the full view's own (nor its default rows').
     const graphPlaced = customFooter()?.includes("codegraph") || profile.footerRows.some((row) => row.includes("codegraph"))
@@ -599,7 +606,7 @@ export function createChrome(ctx: AppContext, actions: {
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
     const botSeen = state.transcript.permissionMode === "plan" ? undefined : botAccent(state, requestFrame)
     const profile = state.tuiProfile
-    const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
+    const directory = shownFolder()
     const fastOn = state.modelReport?.session?.fast ?? state.settingsNow.serviceTier === "fast"
     const hints: Line = []
     if (profile.showCommandHint) hints.push({ text: "ctrl-p commands", fg: "muted" })

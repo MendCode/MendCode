@@ -71,6 +71,9 @@ export const SessionSummary = lazySchema(() => z.strictObject({
   tags: z.array(z.string().max(40)).max(20).optional(),
   /** The user's color mark of the session (the same metadata); a name, so every theme draws it. */
   color: z.enum(SESSION_COLORS).optional(),
+  /** Set on a copy of a chat the sync hub owns and runs (docs/sync.md): the hub's name, and the folder it has there (`directory` is the mapped local one). */
+  hub: z.string().max(64).optional(),
+  hubDirectory: z.string().max(4096).optional(),
   /** True when the user gave the session its title (`session.rename`), not the first message. */
   named: z.boolean().optional(),
   /** The session's unsent draft; only `session.list` fills it, and not for a read-only token (which cannot call `draft.get` either). A list labels an untitled session with it. */

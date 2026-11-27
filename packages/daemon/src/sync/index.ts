@@ -40,6 +40,7 @@ export function createSync(ports: SyncPorts) {
   let device: Device | undefined
   let state: ReturnType<typeof createSyncState> | undefined
   const guard = (sessionId: SessionId, type: string) => device?.guard(sessionId, type) ?? hub?.guard(sessionId)
+  const hubOf = (sessionId: string) => device?.hubOf(sessionId)
   const open = () => state ??= ports.store.openSyncState(createSyncState, guard)
 
   function startDevice() {
@@ -62,6 +63,7 @@ export function createSync(ports: SyncPorts) {
   return {
     /** Why this machine may not write the session now (it is another machine's), or undefined. */
     guard,
+    hubOf,
     /** A local client's command that runs on the hub (a chat in the hub's folder, a prompt, cancel or approval of its chats), or undefined. */
     route(command: Command) { return device?.routes(command) ? (device.forward as (command: Command) => ReturnType<Device["forward"]>) : undefined },
     /** At daemon start: the role the data dir says, if any. */
