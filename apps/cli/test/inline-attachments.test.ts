@@ -36,6 +36,28 @@ describe("what lands in the prompt", () => {
     expect(sent.attachments[0]).toMatchObject({ label: "[Image #1]", name: "one.png", mime: "image/png", at: "mira [Image #1]".length })
   })
 
+  test("a 20 MB file becomes a [File: name · size] chip and the model is sent a note with the path where the chat runs, never the bytes", async () => {
+    const b = bench()
+    await b.type("mira ")
+    await b.type(paste("/docs/board.excalidraw"))
+    expect(b.prompt()).toContain("mira [File: board.excalidraw · 19.3 MB]")
+    await b.type(" gracias")
+    await b.type("\r")
+    const sent = b.submitted()!
+    expect(sent.attachments).toHaveLength(0)
+    expect(sent.text).toBe("mira [File: board.excalidraw · 19.3 MB]  gracias\n\n[attached file: board.excalidraw · 19.3 MB · application/json]\npath: /hub/uploads/ses/board.excalidraw")
+    expect(b.h.sentOf("attachment.upload")).toHaveLength(1)
+  })
+
+  test("a file the daemon cannot make readable where the chat runs stops the send, says why and keeps the prompt", async () => {
+    const b = bench({ reply: (command) => command.type === "attachment.upload" ? { ok: false, error: { code: "forbidden", message: "[SYNC]: board.excalidraw is 120.0 MB; the largest file copied to hub is 100 MB" } } as never : undefined })
+    await b.type(paste("/docs/board.excalidraw"))
+    await b.type("\r")
+    expect(b.submitted()).toBeUndefined()
+    expect(b.text).toContain("[File: board.excalidraw · 19.3 MB]")
+    expect(b.h.text().join("\n")).toContain("the largest file copied to hub is 100 MB")
+  })
+
   test("a file with no attachments is sent exactly as before: text and an empty list", async () => {
     const b = bench()
     await b.type("solo texto")

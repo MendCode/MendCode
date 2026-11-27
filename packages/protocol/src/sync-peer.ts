@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { SessionId } from "./ids"
 import { lazySchema } from "./lazy"
-import { SyncBlobPutInput, SyncBlobReadInput } from "./project-rest"
+import { MAX_SYNC_BLOB_CHUNK_BYTES, MAX_SYNC_UPLOAD_FILE_BYTES, SyncBlobPutInput, SyncBlobReadInput } from "./project-rest"
 
 /**
  * Daemon-to-daemon session sync (docs/sync.md). The hub (an always-on daemon) owns its sessions; a device daemon mirrors them
@@ -70,6 +70,11 @@ export const SyncPeerInput = lazySchema(() => z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("meta"), sessionId: SessionId, title: text(500).optional(), archived: z.boolean().optional(), pinned: z.boolean().optional() }),
   z.strictObject({ op: z.literal("blob-put"), input: SyncBlobPutInput }),
   z.strictObject({ op: z.literal("blob-read"), input: SyncBlobReadInput }),
+  /**
+   * One chunk (base64, at most 128 KiB raw) of a file a device copies into the uploads folder of a chat the hub owns, in order from
+   * offset 0; the last chunk stores it. Needs a run or full token. Answers `{ received, stored, path? }` (`path` on the hub, once stored).
+   */
+  z.strictObject({ op: z.literal("file-put"), sessionId: SessionId, name: text(255).min(1), size: z.number().int().positive().max(MAX_SYNC_UPLOAD_FILE_BYTES), offset: seq, data: text(Math.ceil(MAX_SYNC_BLOB_CHUNK_BYTES / 3) * 4).min(1) }),
   z.strictObject({ op: z.literal("memories"), after: seq }),
   z.strictObject({ op: z.literal("memories-put"), rows: z.array(SyncMemoryRow).min(1).max(SYNC_MEMORY_PAGE) }),
   z.strictObject({ op: z.literal("settings") }),

@@ -66,6 +66,13 @@ export function createSync(ports: SyncPorts) {
     hubOf,
     /** A local client's command that runs on the hub (a chat in the hub's folder, a prompt, cancel or approval of its chats), or undefined. */
     route(command: Command) { return device?.routes(command) ? (device.forward as (command: Command) => ReturnType<Device["forward"]>) : undefined },
+    /** Whether the chat is one the hub runs (this machine holds a copy). */
+    isHubChat: (sessionId: string) => hubOf(sessionId) !== undefined,
+    /** Copies a file for a prompt of a hub chat into the chat's uploads folder on the hub; answers its path there. */
+    upload(sessionId: SessionId, file: string) {
+      if (!device) throw new SyncRefusal("invalid", "sync is off on this machine (`mendcode sync enable REMOTE`)")
+      return device.upload(sessionId, file)
+    },
     /** At daemon start: the role the data dir says, if any. */
     boot(asHub: boolean) {
       startDevice()

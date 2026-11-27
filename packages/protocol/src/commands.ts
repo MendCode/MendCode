@@ -1079,6 +1079,18 @@ export const AttachmentPaste = lazySchema(() => z.strictObject({
   allowDirectory: z.boolean().optional(),
 }))
 
+/**
+ * Makes a file attached as `{ kind: "file" }` readable where the chat runs, before its prompt is sent. A local chat: the file stays
+ * where it is. A chat a sync hub owns: the file is copied to the hub's `uploads/<session>/` folder (at most 100 MiB). Ack:
+ * `{ path, size, copied }`, the path the model is told. Local clients only.
+ */
+export const AttachmentUpload = lazySchema(() => z.strictObject({
+  ...base,
+  type: z.literal("attachment.upload"),
+  sessionId: SessionId,
+  path: z.string().min(1).max(4096),
+}))
+
 /** Ack: `{ commands: Array<{ name, description, argumentHint, source }> }` from .mendcode/commands and the user folder. */
 export const CustomCommandsList = lazySchema(() => z.strictObject({
   ...base,
@@ -2191,6 +2203,7 @@ export const COMMAND_SCHEMAS = {
   "attachment.clipboard": AttachmentClipboard,
   "attachment.read": AttachmentRead,
   "attachment.paste": AttachmentPaste,
+  "attachment.upload": AttachmentUpload,
   "commands.list": CustomCommandsList,
   "commands.expand": CustomCommandExpand,
   "scratchpad.get": ScratchpadGet,

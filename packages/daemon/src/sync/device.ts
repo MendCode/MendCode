@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
-import { MAX_SYNC_BLOB_CHUNK_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
+import { stat } from "node:fs/promises"
+import path from "node:path"
+import { MAX_SYNC_BLOB_CHUNK_BYTES, MAX_SYNC_UPLOAD_FILE_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
 import type { SyncSessionRow, SyncState } from "@mendcode/store"
 import { PORTABLE_SETTINGS } from "../config-bundle/classify"
 import { hubLacksFolders } from "./run-peer"
@@ -136,16 +138,23 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   }
 
   async function uploadBlobs(events: readonly SessionEvent[]) {
-    for (const ref of blobRefs(events).copied) {
-      if (uploaded.has(ref.sha256)) continue
-      const bytes = ports.store.readBlob(ref.sha256)
-      for (let offset = 0; offset < bytes.length; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
-        const result = await call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } })
-        if (result.stored) break
-      }
-      uploaded.add(ref.sha256)
-      if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+    for (const ref of blobRefs(events).copied) await putBlob(ref, true)
+  }
+  /** Sends one blob to the hub in chunks (the hub keeps it once whole and checked). A prompt's attachments are not counted against the round's requests. */
+  async function putBlob(ref: { sha256: string; bytes: number; mime: string }, counted: boolean) {
+    if (uploaded.has(ref.sha256)) return
+    const bytes = ports.store.readBlob(ref.sha256)
+    for (let offset = 0; offset < bytes.length; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
+      const result = await call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
+      if (result.stored) break
     }
+    uploaded.add(ref.sha256)
+    if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+  }
+  /** The attachments of a prompt for a chat the hub runs: its images, PDFs and pasted text go to the hub first, so the prompt can name them there. */
+  async function putAttachments(command: { type: string }) {
+    if (command.type !== "user.submit") return
+    for (const ref of (command as unknown as { attachments: Array<{ sha256: string; bytes: number; mime: string }> }).attachments) await putBlob(ref, false)
   }
   async function downloadBlobs(events: readonly SessionEvent[]) {
     const refs = blobRefs(events)
@@ -593,11 +602,14 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       for (let attempt = 0; ; attempt++) {
         try {
           await connect()
+          await putAttachments(outgoing)
           reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(outgoing)
           // A connection the hub's restart or a dropped network ended answers with this error instead of throwing.
           if (!reply.ok && reply.error.code === "internal" && /connection closed/.test(reply.error.message)) throw new TransportError(reply.error.message)
           break
-        } catch {
+        } catch (error) {
+          // The hub refused an attachment (too large, not accepted): that is its answer, not a lost link.
+          if (error instanceof SyncRefusal) return { ok: false as const, code: "forbidden", message: error.message }
           status.connected = false; try { client?.close() } catch {} ; client = undefined
           if (attempt === 0 && bare.type !== "session.create") continue
           // What belongs to an existing chat waits and goes out, in order, when the link is back.
@@ -629,14 +641,47 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
       try {
         await connect()
+        await putAttachments(next.command)
         reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(next.command)
-      } catch (error) { throw new TransportError(error instanceof Error ? error.message : String(error)) }
+      } catch (error) {
+        if (error instanceof SyncRefusal) { held.shift(); ports.log(`[SYNC]: ${next.command.type} held while ${hub} was away was refused: ${error.message.slice(0, 300)}`); continue }
+        throw new TransportError(error instanceof Error ? error.message : String(error)) }
       held.shift()
       if (!reply.ok) ports.log(`[SYNC]: ${next.command.type} held while ${hub} was away was refused: ${reply.error.message.slice(0, 300)}`)
       const sessionId = (next.command as { sessionId?: SessionId }).sessionId
       if (sessionId && live.has(sessionId)) live.get(sessionId)!.since = ports.now()
       else if (sessionId && next.command.type === "user.submit") live.set(sessionId, { directory: live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })
     }
+  }
+
+  /**
+   * Copies a file attached to a prompt for a chat the hub owns into that chat's uploads folder on the hub, in chunks, and answers the
+   * path there. Nothing is read whole: a file of the size limit passes through in pieces.
+   */
+  async function upload(sessionId: SessionId, file: string): Promise<{ path: string; size: number; copied: true }> {
+    const row = rows.get(sessionId)
+    if (row?.role !== "mirror" || row.state !== "ok") throw new SyncRefusal("invalid", "this chat is not one the hub runs")
+    const info = await stat(file).catch(() => undefined)
+    if (!info?.isFile()) throw new SyncRefusal("invalid", `not a file: ${file}`)
+    const name = path.basename(file)
+    if (info.size > MAX_SYNC_UPLOAD_FILE_BYTES) throw new SyncRefusal("invalid", `${name} is ${(info.size / 1_048_576).toFixed(1)} MB; the largest file copied to ${hub} is ${MAX_SYNC_UPLOAD_FILE_BYTES / 1_048_576} MB`)
+    if (info.size === 0) throw new SyncRefusal("invalid", `${name} is empty`)
+    return exclusive(async () => {
+      const source = Bun.file(file)
+      let stored: { path: string } | undefined
+      try {
+        for (let offset = 0; offset < info.size && !stored; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
+          const data = Buffer.from(await source.slice(offset, Math.min(offset + MAX_SYNC_BLOB_CHUNK_BYTES, info.size)).arrayBuffer()).toString("base64")
+          const result = await call({ op: "file-put", sessionId, name, size: info.size, offset, data }, false) as { stored: boolean; path?: string }
+          if (result.stored && result.path) stored = { path: result.path }
+        }
+      } catch (error) {
+        if (error instanceof TransportError) { status.connected = false; try { client?.close() } catch {} ; client = undefined; throw new SyncRefusal("forbidden", `${hub} is not connected, so ${name} cannot be copied there now; try again when it is back`) }
+        throw error
+      }
+      if (!stored) throw new SyncRefusal("invalid", `${hub} did not keep ${name} (it changed while it was copied)`)
+      return { path: stored.path, size: info.size, copied: true as const }
+    })
   }
 
   /** Moves a session's writer, holding off the background rounds meanwhile (one exchange with the hub at a time). */
@@ -690,6 +735,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     },
     routes,
     forward,
+    upload,
     /** A round that starts now, after any one already running (`mendcode sync now`). */
     async fresh() {
       while (round) await round.catch(() => {})

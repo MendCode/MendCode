@@ -35,10 +35,25 @@ Use `/attach <path>`, or drop/paste a path. All use the daemon.
 | Project file/directory | Inserts `@path`, quoted for spaces. |
 | External text file | Reads up to 200 KiB. |
 | External directory | Inserts a bounded sorted listing. |
-| Pasted image | Existing 20 MiB limit remains. |
-| Pasted PDF | 5 MiB limit. |
+| Pasted image (PNG, JPEG, GIF, WebP) | Attached as an image; existing 20 MiB limit remains. |
+| Pasted PDF | Attached as a PDF; 5 MiB limit. |
+| SVG up to 200 KiB | Its text, like any small text file. |
+| Any other file (big text, an `.excalidraw`, an SVG over 200 KiB, a binary, an image or PDF over its limit) | A file attachment: `[File: name · 19.3 MB]`. The model gets a note with name, size, type and the file's path, never its bytes. |
 
 Successfully attached pasted paths become attachments, not raw escaped prompt text.
+
+### File attachments
+
+A file attachment sends no bytes. When the message is sent the model reads, where the token is:
+
+```
+[attached file: board.excalidraw · 19.3 MB · application/json]
+path: /Users/me/Downloads/board.excalidraw
+```
+
+In a chat of this machine the path is the file where it is. In a chat a [sync hub](sync.md#attachments-to-a-hub-chat) owns, the file is first copied to the hub's `uploads/<chat id>/` folder (at most 100 MB; above that the message is not sent and says so) and the note names that path. A big text file is never put into the prompt. `attachment.paste` answers `{ kind: "file", path, name, size, type }` for them, and `attachment.upload` (`sessionId`, `path`; local clients only) makes the file readable where the chat runs: `{ path, size, copied }`.
+
+SVG is not turned into a picture: no model provider takes SVG as an image, and MendCode carries no rasterizer, so a small one is read as text and a large one is a file.
 
 Bracketed text pastes remain literal across stdin reads. Empty paste events do nothing; only the explicit clipboard action probes images and reports a missing image.
 

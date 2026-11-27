@@ -404,6 +404,8 @@ export async function prepareRunSubmission(client: Pick<Client, "send">, options
   for (const file of options.files) {
     const result = await request(client, { type: "attachment.paste", path: path.resolve(directory, file), allowDirectory: true })
     if (result.kind === "image") attachments.push(result.attachment as BlobRef)
+    // `run --file` inlines text only; a file the prompt cannot carry (the chat's own attach key makes it a path note) stops the command.
+    else if (result.kind === "file") throw new Error(Number(result.size) > 204_800 ? `${result.name} is not a supported image and is larger than 200 KB (${Number(result.size).toLocaleString("en-US")} bytes; the limit is 204,800)` : `${result.name} is not a supported image and is not valid UTF-8 text`)
     else texts.push({ name: String(result.name), content: String(result.content) })
   }
   const composed = await composeLongText({ send: async (put) => { const reply = await client.send(put); return reply.ok ? { ok: true, attachment: (reply.result as { attachment?: BlobRef } | undefined)?.attachment } : { ok: false, message: reply.error.message } }, prompt, files: texts })

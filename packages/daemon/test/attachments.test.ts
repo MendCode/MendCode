@@ -54,13 +54,13 @@ describe("resolvePastedPath", () => {
     expect(await readAttachment(file)).toMatchObject({ mime: "application/pdf", name: "spec.dat" })
   })
 
-  test("PDFs over 5 MiB are rejected by both paste and add", async () => {
+  test("PDFs over 5 MiB are rejected by add and become a file attachment when pasted", async () => {
     const dir = mkdtempSync(path.join(tmpdir(), "attach-"))
     dirs.push(dir)
     const file = path.join(dir, "big.pdf"), bytes = new Uint8Array(MAX_INLINE_MEDIA_BYTES + 1)
     bytes.set(Buffer.from("%PDF-"))
     writeFileSync(file, bytes)
-    await expect(resolvePastedPath(file)).rejects.toThrow("5 MiB")
+    expect(await resolvePastedPath(file)).toEqual({ kind: "file", path: file, name: "big.pdf", size: MAX_INLINE_MEDIA_BYTES + 1, type: "application/pdf" })
     await expect(readAttachment(file)).rejects.toThrow("5 MiB")
   })
 
@@ -111,20 +111,39 @@ describe("resolvePastedPath", () => {
     expect(await resolvePastedPath(file)).toEqual({ kind: "text", name: "readme.md", content: "# hi\n" })
   })
 
-  test("a non-image file outside the project larger than 200 KB is refused", async () => {
+  test("a non-image file outside the project larger than 200 KB is a file attachment, never inlined", async () => {
     const outside = mkdtempSync(path.join(tmpdir(), "outside-"))
     dirs.push(outside)
     const file = path.join(outside, "big.txt")
     writeFileSync(file, "x".repeat(MAX_TEXT_ATTACHMENT_BYTES + 1))
-    await expect(resolvePastedPath(file)).rejects.toThrow("larger than 200 KB")
+    expect(await resolvePastedPath(file)).toEqual({ kind: "file", path: file, name: "big.txt", size: MAX_TEXT_ATTACHMENT_BYTES + 1, type: "text/plain" })
   })
 
-  test("a non-image, non-UTF-8 file outside the project is refused", async () => {
+  test("a 20 MB .excalidraw or .svg is a file attachment with its name, size and type, and its bytes are not read into the prompt", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "outside-"))
+    dirs.push(outside)
+    const body = Buffer.alloc(20 * 1024 * 1024, "a")
+    for (const [name, type] of [["board.excalidraw", "application/json"], ["art.svg", "image/svg+xml"]] as const) {
+      const file = path.join(outside, name)
+      writeFileSync(file, body)
+      expect(await resolvePastedPath(file)).toMatchObject({ kind: "file", path: file, name, size: body.length, type: type === "application/json" ? expect.any(String) : type })
+    }
+  })
+
+  test("a small SVG stays inline text", async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), "outside-"))
+    dirs.push(outside)
+    const file = path.join(outside, "dot.svg")
+    writeFileSync(file, "<svg xmlns=\"http://www.w3.org/2000/svg\"/>")
+    expect(await resolvePastedPath(file)).toMatchObject({ kind: "text", name: "dot.svg" })
+  })
+
+  test("a non-image, non-UTF-8 file outside the project is a file attachment", async () => {
     const outside = mkdtempSync(path.join(tmpdir(), "outside-"))
     dirs.push(outside)
     const file = path.join(outside, "binary.dat")
     writeFileSync(file, Buffer.from([0xff, 0xfe, 0xfd, 0x00, 0x01]))
-    await expect(resolvePastedPath(file)).rejects.toThrow("not valid UTF-8")
+    expect(await resolvePastedPath(file)).toMatchObject({ kind: "file", path: file, name: "binary.dat", size: 5 })
   })
 
   test("a project directory becomes a mention", async () => {

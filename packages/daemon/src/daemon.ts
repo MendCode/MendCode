@@ -83,13 +83,14 @@ import { randomBytes, timingSafeEqual } from "node:crypto"
 import { defaultLocalTransport, localEndpointPath, removeLocalEndpoint, writeLocalEndpoint, type LocalTransport } from "@mendcode/client/local-endpoint"
 import { homedir } from "node:os"
 import path from "node:path"
+import { stat } from "node:fs/promises"
 import { remoteInstructions } from "./remote-instructions"
 import { ancestorLayers, BUILTIN_PACKAGE, claimLook, diagnosticLines, emptyDiagnostics, extensionLayers, foreignLayers, withForeignLayers, installPackage, listPackages, LookOwnedError, manifestCompatProblem, packageKey, PackageError, PackageNotInstalledError, readLayerFooterPacks, readLayerThemes, readLayerToolDesigns, releaseLook, removePackage, restorePackage, RESERVED_AGENTS, stageCapturedLook, type ExtensionLayer, type PackageHost, type ResourceDiagnostics } from "@mendcode/packages"
 import { EXTENSION_API_VERSION } from "@mendcode/extension-api"
 import { canonicalDir, createCustomToolRegistry, shell, type CustomToolRegistry, type SessionRecallPort } from "@mendcode/tools"
 import { createPackageCatalog } from "./package-catalog"
 import { createPackageAuthoring } from "./package-authoring"
-import { AttachmentError, decodeAttachment, imageDimensions, readAttachment, resolvePastedPath } from "./attachments"
+import { AttachmentError, decodeAttachment, imageDimensions, normalizeDroppedPath, readAttachment, resolvePastedPath } from "./attachments"
 import { createClipboardReader, type ClipboardReader } from "./clipboard"
 import { createTuiControl } from "./tui-control"
 import { createThemes } from "./themes"
@@ -3739,6 +3740,8 @@ export async function startDaemon(options: DaemonOptions) {
     engine.forget?.(sessionId)
     options.onSessionRemoved?.(sessionId)
     store.deleteSession(sessionId)
+    // What this chat's prompts copied to this machine (a hub) goes with it.
+    if (existsSync(path.join(options.dir, "uploads", sessionId))) void import("./sync/uploads").then(({ dropUploads }) => dropUploads(options.dir, sessionId))
     // A blank chat no terminal heard of (`quietEmpties`) is not announced: no list holds it.
     if (!quietEmpties.has(sessionId)) globalSink.append({ type: "session.removed", sessionId })
     secrets.drop(sessionId)
@@ -3962,7 +3965,7 @@ export async function startDaemon(options: DaemonOptions) {
     // A run token also starts chats and runs turns, only in the folders this daemon already works in and only for the hub's own sessions.
     if ((connection.peer?.scope === "sync" || connection.peer?.scope === "sync-run") && command.type !== "hello" && command.type !== "sync.peer") {
       const { SYNC_TOKEN_REFUSAL, syncRunRefusal } = await import("./sync/run-peer")
-      const refusal = connection.peer.scope === "sync" ? SYNC_TOKEN_REFUSAL : syncRunRefusal({ command, sessionDirectory: (id) => store.sessionDirectory(id as SessionId), isRoot: (id) => { const info = store.sessionInfo(id as SessionId); return info !== undefined && !info.parentId }, knownFolder: (directory) => existsSync(directory) && knownProjectDirectory(directory) })
+      const refusal = connection.peer.scope === "sync" ? SYNC_TOKEN_REFUSAL : syncRunRefusal({ command, sessionDirectory: (id) => store.sessionDirectory(id as SessionId), isRoot: (id) => { const info = store.sessionInfo(id as SessionId); return info !== undefined && !info.parentId }, knownFolder: (directory) => existsSync(directory) && knownProjectDirectory(directory), blobStored: (sha256, bytes) => existsSync(store.blobPath(sha256)) && store.readBlob(sha256).length === bytes })
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
     }
     // A chat bot's token runs turns inside its own folder and nothing else (docs/remote.md, "Bot bridge").
@@ -6110,11 +6113,22 @@ export async function startDaemon(options: DaemonOptions) {
           const resolved = await resolvePastedPath(command.path, { home: homedir(), ...(command.directory ? { directory: command.directory } : {}), ...(command.allowDirectory ? { allowDirectory: true } : {}) })
           if (resolved.kind === "image" || resolved.kind === "document") return reply(connection, command.id, { ok: true, result: { kind: resolved.kind, attachment: store.putBlob(resolved.bytes, resolved.mime), name: resolved.name, ...(resolved.kind === "image" ? imageDimensions(resolved.bytes) : {}) } })
           if (resolved.kind === "mention") return reply(connection, command.id, { ok: true, result: { kind: "mention", path: resolved.path } })
+          if (resolved.kind === "file") return reply(connection, command.id, { ok: true, result: { kind: "file", path: resolved.path, name: resolved.name, size: resolved.size, type: resolved.type } })
           return reply(connection, command.id, { ok: true, result: { kind: "text", name: resolved.name, content: resolved.content, ...(resolved.directory ? { directory: true } : {}) } })
         } catch (error) {
           if (error instanceof AttachmentError) return reply(connection, command.id, { ok: false, code: "invalid_command", message: error.message })
           throw error
         }
+      case "attachment.upload": {
+        // A file attached to a prompt becomes readable where its chat runs: here it stays put, on a hub it is copied into the chat's uploads folder.
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[ATTACHMENT]: files are attached from this machine only" })
+        const file = normalizeDroppedPath(command.path, homedir())
+        const info = await stat(file).catch(() => undefined)
+        if (!path.isAbsolute(file) || !info?.isFile()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[ATTACHMENT]: not a file: ${file}` })
+        if (!syncHubOf?.(command.sessionId)) return reply(connection, command.id, { ok: true, result: { path: file, size: info.size, copied: false } })
+        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).upload(command.sessionId, file) }) }
+        catch (error) { return reply(connection, command.id, syncFailure(error)) }
+      }
       case "review.query":
       case "review.update":
         if (!store.sessionDirectory(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[REVIEW]: session not found" })
@@ -6993,6 +7007,8 @@ export async function startDaemon(options: DaemonOptions) {
       case "sync.peer": {
         // Another daemon syncing with this one: only over the remote listener, with a sync or full token, never read-only.
         if (!connection.peer || connection.peer.readOnly || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: session sync needs a remote sync or full token" })
+        // Writing a file into this machine's folders is more than syncing sessions: it takes a run or full token.
+        if (command.input.op === "file-put" && connection.peer.scope === "sync") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: copying a file to this machine needs a token made with `remote token create --sync --run`" })
         try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input, clientGone(connection)) }) }
         catch (error) { return reply(connection, command.id, syncFailure(error)) }
       }
