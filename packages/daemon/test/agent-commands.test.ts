@@ -231,7 +231,10 @@ test("restart reattaches summary and peer commands to their persisted queue with
   expect((await next.get(target, peer.commandId)).queueId).toBe(peer.queueId)
   await next.client.send({ type: "user.submit", sessionId: target, text: "Resume", attachments: [] })
   await until(async () => (await next.get(source, summary.commandId)).state === "completed" && (await next.get(source, peer.commandId)).state === "completed")
-  const notices = next.daemon.store.readAfter(target, 0).filter((event) => event.type === "queue.added" && event.notice)
+  // The restart also tells the target that its hung turn was cut off, a notice of its own that lands a moment after recovery, so
+  // only the two commands' queue entries are counted: each is delivered exactly once.
+  const commandQueues = new Set([(await next.get(target, summary.commandId)).queueId, peer.queueId])
+  const notices = next.daemon.store.readAfter(target, 0).filter((event) => event.type === "queue.added" && event.notice && commandQueues.has(event.queueId))
   expect(notices).toHaveLength(2)
   await until(() => next.daemon.store.readAfter(source, 0).some((event) => event.type === "queue.added" && event.notice))
   expect(next.daemon.store.readAfter(source, 0).filter((event) => event.type === "queue.added" && event.notice)).toHaveLength(1)
