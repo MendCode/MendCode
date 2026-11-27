@@ -635,6 +635,26 @@ Frames: `bun scripts/render-frames.ts .agents-frames/B66 --b66 100x30 180x50`.
 
 A bot is an agent with an identity: a name, a shape and color, its own memory, and a place you send it to work. It is off until you run `/experimental bots on`; with the flag off nothing about it loads, `/bot` is not in the menu and its commands answer `forbidden`.
 
+### Quick start
+
+Turn the flag on, draft a bot (the form opens to confirm it; nothing is written until you choose Create), then teach it something:
+
+```sh
+# in the terminal, once
+/experimental bots on
+/bot new calm "A calm reviewer that checks diffs before they ship"
+/bot memory calm add "Prefer short reviews with file:line references"
+```
+
+Then, in the sidebar, Enter on the bot (or `n`) asks for a folder and opens a chat with it there. A model you pick in that chat stays for that chat only. From a shell, the bot list is read only:
+
+```sh
+mendcode bot list
+mendcode bot show calm
+```
+
+A program that runs its own bot on another machine gets a bot token instead of a local bot file: see [bot tokens](remote.md#bot-tokens). A bot's chats are ordinary sessions, so [sessions](sessions.md) and [permissions](permissions.md) apply to them as they do to any session.
+
 A bot is the same file as any agent, with a `bot:` block, and it lives in your own `~/.mendcode/agents/` (a bot is global, so a project's `.mendcode/agents/` file keeps working as an agent and its block is ignored, with a note under `problems`):
 
 ```markdown

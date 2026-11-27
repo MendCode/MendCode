@@ -13,6 +13,36 @@ The loop runs in its own session and does not see the conversation, so say what 
 `loops daemon` and `loops service …` control the shared [user daemon service](automation.md#user-daemon-service-b68).
 There is no competing service per repository; persisted loop triggers remain authoritative.
 
+## From the shell
+
+The same loops from a terminal. `loop` and `loops` are the same command.
+
+```sh
+mendcode loop create --daily 09:00 --name "CI check" "Check CI on main and report any failure"
+mendcode loop create --every 1h --goal --check "bun test" "Make the tests pass"
+mendcode loop list
+mendcode loop show <id>                  # objective, runs and the last journal events
+mendcode loop pause|resume|run|stop|delete <id>
+```
+
+`create` takes `--every 1h` or `--daily 09:00` (local clock). Weekday and time-zone triggers are not in the shell form: write them in the `/loops` form or the trigger text above.
+
+To start a run from cron or CI, use `loop fire`. A fire during a run waits for it, and several fires count once:
+
+```sh
+# crontab: after the nightly build fails, wake the loop with the reason
+mendcode loop fire <id> --note "nightly build failed on main"
+```
+
+To prepare a loop without starting it, make a draft and activate it when it is ready:
+
+```sh
+mendcode loops draft --name "docs watch" --objective "Report stale links in docs/" --interval-ms 3600000
+mendcode loops activate <id>
+```
+
+`loops tick` shows which active loops are due without running them; add `--execute` to run them. The full command list is in [automation](automation.md#commands).
+
 ## Triggers
 
 | trigger | wakes |
