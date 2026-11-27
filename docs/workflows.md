@@ -12,6 +12,22 @@ For opt-in HTTP routes and donor payload support, see [Workflow REST adapter](wo
 
 For bounded single/cascade/critic candidates with immutable review and request/token/cost/time accounting, see [Compound orchestration](compound.md). These opt-in runs keep isolated worktrees and never automatically replay after restart.
 
+## From the shell
+
+`workflow start` only previews unless you add `--yes`, and it prints every check command and the permission it will use before anything runs:
+
+```sh
+mendcode workflow preview plan.json                       # tasks, checks and permission; starts nothing
+mendcode workflow start plan.json --permission edits --yes --wait
+mendcode workflow list                                    # this project's runs (--all for every project)
+mendcode workflow show <id>                               # tasks, contract and last verification
+mendcode workflow retry <id> --task <taskId>              # run one task again, and what depends on it
+mendcode workflow approve <id> --task <taskId> --reason "checked the diff"   # answer a human gate
+mendcode workflow accept <id> --reason "done despite the contract"            # declare it done
+```
+
+`--wait` follows the run until it ends or needs you. A script (`.js`) runs the same way with `mendcode workflow run <file.js|name> key=value ... --yes --wait`; `workflow new <name>` writes a commented starter. Every command is listed in [automation](automation.md#commands).
+
 ## Plan
 
 ```json

@@ -45,6 +45,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
+- Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
 
 ## v0.0.20 - 2026-11-24
 

@@ -427,6 +427,9 @@ mendcode backlog clear                         # removes the finished items
 mendcode loop list [--all]
 mendcode loop create [--every 1h | --daily 09:00] [--now] [--goal [--check "cmd"]… [--no-audit]] [--runs N] [--name N] [--criteria C] "objective"
 mendcode loop pause|resume|stop|run|delete <id>
+mendcode loop fire <id> [--note TEXT]          # start an external loop now (cron, CI)
+mendcode loop events|artifacts|receipt <id> [--run N] [--limit N] [--before SEQ]
+mendcode loop export <id> [--format json|markdown]
 mendcode loops status [--all]
 mendcode loops examples|templates
 mendcode loops draft [NAME OBJECTIVE] [--template ID] [--name N] [--objective O] [--interval-ms N | --daily-at HH:MM --timezone Z]
@@ -442,6 +445,17 @@ mendcode workflow pause|resume|stop|verify|delete <id>
 mendcode workflow retry <id> --task <taskId>
 mendcode workflow approve|reject <id> --task <taskId> [--reason TEXT]   # answer a human task or gate
 mendcode workflow accept <id> --reason "why it is done"
+mendcode workflow run <file.js|name> [key=value ...] [--permission P] [--yes] [--wait [--timeout S]]
+mendcode workflow new <name> [--out FILE]      # a commented starter script
+mendcode workflow convert <plan.json> [--out FILE]
+mendcode workflow budget <id> [--agents N] [--tokens N] [--usd N] [--minutes N]
+mendcode workflow update <id> <file.js>        # swap in an edited script (paused or failed run)
+mendcode workflow retry-task <id> --task-id <taskId> [--reason TEXT]
+mendcode workflow events|artifacts|receipt <id> [--limit N] [--before SEQ]
+mendcode workflow export <id> [--format json|markdown]
+
+mendcode bot list [--json]                     # every bot: state, chats, schedules (read only)
+mendcode bot show NAME [--json]                # one bot's chats by folder, and its schedules
 
 mendcode area [list]
 mendcode area add <name> <folder>... [--permission ask|edits|full]

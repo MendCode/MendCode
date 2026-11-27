@@ -91,6 +91,19 @@ export default { name: "habits", daemon(api) {
 
 `--self-test` proves every check fails on an empty install and passes on a reference solution, with no model.
 
+## Install and switch on from the shell
+
+```sh
+mendcode plugin <module-name>                   # install an extension module from npm (pinned, scripts skipped)
+mendcode plugin file:///path/to/module          # or from a local path
+mendcode profile list                           # installed profiles: what each adds, and whether it is on
+mendcode profile install <source>               # folder, npm:name@x.y.z, github:owner/repo#ref or git:URL
+mendcode profile enable|disable <name>          # applies at once: no /reload and no restart
+mendcode plugin-auth                            # sign-in methods an extension registered
+```
+
+`profile list --project` shows only this directory's profiles (`.mendcode/packages`). Extension code from a project is not loaded until the project is trusted. The full command list is in [automation](automation.md#commands).
+
 ## Where they are found
 
 Put modules in `<layer>/extensions/*.ts|js` or `<layer>/extensions/<name>/index.ts|js` in any extension layer. Discovery and hooks follow this order:
