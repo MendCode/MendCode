@@ -789,8 +789,9 @@ export function createWorkflowService(options: {
               // The script may already have used the old answer: it replays from its journal and waits for the new one.
               if (run.tasks.find((task) => task.id === extra.taskId)?.state === "done") { scripts.stopHost(workflowId, "an agent was restarted"); hostStopped = true }
             }
-            // Agents the stopped script started with the old answer (a script's tasks list no `needs`) are still running. They are reopened like the restarted one: the replay finds each in its own place, pending, and starts it again from the new answer, and its old session ends here instead of running beside it.
-            if (hostStopped) for (const task of run.tasks) if (task.id !== extra.taskId && (task.state === "running" || task.state === "needs_input")) next = retryTask(next, task.id, now, extra.reason)
+            // Agents the stopped script started with the old answer (a script's tasks list no `needs`) are still running. Their sessions end and the tasks leave the run: the replay asks for whatever the new answer needs and creates it then, so nothing starts before the script asks for it and nothing obsolete runs beside it.
+            const orphans = hostStopped ? run.tasks.filter((task) => task.id !== extra.taskId && (task.state === "running" || task.state === "needs_input")) : []
+            if (orphans.length) next = { ...next, tasks: next.tasks.filter((task) => !orphans.some((orphan) => orphan.id === task.id)) }
             cancelTasks(run, run.tasks.filter((task) => (!next.tasks.some((entry) => entry.id === task.id) || next.tasks.find((entry) => entry.id === task.id)?.state === "pending") && (task.state === "running" || task.state === "needs_input")).map((task) => task.id))
             return { run: change(workflowId, () => next)! }
           }
