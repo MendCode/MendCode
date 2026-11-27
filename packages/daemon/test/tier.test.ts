@@ -27,6 +27,8 @@ const fakeTool = (name: string, tier?: Tier) => defineTool({
   execute: async () => ({ output: "ran", title: name, isError: false, truncated: false }),
 })
 
+const MEASURED_PROJECT_PATH = "/work/project"
+
 /** What a fresh session sends before the user types anything: the system prompt and every tool definition the tier offers. */
 async function baseline(tier: Tier | undefined, extra: { projectTools?: ReturnType<typeof fakeTool>[]; settings?: TierSettings } = {}) {
   const dir = temp(), project = temp()
@@ -46,7 +48,9 @@ async function baseline(tier: Tier | undefined, extra: { projectTools?: ReturnTy
   const names = request.tools.map((tool) => tool.name)
   // A character count over four is the usual cheap estimate of tokens; the budget is about growth, not exact cost.
   const toolTokens = Math.ceil(JSON.stringify(request.tools).length / 4)
-  const systemTokens = Math.ceil(request.system.length / 4)
+  // The project path appears in the prompt and its length depends on where the temp dir lives (macOS /private/tmp, a Linux runner's
+  // /tmp, a long CI workspace); the budget is about the prompt's own text, so the path is measured at a fixed stand-in length.
+  const systemTokens = Math.ceil(request.system.split(project).join(MEASURED_PROJECT_PATH).length / 4)
   return { names, systemTokens, toolTokens, total: systemTokens + toolTokens }
 }
 

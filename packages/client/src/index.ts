@@ -25,6 +25,9 @@ export function commandTimeout(command: CommandInput | Command, defaultMs: numbe
   if (command.type === "loop.tick" && command.execute) return Math.max(defaultMs, 16 * 60_000)
   if (command.type === "task.status" && command.action === "wait") return Math.max(defaultMs, (command.timeoutMs ?? 30_000) + 5000)
   if (command.type === "task.run" && !command.input.background) return Math.max(defaultMs, 3_600_000)
+  // A comparison with a hub exports both configurations and may send a bundle; `sync now` with follow on does the same.
+  if (command.type === "config.parity" && (command.input.op === "run" || command.input.op === "apply")) return Math.max(defaultMs, 240_000)
+  if (command.type === "sync.control" && command.input.action === "now") return Math.max(defaultMs, 240_000)
   if (command.type === "continuity.wait") return Math.max(defaultMs, (command.timeoutMs ?? 10000) + 5000)
   if (command.type === "setup.ask") return Math.max(defaultMs, 35_000)
   // From a session's shell, a mode above its own can wait on the user's card (daemon `ELEVATION_WAIT_MS`).
