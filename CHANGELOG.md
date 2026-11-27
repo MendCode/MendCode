@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - A Hermes bot now lists the chats it has in its own app, not only the running ones: the newest three under the bot in the sidebar and the recent list on its page (`o`), each titled and readable. Empty chats started with a Hermes bot and never used no longer show as `Untitled session`.
+- A session in the home folder no longer lists every profile a second time as a project profile, and two profiles that ship the identical extension file load it once instead of warning that it is skipped.
 - `sync status` no longer shows the hub as not connected between rounds that succeed.
 - An expired ChatGPT sign-in now says so in the chat and points to `/connect chatgpt` instead of another tool, and a ChatGPT browser sign-in on a remote server can be finished by pasting the address the browser ended on.
 - `/pet` lists only MendAscii and MendGirl out of the box: an imported pet that repeats MendGirl's name is no longer listed twice, and in a terminal that cannot draw images MendGirl shows as unavailable and MendAscii takes her place.

@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { z } from "zod"
 import { PackageAuthorManifest } from "@mendcode/protocol"
-import { packageDirs, packageKey, packagesRoot, PACKAGE_NAME, type ExtensionSource } from "./layers"
+import { packageDirs, packageKey, packagesRoot, PACKAGE_NAME, projectIsUserDir, type ExtensionSource } from "./layers"
 
 export const MANIFEST_FILE = "mendcode-profile.json"
 /** What the manifest was called when profiles were called packages: still read (and the profile keeps loading), never written. */
@@ -117,7 +117,9 @@ export function packageContents(dir: string): PackageContents {
 export function listPackages({ userDir, directory, disabled = [] }: { userDir: string; directory: string; disabled?: readonly string[] }): PackageInfo[] {
   const off = new Set(disabled)
   const out: PackageInfo[] = []
-  for (const source of ["user", "project"] as const) {
+  // A folder whose `.mendcode` is the data directory (the home folder, through a link) has no project scope of its own.
+  const scopes = projectIsUserDir({ userDir, directory }) ? (["user"] as const) : (["user", "project"] as const)
+  for (const source of scopes) {
     for (const { name, dir } of packageDirs(packagesRoot({ source, userDir, directory }))) {
       const read = readManifest(dir)
       const install = readInstallRecord(dir)
