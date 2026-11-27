@@ -14,6 +14,8 @@ export type SyncPorts = {
   /** A turn, queued work, an approval or a side chat is live for the session. */
   busy(sessionId: SessionId): boolean
   publish(event: SessionEvent): void
+  /** Calls `listener` for every event this daemon appends to a session of its own (the hub's live chats). */
+  observe(listener: (event: SessionEvent) => void): void
   changed(sessionId: SessionId): void
   /** Drops the session's in-memory state after its history changed underneath it. */
   release(sessionId: SessionId): void
@@ -67,9 +69,9 @@ export function createSync(ports: SyncPorts) {
       startDevice()
       if (!device && asHub) startHub()
     },
-    async peer(holder: string, input: SyncPeerInput) {
+    async peer(holder: string, input: SyncPeerInput, gone?: AbortSignal) {
       if (device) throw new SyncRefusal("forbidden", "this machine syncs with another hub; it does not serve as one")
-      return startHub().handle(holder, input)
+      return startHub().handle(holder, input, gone)
     },
     async control(input: SyncControlInput): Promise<Record<string, unknown>> {
       switch (input.action) {

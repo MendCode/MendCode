@@ -11,6 +11,9 @@ import { SyncBlobPutInput, SyncBlobReadInput } from "./project-rest"
 /** Events in one history page or one push, and the bytes of one page (well inside a 256 KiB frame). */
 export const SYNC_PAGE_EVENTS = 2000
 export const SYNC_PAGE_BYTES = 160_000
+/** Sessions one `tail` may follow, and the longest it waits for news. */
+export const SYNC_TAIL_SESSIONS = 16
+export const SYNC_TAIL_MAX_WAIT_MS = 25_000
 /** Session changes listed per `changes` page. */
 export const SYNC_CHANGES_PAGE = 200
 /** Memory rows per `memories` page and per `memories-put`. */
@@ -49,6 +52,11 @@ export const SyncPeerInput = lazySchema(() => z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("changes"), after: seq }),
   /** One session's stored events after native seq `after`. */
   z.strictObject({ op: z.literal("history"), sessionId: SessionId, after: seq }),
+  /**
+   * Long poll for live chats: answers as soon as any listed session has events after its `after` (or empty after `waitMs`), so a
+   * device follows a chat running on the hub at the hub's own pace. Each session's events come as in `history`.
+   */
+  z.strictObject({ op: z.literal("tail"), sessions: z.array(z.strictObject({ sessionId: SessionId, after: seq })).min(1).max(SYNC_TAIL_SESSIONS), waitMs: z.number().int().min(0).max(SYNC_TAIL_MAX_WAIT_MS) }),
   /**
    * New settled events of a session this device holds the lease of (`epoch`), or of a new session it hands to the hub
    * (`create`). `base` is the hub's last seq as the device last saw it; anything else is a conflict.
