@@ -606,6 +606,8 @@ export function createApp(input: AppInput) {
   function report(reply: CommandReply) {
     appState.notice = ""
     if (!reply.ok) fail(reply.error.message)
+    // The hub that runs this chat is out of reach: the device holds the action and sends it when the link is back.
+    else if (reply.result?.held === true) say("sending when reconnected", "info")
   }
 
   // `keybindings.json` is read once here (one existsSync without it); extension modules load after the first settings

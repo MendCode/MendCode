@@ -4,11 +4,12 @@ export const SYNC_TOKEN_REFUSAL = "[SYNC]: a sync token only syncs sessions; to 
 
 /**
  * What a `scope: "sync-run"` token may send besides `hello` and `sync.peer` (docs/sync.md, "Running on the hub"): start a chat in a
- * folder this daemon already works in, send a prompt to one of its root sessions, cancel the turn, answer its approvals, move one of its
- * root sessions to another folder inside the ones it works in (`session.cd`) and list the subfolders of such a folder (`session.dirs`, names
- * only). The device sees the result through the mirror. Nothing else: no shell, no files, settings, permission changes, sub-agents or memory.
+ * folder this daemon already works in, send a prompt to one of its root sessions, cancel the turn, answer its approvals, act on its queue
+ * (send now, steer, drop, edit, move), move one of its root sessions to another folder inside the ones it works in (`session.cd`) and
+ * list the subfolders of such a folder (`session.dirs`, names only). The device sees the result through the mirror. Nothing else: no
+ * shell, no files, settings, permission changes, sub-agents or memory.
  */
-const RUN_COMMANDS: ReadonlySet<string> = new Set(["session.create", "user.submit", "turn.cancel", "request.resolve", "session.cd", "session.dirs"])
+const RUN_COMMANDS: ReadonlySet<string> = new Set(["session.create", "user.submit", "turn.cancel", "request.resolve", "queue.promote", "queue.steer", "queue.remove", "queue.edit", "queue.reorder", "session.cd", "session.dirs"])
 
 export function syncRunRefusal(input: { command: Command; sessionDirectory(sessionId: string): string | undefined; isRoot(sessionId: string): boolean; knownFolder(directory: string): boolean }): string | undefined {
   const { command } = input

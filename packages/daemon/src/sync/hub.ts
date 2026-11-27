@@ -117,7 +117,41 @@ export function createHub(ports: SyncPorts, state: SyncState) {
     return { released: true, lastSeq: head.last_seq }
   }
 
-  async function handle(holder: string, input: SyncPeerInput): Promise<Record<string, unknown>> {
+  /** Devices waiting in a `tail` for news of their chats: one per device (a newer wait replaces the older), woken by the hub's own events. */
+  const tails = new Map<string, { ids: ReadonlySet<string>; wake(): void }>()
+  ports.observe((event) => { if (tails.size) for (const entry of tails.values()) if (entry.ids.has(event.sessionId)) entry.wake() })
+  /** What gathers after a first event before the answer leaves, so one answer carries a few events instead of each alone. */
+  const TAIL_COALESCE_MS = 40
+
+  async function tail(holder: string, input: Extract<SyncPeerInput, { op: "tail" }>, gone?: AbortSignal) {
+    const collect = () => {
+      const out: Array<{ sessionId: SessionId; events: SessionEvent[]; hasMore: boolean; lastSeq: number }> = []
+      for (const { sessionId, after } of input.sessions) {
+        const head = state.sessionHead(sessionId)
+        if (!head || head.parent_id || head.last_seq <= after) continue
+        const page = store.projectSync.sessionHistory(sessionId, after)!
+        if (page.events.length) out.push({ sessionId, events: page.events, hasMore: page.hasMore, lastSeq: page.lastSeq })
+      }
+      return out
+    }
+    let sessions = collect()
+    if (!sessions.length && input.waitMs > 0) {
+      const woken = await new Promise<boolean>((resolve) => {
+        let done = false
+        const finish = (value: boolean) => { if (done) return; done = true; clearTimeout(timer); if (tails.get(holder) === entry) tails.delete(holder); resolve(value) }
+        const entry = { ids: new Set<string>(input.sessions.map((item) => item.sessionId)), wake: () => finish(true) }
+        const timer = setTimeout(() => finish(false), input.waitMs)
+        gone?.addEventListener("abort", () => finish(false), { once: true })
+        tails.get(holder)?.wake()
+        tails.set(holder, entry)
+      })
+      if (woken) await new Promise((resolve) => setTimeout(resolve, TAIL_COALESCE_MS))
+      sessions = collect()
+    }
+    return { sessions }
+  }
+
+  async function handle(holder: string, input: SyncPeerInput, gone?: AbortSignal): Promise<Record<string, unknown>> {
     switch (input.op) {
       case "hello": return { hub: true, leaseMs, now: ports.now() }
       case "changes": {
@@ -134,6 +168,7 @@ export function createHub(ports: SyncPorts, state: SyncState) {
         const page = store.projectSync.sessionHistory(input.sessionId, input.after)!
         return { events: page.events, hasMore: page.hasMore, lastSeq: page.lastSeq }
       }
+      case "tail": return tail(holder, input, gone)
       case "push": return push(holder, input)
       case "lease": return lease(holder, input)
       case "meta": {

@@ -3887,6 +3887,7 @@ export async function startDaemon(options: DaemonOptions) {
         send(connection, { v: PROTOCOL_VERSION, kind: "event", body: event })
       }
     },
+    observe: (listener) => { sessionObservers.push(listener) },
     changed: (id) => publishActivity(id, "idle", true),
     release: (id) => {
       if (actors.get(id)?.snapshot().turnId) return
@@ -3958,7 +3959,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
     }
     // A chat the hub owns runs on the hub: this daemon forwards the prompt, the cancel or the answer, and a new chat in the hub's folder, and the turn comes back through the mirror.
-    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create" || command.type === "session.cd" || command.type === "session.dirs")) {
+    if (syncRoute && !connection.peer && (command.type === "user.submit" || command.type === "turn.cancel" || command.type === "request.resolve" || command.type === "session.create" || command.type === "session.cd" || command.type === "session.dirs" || command.type.startsWith("queue."))) {
       const forward = syncRoute(command)
       if (forward) {
         const done = await forward(command)
@@ -4646,7 +4647,8 @@ export async function startDaemon(options: DaemonOptions) {
       case "session.compaction.set":
       case "session.compact": {
         const peer = Boolean(connection.remoteAddress || connection.peer)
-        if (peer && ["queue.list", "queue.edit", "queue.reorder", "queue.steer"].includes(command.type)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: queue inspection and editing are local only" })
+        // A device with a run token acts on the queue of the hub chats it runs (docs/sync.md); any other remote peer may not.
+        if (peer && connection.peer?.scope !== "sync-run" && ["queue.list", "queue.edit", "queue.reorder", "queue.steer"].includes(command.type)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: queue inspection and editing are local only" })
         if (peer && (command.type === "user.submit" || command.type === "session.compact")) {
           const model = command.type === "user.submit" ? command.selection?.model : command.model
           const selected = model ?? resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(command.sessionId)), catalog })
@@ -6978,7 +6980,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "sync.peer": {
         // Another daemon syncing with this one: only over the remote listener, with a sync or full token, never read-only.
         if (!connection.peer || connection.peer.readOnly || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: session sync needs a remote sync or full token" })
-        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input) }) }
+        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input, clientGone(connection)) }) }
         catch (error) { return reply(connection, command.id, syncFailure(error)) }
       }
       case "sync.control": {
