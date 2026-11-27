@@ -394,7 +394,7 @@ export type EngineExtensions = DaemonExtensions & { hooks: EngineHooks; prompts:
 
 export type DaemonOptions = RemoteListenerOptions & {
   /** Session sync timings (tests shorten them): a device's round interval, a lease's length and how long an idle held session waits before it goes back to the hub. */
-  sync?: { tickMs?: number; leaseMs?: number; idleReleaseMs?: number }
+  sync?: { tickMs?: number; leaseMs?: number; idleReleaseMs?: number; followMs?: number }
   /**
    * `descendants`: every local client that descends from this process is agent-origin unless the user opened its terminal
    * here. On for the real daemon; off by default so a host that starts its own clients (tests, embeddings) is not refused.
@@ -3900,6 +3900,25 @@ export async function startDaemon(options: DaemonOptions) {
       await settingsSaved(before, store.settings.set(patch), patch)
     },
     log: (message) => logLine("warn", message),
+    followMs: options.sync?.followMs ?? 10 * 60_000,
+    parity: async ({ remote }) => {
+      const { paritySummary } = await import("./parity")
+      return { summary: paritySummary(await (await parityService()).run({ remote, apply: true })) }
+    },
+  })
+  /** Configuration parity with a hub (docs/sync.md): loaded by the first `config.parity` command or the first following round. */
+  let parity: Promise<import("./parity").Parity> | undefined
+  const parityService = () => parity ??= import("./parity").then(({ createParity }) => {
+    const directory = options.dir
+    return createParity({
+      dir: options.dir, now: () => clock.now(), version: options.runtimeInfo?.version ?? DEV_VERSION, buildId: options.buildId, log: (message) => logLine("warn", message),
+      settings: async () => store.settings.get() as Record<string, unknown>,
+      setSettings: async (patch) => { const before = store.settings.get(); await settingsSaved(before, store.settings.set(patch), patch) },
+      installPackage: async ({ dir, replace }) => { await managePackages({ type: "profiles.install", directory, source: dir, scope: "user", ...(replace ? { replace: true } : {}) } as ManagedCommand) },
+      enablePackage: async ({ key, enabled }) => { await managePackages({ type: "profiles.enable", directory, key, enabled } as ManagedCommand) },
+      removePackage: async ({ name }) => { await managePackages({ type: "profiles.remove", directory, name, scope: "user" } as ManagedCommand) },
+      setPackageResource: async ({ key, resource, enabled }) => { await packageCatalog({ type: "profiles.resource", directory, key, resource, enabled } as Parameters<typeof packageCatalog>[0]) },
+    })
   })
   /** A sync refusal as a reply: a conflict travels as `target_mismatch` (the protocol has no conflict code). */
   function syncFailure(error: unknown) {
@@ -6946,6 +6965,21 @@ export async function startDaemon(options: DaemonOptions) {
         if (connection.remoteAddress || connection.peer || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: sync is managed on this machine only" })
         try { return reply(connection, command.id, { ok: true, result: await (await syncService()).control(command.input) }) }
         catch (error) { return reply(connection, command.id, syncFailure(error)) }
+      }
+      case "config.parity": {
+        // The hub side takes a bundle from a full token (never a sync, run, bot or read-only one: those are refused before this point) or a local client; `run` is this machine's own.
+        const input = command.input
+        const local = !connection.remoteAddress && !connection.peer
+        if (connection.agent && input.op !== "manifest") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[PARITY]: a session cannot change configuration: run it yourself in a terminal" })
+        if (input.op === "run" ? !local : !local && (!connection.peer || connection.peer.readOnly || connection.peer.scope !== undefined)) return reply(connection, command.id, { ok: false, code: "forbidden", message: input.op === "run" ? "[PARITY]: parity is run on the machine whose configuration is the reference" : "[PARITY]: configuration parity needs a full token" })
+        try {
+          const service = await parityService()
+          const result = input.op === "manifest" ? { manifest: await service.manifest(input.tools === true) }
+            : input.op === "stage" ? service.stage(input)
+              : input.op === "apply" ? await service.apply(input)
+                : { ...await service.run({ ...(input.remote ? { remote: input.remote } : {}), apply: input.apply === true, allowFlagged: input.allowFlagged ?? [], allowCode: input.allowCode === true }) }
+          return reply(connection, command.id, { ok: true, result })
+        } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: redactSecrets(error instanceof Error ? error.message : String(error)).text.slice(0, 1000) }) }
       }
       case "project.rest": {
         try { return reply(connection, command.id, { ok: true, result: await (await projectRestService()).run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }

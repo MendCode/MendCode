@@ -53,6 +53,33 @@ The run token adds only four commands to what a sync token may send: start a cha
 
 With the hub unreachable, the same actions are refused with a short "hub is not connected" message instead of running here; nothing is queued.
 
+## Keeping the hub like this machine
+
+The hub should be set up like the machine you work on. Sessions, memories and preference settings already sync; `parity` carries the rest of the portable setup. It compares this machine (the reference) with the hub and, on request, brings the hub level.
+
+```sh
+mendcode sync parity [REMOTE]                 # compare; changes nothing
+mendcode sync parity --apply                  # bring the hub level (same as: remote parity --apply)
+mendcode sync parity --apply --code           # also send code that runs on its own
+mendcode sync parity --apply --allow-flagged packages/NAME   # a reviewed folder the credential scan held back
+mendcode sync enable REMOTE --follow          # or: sync follow on|off
+```
+
+| Compared | `--apply` does |
+|---|---|
+| Profiles (packages): present, same files, on or off, switched-off parts | Installs or replaces them with the profile installer and sets on or off as here |
+| Skills, agents, themes, commands, recipes, prompt files (`APPEND_SYSTEM.md`, `SYSTEM.md`, `AGENTS.md`) | Writes the same bytes; a changed one replaces the hub's, with a backup |
+| MCP servers | Adds them disabled and pending: approve each in `/mcp` on the hub and sign in there. A definition with a literal secret in `env` or `headers` is refused |
+| Extensions and profiles with tools, hooks or extensions | Listed as `code` and held back; `--code` sends them |
+| graft | Reported only: the version here and there. Parity installs no tools |
+| Preference settings | Listed when they differ; session sync carries them (`--no-settings` turns that off) |
+
+Left alone, always: what only the hub has (listed as `only there`), credentials and logins (providers, keys, MCP sign-ins, tokens), authority and machine settings (permissions, tier, models, execution, trusted folders), the terminal's own look (`tui/`, `activation.json`) and bot state. A unit the hub keeps behind a link (a `skills` folder pointing into a checkout) is `blocked`, never written through.
+
+It runs on this machine and talks to the hub with the full token of the saved remote (`remote add NAME HOST:PORT --token-file F`; `remote setup` saves one). The hub accepts it only from a full token: a sync, run, bot or read-only token is refused, so a device that can only sync cannot change the hub's configuration. The hub checks the bundle's hashes, plans it as a configuration import that replaces what differs, and applies it with a journal and backups: `mendcode config-bundle rollback ID --dir HUB_DIR` on the hub undoes it. A bundle holds at most 32 MiB.
+
+`--follow` repeats the same comparison and apply, without `--code` or `--allow-flagged`, while sync runs: at most every 10 minutes and on each `sync now`. It reads and hashes the configuration folders at those moments only; with it off nothing runs and nothing loads. `sync status` shows the last check and what still differs.
+
 ## Projects
 
 A session's folder is matched by the project's normalized git remote plus the path inside the repository, the same way [`--migrate-sessions`](remote.md#one-command-for-a-vps-remote-setup) does: `/Users/me/code/app/pkg` here and `/home/me/src/app/pkg` on the hub are one project when both clones have the same `origin`. `pathMap` rules (`--path-map LOCAL=HUB`) cover folders that are not git clones. A handoff whose project the hub does not have is refused with the reason; clone it there and try again. A mirror whose project this machine lacks keeps the hub's path. A new chat in that folder runs on the hub when the token allows it ([Running on the hub](#running-on-the-hub)), and is refused naming the hub otherwise.
@@ -65,7 +92,7 @@ Each round sends at most 64 requests, one at a time; a history page holds at mos
 
 | File | What it holds |
 |---|---|
-| `sync.json` | This machine is a device: the remote's name, the token file, `pathMap`, `memories`, `settings` (mode 0600, no token) |
+| `sync.json` | This machine is a device: the remote's name, the token file, `pathMap`, `memories`, `settings`, `follow` (mode 0600, no token) |
 | `sync-hub.json` | This machine serves as a hub |
 | `remote/<remote>.sync-token` | The sync-only token (mode 0600, never printed) |
 

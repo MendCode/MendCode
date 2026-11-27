@@ -178,6 +178,7 @@ describe("the commands the other helps list are accepted", () => {
     ["github", ["github", "install"]], ["github", ["github", "run"]], ["pr", ["pr", "setup", "--session", S]], ["pr", ["pr", "12"]],
     ...["login", "logout", "switch", "orgs", "open", "status"].map((word): [string, string[]] => ["console", ["console", word]]), ["console", ["console", "setup", "--token-file", "f"]],
     ...["status", "create", "sync", "remove"].map((word): [string, string[]] => ["share", ["share", word, S]]), ["share", ["share", "policy", "manual"]], ["share", ["share", "local", S]], ["share", ["share", "gist", S, "--yes"]],
+    ...["enable", "disable", "status", "now", "hub-off", "parity", "follow", "take", "release", "handoff"].map((word): [string, string[]] => ["sync", ["sync", word, ...(word === "enable" ? ["hub"] : word === "follow" ? ["on"] : ["take", "release", "handoff"].includes(word) ? [S] : [])]]), ["sync", ["sync", "parity", "hub", "--apply", "--code", "--allow-flagged", "packages/x"]],
     ...["status", "doctor", "plan", "install", "setup", "activate", "deactivate", "remove"].map((word): [string, string[]] => ["tsm", ["tsm", word]]), ["tsm", ["tsm", "open", "t"]], ["tsm", ["tsm", "create", "n"]],
     ...["status", "legacy-status", "activate", "setup", "deactivate", "remove", "scan", "relay-guide", "plan", "doctor", "start", "stop"].map((word): [string, string[]] => ["mflow", ["mflow", word]]),
     ...["status", "enable", "on", "disable", "off"].map((word): [string, string[]] => ["cache", ["cache", word]]),

@@ -49,6 +49,8 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "bot-service", "bot-memory", "bot-recall", "bot-learn",
     // Session sync (off by default) loads only with sync.json or sync-hub.json in the data dir, or the first sync command.
     "sync/index", "sync/device", "sync/hub", "sync/ingest", "sync/config", "sync/projects", "sync/memories", "sync-blobs", "project-identity",
+    // Configuration parity with a hub loads with the first `config.parity` command or the first round of a device that follows.
+    "parity", "config-bundle/export", "config-bundle/plan", "config-bundle/apply",
     // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
     "bot-hermes",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)

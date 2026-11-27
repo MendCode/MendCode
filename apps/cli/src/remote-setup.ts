@@ -499,7 +499,7 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
   say(`  ${address} answers · saved as ${command.name}${command.makeDefault ? " (default)" : ""}`)
   if (command.sync) {
     const { writeSyncConfig } = await import("@mendcode/daemon/sync-config")
-    writeSyncConfig(command.dir, { remote: command.name, tokenFile: syncTokenFile(command.dir, command.name), pathMap: command.pathMaps, memories: true, settings: true })
+    writeSyncConfig(command.dir, { remote: command.name, tokenFile: syncTokenFile(command.dir, command.name), pathMap: command.pathMaps, memories: true, settings: true, follow: false })
     say(`  session sync on with ${command.name}: it starts with this machine's daemon, or now with \`mendcode sync now\``)
   }
 
