@@ -164,13 +164,35 @@ test("a chat running on the hub streams to the device as the hub stores it, in o
 
 test("with the live tail in place, nothing polls faster than the safety round and an idle hub costs the device no live connection", async () => {
   const { hub, device, seed } = await pair()
-  expect(await deviceStatus(device)).not.toHaveProperty("live")
+  // The terminal holding the chat open follows it by push; once it lets go, an idle hub costs no connection.
+  await until(async () => (await deviceStatus(device)).live === "pushed", "the open chat is followed by push")
+  await device.client.send({ type: "client.unsubscribe", sessionId: seed })
+  await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+  await until(async () => (await deviceStatus(device)).live === undefined, "the device stops following a chat nobody holds open")
   expect(await submit(device, seed, "wait here")).toMatchObject({ ok: true })
   await until(async () => (await deviceStatus(device)).live === "pushed", "the device follows the chat by push")
   const started = events(device, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
   expect(await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
   await until(() => events(hub, seed).some((event) => event.type === "turn.cancelled"), "the cancel ran on the hub")
   await until(async () => (await deviceStatus(device)).live === undefined, "the device stops following once the turn ended")
+}, 30_000)
+
+test("a chat opened on the device while the hub runs a turn is brought up to date at once, not at the next polling round", async () => {
+  const { hub, device, seed } = await pair()
+  await device.client.send({ type: "client.unsubscribe", sessionId: seed })
+  await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+  // Someone else starts a turn on the hub; the device's round is ten minutes away.
+  await hub.client.subscribe(seed, events(hub, seed).at(-1)?.seq ?? 0)
+  expect(await submit(hub, seed, "stream")).toMatchObject({ ok: true })
+  await until(() => events(hub, seed).filter((event) => event.type === "item.delta").length >= 6, "the hub streams")
+  expect(events(device, seed).filter((event) => event.type === "item.delta").length).toBe(0)
+  const before = performance.now()
+  expect(await device.client.subscribe(seed, events(device, seed).at(-1)?.seq ?? 0)).toMatchObject({ ok: true })
+  await until(() => device.stamps.size >= 6, "the open chat caught up")
+  expect(performance.now() - before).toBeLessThan(1_000)
+  // And it goes on by push while it stays open.
+  await until(() => turnsDone(device, seed) === 2 && turnsDone(hub, seed) === 2, "the turn reached the open chat")
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
 }, 30_000)
 
 test("a hub without the tail op is followed by polling and the chat still arrives whole", async () => {

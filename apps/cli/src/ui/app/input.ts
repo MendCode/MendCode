@@ -365,7 +365,15 @@ export function createInput(ctx: AppContext, actions: {
     // What the message was made of (its pastes, its images and files) is kept for this run, so it comes back into the prompt as it was composed.
     if (!executable) actions.rememberComposed({ texts: [text, composed.text], pastes: livePastes(typed.pastes, typed.text), attachments: sending })
     state.clearPending = stillHere && state.tuiProfile.submitScroll === "clear"
-    const reply = await input.send(executable ? { type: "commands.execute", sessionId: submissionSession, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: submissionSession, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
+    // Sent while a turn runs, it is queued: the row shows now, and the daemon's own queue (or the reply) takes its place.
+    const optimistic = !executable && stillHere && state.transcript.foreground !== "idle" ? { sessionId: submissionSession as string, preview: (typeof expanded === "string" || ide.text ? text : composed.text).slice(0, 200), delivery } : undefined
+    if (optimistic) { (state.optimisticQueue ??= []).push(optimistic); requestFrame() }
+    let reply: Awaited<ReturnType<typeof input.send>>
+    try {
+      reply = await input.send(executable ? { type: "commands.execute", sessionId: submissionSession, ...executable, attachments: composed.attachments, ...(composed.text ? { contextText: `\n\n${composed.text}` } : {}) } : { type: "user.submit", sessionId: submissionSession, text: composed.text, attachments: composed.attachments, ...(typeof expanded === "string" || ide.text ? { displayText: typeof expanded === "string" ? text : contextText } : {}), ...(delivery && !executable ? { delivery } : {}) })
+    } finally {
+      if (optimistic) state.optimisticQueue = state.optimisticQueue?.filter((entry) => entry !== optimistic)
+    }
     // A message that could not go comes back to the prompt it left, unless something newer is there now (another session,
     // text typed while it was sent): that stays, and the message is one ↑ away in the prompt history.
     const restorable = state.sessionId === submissionSession && editor.isEmpty() && state.attachments.length === 0

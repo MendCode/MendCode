@@ -3878,6 +3878,7 @@ export async function startDaemon(options: DaemonOptions) {
   /** Set once sync has loaded: a prompt to a session another machine owns is refused before it is queued, with that machine's name. */
   let syncGuard: import("./sync").Sync["guard"] | undefined
   let syncRoute: import("./sync").Sync["route"] | undefined
+  let syncFocus: import("./sync").Sync["focus"] | undefined
   /** Set with `syncRoute`: the hub's name and folder of a chat the hub owns, which lists and the footer show. */
   let syncHubOf: import("./sync").Sync["hubOf"] | undefined
   /**
@@ -3891,11 +3892,13 @@ export async function startDaemon(options: DaemonOptions) {
     syncGuard = service.guard
     syncHubOf = service.hubOf
     syncRoute = service.route
+    syncFocus = service.focus
     return service
   })
   const syncPorts = (): import("./sync").SyncPorts => ({
     dir: options.dir, store, now: () => clock.now(), tickMs: options.sync?.tickMs ?? 5_000, leaseMs: options.sync?.leaseMs ?? 60_000, idleReleaseMs: options.sync?.idleReleaseMs ?? 10 * 60_000,
     busy: (id) => Boolean(actors.get(id)?.snapshot().turnId || store.lastTurnStatus(id) === "running" || store.queueOf(id).length || busyAside(id)),
+    watched: (id) => { for (const connection of connections) if (connection.subscriptions.has(id)) return true; return false },
     publish: (event) => {
       for (const connection of connections) {
         const cursor = connection.subscriptions.get(event.sessionId)
@@ -4660,6 +4663,7 @@ export async function startDaemon(options: DaemonOptions) {
         reply(connection, command.id, { ok: true, result: { lastSeq: store.lastSeq(command.sessionId) ?? 0 } })
         // A goal that was active when the daemon stopped goes on once someone opens its session.
         goals.opened(command.sessionId)
+        syncFocus?.(command.sessionId)
         return
       }
       case "client.unsubscribe":
