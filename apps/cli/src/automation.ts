@@ -34,7 +34,7 @@ import { parseTransferExport, parseTransferImport, TRANSFER_EXPORT_USAGE, TRANSF
 import { parseSyncAutomation } from "./sync-automation"
 import { jobAliases } from "./job-aliases"
 import { indexText, tidyHelp } from "./help-index"
-import { BACKLOG_HELP, CONTEXT_HELP, CONTROL_PLANE_HELP, GENERATE_HELP, PLUGIN_HELP, AREA_HELP, CUSTOMIZE_HELP, PROMPT_HELP, RECIPE_HELP, STATS_HELP, STORAGE_HELP, USAGE_HELP } from "./help-text"
+import { SYNC_HELP, BACKLOG_HELP, CONTEXT_HELP, CONTROL_PLANE_HELP, GENERATE_HELP, PLUGIN_HELP, AREA_HELP, CUSTOMIZE_HELP, PROMPT_HELP, RECIPE_HELP, STATS_HELP, STORAGE_HELP, USAGE_HELP } from "./help-text"
 import { DOCS_USAGE } from "./docs-args"
 import { loopAliases, parseLoopAutomation, isLoopAutomation, runLoopAutomation, type LoopAutomation } from "./loop-automation"
 import { WORKTREE_USAGE, parseWorktree, type WorktreeAutomation } from "./worktree-args"
@@ -58,12 +58,12 @@ export const SCHEMA = "mendcode.cli"
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
 export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plugins", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open", "sync"] as const
-const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast", "no-memories", "no-settings"])
+const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary", "fast", "no-memories", "no-settings", "code"])
 /** `workflow list` shows the newest this many runs unless `--limit` says otherwise. */
 const WORKFLOW_LIST_LIMIT = 50
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes", "sync-token-file", "move-dir"])
 /** Flags that may be given several times; their values are collected in order. */
-const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude", "path-map"])
+const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude", "path-map", "allow-flagged"])
 const DEFAULT_LIST_LIMIT = 50
 const DEFAULT_USAGE_DAYS = 30
 const NAME_CHARS = 60
@@ -336,6 +336,7 @@ export const USAGE: Record<string, string> = {
   ...CATALOG_USAGE,
   theme: THEME_USAGE,
   "config-bundle": CONFIG_BUNDLE_USAGE,
+  sync: SYNC_HELP,
   agent: AGENT_USAGE,
   bot: BOT_USAGE,
   export: TRANSFER_EXPORT_USAGE,
@@ -483,6 +484,12 @@ export function parseAutomation(argv: string[]): ParseResult {
   }
   if (flags.get("version") === true && !(name === "control-plane" && sub === "project" && rest[0] === "package-set")) return { ok: true, command: { kind: "version", json: false } }
   if (name === "help" || (!name && flags.has("help"))) return { ok: true, command: { kind: "help", ...(sub ? { topic: sub } : {}), json: false } }
+  // `remote parity` is the same command as `sync parity`: the hub is a remote, and the comparison is session sync's neighbour.
+  if (name === "remote" && sub === "parity") {
+    if (flags.has("help")) return { ok: true, command: { kind: "help", topic: "sync", json: false } }
+    const parsed = parseSyncAutomation(["parity", ...rest], flags, repeated)
+    return "error" in parsed ? { ok: false, message: parsed.error, topic: "sync" } : { ok: true, command: { json: flags.has("json"), ...(typeof flags.get("dir") === "string" ? { dir: String(flags.get("dir")) } : {}), ...parsed } as Automation }
+  }
   if (!name || !NAMES.includes(name as never)) return { ok: "none" }
   if (flags.has("help")) return { ok: true, command: { kind: "help", topic: name === "control-plane" && (sub === "memory" || sub === "prompt" || sub === "project") ? sub : name, json: false } }
 

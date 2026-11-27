@@ -1,6 +1,7 @@
 import { ConsoleUrl } from "./console"
 import { ProjectRestInput } from "./project-rest"
 import { SyncControlInput, SyncPeerInput } from "./sync-peer"
+import { ConfigParityInput } from "./config-parity"
 import { ProjectControlInput } from "./project"
 import { ProviderOptions } from "./model-config"
 import { BudgetPolicy, SetupPreset } from "./setup"
@@ -2024,6 +2025,8 @@ export const ProjectRest = lazySchema(() => z.strictObject({ ...base, type: z.li
 export const SyncPeer = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.peer"), input: SyncPeerInput }))
 /** This machine's own sync: local clients only. */
 export const SyncControl = lazySchema(() => z.strictObject({ ...base, type: z.literal("sync.control"), input: SyncControlInput }))
+/** Configuration parity with a hub: the hub side (a full token or a local client) and this machine's own `run` (local only). */
+export const ConfigParity = lazySchema(() => z.strictObject({ ...base, type: z.literal("config.parity"), input: ConfigParityInput }))
 
 export const WorkflowPermissions = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.permissions"), workflowId: WorkflowId, mode: z.enum(["report-only", "normal", "custom"]).optional(), sessionPermission: z.enum(["ask", "edits", "full"]).nullable().optional(), reason: z.string().max(500).optional() }))
 export const WorkflowRetryPhase = lazySchema(() => z.strictObject({ ...base, type: z.literal("workflow.retry-phase"), workflowId: WorkflowId, phaseId: WorkflowSlug, reason: z.string().max(500).optional() }))
@@ -2465,6 +2468,7 @@ export const COMMAND_SCHEMAS = {
   "project.rest": ProjectRest,
   "sync.peer": SyncPeer,
   "sync.control": SyncControl,
+  "config.parity": ConfigParity,
   "workflow.permissions": WorkflowPermissions,
   "workflow.retry-phase": WorkflowRetryPhase,
   "workflow.script": WorkflowScriptCommand,

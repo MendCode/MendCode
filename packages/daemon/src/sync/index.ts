@@ -19,6 +19,10 @@ export type SyncPorts = {
   release(sessionId: SessionId): void
   deleteSession(sessionId: SessionId): void
   applySettings(patch: Record<string, unknown>): Promise<void>
+  /** Brings the hub level with this machine's portable configuration (docs/sync.md); only when `follow` is on. */
+  parity(input: { remote: string }): Promise<{ summary: string }>
+  /** How often a following device compares with its hub. */
+  followMs: number
   log(message: string): void
   tickMs: number
   leaseMs: number
@@ -85,6 +89,7 @@ export function createSync(ports: SyncPorts) {
           if (!device && !hub) startDevice()
           if (!device) throw new SyncRefusal("invalid", "sync is off on this machine (`mendcode sync enable REMOTE`)")
           await device.fresh()
+          await device.follow(true)
           return { mode: "device", ...device.status() }
         case "hub-off": {
           if (hub && hub.leases().length) throw new SyncRefusal("busy", "a device still holds a session's lease; release it there first")
