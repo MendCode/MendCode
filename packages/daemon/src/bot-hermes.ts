@@ -33,6 +33,11 @@ const TIMEOUT_MS = 4_000
 const ACTIVE_SESSIONS = 50
 /** The running sessions listed for one profile (the list shows fewer). */
 const ACTIVITY_MAX = 8
+/** The finished sessions listed for one profile, and how many of the root profile's newest are asked for. */
+const RECENT_MAX = 30
+/** Hermes' root profile: the one the user's own assistant lives in. */
+const ROOT_PROFILE = "default"
+const newest = (a: { activeAt?: number | undefined; startedAt?: number | undefined }, b: { activeAt?: number | undefined; startedAt?: number | undefined }) => (b.activeAt ?? b.startedAt ?? 0) - (a.activeAt ?? a.startedAt ?? 0)
 const MESSAGES_DEFAULT = 40
 const MESSAGES_MAX = 100
 const MESSAGE_TEXT_MAX = 4000
@@ -121,17 +126,21 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
         return []
       }
       // Both requests go out together; the sessions only give the working mark and what each profile is doing, so a failure of theirs costs only that.
-      const activeRequest = get<{ sessions?: HermesSession[] }>(from, `/api/profiles/sessions?limit=${ACTIVE_SESSIONS}`)
-        .then((report) => (report.sessions ?? []).filter((session) => session.is_active))
-        .catch(() => [] as HermesSession[])
+      // The root profile (the user's own assistant) is asked for its own newest sessions too: across all profiles, other bots' runs push its chats out of the newest 50.
+      const listOf = (query: string) => get<{ sessions?: HermesSession[] }>(from, `/api/profiles/sessions?${query}`).then((report) => report.sessions ?? []).catch(() => [] as HermesSession[])
+      const activeRequest = Promise.all([listOf(`limit=${ACTIVE_SESSIONS}`), listOf(`profile=${ROOT_PROFILE}&limit=${RECENT_MAX}`)])
+        .then(([all, root]) => [...all, ...root.filter((session) => !all.some((known) => known.id !== undefined && known.id === session.id))])
       const profiles = (await get<{ profiles?: Profile[] }>(from, "/api/profiles")).profiles ?? []
       // Hermes' own rule for "active now" is on its sessions: a profile with one works, and its newest ones say on what.
       const activity = new Map<string, NonNullable<ExternalBotInfo["activity"]>>()
+      const finished = new Map<string, NonNullable<ExternalBotInfo["recent"]>>()
       for (const session of await activeRequest) {
         const profile = session.profile ?? session.profile_name ?? ""
-        const listed = activity.get(profile) ?? []
-        activity.set(profile, listed)
+        const running = session.is_active === true
+        const listed = (running ? activity : finished).get(profile) ?? []
+        ;(running ? activity : finished).set(profile, listed)
         if (typeof session.id !== "string" || !SESSION_ID.test(session.id)) continue
+        // A session with no title of its own reads as what it was asked first, never as a blank row.
         const title = (session.title || session.preview || "").replace(/\s+/g, " ").trim().slice(0, 200)
         const startedAt = millis(session.started_at)
         const activeAt = millis(session.last_active ?? session.last_activity_at)
@@ -156,7 +165,8 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
           ...(profile.model ? { model: profile.model.slice(0, 100) } : {}),
           chat: `acp:${agent}`,
           ...(from.app ? { app: from.app } : {}),
-          ...(activity.get(profile.name)?.length ? { activity: activity.get(profile.name)!.sort((a, b) => (b.activeAt ?? b.startedAt ?? 0) - (a.activeAt ?? a.startedAt ?? 0)).slice(0, ACTIVITY_MAX) } : {}),
+          ...(activity.get(profile.name)?.length ? { activity: activity.get(profile.name)!.sort(newest).slice(0, ACTIVITY_MAX) } : {}),
+          ...(finished.get(profile.name)?.length ? { recent: finished.get(profile.name)!.sort(newest).slice(0, RECENT_MAX) } : {}),
         }
       })
       offerConnectorAgents("hermes-", agents)

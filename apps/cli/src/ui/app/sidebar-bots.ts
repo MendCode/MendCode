@@ -564,7 +564,7 @@ export function createSidebarBots(ctx: AppContext) {
     const bot = named ? report?.external.find((candidate) => candidate.origin === named.origin && candidate.id === named.bot) : undefined
     if (!named || !bot) return say("that bot is gone from the list · /bot list shows them", "warning")
     state.sidebarFocus = false
-    await (await import("./bot-activity")).openBotActivity(ctx, { bot, session: named.session, known: bot.activity?.find((running) => running.id === named.session) })
+    await (await import("./bot-activity")).openBotActivity(ctx, { bot, session: named.session, known: [...(bot.activity ?? []), ...(bot.recent ?? [])].find((running) => running.id === named.session) })
   }
 
   /** The profile's hidden folders as a set, rebuilt only when the list changes (a frame never builds it). */
@@ -635,10 +635,14 @@ export function createSidebarBots(ctx: AppContext) {
     const card = createBotCard({
       bot,
       folders: foldersFor(bot, [...new Set(sessions().map((session) => session.directory))]),
-      external: { app: external.app },
+      external: { app: external.app, running: external.activity, chats: external.recent },
       actions: {
         redraw: requestFrame,
         close,
+        async openAppChat(session) {
+          close()
+          await (await import("./bot-activity")).openBotActivity(ctx, { bot: external, session, known: [...(external.activity ?? []), ...(external.recent ?? [])].find((chat) => chat.id === session) })
+        },
         async openSession(sessionId) {
           close()
           await deps.switchSession(sessionId as SessionId)

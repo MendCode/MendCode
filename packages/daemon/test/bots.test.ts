@@ -129,6 +129,19 @@ describe("bot.list", () => {
     expect(asked).toEqual(["acp:openbot-otto", "acp:openbot-quiet"])
   })
 
+  test("an external bot leaves out the chats nobody used, and keeps the ones with a title, a queue, work or more events", async () => {
+    const h = await boot({})
+    harnesses.push(h)
+    const { listBots } = await import("../src/bot-service")
+    const connector: BotConnector = { id: "openbot", list: async () => [{ origin: "openbot", id: "ob-1", name: "Otto", state: "idle", chat: "acp:openbot-otto" }] }
+    const chat = (sessionId: string, over: Record<string, unknown>) => ({ sessionId, title: "", directory: "/work/app", createdAt: 1, updatedAt: 5, lastSeq: 2, queued: 0, state: "idle", status: "idle", permission: "ask", ...over })
+    const report = await listBots({
+      dir: h.dir, agents: () => ({ directory: h.dir, agents: [], problems: [] }), sessions: () => [], connectors: () => [connector], now: () => 10,
+      sessionsOfModel: () => [chat("ses_000000000000000A", {}), chat("ses_000000000000000B", { title: "Named" }), chat("ses_000000000000000C", { queued: 1 }), chat("ses_000000000000000D", { state: "generating" }), chat("ses_000000000000000E", { lastSeq: 9 })] as never,
+    })
+    expect(report.external[0]!.projects![0]!.sessions.map((session) => String(session.sessionId)).sort()).toEqual(["ses_000000000000000B", "ses_000000000000000C", "ses_000000000000000D", "ses_000000000000000E"])
+  })
+
   test("the bot state: a waiting session first, then working, then a recent failure, else idle", () => {
     const now = 10_000_000
     const at = (status: string, ago = 0) => ({ status, updatedAt: now - ago })
