@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { readFileSync, statSync } from "node:fs"
 import type { TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
-import { createHostMcp, hostInstructions, HOST_MCP_SERVER, mcpInputSchema } from "../src/host-mcp"
+import { createHostMcp, hostInstructions, HOST_LINGER_MS, HOST_MCP_SERVER, mcpInputSchema } from "../src/host-mcp"
 
 const SESSION = "ses_host1" as SessionId
 const TOOLS = [
@@ -165,7 +165,43 @@ describe("native tools bridge for another harness", () => {
     const seen = await rpc(auth, "tools/call", { name: "computer_observe", arguments: {} })
     expect(seen.result.content[1]).toEqual({ type: "image", mimeType: "image/png", data: "AQID" })
     leave()
+  })
+
+  test("calls made at the same time during one turn are all served as calls of that turn", async () => {
+    const { config, rpc, host, calls, turn } = bridge()
+    const auth = config().server.headers.Authorization
+    host.enter(turn("turn_1"))
+    const answers = await Promise.all([1, 2, 3, 4, 5].map((query) => rpc(auth, "tools/call", { name: "graph_find", arguments: { query } })))
+    expect(answers.map((answer) => answer.result.isError)).toEqual([false, false, false, false, false])
+    expect(calls.map((call) => call.turn)).toEqual(Array(5).fill("turn_1"))
+  })
+
+  test("a background sub-agent keeps its calls after the turn that started it ended normally, for a bounded time", async () => {
+    const { config, rpc, host, calls, turn } = bridge()
+    const auth = config().server.headers.Authorization
+    const leave = host.enter(turn("turn_1"))
+    leave()
+    const later = await Promise.all([1, 2, 3].map((query) => rpc(auth, "tools/call", { name: "graph_find", arguments: { query } })))
+    expect(later.map((answer) => answer.result.isError)).toEqual([false, false, false])
+    expect(calls.map((call) => call.turn)).toEqual(["turn_1", "turn_1", "turn_1"])
+    const now = Date.now
+    Date.now = () => now() + HOST_LINGER_MS + 1
+    try { expect((await rpc(auth, "tools/call", { name: "graph_find", arguments: {} })).result.isError).toBe(true) } finally { Date.now = now }
+  })
+
+  test("the next turn takes over from a lingering one, and a stopped turn leaves nothing to call into", async () => {
+    const { config, rpc, host, calls, turn } = bridge()
+    const auth = config().server.headers.Authorization
+    host.enter(turn("turn_1"))()
+    const next = host.enter(turn("turn_2"))
+    await rpc(auth, "tools/call", { name: "graph_find", arguments: {} })
+    next()
+    const stop = new AbortController()
+    const stopped = host.enter(turn("turn_3", stop.signal))
+    stop.abort()
+    stopped()
     expect((await rpc(auth, "tools/call", { name: "graph_find", arguments: {} })).result.isError).toBe(true)
+    expect(calls.map((call) => call.turn)).toEqual(["turn_2"])
   })
 
   test("a cancelled turn takes no more calls; an older turn's end does not close a newer one", async () => {
