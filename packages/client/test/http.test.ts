@@ -33,7 +33,8 @@ async function boot() {
     constructor(url: URL, options: Bun.WebSocketOptions) {
       const address = new URL(url)
       address.protocol = address.protocol === "wss:" ? "https:" : "http:"
-      const authorization = String(options.headers?.Authorization)
+      const headers = options.headers
+      const authorization = String(headers instanceof Headers ? headers.get("Authorization") : Array.isArray(headers) ? headers.find(([name]) => name.toLowerCase() === "authorization")?.[1] : headers?.Authorization)
       requests.push({ url: address.toString(), authorization })
       queueMicrotask(async () => {
         const server = { requestIP: () => ({ address: "local-test" }), upgrade: (_request: Request, options: { data: unknown }) => {

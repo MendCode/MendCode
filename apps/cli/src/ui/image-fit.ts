@@ -1,11 +1,17 @@
 import type { PetImage } from "../pets/decode"
 import type { CellPixels } from "../pets/frames"
+import { drain, type Steps } from "./cooperate"
 
 /** Longest side a decoded transcript image is kept at: a screenshot never costs more than a few MB of RGBA. */
 export const MAX_KEPT_SIDE = 1280
 
 /** Area-averaging resize (alpha-weighted, so a transparent edge never bleeds its color); enlarging repeats the nearest pixel. */
 export function resizeRgba(source: PetImage, width: number, height: number): PetImage {
+  return drain(resizeRgbaSteps(source, width, height))
+}
+
+/** `resizeRgba` as steps (one output row each), so a big picture can be scaled without holding the event loop. */
+export function* resizeRgbaSteps(source: PetImage, width: number, height: number): Steps<PetImage> {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError(`[IMAGES]: invalid size ${width}x${height}`)
   if (width === source.width && height === source.height) return source
   const rgba = new Uint8Array(width * height * 4)
@@ -42,6 +48,7 @@ export function resizeRgba(source: PetImage, width: number, height: number): Pet
       }
       rgba[out + 3] = Math.round(a / count)
     }
+    yield
   }
   return { width, height, rgba }
 }
@@ -56,8 +63,13 @@ export function keptSize(source: { width: number; height: number }, side = MAX_K
 
 /** `source` shrunk (never enlarged) so its longest side is at most `side`. */
 export function limitSide(source: PetImage, side = MAX_KEPT_SIDE): PetImage {
+  return drain(limitSideSteps(source, side))
+}
+
+/** `limitSide` as steps. */
+export function* limitSideSteps(source: PetImage, side = MAX_KEPT_SIDE): Steps<PetImage> {
   const kept = keptSize(source, side)
-  return kept.width === source.width && kept.height === source.height ? source : resizeRgba(source, kept.width, kept.height)
+  return kept.width === source.width && kept.height === source.height ? source : yield* resizeRgbaSteps(source, kept.width, kept.height)
 }
 
 export type ImageBox = { cols: number; rows: number; width: number; height: number }

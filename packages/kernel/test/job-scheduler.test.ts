@@ -120,6 +120,21 @@ describe("JobScheduler", () => {
     expect(h.clock.pendingTimers()).toBe(0)
     expect(h.registry.counters.timers).toBe(0)
   })
+
+  test("a job that ends after its scope was disposed reports nothing to the sink", async () => {
+    const h = createHarness()
+    const appended: string[] = []
+    const sink = { append: (draft: Parameters<typeof h.globalSink.append>[0]) => (appended.push(draft.type), h.globalSink.append(draft)) }
+    const scheduler = createJobScheduler({ clock: h.clock, scope: h.root.child("jobs"), sink, ids: h.ids })
+    const gate = deferred()
+    scheduler.schedule({ jobType: "dream", priority: "P5", run: () => gate.promise })
+    await flush()
+    h.root.dispose()
+    const before = appended.length
+    gate.resolve()
+    await flush()
+    expect(appended.length).toBe(before)
+  })
 })
 
 describe("Scope", () => {

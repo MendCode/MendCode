@@ -169,6 +169,26 @@ The extra solo frame time is the daemon sharing the thread; the client's collect
 
 ## Findings
 
+### Bun 1.3.13 → 1.4.5 (2026-11-24)
+
+Same commit, compiled with each Bun, Apple M4 Pro, macOS, darwin-arm64. Earlier sections that name Bun 1.3.13 were measured on it and are kept as they were.
+
+- **Bun 1.4 on macOS reports the physical footprint as `process.memoryUsage().rss`** (111.6 MB against 127.6 MB from `ps` in the same process). The client probe (`scripts/perf-client.ts`) and the daemon's diagnostics (`packages/daemon/src/resident-memory.ts`) read the RSS through `proc_pid_rusage`, so the RSS budgets keep their meaning. Linux is unchanged.
+- **The executable is 25.8 MB larger**: the runtime grew from 63.1 to 88.7 MB, and the binary from 72.96 to 98.74 MB.
+
+Real terminal in a pseudo-terminal, one real turn on a cheap model (`real.ts mendcode-balanced`), seven alternating rounds a side, median [range]:
+
+| | Bun 1.3.13 | Bun 1.4.5 |
+|---|---|---|
+| Turn CPU | 1.94 s [1.54–2.34] | 1.30 s [1.11–1.44] |
+| CPU over 30 s at rest | 0.28 s [0.26–0.33] | 0.19 s [0.15–0.21] |
+| RSS / footprint at the ready prompt | 127 / 63 MB | 105 / 49 MB |
+| RSS / footprint after the reply | 136 / 66 MB | 120 / 55 MB |
+| Footprint at rest / lifetime peak | 64 / 75 MB | 53 / 59 MB |
+| Disk per session | 2690 bytes | 2693 bytes |
+
+Throwaway HOME, ten alternating runs: `--version` 42.3 → 34.2 ms, `session list --json` against a running daemon 50.7 → 40.4 ms. A daemon with no terminal used 0.2 s of CPU a minute on 1.3.13 and 0–0.1 s on 1.4.5. `scripts/perf.ts` (two alternating runs, load about 3): daemon idle RSS 91–94 → 72 MB and footprint 51–53 → 35–36 MB; terminal footprint after a stream at 10,000 messages 87–90 → 48–55 MB; solo footprint after a stream at 10,000 messages 140–144 → 75–80 MB; first frame at 10,000 messages 177–186 → 135–144 ms.
+
 ### Chat switches on a large data directory (2026-11-22)
 
 A copy of a long-used data directory (hundreds of sessions, a few hundred sub-agent tasks, a dozen projects with code-graph caches) stalled the daemon on every chat switch. What held the loop, measured with a 20 ms lag probe and CPU profiles of the daemon on the copy (fake engines, private HOME):

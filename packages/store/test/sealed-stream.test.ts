@@ -111,8 +111,7 @@ test("a grouped commit whose sealing fails inside the timer does not escape it: 
   const hear = (error: unknown) => void escaped.push(error)
   process.on("uncaughtException", hear)
   try {
-    opened.group()
-    opened.db.query("INSERT INTO t VALUES (2, 'two')").run()
+    opened.groupWrite(() => opened.db.query("INSERT INTO t VALUES (2, 'two')").run())
     // The sealed file can no longer be replaced (the disk went wrong); the group commits on its own timer.
     rmSync(file)
     mkdirSync(file)

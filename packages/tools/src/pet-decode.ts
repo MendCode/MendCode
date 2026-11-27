@@ -23,6 +23,15 @@ type PngHeader = { width: number; height: number; depth: number; color: number; 
 const CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }
 
 export function decodePng(data: Uint8Array): PetImage {
+  const steps = decodePngSteps(data)
+  for (;;) {
+    const step = steps.next()
+    if (step.done) return step.value
+  }
+}
+
+/** `decodePng` as steps (one yield per row of pixels), so a caller on the event loop can give it turns between rows. */
+export function* decodePngSteps(data: Uint8Array): Generator<void, PetImage, void> {
   if (!isPng(data)) throw new TypeError("[PETS]: bad PNG signature")
   const view = new DataView(data.buffer, data.byteOffset, data.byteLength)
   let header: PngHeader | undefined
@@ -74,6 +83,7 @@ export function decodePng(data: Uint8Array): PetImage {
     const swap = previous
     previous = current
     current = swap
+    yield
   }
   return { width, height, rgba }
 }

@@ -89,6 +89,7 @@ export function openPrivateDatabase(dir: string, file: string) {
         if (typeof value !== "function") return value
         return (...args: unknown[]) => {
           check()
+          if (property === "run" || !/^\s*(SELECT|PRAGMA|EXPLAIN)\b/i.test(sql) && ["get", "all", "values"].includes(String(property))) endGroupForOwnWrite()
           const result = value.apply(stmt, args)
           if (property === "run" || !/^\s*(SELECT|PRAGMA|EXPLAIN)\b/i.test(sql) && ["get", "all", "values"].includes(String(property))) persist()
           return result
@@ -124,6 +125,19 @@ export function openPrivateDatabase(dir: string, file: string) {
     // The timer has no caller to tell: a failed commit or seal is held in `failed` (every later call throws it), never thrown out of the timer.
     setTimeout(() => { try { endGroup() } catch { /* Held in `failed`. */ } }, GROUP_MS).unref?.()
   }
+  /**
+   * Only the writes `fn` makes join the group. Any other write that arrives while a group is open (a workflow call's result, a
+   * message, a completion record) first commits what the group holds and then commits by itself, so nothing a client is told is
+   * done waits on the timer: a kill inside the window loses streamed deltas only.
+   */
+  let groupWriting = false
+  function groupWrite<T>(fn: () => T): T {
+    group()
+    const outer = groupWriting
+    groupWriting = true
+    try { return fn() } finally { groupWriting = outer }
+  }
+  const endGroupForOwnWrite = () => { if (!groupWriting) endGroup() }
   const db = new Proxy(live, {
     get(_target, property) {
       if (property === "query") return statement
@@ -132,6 +146,7 @@ export function openPrivateDatabase(dir: string, file: string) {
         const wrap = (mode: "deferred" | "immediate" | "exclusive") => (...args: any[]) => {
           check()
           if (mode !== "deferred") endGroup()
+          else endGroupForOwnWrite()
           depth++
           let ok = false
           try { const result = live.transaction(fn)[mode](...args); ok = true; return result }
@@ -146,7 +161,7 @@ export function openPrivateDatabase(dir: string, file: string) {
     },
   }) as Database
   return {
-    db, sealed, group,
+    db, sealed, groupWrite,
     start() { ready = true; persist() },
     enabled: () => enabled,
     set(next: boolean) {

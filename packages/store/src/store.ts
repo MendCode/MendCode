@@ -941,7 +941,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     sessionSink: {
       append: (draft: SessionEventDraft) => {
         // A streamed delta shares its commit with the rest of this turn of the event loop (private-database.ts, `group`).
-        if (options.groupCommits && draft.type === "item.delta") privacyDatabase.group()
+        if (options.groupCommits && draft.type === "item.delta") return privacyDatabase.groupWrite(() => appendSession(draft))
         return appendSession(draft)
       },
     },

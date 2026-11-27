@@ -8,6 +8,7 @@ import { createEditor } from "../src/view/editor"
 import { markdownStyleFor } from "../src/view/markdown-style"
 import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
+import { SIDEBAR_WIDTH } from "../src/view/sidebar"
 
 afterEach(cleanTemps)
 
@@ -211,4 +212,25 @@ test("at the markdown renderer a diagram is still drawn; only plain shows its so
   expect(shown("markdown")).toContain("Tag pushed on main")
   expect(shown("markdown")).not.toContain("flowchart LR")
   expect(shown("plain")).toContain("flowchart LR")
+})
+
+test("the plan review takes the width the session list leaves, and the whole width when the list is hidden", async () => {
+  const open = await planHarness(130, 30, "implementation", false, undefined, { profile: { sidebar: "always" } })
+  const shown = open.text().find((row) => row.includes("Plan review"))!
+  expect(shown.indexOf("Plan review")).toBe(SIDEBAR_WIDTH + 1)
+  for (const row of open.text()) expect(textWidth(row)).toBeLessThanOrEqual(130)
+  // The list keeps its own column, and the page still takes the keys.
+  expect(open.text().some((row) => row.slice(0, SIDEBAR_WIDTH).trim().length > 0)).toBe(true)
+  await open.app.onKey("c")
+  expect(open.text().join("\n")).toContain("esc preview")
+  const hidden = await planHarness(130, 30, "implementation", false, undefined, { profile: { sidebar: "hidden" } })
+  expect(hidden.text().find((row) => row.includes("Plan review"))!.indexOf("Plan review")).toBe(0)
+})
+
+test("the saved plan page (/plan-review) is drawn beside the list too", async () => {
+  const h = await planHarness(130, 30, "implementation", false, undefined, { profile: { sidebar: "always" } })
+  await h.app.onKey("a")
+  await h.type("/plan-review\r")
+  expect(h.app.page).toBe("plan-review")
+  expect(h.text().find((row) => row.includes("Plan review"))!.indexOf("Plan review")).toBe(SIDEBAR_WIDTH + 1)
 })

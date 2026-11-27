@@ -1,5 +1,6 @@
 import type { PetImage } from "../pets/decode"
-import { limitSide } from "./image-fit"
+import { drainCooperatively, type Steps } from "./cooperate"
+import { limitSide, limitSideSteps } from "./image-fit"
 
 /** Largest image the transcript fetches and decodes; a bigger attachment keeps its text card. */
 export const MAX_CARD_IMAGE_BYTES = 8 * 1024 * 1024
@@ -13,11 +14,23 @@ export function sniffImage(bytes: Uint8Array): "png" | "jpeg" | "gif" | "webp" |
   return undefined
 }
 
-/** One image attachment as RGBA, at most `MAX_KEPT_SIDE` on its longest side. The decoders load on first use. */
+/**
+ * One image attachment as RGBA, at most `MAX_KEPT_SIDE` on its longest side. The decoders load on first use. PNG and JPEG decoding
+ * and the shrinking run in slices of a few milliseconds with the event loop served between them, so several pictures in one
+ * turn never freeze the terminal (a 3200x2400 photo took 300 ms in one block).
+ */
 export async function decodeCardImage(bytes: Uint8Array): Promise<PetImage> {
   const kind = sniffImage(bytes)
   if (!kind) throw new TypeError("[IMAGES]: unsupported image format")
-  if (kind === "jpeg") return limitSide((await import("./jpeg")).decodeJpeg(bytes))
+  if (kind === "jpeg") return drainCooperatively(shrunk((await import("./jpeg")).decodeJpegSteps(bytes)))
   if (kind === "gif") return limitSide((await import("./gif")).decodeGif(bytes))
+  if (kind === "png") {
+    const { decodePngSteps } = await import("../../../../packages/tools/src/pet-decode")
+    return drainCooperatively(shrunk(decodePngSteps(bytes)))
+  }
   return limitSide(await (await import("../pets/decode")).decodeImageBytes(bytes))
+}
+
+function* shrunk(decoding: Steps<PetImage>): Steps<PetImage> {
+  return yield* limitSideSteps(yield* decoding)
 }

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { ARCADE_GAMES, startArcade } from "../src/view/compaction-arcade"
 import { blocks, clearRows, rotateCells } from "../src/view/arcade/blocks"
-import { breakout, moveBall, paddleStride } from "../src/view/arcade/breakout"
+import { breakout, launchBall, moveBall, paddleStride } from "../src/view/arcade/breakout"
 import { crossing, shiftLane } from "../src/view/arcade/crossing"
 import { cycles, reach } from "../src/view/arcade/cycles"
 import { CRASH_GRACE, glide, hitsGate } from "../src/view/arcade/glide"
@@ -99,21 +99,72 @@ test("breakout's paddle moves several cells a press, so a held key crosses the f
   expect(paddle()).toBe(0)
 })
 
+const aim = (x: number, y: number, degrees: number, up = true) => launchBall({ x, y, angle: (degrees * Math.PI) / 180, up })
+
 test("breakout's ball never slips between two bricks touching at a corner, and the paddle's end cells catch it", () => {
   const field = { cols: 12, paddle: 0, paddleY: 9 }
   const walls = new Set(["2,2", "3,3"])
-  const squeeze = moveBall({ ...field, ball: { x: 2, y: 3, vx: 1, vy: -1 }, brick: (x, y) => walls.has(`${x},${y}`) })
+  const squeeze = moveBall({ ...field, ball: aim(2, 3, 45), brick: (x, y) => walls.has(`${x},${y}`) })
   expect(squeeze.broke).toEqual({ x: 2, y: 2 })
-  expect(squeeze.ball).toEqual({ x: 2, y: 3, vx: 1, vy: 1 })
-  const beside = moveBall({ ...field, ball: { x: 5, y: 3, vx: 1, vy: 1 }, brick: (x, y) => x === 6 && y === 3 })
+  expect(squeeze.ball.vy).toBeGreaterThan(0)
+  const beside = moveBall({ ...field, ball: aim(5, 3, 45, false), brick: (x, y) => x === 6 && y === 3 })
   expect(beside.broke).toEqual({ x: 6, y: 3 })
-  expect(beside.ball.vx).toBe(-1)
+  expect(beside.ball.vx).toBeLessThan(0)
   // Over the paddle's last cell and heading off its end: caught, not lost.
-  const edge = moveBall({ ...field, paddle: 3, ball: { x: 7, y: 8, vx: 1, vy: 1 }, brick: () => false })
+  const edge = moveBall({ ...field, paddle: 3, ball: aim(7, 8, 45, false), brick: () => false })
   expect(edge.lost).toBeUndefined()
-  expect(edge.ball).toMatchObject({ y: 8, vy: -1, vx: 1 })
-  const missed = moveBall({ ...field, paddle: 3, ball: { x: 8, y: 9, vx: 1, vy: 1 }, brick: () => false })
+  expect(edge.ball.vy).toBeLessThan(0)
+  expect(edge.ball.vx).toBeGreaterThan(0)
+  const missed = moveBall({ ...field, paddle: 3, ball: aim(8, 9, 45, false), brick: () => false })
   expect(missed.lost).toBe(true)
+})
+
+test("breakout's paddle sends the ball off at an angle that depends on where it lands, never straight up or sideways", () => {
+  const field = { cols: 20, paddle: 5, paddleY: 9, brick: () => false }
+  const land = (x: number) => moveBall({ ...field, ball: aim(x, 8, 30, false) }).ball
+  const left = land(5)
+  const middle = land(7)
+  const right = land(9)
+  expect(left.vx).toBeLessThan(middle.vx)
+  expect(middle.vx).toBeLessThan(right.vx)
+  expect(Math.abs(left.vx)).toBeGreaterThan(Math.abs(middle.vx))
+  for (const ball of [left, middle, right]) {
+    expect(ball.vx).not.toBe(0)
+    expect(ball.vy).not.toBe(0)
+    expect(Math.abs(ball.vy)).toBeGreaterThan(0.4)
+  }
+})
+
+test("breakout's ball breaks a brick within a bounded number of ticks even when the paddle always sends it back the same way", () => {
+  // A single brick in the corner and a paddle that always sits under the ball: the old fixed diagonal never got there.
+  const cols = 11
+  const rows = 12
+  const paddleY = rows - 1
+  const bricks = new Set(["0,0"])
+  let ball = aim(5, paddleY - 1, 14)
+  let broke = 0
+  for (let tick = 1; tick <= 3000 && !broke; tick++) {
+    const paddle = Math.max(0, Math.min(cols - 5, Math.round(ball.x) - 2))
+    const moved = moveBall({ ball, cols, paddle, paddleY, brick: (x, y) => bricks.has(`${x},${y}`) })
+    if (moved.lost) throw new Error("ball lost with the paddle under it")
+    ball = moved.ball
+    expect(Math.abs(ball.vx)).toBeGreaterThan(0)
+    expect(Math.abs(ball.vy)).toBeGreaterThan(0.3)
+    if (moved.broke) broke = tick
+  }
+  expect(broke).toBeGreaterThan(0)
+  expect(broke).toBeLessThan(3000)
+})
+
+test("breakout's loop guard turns a ball that bounces off walls without breaking anything", () => {
+  const field = { cols: 10, paddleY: 10, brick: () => false }
+  let ball = aim(4, 9, 20)
+  let turned = false
+  for (let i = 0; i < 200; i++) {
+    ball = moveBall({ ...field, paddle: Math.max(0, Math.min(5, Math.round(ball.x) - 2)), ball }).ball
+    if (ball.nudges > 0) turned = true
+  }
+  expect(turned).toBe(true)
 })
 
 test("blocks: pieces turn inside their box, full rows clear, a hard drop locks and scores, and the well stacks out", () => {
