@@ -12,8 +12,8 @@ import { wrap } from "./wrap"
 
 /** `patch` is the validated settings change behind `diff`; `done` says what the action did once applied. */
 export type WhatsNewPick = { text: string; patch?: Record<string, unknown> | undefined; diff?: string[] | undefined; command?: string | undefined; dropped?: string | undefined; done?: string | undefined }
-export type WhatsNewChange = { section: string; text: string; fresh: boolean }
-export type WhatsNewCost = { model: string; estimate: number; usage?: { input: number; output: number; costMicros?: number | undefined } | undefined }
+export type WhatsNewChange = { section: string; text: string; fresh: boolean; /** New, Fixed or Changed: the short page groups by it. */ group?: string | undefined }
+export type WhatsNewCost = { model: string; estimate: number; cached?: boolean | undefined; usage?: { input: number; output: number; costMicros?: number | undefined } | undefined }
 export type WhatsNewState = {
   all: boolean
   /** The model call: `loading` while it runs (the changes are already listed), `error` when it failed. `ready` also for `all`. */
@@ -25,6 +25,8 @@ export type WhatsNewState = {
   cost?: WhatsNewCost | undefined
   /** How many changes were left out of the call to keep it small. */
   unsent: number
+  /** How many changes the short page leaves out; `/whatsnew all` lists them. */
+  more: number
   selected: number
   search: PageSearch
   /** The pick whose action is shown for confirmation (index into the picks). */
@@ -37,8 +39,8 @@ export type WhatsNewAction = { type: "none" } | { type: "close" } | { type: "app
 
 type Row = { kind: "pick"; index: number; pick: WhatsNewPick } | { kind: "change"; index: number; change: WhatsNewChange }
 
-export function createWhatsNewState(input: { all: boolean; summary: string; changes: WhatsNewChange[]; unsent?: number }): WhatsNewState {
-  return { all: input.all, status: input.all ? "ready" : "loading", error: "", summary: input.summary, picks: [], changes: input.changes, unsent: input.unsent ?? 0, selected: 0, search: closedSearch() }
+export function createWhatsNewState(input: { all: boolean; summary: string; changes: WhatsNewChange[]; unsent?: number; more?: number }): WhatsNewState {
+  return { all: input.all, status: input.all ? "ready" : "loading", error: "", summary: input.summary, picks: [], changes: input.changes, unsent: input.unsent ?? 0, more: input.more ?? 0, selected: 0, search: closedSearch() }
 }
 
 /** The rows the search leaves, picks first. */
@@ -89,6 +91,7 @@ const tokens = (count: number) => count >= 1000 ? `${(count / 1000).toFixed(1)}k
 /** The cost line: the estimate while the call runs, then what the provider counted. */
 export function whatsNewCostText(cost: WhatsNewCost | undefined, status: WhatsNewState["status"]): string {
   if (!cost) return status === "loading" ? "reading your setup…" : ""
+  if (cost.cached) return `saved summary · ${cost.model}`
   if (!cost.usage) return status === "loading" ? `asking ${cost.model} · about ${tokens(cost.estimate)} tokens` : `${cost.model} · about ${tokens(cost.estimate)} tokens`
   const price = cost.usage.costMicros !== undefined ? ` · $${(cost.usage.costMicros / 1_000_000).toFixed(cost.usage.costMicros < 10_000 ? 4 : 2)}` : ""
   return `${cost.model} · ${tokens(cost.usage.input)} in · ${tokens(cost.usage.output)} out${price}`
@@ -117,8 +120,9 @@ function listRows(state: WhatsNewState, width: number): { rows: Line[]; focus: n
   shown.forEach((row, index) => {
     const on = index === selected
     const mark: Line[number] = { text: on ? "› " : "  ", fg: "primary" }
-    if (row.kind === "change" && row.change.section !== heading) {
-      heading = row.change.section
+    const label = row.kind === "change" ? (!state.all && row.change.group) || row.change.section : ""
+    if (row.kind === "change" && label !== heading) {
+      heading = label
       if (rows.length && rows.at(-1)!.length) rows.push([])
       rows.push([{ text: heading, fg: "heading", bold: true }])
     }
@@ -138,7 +142,8 @@ function listRows(state: WhatsNewState, width: number): { rows: Line[]; focus: n
     else rows.push(clip([mark, { text: row.change.text, fg: on ? "primary" : "text" }, ...fresh], width))
   })
   if (!shown.length) rows.push([{ text: state.search.query ? "no matching changes" : "no changes to show", fg: "muted" }])
-  if (state.unsent && !state.all) rows.push([], [{ text: `${state.unsent} more changes were not sent to the model · /whatsnew all lists every one`, fg: "muted" }])
+  if (state.more && !state.all) rows.push([], [{ text: `more: ${state.more} other changes · /whatsnew all lists the full changelog`, fg: "muted" }])
+  else if (state.unsent && !state.all) rows.push([], [{ text: `${state.unsent} more changes were not sent to the model · /whatsnew all lists every one`, fg: "muted" }])
   return { rows, focus }
 }
 
