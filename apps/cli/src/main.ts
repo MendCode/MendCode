@@ -33,6 +33,7 @@ import type { PaneChild, PaneFacts } from "./herdr"
 import { callerCapabilities, guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
 import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
+import { claimExtensionFault } from "./extensions/fault"
 
 /** The product version shown on the home screen. */
 const CLI_VERSION = packageJson.version
@@ -1190,6 +1191,8 @@ const crash = createCrashGuard({ screen, now: Date.now, version: CLI_VERSION, en
 const uncaught = (error: unknown) => {
   // A write to a terminal that closed: not a crash, a hangup.
   if ((error as NodeJS.ErrnoException | undefined)?.code === "EIO") return hangUp()
+  // A promise or timer an extension left running: that extension stops and a notice names it; the app goes on.
+  if (claimExtensionFault(error)) return soloHost?.log("warn", `extension fault: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
   if (leaving) return soloHost?.log("error", `uncaught while leaving: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
   soloHost?.log("error", `uncaught: ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
   void crash.handle(error)
