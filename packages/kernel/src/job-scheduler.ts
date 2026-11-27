@@ -46,6 +46,7 @@ export function createJobScheduler(options: { clock: Clock; scope: Scope; sink: 
   function setState(job: Job, state: JobState, detail?: string) {
     if (job.state === state && detail === undefined) return
     job.state = state
+    if (scope.disposed) return
     sink.append({ type: "job.state", jobId: job.jobId, jobType: job.spec.jobType, state, ...(detail ? { detail } : {}) })
   }
 

@@ -8,7 +8,12 @@ const dirs: string[] = []
 const clean = () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
 }
-afterEach(clean)
+// Bun 1.4 refuses hooks outside `bun test`; a plain process that imports these helpers relies on the exit handler alone.
+try {
+  afterEach(clean)
+} catch (error) {
+  if (!String(error).includes("outside of the test runner")) throw error
+}
 // A directory made outside a test (a describe body, a hook) is removed when the process ends.
 process.on("exit", clean)
 

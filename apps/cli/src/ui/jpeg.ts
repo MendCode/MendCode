@@ -1,4 +1,5 @@
 import type { PetImage } from "../pets/decode"
+import { drain, type Steps } from "./cooperate"
 
 /**
  * A baseline (sequential Huffman, 8-bit) JPEG decoder for the transcript's image cards: grayscale and YCbCr with any chroma
@@ -44,6 +45,11 @@ function buildHuffman(counts: Uint8Array, values: Uint8Array): Huffman {
 }
 
 export function decodeJpeg(data: Uint8Array): PetImage {
+  return drain(decodeJpegSteps(data))
+}
+
+/** `decodeJpeg` as steps (one MCU row of the scan, one row of pixels), so a big photo is decoded without holding the event loop. */
+export function* decodeJpegSteps(data: Uint8Array): Steps<PetImage> {
   if (data.length < 4 || data[0] !== 0xff || data[1] !== 0xd8) throw new TypeError("[IMAGES]: not a JPEG")
   const quant: Array<Uint16Array | undefined> = []
   const dcTables: Array<Huffman | undefined> = []
@@ -120,15 +126,15 @@ export function decodeJpeg(data: Uint8Array): PetImage {
         component.dc = data[body + 2 + i * 2]! >> 4
         component.ac = data[body + 2 + i * 2]! & 15
       }
-      decodeScan(data, end, frame, quant, dcTables, acTables, restart)
-      return toRgba(frame, adobe)
+      yield* decodeScan(data, end, frame, quant, dcTables, acTables, restart)
+      return yield* toRgba(frame, adobe)
     }
     pos = end
   }
   throw new TypeError("[IMAGES]: JPEG has no image data")
 }
 
-function decodeScan(data: Uint8Array, start: number, frame: Frame, quant: Array<Uint16Array | undefined>, dcTables: Array<Huffman | undefined>, acTables: Array<Huffman | undefined>, restart: number) {
+function* decodeScan(data: Uint8Array, start: number, frame: Frame, quant: Array<Uint16Array | undefined>, dcTables: Array<Huffman | undefined>, acTables: Array<Huffman | undefined>, restart: number): Steps<void> {
   const { width, height, components, hmax, vmax } = frame
   const mcuW = 8 * hmax
   const mcuH = 8 * vmax
@@ -197,6 +203,7 @@ function decodeScan(data: Uint8Array, start: number, frame: Frame, quant: Array<
     const ac = acTables[component.ac]
     if (!table || !dc || !ac) throw new TypeError("[IMAGES]: JPEG is missing a table")
     block.fill(0)
+    let acSeen = false
     const size = symbol(dc)
     if (size > 11) throw new RangeError("[IMAGES]: bad JPEG DC size")
     component.pred += extend(receive(size), size)
@@ -213,15 +220,30 @@ function decodeScan(data: Uint8Array, start: number, frame: Frame, quant: Array<
       k += run
       if (k > 63) break
       block[ZIGZAG[k]!] = extend(receive(length), length) * table[ZIGZAG[k]!]!
+      acSeen = true
       k++
     }
-    // Separable inverse DCT: rows, then columns.
-    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
-      let sum = 0
-      for (let u = 0; u < 8; u++) sum += COS[x * 8 + u]! * block[y * 8 + u]!
-      temp[y * 8 + x] = sum
-    }
     const base = by * 8 * component.stride + bx * 8
+    // Flat blocks (sky, backgrounds, most of a screenshot) are their DC value: no transform needed.
+    if (!acSeen) {
+      const flat = Math.round(block[0]! / 8 + 128)
+      const value = flat < 0 ? 0 : flat > 255 ? 255 : flat
+      for (let y = 0; y < 8; y++) component.plane.fill(value, base + y * component.stride, base + y * component.stride + 8)
+      return
+    }
+    // Separable inverse DCT: rows, then columns. A row with only its first coefficient is a constant.
+    for (let y = 0; y < 8; y++) {
+      const row = y * 8
+      if (block[row + 1] === 0 && block[row + 2] === 0 && block[row + 3] === 0 && block[row + 4] === 0 && block[row + 5] === 0 && block[row + 6] === 0 && block[row + 7] === 0) {
+        temp.fill(block[row]! * COS[0]!, row, row + 8)
+        continue
+      }
+      for (let x = 0; x < 8; x++) {
+        let sum = 0
+        for (let u = 0; u < 8; u++) sum += COS[x * 8 + u]! * block[row + u]!
+        temp[row + x] = sum
+      }
+    }
     for (let x = 0; x < 8; x++) for (let y = 0; y < 8; y++) {
       let sum = 0
       for (let v = 0; v < 8; v++) sum += COS[y * 8 + v]! * temp[v * 8 + x]!
@@ -246,15 +268,17 @@ function decodeScan(data: Uint8Array, start: number, frame: Frame, quant: Array<
       }
       sinceRestart++
     }
+    yield
   }
 }
 
-function toRgba(frame: Frame, adobe: number | undefined): PetImage {
+function* toRgba(frame: Frame, adobe: number | undefined): Steps<PetImage> {
   const { width, height, components, hmax, vmax } = frame
   const rgba = new Uint8Array(width * height * 4)
   const sample = (component: Component, x: number, y: number) => component.plane[Math.floor((y * component.v) / vmax) * component.stride + Math.floor((x * component.h) / hmax)]!
   const [first, second, third] = components
   for (let y = 0; y < height; y++) {
+    yield
     for (let x = 0; x < width; x++) {
       const out = (y * width + x) * 4
       let r: number

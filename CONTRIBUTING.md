@@ -13,7 +13,7 @@ Thanks for helping. MendCode is maintained by a small team, so a focused change 
 
 ## Set up
 
-You need Bun 1.3.13 and pnpm 11.17.0.
+You need Bun 1.4.5 and pnpm 11.17.0.
 
 ```sh
 pnpm install --frozen-lockfile --config.minimumReleaseAge=10080

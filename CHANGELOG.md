@@ -11,10 +11,19 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Moving `~/.mendcode-v2` to `~/.mendcode` works with an installed Linux or macOS user service whose definition differs from the current one: it is rewritten for the new directory with its listener and TLS flags kept (unit drop-ins are untouched). The move never interrupts work: it waits for a start where the daemon has no turns, jobs or running loops (or none runs), and when it cannot happen MendCode says why once instead of on every command.
+- The Breakout mini-game no longer lets the ball loop forever: the paddle sends it off at an angle that depends on where it lands, it is never exactly vertical or flat, and a ball that keeps bouncing without breaking a brick has its heading turned.
+- The plan review stays beside the session list instead of covering the whole screen, like every other page.
+- The terminal no longer freezes while a turn reads or attaches several images: they are decoded and scaled in short slices, one at a time, and keys and frames are served in between.
+- A workflow call, message or completion written while a reply is streaming is saved before it is reported, so a crash right after no longer runs finished workflow calls again.
 - `remote setup` no longer stops when the tailnet has no HTTPS certificates: it makes a private CA on the host with openssl, saves its certificate for the remote and says when the server certificate expires (running setup again renews it).
 - The Linux user service starts again: its systemd unit wrote `WorkingDirectory` in quotes, which systemd rejects as not absolute.
 - `remote setup` and `remote pair` work with Tailscale run without root in userspace networking: they find `tailscale` in `~/.local/bin` and the user's socket, take `--tailscale PATH` and `--tailscale-socket PATH`, and listen on 127.0.0.1 with TLS there.
 - The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
+
+### Changed
+
+- MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
 
 ## v0.0.20 - 2026-11-24
 

@@ -17,7 +17,7 @@ test("CycloneDX shape, unique refs and component counts match lockfile and works
     expect(item.version.length).toBeGreaterThan(0)
     expect(item.purl).toMatch(/^pkg:npm\/.+@.+$/)
   }
-  expect(bom.components.find((item) => item.name === "@types/bun")?.purl).toBe("pkg:npm/%40types/bun@1.3.13")
+  expect(bom.components.find((item) => item.name === "@types/bun")?.purl).toBe("pkg:npm/%40types/bun@1.4.4")
   expect(bom.components.find((item) => item["bom-ref"] === "workspace:apps/cli")?.version).toBe("1.2.3")
   const reversed = <T>(record: Record<string, T>) => Object.fromEntries(Object.entries(record).reverse())
   expect(createSbom({ ...lock, packages: reversed(lock.packages), importers: reversed(lock.importers) }, reversed(manifests), "1.2.3")).toEqual(bom)

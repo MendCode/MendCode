@@ -114,7 +114,7 @@ export function createRender(ctx: AppContext, actions: {
   homeMascot: () => { art(): import("../../view/home").HomeMascot | undefined; placement(top: number): ImagePlacement[] }
   paneFacts: () => { model?: string; contextPercent?: number; costMicros?: number }
   statusRows: (width: number) => Line[]
-  planReviewFrame: (width: number, height: number) => { rows: Line[]; cursor?: { row: number; col: number } } | undefined
+  planReviewFrame: (width: number, height: number, offset?: number) => { rows: Line[]; cursor?: { row: number; col: number } } | undefined
 }) {
   const { input, state, now, localDay, glyphs: g, homeTipText, toasts, stash } = ctx
   const { dropRevealedSecret, syncPulse, syncLoopsTick, syncWorkflowsTick, syncUsageTick, syncTopbarTick, sessionTitle, paletteItems, sidebarShown, sidebarCells, chatRows, sidebarRows, memoryPageData, memoryDirectory, agentSubtasks, diagramLayout, setupValues, setupChecks, homeRoot, homeSessions, settingsValues, statusInput, terminalExtensions, otherExtensionProblems, helpExtensions, extensionPageRows, footer } = actions
@@ -138,12 +138,21 @@ export function createRender(ctx: AppContext, actions: {
     const { width, height } = input.screen.size
     input.screen.setCursorShape?.(state.tuiProfile.vimMode && state.page === "chat" ? ctx.vim.cursorShape : "default")
     // Inline mode keeps the plain chat in the terminal's own screen; every page and overlay borrows the alternate screen.
-    const plan = actions.planReviewFrame(width, height)
+    // The plan review is a page like the others: it takes the width the session list leaves, and the list stays beside it.
+    const planLeft = sidebarShown(width) ? sidebarCells(width) + SIDEBAR_GAP : 0
+    const planSide = state.tuiProfile.sidebarSide
+    const plan = actions.planReviewFrame(width - planLeft, height, planSide === "left" ? planLeft : 0)
     // A bot's face moves only while its page is the one drawn (the visibility signal pets use).
     state.botCard?.setVisible(state.page === "bot" && !plan?.rows.length)
     const inlineLive = !plan?.rows.length && actions.inline.live()
     if (input.screen.inline === true) input.screen.fullscreen(!inlineLive)
-    if (plan?.rows.length) { state.pet?.setVisible(false); input.screen.draw(plan.rows, plan.cursor); return }
+    if (plan?.rows.length) {
+      state.pet?.setVisible(false)
+      const planRows = planLeft ? attachSidebar(plan.rows, sidebarRows(height), width - planLeft, planSide, sidebarCells(width)) : plan.rows
+      const planCursor = plan.cursor && planSide === "left" ? { ...plan.cursor, col: plan.cursor.col + planLeft } : plan.cursor
+      input.screen.draw(planRows, planCursor)
+      return
+    }
     const title = sessionDisplayTitle(state, sessionTitle())
     const waiting = state.transcript.pendingRequests[0]
     if (input.paneState) input.paneState({ foreground: state.transcript.foreground, sessionId: state.sessionId, facts: actions.paneFacts(), children: paneChildren(state, now()), ...(waiting?.title ? { message: waiting.title } : {}) })

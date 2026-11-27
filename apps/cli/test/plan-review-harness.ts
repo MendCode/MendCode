@@ -1,12 +1,12 @@
 import type { PlanReviewRecord } from "@mendcode/protocol"
 import { appHarness, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 
-export async function planHarness(width = 100, height = 30, phase: "plan" | "implementation" = "implementation", failure = false, remote?: { host: string; readOnly: boolean }, extra: { markdown?: string; mode?: "minimal" | "balanced" | "full"; screen?: NonNullable<Parameters<typeof appHarness>[0]>["screen"] } = {}, intercept?: NonNullable<Parameters<typeof appHarness>[0]>["reply"]) {
+export async function planHarness(width = 100, height = 30, phase: "plan" | "implementation" = "implementation", failure = false, remote?: { host: string; readOnly: boolean }, extra: { markdown?: string; mode?: "minimal" | "balanced" | "full"; screen?: NonNullable<Parameters<typeof appHarness>[0]>["screen"]; profile?: NonNullable<Parameters<typeof appHarness>[0]>["profile"] } = {}, intercept?: NonNullable<Parameters<typeof appHarness>[0]>["reply"]) {
   const requestId = ids("request")
   const turnId = ids("turn")
   const markdown = extra.markdown ?? "# Socket recovery\n\nKeep queued work while the socket reconnects.\n\n## Changes\n\n1. Inspect `packages/client/src/index.ts`.\n2. Bound reconnect retries and preserve pending ids.\n3. Add cancellation and duplicate-reply tests.\n\n| State | Action |\n| --- | --- |\n| Offline | Keep queued work |\n| Reconnected | Replay once |\n\n## Verification\n\nRun typecheck and local socket tests."
   let saved: PlanReviewRecord[] = []
-  const h = appHarness({ width, height, dataDir: tempDir(), ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.screen ? { screen: extra.screen } : {}), ...(remote ? { remote } : {}), reply: (command) => {
+  const h = appHarness({ width, height, dataDir: tempDir(), ...(extra.mode ? { mode: extra.mode } : {}), ...(extra.profile ? { profile: extra.profile } : {}),...(extra.screen ? { screen: extra.screen } : {}), ...(remote ? { remote } : {}), reply: (command) => {
     const forced = intercept?.(command)
     if (forced) return forced
     if (command.type === "agents.list") return { ok: true, result: { agents: [{ name: "build", mode: "primary", trusted: true }, { name: "executor", mode: "primary", trusted: true }, { name: "scout", mode: "subagent", trusted: true }] } }

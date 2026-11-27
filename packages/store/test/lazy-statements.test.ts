@@ -81,21 +81,39 @@ test("grouped writes commit together, inside a caller's transaction stay in it, 
   try {
     db.run("CREATE TABLE items (value TEXT)")
     database.start()
-    database.group()
-    db.query("INSERT INTO items VALUES ('a')").run()
-    database.group()
-    db.query("INSERT INTO items VALUES ('b')").run()
+    database.groupWrite(() => db.query("INSERT INTO items VALUES ('a')").run())
+    database.groupWrite(() => db.query("INSERT INTO items VALUES ('b')").run())
     // A transaction of the caller's runs as a savepoint of the group; a script run inside it does not end the group under it.
-    db.transaction(() => { db.query("INSERT INTO items VALUES ('c')").run(); db.run("INSERT INTO items VALUES ('d')") })()
+    database.groupWrite(() => db.transaction(() => { db.query("INSERT INTO items VALUES ('c')").run(); db.run("INSERT INTO items VALUES ('d')") })())
     const other = new Database(file, { readonly: true })
     expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 })
     await Bun.sleep(60)
     expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 4 })
-    database.group()
-    db.query("INSERT INTO items VALUES ('e')").run()
+    database.groupWrite(() => db.query("INSERT INTO items VALUES ('e')").run())
     // A statement run on the connection (a pragma, a script) commits the group first.
     db.run("INSERT INTO items VALUES ('f')")
     expect(other.query("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 6 })
+    other.close()
+  } finally { db.close() }
+})
+
+test("a write outside the group is durable when it returns: it commits the open group and itself, in a statement or a transaction", () => {
+  const dir = tempDir()
+  const file = path.join(dir, "test.db")
+  const database = openPrivateDatabase(dir, file)
+  const { db } = database
+  try {
+    db.run("CREATE TABLE items (value TEXT)")
+    database.start()
+    const other = new Database(file, { readonly: true })
+    const count = () => (other.query("SELECT COUNT(*) AS n FROM items").get() as { n: number }).n
+    database.groupWrite(() => db.query("INSERT INTO items VALUES ('delta')").run())
+    expect(count()).toBe(0)
+    db.query("INSERT INTO items VALUES ('result')").run()
+    expect(count()).toBe(2)
+    database.groupWrite(() => db.query("INSERT INTO items VALUES ('delta')").run())
+    db.transaction(() => db.query("INSERT INTO items VALUES ('result')").run())()
+    expect(count()).toBe(4)
     other.close()
   } finally { db.close() }
 })

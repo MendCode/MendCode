@@ -5,7 +5,8 @@ import type { SessionEvent, SessionId, Settings } from "@mendcode/protocol"
 import { processStats } from "./perf-proc"
 
 const MB = 1048576
-const rssMB = () => +(process.memoryUsage().rss / MB).toFixed(1)
+// RSS as `ps` reports it: Bun 1.4 on macOS returns the physical footprint as `process.memoryUsage().rss`, which the budgets do not mean.
+const rssMB = () => processStats(process.pid)?.rssMB ?? +(process.memoryUsage().rss / MB).toFixed(1)
 /** JS heap in use at each settled sample: tells heap growth from native memory the runtime keeps. */
 const heapMB: Record<string, number> = {}
 /** macOS physical footprint (MB) at each settled sample, beside the RSS; empty where the platform does not report it. */

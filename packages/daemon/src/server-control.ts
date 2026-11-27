@@ -6,6 +6,7 @@ import type { ConfigExtras, ServerConfigExtras } from "./server-config-extras"
 import { memorySettings } from "./memory-config"
 import { catalogModel, invalidChoice, type ModelCatalog } from "./models"
 import type { LogLevel } from "./logging"
+import { residentMemoryUsage } from "./resident-memory"
 
 const WARN_BYTES = 2 * 1024 ** 3
 const CRITICAL_BYTES = 4 * 1024 ** 3
@@ -22,7 +23,7 @@ function logText(text: string) {
     .replace(/(\b[\w.-]*(?:secret|token|password|passwd|api[_-]?key|authorization|cookie|credential)[\w.-]*["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,;\]}]+)/gi, "$1[redacted:secret]")
     .replace(/[\x00-\x1f\x7f]/g, " ")
 }
-export function processMemory(memory = process.memoryUsage(), uptime = process.uptime(), pid = process.pid): ProcessMemory {
+export function processMemory(memory = residentMemoryUsage(), uptime = process.uptime(), pid = process.pid): ProcessMemory {
   return { pid, role: "server", ...memory, uptimeSeconds: uptime, memoryGuardrail: { status: memory.rss >= CRITICAL_BYTES ? "critical" : memory.rss >= WARN_BYTES ? "warning" : "ok", warnBytes: WARN_BYTES, criticalBytes: CRITICAL_BYTES } }
 }
 
