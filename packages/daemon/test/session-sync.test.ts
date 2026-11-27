@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
@@ -670,4 +670,30 @@ test("an older hub's answers to the folder commands are told apart from the hub'
   expect(hubLacksFolders({ code: "invalid_command", message: "[DAEMON]: No such directory" })).toBe(false)
   expect(hubLacksFolders({ code: "forbidden", message: "[SYNC]: that folder is not a project of this machine" })).toBe(false)
   expect(hubLacksFolders({ code: "busy", message: "[DAEMON]: Session or child is busy" })).toBe(false)
+})
+
+test("a chat the hub owns says so in the device's list (the hub's name and its real folder), shows the hub turn's running and waiting states, and runs nothing in the mapped local folder", async () => {
+  const { hub, device, here, hubFolder, seed } = await runPair({ run: true })
+  const listed = async () => {
+    const reply = await device.client.send({ type: "session.list", limit: 50 })
+    return (reply as unknown as { result: { sessions: Array<{ sessionId: string; directory: string; state: string; hub?: string; hubDirectory?: string }> } }).result.sessions.find((session) => session.sessionId === seed)!
+  }
+  // The folder is the mapped one; the hub's own folder and its name travel with the summary, and the hub's own list has neither.
+  expect(await listed()).toMatchObject({ directory: here, hub: "hub", hubDirectory: hubFolder, state: "idle" })
+  const onHub = (await hub.client.send({ type: "session.list", limit: 50 }) as unknown as { result: { sessions: Array<{ sessionId: string; hub?: string }> } }).result.sessions.find((session) => session.sessionId === seed)!
+  expect(onHub.hub).toBeUndefined()
+  // An approval the hub waits on shows as waiting here, a running hub turn as generating, and both end as idle.
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "ask first", attachments: [] })).toMatchObject({ ok: true })
+  await until(async () => (await listed()).state === "waiting_approval", "the hub's approval shows as waiting in the device's list")
+  const request = events(device.daemon, seed).find((event) => event.type === "server.request") as Extract<SessionEvent, { type: "server.request" }>
+  expect(await device.client.send({ type: "request.resolve", sessionId: seed, requestId: request.requestId, decision: { kind: "approve", scope: "once" } })).toMatchObject({ ok: true })
+  await until(async () => texts(events(device.daemon, seed)).includes("re: ask first (approve)") && (await listed()).state === "idle", "the settled chat is idle")
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "wait forever", attachments: [] })).toMatchObject({ ok: true })
+  await until(async () => (await listed()).state === "generating", "the hub's running turn shows as generating")
+  const started = events(device.daemon, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
+  await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })
+  await until(async () => (await listed()).state === "idle", "the cancelled turn is idle")
+  // The prompts ran on the hub, and the mapped folder was never used: it does not even exist here.
+  expect(turnsDone(hub.daemon, seed)).toBeGreaterThanOrEqual(2)
+  expect(existsSync(here)).toBe(false)
 })

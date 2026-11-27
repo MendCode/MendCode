@@ -6,7 +6,7 @@ import { clip, fit, spread } from "./deck"
 import { compact } from "./format"
 import type { TodoItem, TodoStatus } from "./dock"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
-import { draftSizeLabel, labelSpans, rowLabel, sessionActivityAt, sessionOrderAt, workflowOf } from "./session-label"
+import { draftSizeLabel, hubBadge, labelSpans, rowLabel, sessionActivityAt, sessionOrderAt, workflowOf } from "./session-label"
 import { lineWidth, textWidth, wrap } from "./wrap"
 import { agentsSpans, elapsedLabel, isCompacting, liveDetail, prSpans, SETTLED_FIRST } from "./sidebar-marks"
 import { sidebarWindowStart, type SidebarScroll } from "./sidebar-window"
@@ -204,7 +204,7 @@ const RUNNING_STATES: ReadonlySet<string> = new Set(["generating", "tool", "comp
 const MARK_RANK: Record<SessionMark, number> = { approval: 0, question: 1, plan: 2, error: 3, unread: 4, running: 5, queued: 6, settled: 7, idle: 8 }
 const MARK_FG: Record<SessionMark, ColorName> = { approval: "warning", question: "info", plan: "accent", running: "primary", error: "error", unread: "success", queued: "muted", settled: "muted", idle: "muted" }
 
-type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting" | "named" | "createdAt" | "lastHumanAt">>
+type SidebarSession = Pick<SessionSummary, "sessionId" | "title" | "state" | "queued" | "updatedAt"> & Partial<Pick<SessionSummary, "archivedAt" | "lifecycle" | "draft" | "parentId" | "tool" | "paused" | "since" | "pending" | "pendingKind" | "agents" | "compacting" | "named" | "createdAt" | "lastHumanAt" | "hub">>
 
 /**
  * The row's state: waiting for you (to approve, to answer, or to review a plan), working, failed, a reply you have not opened yet, queued
@@ -318,7 +318,7 @@ export function renderSessionSidebar(input: {
     // Compacting takes the time's place; sub-agents at work show their live count in the working colour, else the listed children stay dim.
     const clock = isCompacting(session) ? { text: "compacting", fg: "info" as const } : { text: time, fg: "muted" as const }
     const kids = session.agents ? agentsSpans(session, input.ascii) : childCount ? [{ text: ` ${input.ascii ? "^" : "↳"}${childCount}`, fg: "muted" as const }] : []
-    const metaOf = (withNumber: boolean): Line => [clock, ...kids, ...(pr ? prSpans(pr, withNumber) : [])]
+    const metaOf = (withNumber: boolean): Line => [clock, ...hubBadge(session), ...kids, ...(pr ? prSpans(pr, withNumber) : [])]
     // The PR state word keeps its place; when the title would be left with under ten cells the number goes first.
     const full = metaOf(true)
     const meta = pr && inner - 2 - lineWidth(full) - 2 < 10 ? metaOf(false) : full
