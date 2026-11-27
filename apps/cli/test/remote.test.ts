@@ -46,6 +46,8 @@ test("token subcommand: explicit dir, create/list/revoke, no token or hash in li
   const dir = tempDir()
   expect(() => parseTokenCommand(["remote", "token", "create"])).toThrow("explicit --dir")
   expect(parseTokenCommand(["session", "list"])).toBeUndefined()
+  expect(parseTokenCommand(["remote", "token", "create", "--dir", dir, "--sync", "--run", "--name", "dev"])).toMatchObject({ action: "create", sync: true, run: true })
+  expect(() => parseTokenCommand(["remote", "token", "create", "--dir", dir, "--run"])).toThrow("--run goes with --sync")
   const command = parseTokenCommand(["remote", "token", "create", "--dir", dir, "--read-only", "--name", "viewer"])!
   expect(command).toEqual({ action: "create", dir, readOnly: true, name: "viewer" })
   let output = ""

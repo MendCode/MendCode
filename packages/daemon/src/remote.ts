@@ -6,11 +6,12 @@ import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 export const REMOTE_TOKENS_FILE = "remote-tokens.json"
 /** `expiresAt` (epoch ms): after it the token no longer authenticates and an open connection drops; absent means it never expires. */
 /**
- * `scope: "sync"`: the token of a device daemon that syncs sessions with this one (docs/sync.md); it may send only `hello` and
+ * `scope: "sync-run"`: a sync token that may also start chats, send prompts, cancel and answer approvals in the hub's own projects
+ * (docs/sync.md, "Running on the hub"). `scope: "sync"`: the token of a device daemon that syncs sessions with this one (docs/sync.md); it may send only `hello` and
  * `sync.peer`, nothing else. `scope: "bot"`: the token of a chat bot on another machine (docs/remote.md, "Bot bridge"); it runs
  * turns only in sessions under its `root` folder and hears of nothing else. Absent means the token's usual authority (full, or read-only).
  */
-export type RemoteTokenScope = "sync" | "bot"
+export type RemoteTokenScope = "sync" | "sync-run" | "bot"
 export type RemoteTokenInfo = { name: string; readOnly: boolean; createdAt: number; lastUsedAt?: number; expiresAt?: number; scope?: RemoteTokenScope; root?: string }
 type Entry = RemoteTokenInfo & { hash: string }
 const hashToken = (token: string) => createHash("sha256").update(token).digest()
@@ -26,7 +27,7 @@ export function remoteTokens(dir: string) {
     }
     let entries: unknown
     try { entries = JSON.parse(text) } catch { throw new Error("invalid remote token store") }
-    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)) || (e.scope !== undefined && (!["sync", "bot"].includes(e.scope) || e.readOnly)) || (e.scope === "bot") !== (e.root !== undefined) || (e.root !== undefined && (typeof e.root !== "string" || !path.isAbsolute(e.root))))) throw new Error("invalid remote token store")
+    if (!Array.isArray(entries) || entries.length > 1000 || entries.some((e) => !e || typeof e.name !== "string" || !/^[a-zA-Z0-9_-]{1,64}$/.test(e.name) || typeof e.readOnly !== "boolean" || !/^[a-f0-9]{64}$/.test(e.hash) || !Number.isFinite(e.createdAt) || (e.lastUsedAt !== undefined && !Number.isFinite(e.lastUsedAt)) || (e.expiresAt !== undefined && !Number.isFinite(e.expiresAt)) || (e.scope !== undefined && (!["sync", "sync-run", "bot"].includes(e.scope) || e.readOnly)) || (e.scope === "bot") !== (e.root !== undefined) || (e.root !== undefined && (typeof e.root !== "string" || !path.isAbsolute(e.root))))) throw new Error("invalid remote token store")
     chmodSync(file, 0o600)
     return entries as Entry[]
   }
@@ -54,17 +55,18 @@ export function remoteTokens(dir: string) {
   const info = (entry: Entry): RemoteTokenInfo => ({ name: entry.name, readOnly: entry.readOnly, createdAt: entry.createdAt, ...(entry.lastUsedAt === undefined ? {} : { lastUsedAt: entry.lastUsedAt }), ...(entry.expiresAt === undefined ? {} : { expiresAt: entry.expiresAt }), ...(entry.scope ? { scope: entry.scope } : {}), ...(entry.root ? { root: entry.root } : {}) })
   const live = (entry: Entry) => entry.expiresAt === undefined || Date.now() < entry.expiresAt
   return {
-    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number; sync?: boolean; botRoot?: string } = {}) {
+    create(input: { name?: string; readOnly?: boolean; expiresInMs?: number; sync?: boolean; run?: boolean; botRoot?: string } = {}) {
       const name = input.name ?? `token-${randomBytes(4).toString("hex")}`
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(name)) throw new Error("token name must use letters, digits, _ or - (1–64)")
       if (input.sync && input.readOnly) throw new Error("a sync token cannot also be read-only")
+      if (input.run && !input.sync) throw new Error("a run token is a sync token that may also run turns: use sync and run together")
       if (input.botRoot !== undefined && (input.sync || input.readOnly)) throw new Error("a bot token cannot also be sync or read-only")
       if (input.botRoot !== undefined && (!path.isAbsolute(input.botRoot) || path.resolve(input.botRoot) === path.parse(input.botRoot).root)) throw new Error("a bot token needs an absolute folder that is not the filesystem root")
       const token = randomBytes(32).toString("base64url")
       return update((entries) => {
         if (entries.some((e) => e.name === name)) throw new Error("token name already exists")
         if (entries.length >= 1000) throw new Error("remote token limit reached")
-        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: "sync" as const } : {}), ...(input.botRoot !== undefined ? { scope: "bot" as const, root: path.resolve(input.botRoot) } : {}) }
+        const entry: Entry = { name, readOnly: input.readOnly ?? false, createdAt: Date.now(), hash: hashToken(token).toString("hex"), ...(input.expiresInMs ? { expiresAt: Date.now() + input.expiresInMs } : {}), ...(input.sync ? { scope: input.run ? "sync-run" as const : "sync" as const } : {}), ...(input.botRoot !== undefined ? { scope: "bot" as const, root: path.resolve(input.botRoot) } : {}) }
         entries.push(entry)
         return { token, ...info(entry) }
       })

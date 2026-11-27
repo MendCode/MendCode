@@ -12,7 +12,7 @@ mendcode sync now                                                   # sync once 
 mendcode sync status
 ```
 
-`--sync` creates a second token on the hub, `<device>-sync`, that may only sync (it cannot run turns, read settings or anything else), saves it to `<data dir>/remote/<remote>.sync-token` (mode 0600) and writes `<data dir>/sync.json`. By hand, with a token from `mendcode remote token create --sync --name laptop-sync` on the hub:
+`--sync` creates a second token on the hub, `<device>-sync`, that may only sync (it cannot run turns, read settings or anything else; `--run` lets it also run turns in the hub's projects, see [Running on the hub](#running-on-the-hub)), saves it to `<data dir>/remote/<remote>.sync-token` (mode 0600) and writes `<data dir>/sync.json`. By hand, with a token from `mendcode remote token create --sync --name laptop-sync` on the hub:
 
 ```sh
 mendcode sync enable vps --sync-token-file ~/.mendcode/remote/vps.sync-token [--path-map /Users/me/code=/home/me/code] [--no-memories] [--no-settings]
@@ -45,9 +45,17 @@ A lease lasts a minute and is renewed while this machine is online. If this mach
 
 Never synced: provider credentials, tokens, `environment.enc`, keys, channel and Console state, engine bindings (ACP session ids), and authority or machine settings (permissions, tier, models, shell, remote engines). The hub refuses them even when asked.
 
+## Running on the hub
+
+A device whose sync token was made with `--run` (`remote setup HOST --sync --run`, or `remote token create --sync --run` on the hub) can work on the hub's chats and projects from here. A chat started in a folder that is only the hub's, a prompt, a cancel or an approval answer for a chat the hub owns goes to the hub, which runs it there; the turn streams back into this machine's copy while it runs, so the transcript, the approval card and the cancel work as in any chat. The tools and model are the hub's. A chat started from a device begins in the hub's `syncRunPermission` mode (`ask`, `edits` or `full`; default `edits`: file edits run, commands ask for approval, answered from the device); the device cannot change it.
+
+The run token adds only four commands to what a sync token may send: start a chat (in a folder the hub already works in, with no parent, agent, model or title), send a prompt (text only, to a root chat of the hub that no device holds), cancel, and answer an approval (without saving rules or memories). It cannot run a shell, read files, change settings or a chat's permission mode, start sub-agents or touch anything else. A plain sync token (`--sync` alone) cannot run anything: the refusal says so.
+
+With the hub unreachable, the same actions are refused with a short "hub is not connected" message instead of running here; nothing is queued.
+
 ## Projects
 
-A session's folder is matched by the project's normalized git remote plus the path inside the repository, the same way [`--migrate-sessions`](remote.md#one-command-for-a-vps-remote-setup) does: `/Users/me/code/app/pkg` here and `/home/me/src/app/pkg` on the hub are one project when both clones have the same `origin`. `pathMap` rules (`--path-map LOCAL=HUB`) cover folders that are not git clones. A handoff whose project the hub does not have is refused with the reason; clone it there and try again. A mirror whose project this machine lacks keeps the hub's path.
+A session's folder is matched by the project's normalized git remote plus the path inside the repository, the same way [`--migrate-sessions`](remote.md#one-command-for-a-vps-remote-setup) does: `/Users/me/code/app/pkg` here and `/home/me/src/app/pkg` on the hub are one project when both clones have the same `origin`. `pathMap` rules (`--path-map LOCAL=HUB`) cover folders that are not git clones. A handoff whose project the hub does not have is refused with the reason; clone it there and try again. A mirror whose project this machine lacks keeps the hub's path. A new chat in that folder runs on the hub when the token allows it ([Running on the hub](#running-on-the-hub)), and is refused naming the hub otherwise.
 
 ## Limits and load
 
