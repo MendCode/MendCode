@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A streaming reply in a long chat uses less CPU again: each frame works out the transcript's length once instead of several times.
 - Moving `~/.mendcode-v2` to `~/.mendcode` works with an installed Linux or macOS user service whose definition differs from the current one: it is rewritten for the new directory with its listener and TLS flags kept (unit drop-ins are untouched). The move never interrupts work: it waits for a start where the daemon has no turns, jobs or running loops (or none runs), and when it cannot happen MendCode says why once instead of on every command.
 - The Breakout mini-game no longer lets the ball loop forever: the paddle sends it off at an angle that depends on where it lands, it is never exactly vertical or flat, and a ball that keeps bouncing without breaking a brick has its heading turned.
 - The plan review stays beside the session list instead of covering the whole screen, like every other page.
