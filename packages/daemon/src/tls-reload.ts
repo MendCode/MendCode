@@ -1,4 +1,4 @@
-import { readFileSync, statSync, unwatchFile, watch, watchFile, type FSWatcher } from "node:fs"
+import { readFileSync, statSync, watch, type FSWatcher } from "node:fs"
 import path from "node:path"
 
 const POLL_MS = 250
@@ -21,7 +21,7 @@ export function watchTlsFiles(input: {
   const watchFolder = input.watchFolder ?? ((folder, listener) => watch(folder, listener))
   const names = new Set(input.files.map((file) => path.resolve(file)))
   const watchers = new Map<string, FSWatcher>()
-  const polled = new Set<string>()
+  const pollers: ReturnType<typeof setInterval>[] = []
   let timer: ReturnType<typeof setTimeout> | undefined
   const schedule = () => {
     clearTimeout(timer)
@@ -30,16 +30,17 @@ export function watchTlsFiles(input: {
   const poll = (folder: string) => {
     for (const file of names) {
       if (path.dirname(file) !== folder) continue
-      polled.add(file)
-      // The file as it is when the watch is asked for: the poll's own first look comes later, and a file renamed over in between would be taken as the starting point.
-      let known: { mtimeMs: number; ino: number; size: number } | undefined
-      try { known = statSync(file) } catch { /* missing now: any appearance is a change */ }
-      watchFile(file, { interval: input.pollMs ?? POLL_MS, persistent: false }, (current) => {
-        if (!known || current.mtimeMs !== known.mtimeMs || current.ino !== known.ino || current.size !== known.size) {
-          known = { mtimeMs: current.mtimeMs, ino: current.ino, size: current.size }
-          schedule()
-        }
-      })
+      // The file as it is when the watch is asked for; a timer of our own compares it (a runtime's file watcher can start its first look late and take a renewal made meanwhile as the starting point).
+      const look = () => { try { const info = statSync(file); return `${info.ino}:${info.size}:${info.mtimeMs}` } catch { return "" } }
+      let known = look()
+      const poller = setInterval(() => {
+        const now = look()
+        if (now === known) return
+        known = now
+        if (now) schedule()
+      }, input.pollMs ?? POLL_MS)
+      poller.unref?.()
+      pollers.push(poller)
     }
   }
   for (const folder of new Set([...names].map((file) => path.dirname(file)))) {
@@ -57,7 +58,7 @@ export function watchTlsFiles(input: {
     close() {
       clearTimeout(timer)
       for (const watcher of watchers.values()) watcher.close()
-      for (const file of polled) unwatchFile(file)
+      for (const poller of pollers) clearInterval(poller)
     },
   }
 }
