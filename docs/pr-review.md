@@ -1232,8 +1232,16 @@ model cost is the table's text. A review checkout without installed dependencies
 (`bun install --frozen-lockfile`, as the script does for each build) and loses them again afterwards; a run that still fails is
 reported by its error line.
 
-- A total that rose above the measured noise (a process's footprint, CPU in a phase, or the bytes a session stores; the script exits
-  1) adds a critical `performance` finding on the first changed line of the code that can change cost. Within the noise is no difference.
+- A total that rose (a process's footprint, CPU in a phase, or the bytes a session stores; the script exits 1) adds a critical
+  `performance` finding on the first changed line of the code that can change cost. It is a rise only when the head's median of
+  five alternating base/head sessions is above the measured noise, outside the base's own min..max and above a floor (footprint 3 MB,
+  disk per session 1 KB, CPU 15% or 150 ms, whichever is larger), so one outlier sample never flags. A rise whose listed causes
+  (heap bytes by constructor, native regions, stored tables) are less than a tenth of it, or a CPU rise with a few KB of cause and
+  the same start-up modules, is a `nota` ("possible noise"), never a finding. The finding is "confirmed" only when a second
+  measurement of the same pair (builds cached, sessions only) rises too; one that did not reproduce is dropped and said so in the
+  details, and one whose second measurement could not finish is a minor, plausible finding that does not block.
+  An incremental review measures its own increment (the last reviewed head against this head), not the whole pull request again,
+  except while a measured rise is open (that measurement resolves it). Within the noise is no difference.
   On a later head no model re-checks that finding: the new measurement decides, and a head measured without a rise resolves it.
 - An inner count that rose while no total did (JS heap objects, protected objects, heap bytes, JIT code, the binary's size) is a
   `nota`: it shows in the table and the model may cite it, but it is never a finding on its own.

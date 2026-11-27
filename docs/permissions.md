@@ -547,6 +547,10 @@ notice goes when the children are answered.
 
 Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session leaves the card.
 
+A sub-agent the `task` tool started in the background is handled the same way: its parent's model is told it waits and you get the card. A sub-agent may use the folders outside the project its parent was let into (an "approve for this session" of external directory access), never more than its parent; other session approvals are not shared.
+
+An approval of such a child that nobody answers is rejected as timed out after `subagentApprovalTimeout` minutes (default 10, 0 waits for ever); the child is told why and its parent gets a notice. Your own session's approvals never time out.
+
 `mendcode session status ID` names what a child waits on (`Waiting: approval …`); `mendcode logs ID` shows `waiting for approval` lines. Nothing runs until a child waits.
 
 The link to the launching session is stored with the

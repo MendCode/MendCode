@@ -55,6 +55,12 @@ export function runsAsUserService(env: NodeJS.ProcessEnv) {
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;")
 const unitQuote = (text: string) => '"' + text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("$", () => "$$") + '"'
 
+/** Path-valued directives (WorkingDirectory=, StandardOutput=append:) take the rest of the line literally: quotes are not parsed there, spaces need no escape, only `%` is a specifier. A line break would start another directive, so it is refused. */
+function unitPath(text: string) {
+  if (!text.startsWith("/") || /[\u0000-\u001f\u007f]/.test(text)) throw new Error("[SERVICE]: systemd needs an absolute path without control characters")
+  return text.replaceAll("%", "%%")
+}
+
 export function daemonServicePlan(options: ServiceOptions): ServicePlan {
   const platform = options.platform ?? process.platform
   const home = options.home ?? homedir()
@@ -103,14 +109,14 @@ Description=MendCode user daemon (loops and Dream)
 
 [Service]
 Type=simple
-WorkingDirectory=${unitQuote(plan.cwd).replaceAll("$$", "$")}
+WorkingDirectory=${unitPath(plan.cwd)}
 ExecStart=${plan.programArguments.map(unitQuote).join(" ")}
 Environment=MENDCODE_V2_SERVICE=1
 Restart=always
 RestartSec=5
 UMask=0077
-StandardOutput=append:${plan.stdoutPath.replaceAll("%", "%%")}
-StandardError=append:${plan.stderrPath.replaceAll("%", "%%")}
+StandardOutput=append:${unitPath(plan.stdoutPath)}
+StandardError=append:${unitPath(plan.stderrPath)}
 
 [Install]
 WantedBy=default.target

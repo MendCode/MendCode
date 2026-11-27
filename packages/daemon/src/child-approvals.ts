@@ -16,7 +16,7 @@ export const DENY_ONE = "Reject"
 
 /** A request of a session another session started (`mendcode run --bg`) that waits for the user. */
 type Mirror = { header: string; question: string; options: string[]; context: string }
-type Waiting = { child: SessionId; requestId: RequestId; launcher: SessionId; approval: boolean; title: string; tool: string | undefined; detail: string; announced: boolean; mirror: Mirror | undefined; mirrored: boolean }
+type Waiting = { child: SessionId; requestId: RequestId; launcher: SessionId; approval: boolean; title: string; tool: string | undefined; detail: string; announced: boolean; mirror: Mirror | undefined; mirrored: boolean; expiry?: ReturnType<typeof setTimeout> | undefined }
 type Card = { requestId: RequestId; at: SessionId; launcher: SessionId; items: RequestId[] }
 type Single = { requestId: RequestId; at: SessionId; target: RequestId; launcher: SessionId; options: string[] }
 
@@ -50,9 +50,11 @@ export function createChildApprovals(deps: {
   /** Takes a notice that still waits back out of the launcher's queue. */
   unqueue?(launcher: SessionId, queueId: QueueId): void
   /** Answers the child's own request as the user. */
-  resolveChild(input: { child: SessionId; requestId: RequestId; decision: { kind: "approve"; scope: "once" } | { kind: "deny" } | { kind: "answer"; text: string; answers: string[][] }; clientId: string | undefined }): Promise<void>
+  resolveChild(input: { child: SessionId; requestId: RequestId; decision: { kind: "approve"; scope: "once" } | { kind: "deny"; reason?: string } | { kind: "answer"; text: string; answers: string[][] }; clientId: string | undefined }): Promise<void>
   /** Who waits for `launcher`, told to every local terminal so the one with another session open can see it; no children says nothing waits now. */
   announce(waiting: { launcher: SessionId; launcherTitle: string; total: number; children: Array<{ sessionId: SessionId; title: string }> }): void
+  /** Minutes a child's approval may wait before it is rejected as timed out; 0 or absent: it waits for the user. Read when each request arrives. */
+  timeoutMinutes?(): number
   delayMs?: number
 }) {
   const waiting = new Map<RequestId, Waiting>()
@@ -136,8 +138,10 @@ export function createChildApprovals(deps: {
   const line = (entry: Waiting, at: SessionId) => `${clip(deps.mask(at, entry.title), 60)} · ${entry.approval ? (entry.tool ?? "approval") : "question, answer it in that session"}: ${clip(deps.mask(at, entry.detail), SHOWN_DETAIL)}`
 
   function notice(entries: Waiting[]) {
+    const minutes = deps.timeoutMinutes?.() ?? 0
+    const expires = minutes > 0 && entries.some((entry) => entry.approval) ? ` An approval nobody answers is rejected after ${minutes} minute${minutes === 1 ? "" : "s"}, and you are told.` : ""
     const lines = entries.map((entry) => `- ${entry.child} ${JSON.stringify(deps.mask(entry.child, entry.title))}: ${entry.approval ? `approval for ${entry.tool ?? "a tool"}` : "a question"}: ${JSON.stringify(clip(deps.mask(entry.child, entry.detail), SHOWN_DETAIL))}`)
-    return `Internal notification. ${entries.length === 1 ? "A session you started is" : `${entries.length} sessions you started are`} blocked waiting for the user's approval:\n${lines.join("\n")}\n\nThe user has been shown one card for them in MendCode. You cannot approve, and polling does not help: do not retry the work another way. Tell the user these wait for them, and continue with what does not depend on them.`
+    return `Internal notification. ${entries.length === 1 ? "A session you started is" : `${entries.length} sessions you started are`} blocked waiting for the user's approval:\n${lines.join("\n")}\n\nThe user has been shown one card for them in MendCode. You cannot approve, and polling does not help: do not retry the work another way. Tell the user these wait for them, and continue with what does not depend on them.${expires}`
   }
 
   function groupCard(launcher: SessionId, at: SessionId, entries: Waiting[]): Card {
@@ -199,6 +203,27 @@ export function createChildApprovals(deps: {
     if (at) cards.set(launcher, groupCard(launcher, at, approvals))
   }
 
+  /** An approval nobody answered in time is rejected as the user would, with the reason; the launcher's model is told so it does not keep waiting. */
+  function expire(requestId: RequestId, minutes: number) {
+    const entry = waiting.get(requestId)
+    if (!entry || stopped) return
+    entry.expiry = undefined
+    if (answering.has(requestId)) return
+    answering.add(requestId)
+    const unit = `${minutes} minute${minutes === 1 ? "" : "s"}`
+    const reason = `Timed out: nobody answered this approval within ${unit}, so it was rejected. Do not retry the same action; continue with what does not need it.`
+    void deps.resolveChild({ child: entry.child, requestId, decision: { kind: "deny", reason }, clientId: undefined }).catch(() => undefined).finally(() => answering.delete(requestId))
+    const text = `Internal notification. The approval that session ${entry.child} ${JSON.stringify(deps.mask(entry.child, entry.title))} waited for (${entry.tool ?? "a tool"}: ${JSON.stringify(clip(deps.mask(entry.child, entry.detail), SHOWN_DETAIL))}) timed out after ${unit} and was rejected. That session goes on without it. Tell the user what was left undone; do not retry it another way.`
+    void deps.notify(entry.launcher, text, deps.queueId()).catch(() => undefined)
+  }
+  function arm(entry: Waiting) {
+    const minutes = deps.timeoutMinutes?.() ?? 0
+    if (!entry.approval || minutes <= 0 || stopped) return
+    entry.expiry = setTimeout(() => expire(entry.requestId, minutes), minutes * 60_000)
+    entry.expiry.unref?.()
+  }
+  const disarm = (entry: Waiting) => { if (entry.expiry) clearTimeout(entry.expiry); entry.expiry = undefined }
+
   function schedule(launcher: SessionId) {
     if (stopped || timers.has(launcher)) return
     const timer = setTimeout(() => flush(launcher), delay)
@@ -225,13 +250,17 @@ export function createChildApprovals(deps: {
         const approval = event.kind === "approval" && event.tool !== "plan_review"
         const asked = event.kind === "question" && !event.planReview ? (event.questions?.length === 1 ? event.questions[0] : event.questions ? undefined : event.options?.length ? { header: "Question", question: event.title, options: event.options, context: event.detail } : undefined) : undefined
         const mirror = asked && asked.options.length > 0 && !asked.multiple ? { header: asked.header, question: asked.question, options: asked.options.map((option) => option.label), context: `${asked.context ?? ""}\n${event.detail}`.trim() } : undefined
-        waiting.set(event.requestId, { child: event.sessionId, requestId: event.requestId, launcher, approval, title: deps.title(event.sessionId), tool: "tool" in event ? event.tool : undefined, detail: firstLine(event.detail || event.title || ""), announced: false, mirror, mirrored: false })
+        const held = waiting.get(event.requestId)
+        if (held) disarm(held)
+        const entry: Waiting = { child: event.sessionId, requestId: event.requestId, launcher, approval, title: deps.title(event.sessionId), tool: "tool" in event ? event.tool : undefined, detail: firstLine(event.detail || event.title || ""), announced: false, mirror, mirrored: false }
+        waiting.set(event.requestId, entry)
+        arm(entry)
         schedule(launcher)
         return
       }
       if (event.type === "server.request.resolved") {
         const entry = waiting.get(event.requestId)
-        if (entry) { waiting.delete(event.requestId); updateNotice(entry.launcher, []); announce(entry.launcher); schedule(entry.launcher) }
+        if (entry) { disarm(entry); waiting.delete(event.requestId); updateNotice(entry.launcher, []); announce(entry.launcher); schedule(entry.launcher) }
       }
     },
     /** An answer to one of these cards; undefined when the request is not one. Only the user's own terminal answers it. */
@@ -272,7 +301,7 @@ export function createChildApprovals(deps: {
     /** What waits for `launcher` right now. */
     pending: (launcher: SessionId) => forLauncher(launcher).map((entry) => ({ child: entry.child, requestId: entry.requestId, approval: entry.approval })),
     forget(sessionId: SessionId) {
-      for (const [id, entry] of waiting) if (entry.child === sessionId || entry.launcher === sessionId) { waiting.delete(id); if (entry.launcher !== sessionId) schedule(entry.launcher) }
+      for (const [id, entry] of waiting) if (entry.child === sessionId || entry.launcher === sessionId) { disarm(entry); waiting.delete(id); if (entry.launcher !== sessionId) schedule(entry.launcher) }
       notices.delete(sessionId)
       closeCard(sessionId)
       closeSingles(sessionId)
@@ -280,6 +309,7 @@ export function createChildApprovals(deps: {
     },
     stop() {
       stopped = true
+      for (const entry of waiting.values()) disarm(entry)
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
       for (const launcher of [...cards.keys()]) closeCard(launcher)

@@ -626,6 +626,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   subagentMaxChildren: intIn(1, 64).optional(),
   subagentMaxDescendants: intIn(1, 256).optional(),
   subagentOwnerWake: z.boolean().optional(),
+  /** Minutes an approval of a background sub-agent waits before it is rejected as timed out and its parent is told (10 when unset; 0 waits for ever). */
+  subagentApprovalTimeout: intIn(0, 1440).optional(),
   /** A turn an orderly daemon stop interrupted continues when the daemon starts again; `false` leaves it interrupted (default on). */
   resumeAfterRestart: z.boolean().optional(),
   /** Sub-agents the `task` tool's description names (built-ins first, 6 when unset); the rest are listed on demand (`agent: "?"`). */

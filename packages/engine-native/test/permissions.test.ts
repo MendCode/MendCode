@@ -347,3 +347,34 @@ test("the permission reviewer tells its completion which session asks, so its ca
   expect(verdict.verdict).toBe("allow")
   expect(sessions).toEqual([sessionId])
 })
+
+describe("sub-agent folder access", () => {
+  const pattern = "/data/shared/*"
+  const family = (id: string) => (id === "ses_child" ? "ses_parent" : id === "ses_grand" ? "ses_child" : undefined) as never
+
+  test("a sub-agent, and its own sub-agent, may use the folders its parent was let into", () => {
+    const grants = createGrantStore(Date.now, undefined, family)
+    grants.add("ses_parent" as never, "read", "read" as never, pattern, "external_directory")
+    expect(grants.has("ses_child" as never, "read", "/data/shared/notes.md", "external_directory")).toBe(true)
+    expect(grants.has("ses_grand" as never, "read", "/data/shared/notes.md", "external_directory")).toBe(true)
+    expect(grants.has("ses_child" as never, "read", "/data/other/notes.md", "external_directory")).toBe(false)
+  })
+
+  test("nothing else is inherited, nothing flows upward and a session without a parent gets nothing", () => {
+    const grants = createGrantStore(Date.now, undefined, family)
+    grants.add("ses_parent" as never, "bash", "execute" as never, "git push *", "bash")
+    grants.add("ses_parent" as never, "bash", "execute" as never)
+    grants.add("ses_child" as never, "read", "read" as never, "/data/child/*", "external_directory")
+    expect(grants.has("ses_child" as never, "bash", "git push origin", "bash")).toBe(false)
+    expect(grants.has("ses_child" as never, "bash")).toBe(false)
+    expect(grants.has("ses_parent" as never, "read", "/data/child/x", "external_directory")).toBe(false)
+    expect(createGrantStore().has("ses_child" as never, "read", "/data/child/x", "external_directory")).toBe(false)
+  })
+
+  test("revoking the parent's grant takes the access from its sub-agents", () => {
+    const grants = createGrantStore(Date.now, undefined, family)
+    grants.add("ses_parent" as never, "read", "read" as never, pattern, "external_directory")
+    grants.revoke("ses_parent" as never, "all")
+    expect(grants.has("ses_child" as never, "read", "/data/shared/a", "external_directory")).toBe(false)
+  })
+})

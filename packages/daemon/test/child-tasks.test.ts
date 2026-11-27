@@ -263,3 +263,14 @@ test("a streamed answer reads the task table no more than a one-word answer: no 
   // The whole table is not read per delta: 300 deltas cost about what one does (a slow machine may add a read or two).
   expect(await reads(300)).toBeLessThanOrEqual(await reads(1) + 2)
 })
+
+test("a background sub-agent blocked on an approval is announced to its parent", async () => {
+  const h = await start({ shell: true, steps: [callTool("shell", { command: "echo from-child" }), hang, stop("noted")] })
+  const parent = await openSession(h, "ask")
+  const child = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Asks", prompt: "go", background: true } }))
+  await until(() => h.store.tasks.get(child.taskId)?.state === "needs_input")
+  await until(() => JSON.stringify(h.requests).includes("blocked waiting for the user's approval"))
+  const told = h.requests.map((request) => JSON.stringify(request.messages)).find((text) => text.includes("blocked waiting for the user's approval"))!
+  expect(told).toContain(child.taskId)
+  expect(told).toContain("rejected after 10 minutes")
+}, 15_000)

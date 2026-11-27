@@ -16,11 +16,11 @@ const DEFAULT_PORT = 9876
 export type SetupCommand = Provision | Unpair
 type Unpair = { action: "unpair"; dir: string; device: string; remote?: string; ssh?: string; remoteDir: string; dryRun: boolean }
 type Provision =
-  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number; sync: boolean }
+  { action: "setup" | "pair"; dir: string; host: string; ssh: string; name: string; device: string; port?: number; remoteDir: string; upgrade: boolean; channel?: string; installerUrl: string; makeDefault: boolean; expiresDays?: number; rotate: boolean; reinstallService: boolean; dryRun: boolean; migrateSettings: boolean; migrateSessions: boolean; acpAgents: boolean; pathMaps: PathRule[]; cloneMissing: boolean; searchRoots: string[]; sessionLimit: number; sync: boolean; tailscale?: string; tailscaleSocket?: string }
 
-const VALUE_FLAGS = ["--dir", "--ssh", "--name", "--device", "--port", "--remote-dir", "--channel", "--installer-url", "--expires-days", "--path-map", "--search-root", "--session-limit", "--remote"]
+const VALUE_FLAGS = ["--dir", "--ssh", "--name", "--device", "--port", "--remote-dir", "--channel", "--installer-url", "--expires-days", "--path-map", "--search-root", "--session-limit", "--remote", "--tailscale", "--tailscale-socket"]
 const BOOLEAN_FLAGS = ["--upgrade", "--dry-run", "--migrate-settings", "--migrate-sessions", "--acp-agents", "--clone-missing", "--no-default", "--rotate", "--reinstall-service", "--sync"]
-export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--sync [--path-map LOCAL=REMOTE]] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default] [--sync]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
+export const SETUP_USAGE = "usage: remote setup HOST [--ssh USER@HOST] [--name N] [--device D] [--port P] [--remote-dir DIR] [--upgrade] [--channel stable|beta|nightly] [--expires-days N] [--rotate] [--reinstall-service] [--no-default] [--migrate-settings] [--migrate-sessions [--path-map LOCAL=REMOTE] [--clone-missing] [--search-root DIR] [--session-limit N]] [--acp-agents] [--sync [--path-map LOCAL=REMOTE]] [--tailscale PATH] [--tailscale-socket PATH] [--dry-run]\n       remote pair HOST [--ssh USER@HOST] [--name N] [--device D] [--expires-days N] [--rotate] [--no-default] [--sync] [--tailscale PATH] [--tailscale-socket PATH]\n       remote unpair DEVICE [--remote N] [--ssh USER@HOST] [--dry-run]"
 
 const HOST = /^[A-Za-z0-9][A-Za-z0-9.-]{0,251}$/
 const SSH_TARGET = /^[A-Za-z0-9_][A-Za-z0-9._@:[\]-]{0,252}$/
@@ -60,6 +60,8 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
   if (!NAME.test(device)) throw new Error("--device uses 1–64 letters, digits, _ or -")
   if (action === "unpair") {
     const unpairOnly = ["--migrate-settings", "--migrate-sessions", "--acp-agents", "--upgrade", "--clone-missing", "--rotate", "--reinstall-service", "--no-default", "--sync"].find((flag) => flags.has(flag))
+    const tailscaleFlag = ["--tailscale", "--tailscale-socket"].find((flag) => values.has(flag))
+    if (tailscaleFlag) throw new Error(`${tailscaleFlag} does not apply to remote unpair`)
     if (unpairOnly) throw new Error(`${unpairOnly} does not apply to remote unpair`)
     const target = words[2]!
     if (!NAME.test(target)) throw new Error("device name uses 1–64 letters, digits, _ or -")
@@ -87,6 +89,8 @@ export function parseSetupCommand(argv: string[], fallbackDir: string, hostName:
     migrateSettings: flags.has("--migrate-settings"), migrateSessions, acpAgents: flags.has("--acp-agents"), pathMaps: (values.get("--path-map") ?? []).map(parsePathRule),
     cloneMissing: flags.has("--clone-missing"), searchRoots: (values.get("--search-root") ?? []).map((root) => checkRemotePath(root, "--search-root")), sessionLimit: limit,
     sync: flags.has("--sync"),
+    ...(one("--tailscale") ? { tailscale: checkRemotePath(one("--tailscale")!, "--tailscale") } : {}),
+    ...(one("--tailscale-socket") ? { tailscaleSocket: checkRemotePath(one("--tailscale-socket")!, "--tailscale-socket") } : {}),
   }
 }
 
@@ -113,10 +117,31 @@ const shellPath = (value: string) => value.startsWith("~") ? `"$HOME"${value.sli
 /** Long token-like runs never reach a message. */
 const scrub = (text: string) => text.replace(/[A-Za-z0-9_-]{32,}/g, "***").replace(/\s+/g, " ").trim().slice(0, 300)
 const PRELUDE = (remoteDir: string) => `set -eu
+export PATH="\${PATH:-/usr/bin:/bin}:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/sbin:/usr/sbin:/sbin"
 MC="$HOME/.local/bin/mendcode"; if command -v mendcode >/dev/null 2>&1; then MC=$(command -v mendcode); fi
 export XDG_RUNTIME_DIR="\${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 D=${shellPath(remoteDir)}
 `
+
+/** Finds tailscale (the given path, PATH, then the usual user and system bin directories) and its socket (the given one, else the unprivileged user's own when the system socket is absent). Prints what it found as `tailscale=`, `tailscale_path=` and `tailscale_socket=`. */
+function findTailscale(command: { tailscale?: string; tailscaleSocket?: string }) {
+  return `TS=${command.tailscale ? shellPath(command.tailscale) : '""'}
+if [ -z "$TS" ]; then TS=$(command -v tailscale 2>/dev/null || true); fi
+if [ -z "$TS" ]; then for d in "$HOME/.local/bin" /usr/local/bin /usr/bin /opt/homebrew/bin; do if [ -x "$d/tailscale" ]; then TS="$d/tailscale"; break; fi; done; fi
+if [ -n "$TS" ] && [ ! -x "$TS" ]; then TS=""; fi
+SOCK=${command.tailscaleSocket ? shellPath(command.tailscaleSocket) : '""'}
+if [ -z "$SOCK" ] && [ ! -S /var/run/tailscale/tailscaled.sock ] && [ -S "$HOME/.local/state/tailscale/tailscaled.sock" ]; then SOCK="$HOME/.local/state/tailscale/tailscaled.sock"; fi
+if [ -n "$TS" ]; then echo tailscale=yes; else echo tailscale=no; fi
+echo "tailscale_path=$TS"; echo "tailscale_socket=$SOCK"`
+}
+
+const SAFE_PATH = /^[A-Za-z0-9_./+-]*$/
+/** Defines `ts` in a remote script: the tailscale binary found by the probe, with --socket when one is used. */
+function tailscaleFunction(found: { path: string; socket: string }) {
+  return `TS=${shq(found.path)}; SOCK=${shq(found.socket)}
+ts() { if [ -n "$SOCK" ]; then "$TS" --socket "$SOCK" "$@"; else "$TS" "$@"; fi; }
+`
+}
 
 function fields(text: string) {
   const map = new Map<string, string>()
@@ -127,12 +152,13 @@ function fields(text: string) {
 /** The ordered list of steps and what each does; `--dry-run` prints exactly this and runs nothing. */
 export function setupPlan(command: SetupCommand): string[] {
   if (command.action === "unpair") return [`revoke the token ${command.device} and its sync token ${command.device}-sync (if any) on the host over SSH (its devices drop within a second)`, `delete this machine's token files for ${command.device}, its session sync setup and the saved remote that use them, if any`]
-  const lines = [`check ${command.ssh} over SSH (read-only): Linux with systemd, Tailscale running, and the name ${command.host}`]
+  const where = command.tailscale ? `tailscale at ${command.tailscale}` : "tailscale (found in PATH, ~/.local/bin, /usr/local/bin, /usr/bin or /opt/homebrew/bin)"
+  const lines = [`check ${command.ssh} over SSH (read-only): Linux with systemd, ${where}${command.tailscaleSocket ? ` with the socket ${command.tailscaleSocket}` : " (a user socket under ~/.local/state/tailscale is used when the system one is absent)"} running, and the name ${command.host}; detect whether Tailscale runs in userspace networking (its address is on no network interface of the host)`]
   if (command.action === "setup") {
     lines.push(
       `install MendCode on the host with ${command.installerUrl} (the installer checks the binary's SHA256${command.upgrade ? "; --upgrade also replaces an installed version" : "; an installed version is kept"})`,
-      `get the TLS certificate with tailscale cert into ${command.remoteDir}/tls and add a systemd user timer that renews it every 30 days`,
-      `write ${command.remoteDir}/remote.json with mode tailscale, the host's tailnet address and port ${command.port ?? `${DEFAULT_PORT} (or the one already set)`}`,
+      `get the TLS certificate with tailscale cert into ${command.remoteDir}/tls and add a systemd user timer that renews it every 30 days (the same tailscale path and socket); if the tailnet has no HTTPS certificates, make a private CA with openssl on the host instead (825 days, no timer, re-run setup to renew) and save its ca.pem here for the remote`,
+      `write ${command.remoteDir}/remote.json with port ${command.port ?? `${DEFAULT_PORT} (or the one already set)`}: with a system Tailscale (mode tailscale) the listener binds the host's tailnet address; with userspace Tailscale (no root) it binds 127.0.0.1 with TLS, because tailscaled forwards inbound tailnet TCP to localhost on the same port`,
     )
   } else lines.push(`read ${command.remoteDir}/remote.json on the host for the address and port`)
   lines.push(`create the token ${command.device}${command.expiresDays ? ` (expires in ${command.expiresDays} days)` : ""} on the host and save it to ${tokenFile(command.dir, command.name, command.device)} (mode 0600, never printed)`)
@@ -177,6 +203,35 @@ function legacyTokenFile(dir: string, device: string) { return path.join(dir, "r
 /** Where `--sync` keeps the sync-scoped token; `mendcode sync enable NAME` looks there too. */
 function syncTokenFile(dir: string, remote: string) { return path.join(dir, "remote", `${remote}.sync-token`) }
 
+/** The CA of a host whose tailnet cannot issue certificates; saved next to the token (mode 0600, in the 0700 remote directory). */
+function caFileOf(dir: string, remote: string) { return path.join(dir, "remote", `${remote}.ca.pem`) }
+
+/** What `tailscale cert` prints when HTTPS certificates are not enabled for the tailnet ("your Tailscale account does not support getting TLS certs"). */
+const NO_TAILNET_CERTS = /does not support getting TLS certs|HTTPS (certificates )?(are |is )?not enabled|enable HTTPS/i
+
+/**
+ * Fallback for a tailnet without HTTPS certificates: an EC P-256 CA on the host (key 0600 in <remote dir>/tls, reused when it exists) signs a 825-day
+ * server certificate for the DNS name, the short name, the tailnet IP and 127.0.0.1. It writes cert.pem and key.pem, the files `remote.json` already names.
+ * Exit 127 means openssl is missing.
+ */
+export function privateCaScript(facts: { dns: string; ip: string }) {
+  const short = facts.dns.split(".")[0]!
+  return `command -v openssl >/dev/null 2>&1 || { echo "openssl is not installed on the host" >&2; exit 127; }
+umask 077; mkdir -p "$D/tls"; cd "$D/tls"
+ABS=$(cd "$D" && pwd); echo "abs=$ABS"
+if [ ! -s ca.key ] || [ ! -s ca.pem ]; then
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out ca.key >&2
+  openssl req -x509 -new -key ca.key -sha256 -days 3650 -subj "/CN=MendCode private CA" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign" -out ca.pem >&2
+fi
+openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out key.pem >&2
+openssl req -new -key key.pem -subj "/CN=${facts.dns}" -out server.csr >&2
+printf '%s\\n' "subjectAltName=DNS:${facts.dns},DNS:${short},IP:${facts.ip},IP:127.0.0.1" "basicConstraints=CA:FALSE" "keyUsage=digitalSignature" "extendedKeyUsage=serverAuth" > server.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 825 -sha256 -extfile server.ext -out cert.pem >&2
+rm -f server.csr server.ext ca.srl
+chmod 600 ca.key key.pem cert.pem ca.pem
+echo "expires=$(openssl x509 -in cert.pem -noout -enddate | sed 's/^notAfter=//')"`
+}
+
 function writePrivate(file: string, text: string) {
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
   const temporary = `${file}.${process.pid}.tmp`
@@ -211,6 +266,7 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
   if (ownFile) {
     // This machine is the device that was unpaired: its sync token file and the sync setup that uses it go too.
     rmSync(syncTokenFile(command.dir, remote), { force: true })
+    rmSync(caFileOf(command.dir, remote), { force: true })
     const { readSyncConfig, writeSyncConfig } = await import("@mendcode/daemon/sync-config")
     let syncing: string | undefined
     try { syncing = readSyncConfig(command.dir)?.remote } catch { /* an unreadable sync.json is left for `sync` to report */ }
@@ -230,7 +286,7 @@ async function unpair(command: Unpair,deps: SetupDeps, say: (line: string) => vo
 
 const parseHost = (address: string) => address.replace(/:\d+$/, "")
 
-type Facts = { dns: string; ip: string; home: string; version?: string; systemd: boolean }
+type Facts = { dns: string; ip: string; home: string; version?: string; systemd: boolean; userspace: boolean }
 
 async function provision(command: Provision,deps: SetupDeps, say: (line: string) => void) {
   const run = deps.ssh(command.ssh)
@@ -247,14 +303,18 @@ async function provision(command: Provision,deps: SetupDeps, say: (line: string)
   begin("checking the host")
   const probe = await remote(`echo "os=$(uname -s)"; echo "arch=$(uname -m)"; echo "home=$HOME"
 if command -v systemctl >/dev/null 2>&1; then echo systemd=yes; else echo systemd=no; fi
-if command -v tailscale >/dev/null 2>&1; then echo tailscale=yes; else echo tailscale=no; fi
+${findTailscale(command)}
 if [ -x "$MC" ]; then echo "mendcode=$("$MC" --version 2>/dev/null | head -n 1 || true)"; else echo mendcode=none; fi`)
   if (probe.code !== 0) throw new SetupError(`cannot run commands on ${command.ssh} over SSH: ${scrub(probe.stderr) || `exit ${probe.code}`}. Check that \`ssh ${command.ssh}\` works without a password prompt.`)
   const seen = fields(probe.stdout)
   if (seen.get("os") !== "Linux") throw new SetupError(`the host runs ${seen.get("os") || "an unknown system"}; remote setup supports Linux with systemd`)
   if (seen.get("systemd") !== "yes") throw new SetupError("the host has no systemd; remote setup installs a systemd user service")
-  if (seen.get("tailscale") !== "yes") throw new SetupError("Tailscale is not installed on the host: install it and run `tailscale up` there first")
-  const status = await remote("tailscale status --json")
+  if (seen.get("tailscale") !== "yes") throw new SetupError("Tailscale is not installed on the host (looked in PATH, ~/.local/bin, /usr/local/bin, /usr/bin and /opt/homebrew/bin): install it and run `tailscale up` there first, or give its location with --tailscale PATH (and --tailscale-socket PATH)")
+  const found = { path: seen.get("tailscale_path") ?? "", socket: seen.get("tailscale_socket") ?? "" }
+  if (!found.path.startsWith("/") || !SAFE_PATH.test(found.path) || !SAFE_PATH.test(found.socket)) throw new SetupError("the host's tailscale path or socket has characters this tool does not pass to a remote shell; pass a plain path with --tailscale and --tailscale-socket")
+  const tsDefinition = tailscaleFunction(found)
+  say(`  tailscale ${found.path}${found.socket ? ` (socket ${found.socket})` : ""}`)
+  const status = await remote(`${tsDefinition}ts status --json`)
   let facts: Facts
   try {
     const parsed = JSON.parse(status.stdout) as { BackendState?: string; Self?: { DNSName?: string; TailscaleIPs?: string[] } }
@@ -262,16 +322,24 @@ if [ -x "$MC" ]; then echo "mendcode=$("$MC" --version 2>/dev/null | head -n 1 |
     const dns = (parsed.Self?.DNSName ?? "").replace(/\.$/, "").toLowerCase()
     const ip = parsed.Self?.TailscaleIPs?.find((address) => /^\d+\.\d+\.\d+\.\d+$/.test(address))
     if (!dns || !ip) throw new SetupError("Tailscale on the host reports no name or IPv4 address; enable MagicDNS and HTTPS certificates in the Tailscale admin console")
-    facts = { dns, ip, home: seen.get("home") ?? "", systemd: true, ...(seen.get("mendcode") && seen.get("mendcode") !== "none" ? { version: seen.get("mendcode")! } : {}) }
+    facts = { dns, ip, home: seen.get("home") ?? "", systemd: true, userspace: false, ...(seen.get("mendcode") && seen.get("mendcode") !== "none" ? { version: seen.get("mendcode")! } : {}) }
   } catch (error) {
     if (error instanceof SetupError) throw error
     throw new SetupError(`cannot read \`tailscale status --json\` on the host: ${scrub(status.stderr || status.stdout)}`)
   }
   if (facts.dns !== command.host) throw new SetupError(`the host's Tailscale name is ${facts.dns}, not ${command.host}: run again with that name`)
-  say(`  ${facts.dns} · ${facts.ip} · ${facts.version ? `MendCode ${facts.version}` : "MendCode not installed"}`)
+  // `tailscale status --json` has no field for the networking mode. In userspace networking (no TUN device, no root) the tailnet address is on no
+  // interface of the host; a system Tailscale puts it on tailscale0. When the host cannot tell (no ip and no /proc), the system mode is assumed.
+  const iface = fields((await remote(`IP=${shq(facts.ip)}
+if command -v ip >/dev/null 2>&1; then if ip -o addr 2>/dev/null | grep -F "inet $IP/" >/dev/null; then echo iface=yes; else echo iface=no; fi
+elif [ -r /proc/net/fib_trie ]; then if grep -F "|-- $IP" /proc/net/fib_trie >/dev/null; then echo iface=yes; else echo iface=no; fi
+else echo iface=unknown; fi`)).stdout).get("iface")
+  facts.userspace = iface === "no"
+  say(`  ${facts.dns} · ${facts.ip} · ${facts.userspace ? "userspace networking (no root)" : "system networking"} · ${facts.version ? `MendCode ${facts.version}` : "MendCode not installed"}`)
 
   let port = command.port
   let changedListener = false
+  let caFile: string | undefined
   if (command.action === "setup") {
     begin("installing MendCode")
     if (facts.version && !command.upgrade) say(`  already installed (${facts.version}); --upgrade replaces it`)
@@ -283,11 +351,35 @@ if [ -x "$MC" ]; then echo "mendcode=$("$MC" --version 2>/dev/null | head -n 1 |
     }
 
     begin("TLS certificate and renewal timer")
-    const cert = await remote(`umask 077; mkdir -p "$D/tls"
-tailscale cert --cert-file "$D/tls/cert.pem" --key-file "$D/tls/key.pem" ${facts.dns} >&2
+    let cert = await remote(`umask 077; mkdir -p "$D/tls"
+${tsDefinition}ts cert --cert-file "$D/tls/cert.pem" --key-file "$D/tls/key.pem" ${facts.dns} >&2
 chmod 600 "$D/tls/key.pem"
-ABS=$(cd "$D" && pwd); echo "abs=$ABS"
-TS=$(command -v tailscale)
+ABS=$(cd "$D" && pwd); echo "abs=$ABS"`)
+    let privateCa = false
+    if (cert.code !== 0 && NO_TAILNET_CERTS.test(cert.stderr + cert.stdout)) {
+      say("  tailscale cert is not available for this tailnet (HTTPS certificates are not enabled): using a private CA made on the host")
+      cert = await remote(privateCaScript(facts))
+      if (cert.code === 127) throw new SetupError(`tailscale cert failed: ${scrub(cert.stderr || cert.stdout)}. Enable HTTPS certificates for the tailnet in the Tailscale admin console (or install openssl on the host so setup can make a private CA).`)
+      if (cert.code !== 0) throw new SetupError(`making the private CA on the host failed: ${scrub(cert.stderr || cert.stdout) || `exit ${cert.code}`}`)
+      privateCa = true
+    } else if (cert.code !== 0) {
+      const hint = /access denied|permission|operator|not allowed/i.test(cert.stderr) ? " Run once on the host: sudo tailscale set --operator=$USER" : /https|certificate|not enabled/i.test(cert.stderr) ? " Enable HTTPS certificates for the tailnet in the Tailscale admin console." : ""
+      throw new SetupError(`tailscale cert failed: ${scrub(cert.stderr || cert.stdout)}.${hint}`)
+    }
+    const certFacts = fields(cert.stdout)
+    const absolute = certFacts.get("abs")
+    if (!absolute || !absolute.startsWith("/")) throw new SetupError("could not resolve the data directory on the host")
+    if (privateCa) {
+      const ca = (await must("could not read the private CA from the host", `cat "$D/tls/ca.pem"`)).trim()
+      if (!ca.startsWith("-----BEGIN CERTIFICATE-----")) throw new SetupError("the host returned something that is not a CA certificate")
+      caFile = caFileOf(command.dir, command.name)
+      writePrivate(caFile, `${ca}\n`)
+      say(`  saved ${caFile}; the CA key stays on the host in ${command.remoteDir}/tls (mode 0600)`)
+      say(`  server certificate valid until ${certFacts.get("expires") ?? "about 825 days from now"}; no renewal timer: run the same \`remote setup\` command again before then to renew it`)
+      say("  tip: enable HTTPS certificates in the Tailscale admin console, then run setup again to use real certificates that renew themselves")
+    } else {
+      const timer = await remote(`${tsDefinition}ABS=$(cd "$D" && pwd)
+TSX="$TS"; if [ -n "$SOCK" ]; then TSX="$TS --socket $SOCK"; fi
 U="$HOME/.config/systemd/user"; mkdir -p "$U"
 cat > "$U/mendcode-cert.service" <<EOF
 [Unit]
@@ -295,7 +387,7 @@ Description=Renew the Tailscale certificate of the MendCode daemon
 
 [Service]
 Type=oneshot
-ExecStart=$TS cert --cert-file $ABS/tls/cert.pem --key-file $ABS/tls/key.pem ${facts.dns}
+ExecStart=$TSX cert --cert-file $ABS/tls/cert.pem --key-file $ABS/tls/key.pem ${facts.dns}
 EOF
 cat > "$U/mendcode-cert.timer" <<EOF
 [Unit]
@@ -312,14 +404,9 @@ EOF
 systemctl --user daemon-reload
 systemctl --user enable --now mendcode-cert.timer >&2
 if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
-    if (cert.code !== 0) {
-      const hint = /access denied|permission|operator|not allowed/i.test(cert.stderr) ? " Run once on the host: sudo tailscale set --operator=$USER" : /https|certificate|not enabled/i.test(cert.stderr) ? " Enable HTTPS certificates for the tailnet in the Tailscale admin console." : ""
-      throw new SetupError(`tailscale cert failed: ${scrub(cert.stderr || cert.stdout)}.${hint}`)
+      if (timer.code !== 0) throw new SetupError(`could not set up the certificate renewal timer: ${scrub(timer.stderr || timer.stdout) || `exit ${timer.code}`}`)
+      if (fields(timer.stdout).get("linger") === "failed") say("  warning: loginctl enable-linger failed; run `sudo loginctl enable-linger $USER` on the host so the service survives a logout and reboot")
     }
-    const certFacts = fields(cert.stdout)
-    const absolute = certFacts.get("abs")
-    if (!absolute || !absolute.startsWith("/")) throw new SetupError("could not resolve the data directory on the host")
-    if (certFacts.get("linger") === "failed") say("  warning: loginctl enable-linger failed; run `sudo loginctl enable-linger $USER` on the host so the service survives a logout and reboot")
 
     begin("listener settings")
     const existingText = (await remote(`cat "$D/remote.json" 2>/dev/null || true`)).stdout.trim()
@@ -330,7 +417,12 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
     }
     const existingPort = typeof existing.listen === "string" ? Number(/:(\d+)$/.exec(existing.listen)?.[1]) : undefined
     port ??= existingPort && existingPort > 0 ? existingPort : DEFAULT_PORT
-    const desired = { ...existing, listen: `${facts.ip}:${port}`, tlsCert: `${absolute}/tls/cert.pem`, tlsKey: `${absolute}/tls/key.pem`, mode: "tailscale" }
+    // Userspace tailscaled forwards inbound tailnet TCP to 127.0.0.1 on the same port (wgengine/netstack acceptTCP), so the daemon listens on loopback with TLS;
+    // mode tailscale would refuse that listener and its peer check would see 127.0.0.1.
+    const desired: Record<string, unknown> = { ...existing, listen: `${facts.userspace ? "127.0.0.1" : facts.ip}:${port}`, tlsCert: `${absolute}/tls/cert.pem`, tlsKey: `${absolute}/tls/key.pem` }
+    if (facts.userspace) delete desired.mode
+    else desired.mode = "tailscale"
+    if (facts.userspace) say("  Tailscale runs in userspace networking: the daemon listens on 127.0.0.1 with TLS and tailscaled forwards the tailnet port to it")
     changedListener = JSON.stringify(desired) !== JSON.stringify(existing)
     if (changedListener) {
       await must("could not write remote.json on the host", `umask 077; cat > "$D/remote.json.tmp" && chmod 600 "$D/remote.json.tmp" && mv "$D/remote.json.tmp" "$D/remote.json"`, `${JSON.stringify(desired, null, 2)}\n`)
@@ -394,7 +486,7 @@ if ! loginctl enable-linger "$USER" >&2 2>&1; then echo "linger=failed"; fi`)
   begin("saving the remote and checking it")
   const address = `${command.host}:${port}`
   const profiles = readRemoteProfiles(command.dir) ?? { remotes: {} }
-  const next: RemoteProfiles = { ...profiles, remotes: { ...profiles.remotes, [command.name]: { connect: address, tokenFile: file, tls: true } }, ...(command.makeDefault ? { defaultRemote: command.name } : {}) }
+  const next: RemoteProfiles = { ...profiles, remotes: { ...profiles.remotes, [command.name]: { connect: address, tokenFile: file, ...(caFile ? { ca: caFile } : {}), tls: true } }, ...(command.makeDefault ? { defaultRemote: command.name } : {}) }
   writeRemoteProfiles(command.dir, next)
   let up = false
   for (let attempt = 0; attempt < 10 && !up; attempt++) {
