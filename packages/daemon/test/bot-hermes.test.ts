@@ -143,7 +143,7 @@ describe("the Hermes connector lists the profiles as bots", () => {
     await connector.list()
     await connector.list()
     await Promise.resolve()
-    expect(requests - before).toBe(2)
+    expect(requests - before).toBe(3)
     release.splice(0).forEach((resolve) => resolve())
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect((await connector.list()).map((bot) => bot.id)).toEqual(["later"])
@@ -175,7 +175,7 @@ describe("the Hermes connector lists the profiles as bots", () => {
       return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [] })
     }) as unknown as typeof fetch
     await hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher }).list()
-    expect(order).toEqual(["start sessions", "start profiles"])
+    expect(order).toEqual(["start sessions", "start sessions", "start profiles"])
   })
 })
 
@@ -225,6 +225,7 @@ describe("what a working profile is doing", () => {
           { id: "s-old", profile: "ada", is_active: true, title: "Older run", source: "cron", started_at: 1_700_000_000, last_active: 1_700_000_100 },
           { id: "s-new", profile: "ada", is_active: true, title: null, preview: "Flash the board", source: "telegram", started_at: 1_700_000_200, last_activity_at: 1_700_000_300.5 },
           { id: "s-done", profile: "ada", is_active: false, title: "Finished" },
+          { id: "s-titleless", profile: "ada", is_active: false, title: null, preview: "  First   question\nhere ", source: "desktop", started_at: 1_700_000_050, last_active: 1_700_000_060 },
           { id: "bad id", profile: "ada", is_active: true, title: "Odd" },
         ] })
         if (url.pathname === "/api/sessions/s-new/messages") return Response.json({ session_id: "s-new", messages: [
@@ -241,7 +242,7 @@ describe("what a working profile is doing", () => {
     return { env: { MENDCODE_HERMES_URL: `http://127.0.0.1:${server.port}`, MENDCODE_HERMES_TOKEN: TOKEN }, asked }
   }
 
-  test("the list carries the profile's live sessions, newest first, in milliseconds, and nothing of a finished one", async () => {
+  test("the list carries the profile's live sessions, newest first, in milliseconds, and its finished ones apart with a title read from the first question", async () => {
     const hermes = busyHermes()
     const bots = await hermesConnector({ env: hermes.env }).list()
     const ada = bots.find((bot) => bot.id === "ada")!
@@ -250,7 +251,13 @@ describe("what a working profile is doing", () => {
       { id: "s-new", title: "Flash the board", source: "telegram", startedAt: 1_700_000_200_000, activeAt: 1_700_000_300_500 },
       { id: "s-old", title: "Older run", source: "cron", startedAt: 1_700_000_000_000, activeAt: 1_700_000_100_000 },
     ])
+    expect(ada.recent).toEqual([
+      { id: "s-titleless", title: "First question here", source: "desktop", startedAt: 1_700_000_050_000, activeAt: 1_700_000_060_000 },
+      { id: "s-done", title: "Finished" },
+    ])
     expect(bots.find((bot) => bot.id === "default")!.activity).toBeUndefined()
+    // The root profile's own newest sessions are asked for apart, so other bots' runs cannot push them out of the shared list.
+    expect(hermes.asked.some((entry) => entry.query.includes("profile=default"))).toBe(true)
     expect(BotListReport.safeParse({ bots: [], external: bots, problems: [] }).success).toBe(true)
   })
 

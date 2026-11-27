@@ -422,7 +422,7 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
       for (const [origin, members] of origins) {
         const groupId = `${XGROUP}${origin}`
         const chatsOfBot = (external: ExternalBotInfo) => chatsOf(externalBotId(external), external.projects ?? [])
-        const lately = (external: ExternalBotInfo) => external.state !== "idle" || chatsOfBot(external).some((session) => busyMark(mark(session)) || input.now - sessionActivityAt(session as never) <= DAY_MS)
+        const lately = (external: ExternalBotInfo) => external.state !== "idle" || (external.recent ?? []).some((chat) => input.now - (chat.activeAt ?? chat.startedAt ?? 0) <= DAY_MS) || chatsOfBot(external).some((session) => busyMark(mark(session)) || input.now - sessionActivityAt(session as never) <= DAY_MS)
         const recent = members.filter(lately)
         const open = input.open.get(groupId) ?? false
         names.set(groupId, `${origin} bots`)
@@ -437,12 +437,15 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
           const row = external.chat ? externalBotId(external) : undefined
           push(spread([{ text: "  " }, { text: input.ascii ? `${made.text} ` : made.text, fg: made.fg }, { text: truncateEnd(external.name, 14), fg: row ? "text" : "muted", bold: row !== undefined && row === picked }], [{ text: `${stateMark} ${STATE_WORD[external.state]}`, fg: STATE_FG[external.state] }, ...(row ? plus : [])], inner), row, undefined, undefined, row ? { plus: true } : undefined)
           // What it does in its own app right now: one read-only row per session running there, newest first.
-          for (const running of (external.activity ?? []).slice(0, ACTIVITY_ROWS)) {
-            const id = externalActivityId(external, running.id)
-            const age: Line = [{ text: relativeTime(input.now, running.activeAt ?? running.startedAt ?? input.now), fg: "muted" }]
-            const title = running.title?.trim() || (running.source ? `${running.source} session` : "session")
+          // Under the running ones, the newest it finished there (its page lists more), so its own chats are findable here too.
+          const running = (external.activity ?? []).slice(0, ACTIVITY_ROWS)
+          const rows = [...running.map((session) => ({ session, live: true })), ...(external.recent ?? []).slice(0, ACTIVITY_ROWS - running.length).map((session) => ({ session, live: false }))]
+          for (const { session, live } of rows) {
+            const id = externalActivityId(external, session.id)
+            const age: Line = [{ text: relativeTime(input.now, session.activeAt ?? session.startedAt ?? input.now), fg: "muted" }]
+            const title = session.title?.trim() || (session.source ? `${session.source} session` : "session")
             names.set(id, title)
-            push(spread([{ text: "    " }, { text: `${input.spinner || g.running} `, fg: "primary" }, { text: truncateEnd(title, Math.max(4, inner - 6 - lineWidth(age) - 2)), fg: id === picked ? "text" : "muted", bold: id === picked }], age, inner), id)
+            push(spread([{ text: "    " }, live ? { text: `${input.spinner || g.running} `, fg: "primary" } : { text: input.ascii ? "- " : "· ", fg: "muted" }, { text: truncateEnd(title, Math.max(4, inner - 6 - lineWidth(age) - 2)), fg: id === picked ? "text" : "muted", bold: id === picked }], age, inner), id)
           }
           if (row) botChats(row, external.name, external.projects ?? [], "  ", false)
         }
