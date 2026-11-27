@@ -69,6 +69,7 @@ Workflows and sync get most of this release. Say `fanout` and the model writes a
 - `remote setup` and `remote pair` work with Tailscale run without root in userspace networking: they find `tailscale` in `~/.local/bin` and the user's socket, take `--tailscale PATH` and `--tailscale-socket PATH`, and listen on 127.0.0.1 with TLS there.
 - The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
 - A hub chat's sidebar row shows what the hub is doing with it: running while its turn runs, waiting while it asks for approval, and a reply mark only once the turn has finished.
+- A hub chat copied before the hub's folder was kept now shows that folder in the footer too: the next sync round fills it in without copying the chat again.
 
 ## v0.0.20 - 2026-11-24
 

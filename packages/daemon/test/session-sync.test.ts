@@ -697,3 +697,22 @@ test("a chat the hub owns says so in the device's list (the hub's name and its r
   expect(turnsDone(hub.daemon, seed)).toBeGreaterThanOrEqual(2)
   expect(existsSync(here)).toBe(false)
 })
+
+test("a copy made before the hub's folder was kept gets it from the hub's change feed on the next round, without copying its events again", async () => {
+  const { device, hubFolder, seed } = await runPair({ run: false })
+  const listed = async (node: { client: Client }) => ((await node.client.send({ type: "session.list", limit: 50 })) as unknown as { result: { sessions: Array<{ sessionId: string; hub?: string; hubDirectory?: string }> } }).result.sessions.find((session) => session.sessionId === seed)!
+  expect(await listed(device)).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
+  const stored = events(device.daemon, seed).length
+  // The row as an older build left it: mirrored, with no folder of the hub's.
+  const dir = device.dir
+  await device.stop()
+  const db = new Database(path.join(dir, "mendd.db"))
+  db.run("UPDATE sync_sessions SET hub_dir = '' WHERE session_id = ?", [seed])
+  db.close()
+  const restarted = await startDevice(dir)
+  expect(await listed(restarted)).toMatchObject({ hub: "hub" })
+  expect((await listed(restarted)).hubDirectory).toBeUndefined()
+  await syncNow(restarted.client)
+  expect(await listed(restarted)).toMatchObject({ hub: "hub", hubDirectory: hubFolder })
+  expect(events(restarted.daemon, seed).length).toBe(stored)
+})

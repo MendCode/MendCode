@@ -425,6 +425,25 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     }
   }
 
+  /** Where the one-time look for the hub's folder of copies made before it was kept has reached; undefined once nothing is missing. */
+  let hubDirCursor: number | undefined = 0
+  /**
+   * A copy made before the hub's own folder was kept has none: the hub's change feed is read once from its start, only for the
+   * folders, so the lists and the footer show it without the events being copied again.
+   */
+  async function backfillHubDirs() {
+    while (hubDirCursor !== undefined) {
+      if (![...rows.values()].some((row) => row.role === "mirror" && !row.hubDir)) { hubDirCursor = undefined; return }
+      const page = await call({ op: "changes", after: hubDirCursor }) as { changes: Summary[]; cursor: number; hasMore: boolean }
+      for (const change of page.changes) {
+        const row = rows.get(change.sessionId)
+        if (!change.deleted && change.directory && row?.role === "mirror" && !row.hubDir) save({ ...row, hubDir: change.directory })
+      }
+      if (!page.hasMore) { hubDirCursor = undefined; return }
+      hubDirCursor = page.cursor
+    }
+  }
+
   async function pullChanges() {
     for (;;) {
       const after = Number(state.meta.get("session-cursor") ?? 0)
@@ -502,6 +521,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       lastFull = ports.now()
       await syncOwned()
       await pullChanges()
+      await backfillHubDirs()
       await pushLocalMeta()
       if (config.memories) await syncMemories()
       if (config.settings && rounds % 6 === 1) await syncSettings()
