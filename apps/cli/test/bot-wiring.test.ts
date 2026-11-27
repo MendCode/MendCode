@@ -100,6 +100,23 @@ describe("the sidebar places a picture over each bot icon only with faces", () =
   })
 })
 
+describe("the page of a bot of another app lists the chats it has there", () => {
+  test("its running and finished chats are rows after the MendCode chats; Enter on one reads it", async () => {
+    const opened: string[] = []
+    const card = createBotCard({
+      bot: bot("idle"), folders: ["/work/app"],
+      external: { app: "Hermes", running: [{ id: "run-1", title: "Flash the board", activeAt: NOW - 60_000 }], chats: [{ id: "done-1", title: "Wiring notes", activeAt: NOW - 3_600_000 }, { id: "done-2", source: "cron" }] },
+      actions: { openSession: async () => {}, newSession: async () => {}, edit: async () => {}, delete: async () => {}, memory: async () => {}, openApp: async () => {}, openAppChat: async (id) => void opened.push(id), close() {}, redraw() {} },
+    })
+    const text = lines(card.render({ width: 80, height: 24, now: NOW })).join("\n")
+    for (const needle of ["In Hermes", "Flash the board", "running", "Wiring notes", "cron session"]) expect(text).toContain(needle)
+    // New chat, Open in app, the MendCode chat, then the running one.
+    for (let step = 0; step < 3; step++) await card.key("j")
+    await card.key("\r")
+    expect(opened).toEqual(["run-1"])
+  })
+})
+
 describe("the bot page draws the face", () => {
   const view = { width: 80, height: 24, now: NOW }
   const page = (state: BotState, capability: FaceCapability, extra: { ascii?: boolean; theme?: ReturnType<typeof theme>; placements?: ImagePlacement[] } = {}, timers?: { set: (run: () => void, ms: number) => unknown; clear: (timer: unknown) => void }) => {

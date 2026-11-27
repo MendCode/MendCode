@@ -499,6 +499,19 @@ describe("what a bot of another app is doing there", () => {
     expect(h.app.page).toBe("chat")
   })
 
+  test("an idle bot lists the newest chats it finished in its own app, and Enter reads one", async () => {
+    const chief = { origin: "hermes", id: "default", name: "Chief", state: "idle", chat: "acp:hermes-default", app: "Hermes", identity: { origin: "hermes" }, recent: [{ id: "done-1", title: "Wiring notes", source: "desktop", startedAt: NOW - 61 * MINUTE, activeAt: NOW - 60 * MINUTE }] }
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply({ bots: [], external: [chief], problems: [] }) : command.type === "bot.activity" ? reply(messages) : undefined })
+    await until(h, "Wiring notes")
+    expect(side(h)[rowOf(h, "Wiring notes")]).toMatch(/· Wiring notes +1h/)
+    await h.type("\x1b[D")
+    for (let turn = 0; turn < 20 && !/^ › .*Wiring notes/.test(side(h)[rowOf(h, "Wiring notes")]!); turn++) await h.type("\x1b[B")
+    await h.type("\r")
+    for (let turn = 0; turn < 40 && !h.text().join("\n").includes("Flashed and verified."); turn++) { await Bun.sleep(5); h.app.render() }
+    expect(h.sentOf("bot.activity").at(-1)).toMatchObject({ origin: "hermes", bot: "default", session: "done-1" })
+    expect(h.sentOf("session.create")).toHaveLength(0)
+  })
+
   test("when the app will not give the messages the page says so and keeps what the list knew", async () => {
     const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply(bots) : command.type === "bot.activity" ? { ok: false, error: { code: "failed", message: "[HERMES]: Hermes is not running" } } as never : undefined })
     await onRun(h)

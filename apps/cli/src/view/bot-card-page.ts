@@ -25,6 +25,8 @@ export type BotCardActions = {
   memory(): Promise<void>
   /** An external bot: opens the app it lives in. */
   openApp?(): Promise<void>
+  /** An external bot: reads one of the sessions it has in its own app. */
+  openAppChat?(id: string): Promise<void>
   close(): void
   redraw(): void
 }
@@ -55,7 +57,9 @@ const FACE_MIN_HEIGHT = 16
 const FACE_AT = { row: 4, col: 2 }
 const PAGE_STEP = 10
 
-type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete" | "app"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number }
+type Row = { kind: "action"; id: "new" | "edit" | "memory" | "delete" | "app"; label: string; hint: string } | { kind: "session"; sessionId: string; title: string; status: string; updatedAt: number } | { kind: "app"; id: string; title: string; at: number; live: boolean }
+/** A session of a bot in its own app, as the list carries it. */
+export type AppChat = { id: string; title?: string | undefined; source?: string | undefined; startedAt?: number | undefined; activeAt?: number | undefined }
 /** `row` is the index in `rows` of a line the cursor can stand on. */
 type Item = { line: Line; row?: number }
 
@@ -84,18 +88,21 @@ const newestFirst = (bot: Pick<BotInfo, "projects">): BotInfo["projects"] => bot
   .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0))
 
 /** `external`: a bot of another app (a connector's): only a new chat and, when it names its app, opening that app; edit, memory and delete belong to the app. */
-export function createBotCard({ bot, folders, actions, face, external }: { bot: BotInfo; folders: readonly string[]; actions: BotCardActions; face?: BotCardFace | undefined; external?: { app?: string | undefined } }): BotCard {
+export function createBotCard({ bot, folders, actions, face, external }: { bot: BotInfo; folders: readonly string[]; actions: BotCardActions; face?: BotCardFace | undefined; external?: { app?: string | undefined; chats?: readonly AppChat[] | undefined; running?: readonly AppChat[] | undefined } }): BotCard {
   const actionList: ReadonlyArray<Extract<Row, { kind: "action" }>> = external ? [ACTIONS[0]!, ...(external.app && actions.openApp ? [OPEN_APP(external.app)] : [])] : ACTIONS
   const animator = face ? createFaceAnimator({ onChange: face.onFrame, ...(face.reducedMotion ? { reducedMotion: face.reducedMotion } : {}), ...(face.setTimer ? { setTimer: face.setTimer } : {}), ...(face.clearTimer ? { clearTimer: face.clearTimer } : {}) }) : undefined
   animator?.setState(faceStateOf(bot.state))
   const projects = newestFirst(bot)
   const rows: Row[] = [...actionList, ...projects.flatMap((project) => project.sessions.map((session): Row => ({ kind: "session", sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt })))]
+  const appRows: Row[] = actions.openAppChat ? [...(external?.running ?? []).map((chat) => ({ chat, live: true })), ...(external?.chats ?? []).map((chat) => ({ chat, live: false }))].map(({ chat, live }): Row => ({ kind: "app", id: chat.id, title: chat.title?.trim() || (chat.source ? `${chat.source} session` : "session"), at: chat.activeAt ?? chat.startedAt ?? 0, live })) : []
+  rows.push(...appRows)
   let selected = 0
   /** The folder list of "New chat", while it is open. */
   let picking: { selected: number } | undefined
 
   async function activate(row: Row) {
     if (row.kind === "session") return actions.openSession(row.sessionId)
+    if (row.kind === "app") return actions.openAppChat?.(row.id)
     if (row.id === "app") return actions.openApp?.()
     if (row.id === "edit") return actions.edit()
     if (row.id === "memory") return actions.memory()
@@ -145,7 +152,7 @@ export function createBotCard({ bot, folders, actions, face, external }: { bot: 
       return items
     }
     actionList.forEach((action, index) => items.push({ line: spread([mark(selected === index), { text: action.label, fg: "text", bold: selected === index }], [{ text: action.hint, fg: "muted" }], width), row: index }))
-    const total = rows.length - actionList.length
+    const total = rows.length - actionList.length - appRows.length
     items.push({ line: [] }, { line: [{ text: "Chats", fg: "heading", bold: true }, { text: `  ${total}`, fg: "muted" }] })
     if (!total) items.push({ line: [{ text: external ? "Chats open as normal sessions · /sessions lists them" : "None yet · enter on the bot in the sidebar starts one", fg: "muted" }] })
     let index = actionList.length
@@ -156,6 +163,15 @@ export function createBotCard({ bot, folders, actions, face, external }: { bot: 
         const at = index++
         const on = at === selected
         items.push({ line: spread([mark(on), { text: truncateEnd(session.title || "Untitled session", Math.max(4, width - 24)), fg: "text", bold: on }], [{ text: `${session.status} · ${relativeTime(now, session.updatedAt)}`, fg: "muted" }], width), row: at })
+      }
+    }
+    if (appRows.length) {
+      items.push({ line: [] }, { line: [{ text: `In ${external?.app ?? "its app"}`, fg: "heading", bold: true }, { text: `  ${appRows.length}`, fg: "muted" }] })
+      for (const row of appRows) {
+        if (row.kind !== "app") continue
+        const at = index++
+        const on = at === selected
+        items.push({ line: spread([mark(on), { text: truncateEnd(row.title, Math.max(4, width - 18)), fg: "text", bold: on }], [{ text: row.live ? "running" : relativeTime(now, row.at), fg: row.live ? "primary" : "muted" }], width), row: at })
       }
     }
     return items

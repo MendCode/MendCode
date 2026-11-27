@@ -79,12 +79,16 @@ const isBot = (agent: AgentsReport["agents"][number]) => agent.bot !== undefined
 /** A chat as the bot list carries it; `orderAt` is where a list places it (the last message a person typed, else its creation), so replies never move it. */
 const botSession = (session: SessionDetail) => ({ sessionId: session.sessionId, title: session.title, status: session.status, updatedAt: session.updatedAt, orderAt: session.lastHumanAt ?? session.createdAt })
 
+/** The events a chat has before anyone wrote in it (its creation and its permission mode): the terminal's own `UNUSED_EVENTS`. */
+const UNUSED_CHAT_EVENTS = 2
+
 /**
  * An external bot with the MendCode chats on its model, grouped by folder like a MendCode bot's, and the state those chats show
  * (the connector's own state stands while they are all idle). Generic per origin: nothing here names an app.
  */
 function withChats(bot: ExternalBotInfo, context: BotContext, now: number): ExternalBotInfo {
-  const sessions = bot.chat ? context.sessionsOfModel?.(bot.chat) ?? [] : []
+  // A chat nobody used (no title, idle, nothing queued, a log that stops at its first events) is not listed: the sidebar draws the rest by title, and these would all read `Untitled session`.
+  const sessions = (bot.chat ? context.sessionsOfModel?.(bot.chat) ?? [] : []).filter((session) => session.title.trim() !== "" || session.queued > 0 || session.state !== "idle" || session.lastSeq > UNUSED_CHAT_EVENTS)
   if (!sessions.length) return bot
   const byProject = new Map<string, SessionDetail[]>()
   for (const session of sessions) byProject.set(session.directory, [...(byProject.get(session.directory) ?? []), session])

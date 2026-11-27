@@ -1554,6 +1554,16 @@ const botParts = lazyValue(() => {
     /** The schedules the bot made for itself (not cancelled, not finished); the daemon always sends it. */
     schedules: z.array(schedule).optional(),
   })
+  /** One session of a bot in its own app (not a MendCode session). */
+  const appSession = z.strictObject({
+    /** The session's id in that app. */
+    id: z.string().min(1).max(200),
+    title: z.string().max(200).optional(),
+    /** What started it there (`cli`, `kanban`, `cron`, a chat platform…). */
+    source: z.string().max(64).optional(),
+    startedAt: z.number().int().nonnegative().optional(),
+    activeAt: z.number().int().nonnegative().optional(),
+  })
   /** A bot that lives in another app and reaches MendCode through a connector (`hermes` is the first; the list is empty without one). */
   const external = z.strictObject({
     /** The connector's id. */
@@ -1574,15 +1584,9 @@ const botParts = lazyValue(() => {
     /** The state the app itself reported, before its MendCode chats are counted: it stands whenever those chats are all idle. */
     appState: state.optional(),
     /** What the bot does in its own app right now: the sessions it has running there, newest first (at most 8). Read-only; they are not MendCode sessions. */
-    activity: z.array(z.strictObject({
-      /** The session's id in that app. */
-      id: z.string().min(1).max(200),
-      title: z.string().max(200).optional(),
-      /** What started it there (`cli`, `kanban`, `cron`, a chat platform…). */
-      source: z.string().max(64).optional(),
-      startedAt: z.number().int().nonnegative().optional(),
-      activeAt: z.number().int().nonnegative().optional(),
-    })).max(8).optional(),
+    activity: z.array(appSession).max(8).optional(),
+    /** The newest sessions it has finished in its own app (the running ones are in `activity`), newest first (at most 30). Read-only: the app's own history, not MendCode sessions. */
+    recent: z.array(appSession).max(30).optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),
