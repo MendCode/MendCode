@@ -9,14 +9,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-### Changed
-
-- A chat that runs on your sync hub now looks like it: its sidebar row carries the hub's name, its project group says it holds hub chats, and the footer and top bar show the hub's own folder (`hub:~/projects/app`) instead of the mapped local one.
-
-### Fixed
-
-- A hub chat's sidebar row shows what the hub is doing with it: running while its turn runs, waiting while it asks for approval, and a reply mark only once the turn has finished.
-
 ## v0.0.21 - 2026-11-26
 
 Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.
@@ -57,6 +49,7 @@ Workflows and sync get most of this release. Say `fanout` and the model writes a
 - Docs: the automation page indexes every top-level command with its page, the `ps`, `logs` and `kill` shorthands and the missing subcommands, and the what's-new page lists the latest versions.
 - MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
 - Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
+- A chat that runs on your sync hub now looks like it: its sidebar row carries the hub's name, its project group says it holds hub chats, and the footer and top bar show the hub's own folder (`hub:~/projects/app`) instead of the mapped local one.
 
 ### Fixed
 
@@ -75,6 +68,7 @@ Workflows and sync get most of this release. Say `fanout` and the model writes a
 - The Linux user service starts again: its systemd unit wrote `WorkingDirectory` in quotes, which systemd rejects as not absolute.
 - `remote setup` and `remote pair` work with Tailscale run without root in userspace networking: they find `tailscale` in `~/.local/bin` and the user's socket, take `--tailscale PATH` and `--tailscale-socket PATH`, and listen on 127.0.0.1 with TLS there.
 - The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
+- A hub chat's sidebar row shows what the hub is doing with it: running while its turn runs, waiting while it asks for approval, and a reply mark only once the turn has finished.
 
 ## v0.0.20 - 2026-11-24
 
