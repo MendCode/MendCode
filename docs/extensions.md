@@ -116,6 +116,8 @@ Put modules in `<layer>/extensions/*.ts|js` or `<layer>/extensions/<name>/index.
 
 Files ending `.d.ts`, dotfiles and folders without an index are ignored. Each layer allows at most 64 modules.
 
+The data directory (`~/.mendcode`, and `~/.mendcode-v2` when it links to it) is always the user layer, never a project layer too: a session in the home folder lists each profile once as `user:<name>`. Parent folders are inherited only up to the repository root, never from the home folder. When two enabled profiles ship the very same extension file (same content), it loads once without a warning; two different files with one name keep the first and warn once.
+
 ### Loading and trust
 
 - User-layer modules (user folder, user profiles) load once for the whole daemon.

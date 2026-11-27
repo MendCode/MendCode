@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import { createRequire } from "node:module"
@@ -122,7 +123,8 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
   const failed: Array<{ file: string; extension: string; message: string }> = []
   /** An extension command, page or name that another extension replaced; `winner` is the one still working. */
   const conflicts: ExtensionConflictNote[] = []
-  const seen = new Set<string>()
+  /** Extension names already loaded, with the file that holds each: two packages that ship the very same file load it once, quietly. */
+  const seen = new Map<string, string>()
   const slots: SlotEntry[] = []
   const tools: ToolEntry[] = []
   const markdowns: MarkdownEntry[] = []
@@ -148,6 +150,10 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
   let disposed = false
   const theme = () => Object.freeze({ name: activeTheme().name, colors: Object.freeze({ ...activeTheme().colors }) })
   const context = (message: MessageData, width: number) => Object.freeze({ message: Object.freeze({ ...message, ...(message.meta ? { meta: Object.freeze({ ...message.meta }) } : {}) }), width, theme: theme() })
+
+  function sameFile(a: string, b: string) {
+    try { return readFileSync(a).equals(readFileSync(b)) } catch { return false }
+  }
 
   function problem(extension: string, message: string) {
     const entry = { extension, message }
@@ -416,8 +422,9 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
     if (!name || name.length > 64) return broken(file, label, "extension needs a name (1-64 characters)")
     if (extension.tui !== undefined && typeof extension.tui !== "function") return broken(file, name, "tui must be a function")
     if (extension.daemon !== undefined && typeof extension.daemon !== "function") return broken(file, name, "daemon must be a function")
-    if (seen.has(name)) return problem(name, `another extension is already called ${name}; ${label} skipped`)
-    seen.add(name)
+    const first = seen.get(name)
+    if (first !== undefined) return sameFile(first, file.file) ? undefined : problem(name, `another extension is already called ${name}; ${label} skipped`)
+    seen.set(name, file.file)
     const enabled = !options.disabled?.includes(name)
     if (enabled && typeof extension.tui === "function") {
       const api = makeApi(name, file.dir) as TuiExtensionAPI & { seal(success: boolean): void }
