@@ -49,6 +49,24 @@ describe("what lands in the prompt", () => {
     expect(b.h.sentOf("attachment.upload")).toHaveLength(1)
   })
 
+  test("an image attached to the next message while a file uploads is still there when that message is sent", async () => {
+    let release: (() => void) | undefined
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const b = bench({ reply: (command) => command.type === "attachment.upload" ? gate.then(() => ({ ok: true, result: { path: "/hub/uploads/ses/board.excalidraw", size: 20_230_865, copied: true } })) as never : undefined })
+    await b.type(paste("/docs/board.excalidraw"))
+    const first = b.type("\r")
+    // The first message is still uploading: the next one gets an image.
+    await Bun.sleep(20)
+    await b.type(paste(SHOT))
+    expect(b.prompt()).toContain("[Image #1]")
+    release!()
+    await first
+    await b.type("\r")
+    const sent = b.h.sentOf("user.submit")
+    expect(sent).toHaveLength(2)
+    expect((sent[1] as unknown as { attachments: unknown[] }).attachments).toHaveLength(1)
+  })
+
   test("a file the daemon cannot make readable where the chat runs stops the send, says why and keeps the prompt", async () => {
     const b = bench({ reply: (command) => command.type === "attachment.upload" ? { ok: false, error: { code: "forbidden", message: "[SYNC]: board.excalidraw is 120.0 MB; the largest file copied to hub is 100 MB" } } as never : undefined })
     await b.type(paste("/docs/board.excalidraw"))

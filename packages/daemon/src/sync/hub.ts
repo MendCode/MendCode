@@ -183,7 +183,7 @@ export function createHub(ports: SyncPorts, state: SyncState) {
       case "blob-put": return staging.put(input.input)
       case "file-put": {
         root(input.sessionId)
-        return (uploads ??= (await import("./uploads")).createUploads(ports.dir)).put(input)
+        return (uploads ??= (await import("./uploads")).createUploads(ports.dir)).put(holder, input)
       }
       case "blob-read": {
         const info = state.blobInfo(input.input.sha256)

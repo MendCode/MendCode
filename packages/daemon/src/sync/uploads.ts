@@ -1,5 +1,6 @@
 import { mkdirSync, rmSync, statSync } from "node:fs"
 import { open, rename } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import path from "node:path"
 import { MAX_SYNC_BLOB_CHUNK_BYTES, type SyncPeerInput } from "@mendcode/protocol"
 import { SyncRefusal } from "./ingest"
@@ -26,12 +27,13 @@ export function uploadName(name: string): string {
  */
 export function createUploads(dir: string) {
   return {
-    async put(input: Put): Promise<{ received: number; stored: boolean; path?: string }> {
+    async put(holder: string, input: Put): Promise<{ received: number; stored: boolean; path?: string }> {
       const chunk = Buffer.from(input.data, "base64")
       if (!chunk.byteLength || chunk.byteLength > MAX_SYNC_BLOB_CHUNK_BYTES || chunk.toString("base64") !== input.data) throw new SyncRefusal("invalid", "file chunk is not valid base64 of at most 128 KiB")
       const folder = uploadsDir(dir, input.sessionId)
       const name = uploadName(input.name)
-      const part = path.join(folder, `.${name}.part`)
+      // One partial file per device: two devices sending the same name never write into each other's.
+      const part = path.join(folder, `.${name}.${createHash("sha256").update(holder).digest("hex").slice(0, 12)}.part`)
       if (input.offset === 0) mkdirSync(folder, { recursive: true })
       else {
         let have = -1

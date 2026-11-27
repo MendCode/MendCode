@@ -316,6 +316,8 @@ export function createInput(ctx: AppContext, actions: {
     if (state.sessionId !== submissionSession || input.directory !== submissionDirectory || editor.text.trim() !== text) return
     // What still belongs to the prompt: a deleted token took its attachment with it.
     const live = liveAttachments(state.attachments, editor.text)
+    // What was attached when the message was sent; what is attached to the next one while this one uploads stays.
+    const attachedNow = state.attachments
     editor.clear()
     // A sent prompt is not an edit to undo: the next one starts with a clean history.
     editor.resetHistory()
@@ -355,7 +357,7 @@ export function createInput(ctx: AppContext, actions: {
     const sending = live
     // The bot assignment above is awaited: another chat may be open by now, and the message stays bound to the one it was written in.
     const stillHere = state.sessionId === submissionSession
-    if (stillHere) state.attachments = []
+    if (stillHere) state.attachments = state.attachments.filter((attachment) => !attachedNow.includes(attachment))
     const executable = expanded !== undefined && typeof expanded !== "string" ? expanded : undefined
     const composed = composeSubmission(attached ? attached.message : typeof expanded === "string" ? expanded : executable ? "" : text, uploaded.attachments, executable ? "" : ide.text)
     const contextText = composed.text
