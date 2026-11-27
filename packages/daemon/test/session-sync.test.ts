@@ -10,6 +10,7 @@ import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
 import { remoteTokens } from "../src/remote"
 import { canonical } from "../src/sync/ingest"
+import { hubLacksFolders } from "../src/sync/run-peer"
 
 /**
  * Session sync between two daemons in this process, each on its own temp data dir: a hub with a loopback listener and a device
@@ -609,4 +610,64 @@ test("with the hub unreachable, a chat in the hub's folder is refused saying the
   await hub.stop()
   const created = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
   expect(created).toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("hub is not connected") } })
+})
+
+/** A hub folder with subfolders, files and a hidden folder, under the pair's hub project. */
+function seedHubFolders(hubFolder: string) {
+  for (const name of ["alpha", "beta", ".hidden"]) mkdirSync(path.join(hubFolder, name), { recursive: true })
+  mkdirSync(path.join(hubFolder, "alpha", "deep"), { recursive: true })
+  writeFileSync(path.join(hubFolder, "file.txt"), "x")
+}
+const hubFolderOf = (hub: { daemon: Daemon }, id: SessionId) => hub.daemon.store.sessionDirectory(id)!
+
+test("the folders of a chat that runs on the hub are listed by the hub, names only, and /cd changes the hub's chat and the mirror follows", async () => {
+  const { hub, device, seed } = await runPair({ run: true })
+  const hubFolder = hubFolderOf(hub, seed)
+  seedHubFolders(hubFolder)
+  const listed = await device.client.send({ type: "session.dirs", sessionId: seed, path: "." })
+  expect(listed).toMatchObject({ ok: true, result: { names: [".hidden", "alpha", "beta"], truncated: false } })
+  expect(await device.client.send({ type: "session.dirs", sessionId: seed, path: "alpha/" })).toMatchObject({ ok: true, result: { names: ["deep"] } })
+  const moved = await device.client.send({ type: "session.cd", sessionId: seed, path: "alpha" })
+  expect(moved).toMatchObject({ ok: true, result: { directory: path.join(hubFolder, "alpha") } })
+  expect(hub.daemon.store.sessionDirectory(seed)).toBe(path.join(hubFolder, "alpha"))
+  await until(() => events(device.daemon, seed).some((event) => event.type === "session.workspace.changed"), "the mirror got the new folder")
+  expect(device.daemon.store.sessionDirectory(seed)).not.toBe(path.join(hubFolder, "alpha")) // mapped through the device's path rule or kept as the hub's path, never a local folder
+  expect(events(device.daemon, seed).filter((event) => event.type === "session.workspace.changed")).toHaveLength(1)
+})
+
+test("a run token lists and enters only folders inside the hub's projects, and says when a folder does not exist or the hub is unreachable", async () => {
+  const { hub, device, seed } = await runPair({ run: true })
+  const hubFolder = hubFolderOf(hub, seed)
+  seedHubFolders(hubFolder)
+  const outside = tempDir("elsewhere")
+  const refused = (message: string) => ({ ok: false, error: { code: "forbidden", message: expect.stringContaining(message) } })
+  expect(await device.client.send({ type: "session.dirs", sessionId: seed, path: outside })).toMatchObject(refused("not a project"))
+  expect(await device.client.send({ type: "session.dirs", sessionId: seed, path: "../.." })).toMatchObject(refused("not a project"))
+  expect(await device.client.send({ type: "session.cd", sessionId: seed, path: outside })).toMatchObject(refused("not a project"))
+  expect(await device.client.send({ type: "session.cd", sessionId: seed, path: "~" })).toMatchObject(refused("not a project"))
+  expect(await device.client.send({ type: "session.cd", sessionId: seed, path: "nope" })).toMatchObject({ ok: false, error: { message: expect.stringContaining("no such directory") } })
+  expect(await device.client.send({ type: "session.cd", sessionId: seed, path: "file.txt" })).toMatchObject({ ok: false, error: { message: expect.stringContaining("no such directory") } })
+  expect(hub.daemon.store.sessionDirectory(seed)).toBe(hubFolder)
+  await hub.stop()
+  expect(await device.client.send({ type: "session.dirs", sessionId: seed, path: "." })).toMatchObject({ ok: false, error: { message: expect.stringContaining("hub is not connected") } })
+  expect(await device.client.send({ type: "session.cd", sessionId: seed, path: "alpha" })).toMatchObject({ ok: false, error: { message: expect.stringContaining("hub is not connected") } })
+})
+
+test("a plain sync token, or a hub that does not know the folder commands, gets one message naming the run token and the hub update for /cd and completion", async () => {
+  const plain = await runPair({ run: false })
+  seedHubFolders(hubFolderOf(plain.hub, plain.seed))
+  const reply = await plain.device.client.send({ type: "session.cd", sessionId: plain.seed, path: "alpha" })
+  const message = reply.ok ? "" : reply.error.message
+  expect(message).toContain("older MendCode")
+  expect(message).toContain("--sync --run")
+  expect(plain.hub.daemon.store.sessionDirectory(plain.seed)).toBe(hubFolderOf(plain.hub, plain.seed))
+  expect(await plain.device.client.send({ type: "session.dirs", sessionId: plain.seed, path: "." })).toMatchObject({ ok: false, error: { message: expect.stringContaining("older MendCode") } })
+})
+
+test("an older hub's answers to the folder commands are told apart from the hub's own refusals", () => {
+  expect(hubLacksFolders({ code: "forbidden", message: "[SYNC]: a sync token only syncs sessions; to run turns on this machine from a device, make the token with `remote token create --sync --run`" })).toBe(true)
+  expect(hubLacksFolders({ code: "invalid_command", message: "Invalid input" })).toBe(true)
+  expect(hubLacksFolders({ code: "invalid_command", message: "[DAEMON]: No such directory" })).toBe(false)
+  expect(hubLacksFolders({ code: "forbidden", message: "[SYNC]: that folder is not a project of this machine" })).toBe(false)
+  expect(hubLacksFolders({ code: "busy", message: "[DAEMON]: Session or child is busy" })).toBe(false)
 })

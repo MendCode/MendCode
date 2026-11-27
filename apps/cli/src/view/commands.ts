@@ -302,12 +302,12 @@ export function slashRefusal(text: string, settings: TierSettings, prefs: readon
  * The commands `text` matches, best match first. Among equal matches the ones used before come first, the most used ahead
  * (`/s` with `/sessions` in the recents puts it over `/settings`); an exact name or alias still wins over a used prefix.
  */
-export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = [], directory?: string): SlashCommand[] {
+export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = [], directory?: string, hubFolders?: (head: string) => readonly string[] | undefined): SlashCommand[] {
   const typed = /^\/(\S+)\s+([\s\S]*)$/.exec(text)
   if (typed) {
     const command = (catalog ?? slashCatalog(custom)).find((candidate) => names(candidate).includes(typed[1]!.toLowerCase()))
     if (!command || command.custom || command.ext) return []
-    if (takesPath(command.name)) return pathMatches({ command: command.name, args: typed[2]!, base: directory }).map((match) => ({ name: match.name, group: command.group, aliases: [], summary: match.summary, argument: { more: false, path: true as const } }))
+    if (takesPath(command.name)) return pathMatches({ command: command.name, args: typed[2]!, base: directory, ...(hubFolders ? { hubFolders } : {}) }).map((match) => ({ name: match.name, group: command.group, aliases: [], summary: match.summary, argument: { more: false, path: true as const } }))
     return argumentMatches(command.name, typed[2]!).map((option) => ({ name: option.name, group: command.group, aliases: [], summary: option.summary, ...(option.feature ? { feature: option.feature } : {}), argument: { more: option.more === true } }))
   }
   if (!text.startsWith("/") || text.startsWith("//") || /\s/.test(text)) return []

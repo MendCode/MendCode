@@ -248,7 +248,7 @@ B17 small commands:
 | `/cd PATH` | moves this idle session and its children to an existing directory, relative to the session; `~` is home |
 | `/pwd` | companion to `/cd PATH` |
 
-Moving drops the session's runtime grants. `/cd PATH` refuses while a turn, queue or child work is running, and for remote terminals. Settings commands are refused for read-only peers.
+Moving drops the session's runtime grants. `/cd PATH` refuses while a turn, queue or child work is running, and for remote terminals. In a chat that runs on the sync hub (its folder is the hub's, not on this machine) `/cd PATH` changes the hub's chat and the completion lists the hub's folders; the path must exist on the hub inside its project folders ([docs/sync.md](sync.md#running-on-the-hub)). Settings commands are refused for read-only peers.
 
 ### Coordination, remote access and voice
 
@@ -285,7 +285,7 @@ Numbers and free text are never guessed: no row is shown. A command the tier lea
 
 ### Complete paths
 
-In local terminals, `/cd `, `/add-dir ` and `/attach ` list entries of the directory typed so far (`view/path-arguments.ts`). Paths are relative to the session directory; `~/` is home.
+In local terminals, `/cd `, `/add-dir ` and `/attach ` list entries of the directory typed so far (`view/path-arguments.ts`). Paths are relative to the session directory; `~/` is home. For a chat that runs on the sync hub, `/cd ` asks the hub for the folders (once per typed directory) and lists those.
 
 Directories come first and end in `/`. Hidden entries appear once you type a dot.
 

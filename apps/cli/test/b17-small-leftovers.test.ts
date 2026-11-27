@@ -204,6 +204,20 @@ describe("slash commands", () => {
     expect(text).toContain("not set")
   })
 
+  test("/cd in a chat that runs on the hub asks the hub for its folders once per typed directory and shows them; a hub error is a notice", async () => {
+    const { h } = app({ directory: "/nonexistent-hub/projects", reply: (command) => command.type === "session.dirs" ? { ok: true, result: { directory: "/nonexistent-hub/projects", names: ["APP-NEXT", "docs"], truncated: false } } : undefined })
+    await h.type("/cd AP")
+    await until(() => h.sentOf("session.dirs").length === 1, "the hub was asked")
+    expect(h.sentOf("session.dirs")[0]).toEqual({ type: "session.dirs", sessionId: h.sessionId, path: "." })
+    await until(() => screen(h).includes("cd APP-NEXT/"), "the hub's folder is offered")
+    expect(screen(h)).not.toContain("cd docs/")
+    await h.type("P")
+    expect(h.sentOf("session.dirs")).toHaveLength(1)
+    const down = app({ directory: "/nonexistent-hub/projects", reply: (command) => command.type === "session.dirs" ? { ok: false, error: { code: "forbidden", message: "[SYNC]: hub is not connected, so the folder list cannot run there now" } } : undefined })
+    await down.h.type("/cd F")
+    await until(() => screen(down.h).includes("hub is not connected"), "the hub error is shown")
+  })
+
   test("/cd sends the move and /pwd shows the directory; a remote terminal is refused before sending", async () => {
     const { h } = app({ directory: "/work/here", reply: (command) => command.type === "session.cd" ? { ok: true, result: { directory: "/work/other", previous: "/work/here" } } : undefined })
     await h.type("/pwd\r")

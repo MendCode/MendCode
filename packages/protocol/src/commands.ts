@@ -1770,6 +1770,13 @@ export const SetupImport = lazySchema(() => z.strictObject({
  */
 export const SessionCd = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.cd"), sessionId: SessionId, path: z.string().min(1).max(4096) }))
 
+/**
+ * `/cd` completion: the subfolders of a directory (read only, names only, no file contents), for a session that runs on a sync hub.
+ * A relative `path` resolves against the session's directory and `~` against the home directory of the machine that answers.
+ * Ack: `{ directory, names, truncated }`.
+ */
+export const SessionDirs = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.dirs"), sessionId: SessionId, path: z.string().min(1).max(4096) }))
+
 export const SessionRecallSearch =z.strictObject({ ...base, type: z.literal("session.recall.search"), sessionId: SessionId, input: SessionRecallSearchInput })
 export const SessionRecallRead = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.recall.read"), sessionId: SessionId, input: SessionRecallReadInput }))
 export const SessionNotes = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.notes"), sessionId: SessionId, input: SessionNotesInput }))
@@ -2460,6 +2467,7 @@ export const COMMAND_SCHEMAS = {
   "session.unshare": SessionUnshare,
   "session.share.static": SessionShareStatic,
   "session.cd": SessionCd,
+  "session.dirs": SessionDirs,
   "catalog.rest": CatalogRest,
   "tui.control.register": TuiControlRegister,
   "tui.control.send": TuiControlSend,
