@@ -9,42 +9,17 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-### Fixed
+## v0.0.21 - 2026-11-27
 
-- Sub-agents launched in the background now look like any other sub-agent in the conversation: the same card, running with its tool count while it works, and its result lands in that card when it ends instead of repeating in a separate notice.
-- The sidebar no longer loses projects or bots when a refresh fails: it keeps what it showed, marks the heading `stale` and asks again within seconds.
-- Hermes bots stay listed and their chats open when the Hermes desktop app works against a server elsewhere: MendCode reads the profiles and their sessions from the Hermes folder on this machine, and bots it already knew stay, marked stale, while Hermes does not answer.
-- A long prompt scrolls inside its box: the mouse wheel over it scrolls it, a drag past its top or bottom edge keeps scrolling and selecting, and a selection can cover text that is scrolled out of view and copies all of it. `ctrl+c` copies selected prompt text, and `edit.select-all` selects the whole prompt (`cmd+a` in terminals that send it).
-- Sending or opening a message with many pictures shows the ones on screen almost at once: their rows are reserved right away, only the pictures you can see are decoded, and the decoding runs beside the terminal so typing never waits for it.
-- On a Mac with chats synced from a Linux hub, the daemon no longer stops answering for seconds or minutes: folders of those chats that are not on this machine are recognized at once instead of being looked up again and again.
-- The daemon's log names the commands that were running when its event loop was held for over a second.
-
-- Chats on a sync hub feel closer to local ones: streamed text arrives as the hub writes it, sending a message is answered sooner, and the sidebar shows a hub chat as running or idle within a moment, also when it is not open and the turn started elsewhere. The full gain needs the hub updated too; an older hub keeps working at its old pace.
-- A picture the hub already has is not uploaded again when it is attached to another hub chat, also after a restart.
-- Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
-- A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
-- Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload. A PNG wider or taller than 2048 pixels is sent to the hub as a smaller copy (a photograph as a JPEG on a Mac); the original stays on this machine.
-- On a Mac, pasting a screenshot from the clipboard is instant instead of taking seconds, and no longer fails with "no image in the clipboard" for a large one.
-- On a Mac, Cmd+V attaches an image that is alone on the clipboard, in terminals with the kitty keyboard protocol (Ghostty, for one); it used to do nothing.
-- Pasting or dropping files into the prompt attaches them when the name holds a narrow no-break space (macOS screenshots), when several files arrive on one line, and when a single path keeps plain spaces.
-- In a Claude Code session, background sub-agents keep using MendCode's tools (image generation and the rest) after the turn that started them ended, including several calls at once, instead of failing with "No turn is running".
-- In a Claude Code session whose process stays alive for background agents, the sub-agent tool (`delegate_task`) no longer stops working after an hour with an "Authorization header rejected" error: the token lasts as long as the session keeps having turns.
-- A workflow script that names a model the catalog does not have is refused when it starts, listing the closest model ids, instead of finishing with every agent failed.
-- An extension that throws in `onStart`, rejects a promise it started, or throws in a timer no longer takes the terminal down: that extension stops for the session, its slots go back to the defaults and a notice names it.
-- A prompt with pasted images, PDFs or long pasted text sent to a chat that lives on the sync hub runs on the hub like a text prompt, instead of being refused as owned by the hub.
-- Any file can be attached: a big text file, an `.excalidraw`, a large SVG, a binary or an oversized image shows as a `[File: name · size]` chip, and the model gets its path (copied to the hub's per-chat uploads folder, up to 100 MB, for a hub chat) and a short note instead of the bytes.
-
-## v0.0.21 - 2026-11-26
-
-Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.
+Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats. Chats on a sync hub stream and copy at once, pictures in the transcript and pasted screenshots show far faster, a long prompt scrolls inside its box, pasting images and files works on a Mac, and the daemon no longer stops answering for chats synced from a Linux hub.
 
 ### Upgrade notes
 
 - Same code as v0.0.21-beta.1.
 
-## v0.0.21-beta.1 - 2026-11-26
+## v0.0.21-beta.1 - 2026-11-27
 
-Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats.
+Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats. Chats on a sync hub stream and copy at once, pictures in the transcript and pasted screenshots show far faster, a long prompt scrolls inside its box, pasting images and files works on a Mac, and the daemon no longer stops answering for chats synced from a Linux hub.
 
 
 ### New
@@ -75,6 +50,11 @@ Workflows and sync get most of this release. Say `fanout` and the model writes a
 - MendCode now runs on Bun 1.4.5: it uses less CPU and memory while working and at rest, and starts faster. The download is larger.
 - Docs: the bots, loops, workflows, goals and extensions pages gain shell how-tos and the commands for `bot list`, `loop fire` and the workflow subcommands, and say how a goal waits for background commands.
 - A chat that runs on your sync hub now looks like it: its sidebar row carries the hub's name, its project group says it holds hub chats, and the footer and top bar show the hub's own folder (`hub:~/projects/app`) instead of the mapped local one.
+- Chats on a sync hub feel closer to local ones: streamed text arrives as the hub writes it, sending a message is answered sooner, and the sidebar shows a hub chat as running or idle within a moment, also when it is not open and the turn started elsewhere. The full gain needs the hub updated too; an older hub keeps working at its old pace.
+- A picture the hub already has is not uploaded again when it is attached to another hub chat, also after a restart.
+- Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
+- A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
+- Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload. A PNG wider or taller than 2048 pixels is sent to the hub as a smaller copy (a photograph as a JPEG on a Mac); the original stays on this machine.
 
 ### Fixed
 
@@ -95,6 +75,22 @@ Workflows and sync get most of this release. Say `fanout` and the model writes a
 - The PR reviewer's performance findings no longer flag noise: it measures five alternating base/head sessions, flags only a rise outside the base's own range and above a minimum size, confirms it with a second measurement, and an incremental review measures only its own increment.
 - A hub chat's sidebar row shows what the hub is doing with it: running while its turn runs, waiting while it asks for approval, and a reply mark only once the turn has finished.
 - A hub chat copied before the hub's folder was kept now shows that folder in the footer too: the next sync round fills it in without copying the chat again.
+- Sub-agents launched in the background now look like any other sub-agent in the conversation: the same card, running with its tool count while it works, and its result lands in that card when it ends instead of repeating in a separate notice.
+- The sidebar no longer loses projects or bots when a refresh fails: it keeps what it showed, marks the heading `stale` and asks again within seconds.
+- Hermes bots stay listed and their chats open when the Hermes desktop app works against a server elsewhere: MendCode reads the profiles and their sessions from the Hermes folder on this machine, and bots it already knew stay, marked stale, while Hermes does not answer.
+- A long prompt scrolls inside its box: the mouse wheel over it scrolls it, a drag past its top or bottom edge keeps scrolling and selecting, and a selection can cover text that is scrolled out of view and copies all of it. `ctrl+c` copies selected prompt text, and `edit.select-all` selects the whole prompt (`cmd+a` in terminals that send it).
+- Sending or opening a message with many pictures shows the ones on screen almost at once: their rows are reserved right away, only the pictures you can see are decoded, and the decoding runs beside the terminal so typing never waits for it.
+- On a Mac with chats synced from a Linux hub, the daemon no longer stops answering for seconds or minutes: folders of those chats that are not on this machine are recognized at once instead of being looked up again and again.
+- The daemon's log names the commands that were running when its event loop was held for over a second.
+- On a Mac, pasting a screenshot from the clipboard is instant instead of taking seconds, and no longer fails with "no image in the clipboard" for a large one.
+- On a Mac, Cmd+V attaches an image that is alone on the clipboard, in terminals with the kitty keyboard protocol (Ghostty, for one); it used to do nothing.
+- Pasting or dropping files into the prompt attaches them when the name holds a narrow no-break space (macOS screenshots), when several files arrive on one line, and when a single path keeps plain spaces.
+- In a Claude Code session, background sub-agents keep using MendCode's tools (image generation and the rest) after the turn that started them ended, including several calls at once, instead of failing with "No turn is running".
+- In a Claude Code session whose process stays alive for background agents, the sub-agent tool (`delegate_task`) no longer stops working after an hour with an "Authorization header rejected" error: the token lasts as long as the session keeps having turns.
+- A workflow script that names a model the catalog does not have is refused when it starts, listing the closest model ids, instead of finishing with every agent failed.
+- An extension that throws in `onStart`, rejects a promise it started, or throws in a timer no longer takes the terminal down: that extension stops for the session, its slots go back to the defaults and a notice names it.
+- A prompt with pasted images, PDFs or long pasted text sent to a chat that lives on the sync hub runs on the hub like a text prompt, instead of being refused as owned by the hub.
+- Any file can be attached: a big text file, an `.excalidraw`, a large SVG, a binary or an oversized image shows as a `[File: name · size]` chip, and the model gets its path (copied to the hub's per-chat uploads folder, up to 100 MB, for a hub chat) and a short note instead of the bytes.
 
 ## v0.0.20 - 2026-11-24
 
