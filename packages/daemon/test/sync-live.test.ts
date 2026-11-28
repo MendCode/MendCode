@@ -48,7 +48,7 @@ const engine = () => ({
   compact: async () => ({ status: "ok" }),
 }) as unknown as EnginePort
 
-type Relay = { port: number; cut(): void; pause(): void; resume(): void; olderHub(): void; prePushHub(): void; upBytes(): number }
+type Relay = { port: number; delay(ms: number): void; cut(): void; pause(): void; resume(): void; olderHub(): void; prePushHub(): void; upBytes(): number }
 /**
  * A TCP relay in front of the hub: `cut` drops every connection, `pause` also refuses new ones, `olderHub` hides the `tail` op like a
  * build that lacks it, `prePushHub` refuses a pushed tail like a build that knows only long polls (both start from new connections).
@@ -57,6 +57,8 @@ function relay(target: number): Relay {
   let paused = false
   let older = false
   let prePush = false
+  /** Every answer of the hub reaches the device this much later, in the same order. */
+  let lag = 0
   /** Bytes the device sent toward the hub. */
   let sentUp = 0
   const open = new Set<{ end(): void }>()
@@ -86,7 +88,7 @@ function relay(target: number): Relay {
         socket.data = { early: [] }
         if (paused) { socket.end(); return }
         open.add(socket)
-        const up = await Bun.connect({ hostname: "127.0.0.1", port: target, socket: { data(_up, data) { send(socket, new Uint8Array(data)) }, drain(up) { flush(up) }, close() { socket.end() }, error() {} } })
+        const up = await Bun.connect({ hostname: "127.0.0.1", port: target, socket: { data(_up, data) { const bytes = new Uint8Array(data); if (lag) setTimeout(() => send(socket, bytes), lag); else send(socket, bytes) }, drain(up) { flush(up) }, close() { socket.end() }, error() {} } })
         open.add(up)
         socket.data.up = up
         for (const chunk of socket.data.early.splice(0)) send(up, chunk)
@@ -105,6 +107,7 @@ function relay(target: number): Relay {
   cleanups.push(() => server.stop(true))
   return {
     port: server.port,
+    delay: (ms) => { lag = ms },
     cut: () => { for (const socket of [...open]) socket.end(); open.clear() },
     pause() { paused = true; this.cut() },
     resume() { paused = false },
@@ -397,3 +400,38 @@ test("a PNG over 2048 pixels goes to the hub as a smaller PNG and the prompt nam
   } else expect(sent.mime).toBe("image/jpeg")
   expect(device.daemon.store.readBlob(ref.sha256).length).toBe(original.length)
 }, 60_000)
+
+test("pulls that overlap fetch one attachment once: the picture arrives whole and the chat stays synced", async () => {
+  const { hub, device, link, seed } = await pair()
+  link.delay(120)
+  const bytes = new Uint8Array(1200 * 1024)
+  for (let at = 0; at < bytes.length; at++) bytes[at] = (at * 2654435761) >>> 24
+  const ref = hub.daemon.store.putBlob(bytes, "application/pdf")
+  await hub.client.subscribe(seed, events(hub, seed).at(-1)?.seq ?? 0)
+  expect(await hub.client.send({ type: "user.submit", sessionId: seed, text: "with a file", attachments: [ref] })).toMatchObject({ ok: true })
+  // The pushed tail, the open chat and several rounds all want the same picture at once.
+  for (let round = 0; round < 8; round++) { void device.client.send({ type: "sync.control", input: { action: "now" } } as never); await Bun.sleep(60) }
+  await until(() => turnsDone(device, seed) === 2 && turnsDone(hub, seed) === 2, "the prompt with the file reached the device")
+  expect(device.daemon.store.readBlob(ref.sha256).length).toBe(bytes.length)
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
+  // Nothing was marked damaged: the next turn still arrives.
+  expect(await submit(hub, seed, "after")).toMatchObject({ ok: true })
+  await until(() => turnsDone(device, seed) === 3 && turnsDone(hub, seed) === 3, "the chat still follows the hub")
+}, 30_000)
+
+test("a title, pin or archive sent to the hub while the hub's output arrives does not set the stored position back: the chat keeps following", async () => {
+  const { hub, device, link, seed } = await pair()
+  link.delay(120)
+  await hub.client.subscribe(seed, events(hub, seed).at(-1)?.seq ?? 0)
+  expect(await submit(hub, seed, "stream")).toMatchObject({ ok: true })
+  for (let round = 0; round < 12; round++) {
+    device.daemon.store.renameSession(seed, `renamed ${round}`)
+    void device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+    await Bun.sleep(40)
+  }
+  await until(() => turnsDone(device, seed) === 2 && turnsDone(hub, seed) === 2, "the streamed turn reached the device")
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
+  expect(await submit(hub, seed, "after")).toMatchObject({ ok: true })
+  await until(() => turnsDone(device, seed) === 3 && turnsDone(hub, seed) === 3, "the chat still follows the hub")
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
+}, 45_000)
