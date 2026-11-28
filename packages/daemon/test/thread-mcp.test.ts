@@ -182,6 +182,30 @@ test("a process kept for its background agents keeps its earlier turn's token: i
   fresh.release()
 })
 
+test("a kept process's first token keeps working while its session has a turn at least once an hour, however long the process lives", async () => {
+  const clock = createVirtualClock()
+  const service = createThreadMcp({ clock, listen: () => ({ url: "http://127.0.0.1:12345/mcp", stop: () => {} }) })
+  cleanup.push(service.stop)
+  const threads = { granted: () => false, list: () => ({ ok: true, output: "project threads" }) } as unknown as ThreadPort
+  const session = ids("session")
+  const open = () => service.open({ engine: "claude", turn: { ...turn(), sessionId: session } as TurnInput, allowed: () => true, threads, authorize: async () => true, create: async () => ({ ok: true, output: "" }), delegate: async () => ({ ok: true, output: "" }) })
+  const list = (authorization: string) => service.handle(new Request("http://127.0.0.1:12345/mcp", { method: "POST", headers: { "content-type": "application/json", authorization }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }) }))
+  const first = open()
+  const earlier = first.servers[0]!.headers[0]!.value
+  first.release()
+  for (let turns = 0; turns < 4; turns++) {
+    clock.advance(40 * 60_000)
+    const current = open()
+    expect((await list(earlier)).status).toBe(200)
+    current.release()
+  }
+  // Two hours and forty minutes after it was issued, a turn after an idle hour does not take it.
+  clock.advance(61 * 60_000)
+  const idle = open()
+  expect((await list(earlier)).status).toBe(401)
+  idle.release()
+})
+
 test("the server opens again on the port it had, so a kept process's config still reaches it", () => {
   const service = createThreadMcp({ clock: createVirtualClock() })
   cleanup.push(service.stop)

@@ -11,6 +11,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- In a Claude Code session, background sub-agents keep using MendCode's tools (image generation and the rest) after the turn that started them ended, including several calls at once, instead of failing with "No turn is running".
+- In a Claude Code session whose process stays alive for background agents, the sub-agent tool (`delegate_task`) no longer stops working after an hour with an "Authorization header rejected" error: the token lasts as long as the session keeps having turns.
+- A workflow script that names a model the catalog does not have is refused when it starts, listing the closest model ids, instead of finishing with every agent failed.
 - An extension that throws in `onStart`, rejects a promise it started, or throws in a timer no longer takes the terminal down: that extension stops for the session, its slots go back to the defaults and a notice names it.
 - A prompt with pasted images, PDFs or long pasted text sent to a chat that lives on the sync hub runs on the hub like a text prompt, instead of being refused as owned by the hub.
 - Any file can be attached: a big text file, an `.excalidraw`, a large SVG, a binary or an oversized image shows as a `[File: name · size]` chip, and the model gets its path (copied to the hub's per-chat uploads folder, up to 100 MB, for a hub chat) and a short note instead of the bytes.

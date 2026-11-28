@@ -111,15 +111,14 @@ export function createThreadMcp(options: {
   /**
    * Tokens of turns that ended, with their session and the end of their lifetime. A Claude Code process kept alive for its background
    * agents was started with an earlier turn's token; the next turn of the same session joins that process, so its token answers for
-   * that session's live lease, and never for another session's or past the hour it was issued for.
+   * that session's live lease, and never for another session's or past an hour after that session's latest turn started or ended.
    */
   const retired = new Map<string, { sessionId: string; until: number; /** False for a turn that was cancelled: its token is revoked, only still scrubbed from output. */ reusable: boolean }>()
   const RETIRED_MAX = 64
   function retire(lease: Lease, reusable: boolean) {
     const now = options.clock.now()
     for (const [token, entry] of retired) if (entry.until <= now) retired.delete(token)
-    if (lease.born + MAX_MS <= now) return
-    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: lease.born + MAX_MS, reusable })
+    retired.set(lease.token, { sessionId: lease.turn.sessionId, until: now + MAX_MS, reusable })
     while (retired.size > RETIRED_MAX) retired.delete(retired.keys().next().value!)
   }
   /** The live lease of the session an ended turn's `bytes` token belonged to, when that token's hour has not run out. */
@@ -234,6 +233,9 @@ export function createThreadMcp(options: {
         lastPort = server.port
         return { url: `http://127.0.0.1:${server.port}/mcp`, stop: () => void server.stop(true) }
       })()
+      // A kept process cannot be given a new token, so its old one lasts the hour after this session's latest turn started or ended.
+      const openedAt = options.clock.now()
+      for (const entry of retired.values()) if (entry.sessionId === input.turn.sessionId && entry.reusable && entry.until > openedAt) entry.until = openedAt + MAX_MS
       const controller = new AbortController()
       let configDir: string | undefined
       const lease: Lease = {
