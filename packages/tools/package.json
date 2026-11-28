@@ -3,6 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./media": "./src/media.ts" },
+  "exports": { ".": "./src/index.ts", "./media": "./src/media.ts", "./image-downscale": "./src/image-downscale.ts" },
   "dependencies": { "@mendcode/packages": "workspace:*", "@mendcode/program": "workspace:*", "zod": "4.6.6" }
 }
