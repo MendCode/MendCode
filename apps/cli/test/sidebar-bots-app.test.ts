@@ -946,6 +946,41 @@ describe("layouts and widths", () => {
   })
 })
 
+describe("a failed refresh never empties the list", () => {
+  const headingOf = (h: App, title: string) => side(h).find((row) => row.trimStart().startsWith(title)) ?? ""
+  test("an all-projects list that fails keeps what the list had, says stale, and is asked again within seconds; the answer replaces it", async () => {
+    let failing = true
+    const h = chatApp({ height: 40, extra: (command) => command.type === "session.list" && !(command as { directory?: string }).directory && failing ? { ok: false, error: { code: "internal", message: "busy" } } as CommandReply : undefined })
+    await until(h, "Projects")
+    await until(h, "stale")
+    expect(headingOf(h, "Projects")).toContain("stale")
+    expect(sidebarText(h)).not.toContain("api")
+    const asked = h.sentOf("session.list").length
+    failing = false
+    h.clock.at += 7_000
+    await until(h, "api")
+    expect(h.sentOf("session.list").length).toBeGreaterThan(asked)
+    expect(headingOf(h, "Projects")).not.toContain("stale")
+  })
+
+  test("a bot list whose connector failed keeps that connector's bots from the last answer, marked stale", async () => {
+    let broken = false
+    const ada = { origin: "hermes", id: "ada", name: "Ada", identity: { origin: "hermes" }, state: "idle", chat: "acp:hermes-ada" }
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply({ bots: [], external: broken ? [] : [ada], problems: broken ? [{ file: "connector:hermes", message: "[HERMES]: Hermes does not answer" }] : [] }) : undefined })
+    await until(h, "hermes · 1")
+    expect(headingOf(h, "Bots")).not.toContain("stale")
+    broken = true
+    const asked = h.sentOf("bot.list").length
+    h.clock.at += 65_000
+    for (let turn = 0; turn < 40 && h.sentOf("bot.list").length === asked; turn++) { h.app.render(); await Bun.sleep(5) }
+    await Bun.sleep(10)
+    h.app.render()
+    expect(h.sentOf("bot.list").length).toBeGreaterThan(asked)
+    expect(sidebarText(h)).toContain("hermes · 1")
+    expect(headingOf(h, "Bots")).toContain("stale")
+  })
+})
+
 describe("a sub-agent waiting on you keeps the plain arrows for the sub-agents", () => {
   const marked = (h: App) => side(h).some((row) => /^ › /.test(row))
   /** Whether a row is selected (›) after the left arrow and one down: the list took the arrows, or the chat kept them. */

@@ -79,6 +79,8 @@ export type MultiInput = {
   scroll?: SidebarScroll | undefined
   /** Present while the list holds still: see `SidebarHold`. */
   hold?: SidebarHold | undefined
+  /** The last ask of a list failed and it shows what it had before: its heading says `stale` (a bot its app kept stale says so too). */
+  stale?: { projects?: boolean; bots?: boolean } | undefined
 }
 
 const PAD_X = 2
@@ -305,7 +307,7 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
   /** The `+` that ends a row a chat can be started from; its cells (and the blank before the rule) are the row's own hit zone. */
   const plus: Line = [{ text: " +", fg: "muted" }]
   const blankBetween = () => { if (entries.length) entries.push({ line: [] }) }
-  const heading = (title: string, count: number) => push(spread([{ text: title, fg: "muted" }], [{ text: String(count), fg: "muted" }], inner))
+  const heading = (title: string, count: number, stale = false) => push(spread([{ text: title, fg: "muted" }], [...(stale ? [{ text: "stale ", fg: "warning" as const }] : []), { text: String(count), fg: "muted" }], inner))
   /** `slot` names the picture for the image layer when the terminal draws images: one per row. */
   const icon = (bot: { name: string; state?: BotState; identity: { shape?: never; color?: never } | BotListReport["bots"][number]["identity"] }, slot: string) => botIcon({ name: bot.name, shape: bot.identity.shape, color: bot.identity.color, ascii: input.ascii, state: bot.state, ...(input.faces ? { faces: { ...input.faces, slot: `${input.faces.slot}:${slot}` } } : {}) })
   /** The icon cells of a session row: the bot's icon, else blanks of the same width. */
@@ -396,7 +398,7 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
     inSection = section
     if (section === "bots") {
       const bots = input.bots!
-      if (!input.icons) { blankBetween(); heading("Bots", bots.bots.length + bots.external.length) }
+      if (!input.icons) { blankBetween(); heading("Bots", bots.bots.length + bots.external.length, input.stale?.bots === true || bots.external.some((bot) => bot.stale === true)) }
       else blankBetween()
       if (!bots.bots.length && !bots.external.length && !input.icons) push([{ text: "No bots · /bot new <name>", fg: "muted" }])
       for (const bot of bots.bots) {
@@ -457,7 +459,7 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
       const visible = new Set([...ranked.shown, ...ranked.rest.slice(0, extra)])
       const directories = ranked.all.filter((directory) => visible.has(directory))
       const labels = groupLabels(directories)
-      if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length) }
+      if (!input.icons) { blankBetween(); heading("Projects", ranked.shown.length + ranked.rest.length, input.stale?.projects === true) }
       else blankBetween()
       // An automatic count fills the height: a group that would not fit is taken back, and with it every plain one after it.
       const auto = !input.icons && input.scope === "all" && input.projects?.count === 0

@@ -2,7 +2,7 @@ import type { BotListReport, ExternalBotInfo, SessionId, SessionSummary } from "
 import { botChatsName, botKey, botMoreName, botName, externalActivityOf, externalBotOf, groupDirectory, hostKey, isBotChatsId, isBotId, isBotMoreId, isExternalActivityId, isExternalBotId, isExternalGroupId, isGroupId, externalBotId, isMoreId, isMoreProjectsId, isNewChatId, moreDirectory, multiFoldState, multiSectionStarts, multiStops, renderMultiSidebar, REVEAL_PAGE, type MultiInput, type SidebarHold } from "../../view/sidebar-multi"
 import { createProjectProbe, eligibleDirectory, FRESH_MS, type ProjectInspection } from "../../view/sidebar-projects"
 import { markAnimates, restingWorkflow, sessionMark, sidebarKind, waitsOnYou } from "../../view/sidebar"
-import { botIndex, patchBotReport } from "../../view/bot-live"
+import { botIndex, keepKnownExternal, patchBotReport } from "../../view/bot-live"
 import { mergeActivity, type ActivityEvent } from "../../view/session-activity"
 import { sessionOrderAt } from "../../view/session-label"
 import { sidebarListsAll, sidebarSectionsOf } from "../../view/tui-profile"
@@ -36,6 +36,8 @@ export type SidebarBots = ReturnType<typeof createSidebarBots>
 const BOTS_WINDOW_MS = 1000
 const JITTER_MS = 1500
 const SAFETY_MS = 60_000
+/** A list that failed is asked again this soon (jittered), not at the slow safety refresh; what it showed before stays meanwhile. */
+const RETRY_MS = 5_000
 const DURING_MAX = 200
 /** The pushed sessions a list keeps (the cap `events.ts` gives this terminal's own list). */
 const PUSHED_MAX = 500
@@ -94,6 +96,12 @@ export function createSidebarBots(ctx: AppContext) {
   /** Pushes that came while a bot list was being asked for, in order (at most `DURING_MAX`): the answer may predate them. */
   const during: ActivityEvent[] = []
   let loadingOthers = false
+  /** The last ask of each list failed: the list keeps what it had, its heading says `stale`, and it is asked again after `RETRY_MS`. */
+  let botsStale = false
+  let othersStale = false
+  /** Each list has had one good answer since this terminal started: until then, the first good one is the list itself arriving. */
+  let botsGood = false
+  let othersGood = false
   let timer: ReturnType<typeof setTimeout> | undefined
   let iconsNow = false
   /** How many projects past the cap the `+ N more projects` row has revealed, a page per press; kept in memory only. */
@@ -210,8 +218,15 @@ export function createSidebarBots(ctx: AppContext) {
     during.length = 0
     try {
       const reply = await askBotList(input)
+      // A failed ask keeps the bots drawn; an answer whose connector failed keeps that connector's bots from the last one (stale).
+      botsStale = !reply.ok
       if (reply.ok) {
-        report = reply.result as BotListReport
+        const answered = reply.result as BotListReport
+        const next = keepKnownExternal(report, answered)
+        // Only what this terminal kept asks again soon; bots the daemon itself kept stale are refreshed by the daemon when asked.
+        botsStale = next.external.length > answered.external.length
+        botsGood = true
+        report = next
         // The answer is older than the pushes that came while it was on its way: they move the new report as they moved the old one.
         for (const event of during) report = patchBotReport(report, event, now()) ?? report
         botOfSession = botIndex(report)
@@ -229,15 +244,27 @@ export function createSidebarBots(ctx: AppContext) {
     othersLoaded = true
     try {
       const reply = await input.send({ type: "session.list", limit: ALL_LIMIT, hideEmpty: true })
-      if (reply.ok) others = (reply.result?.sessions as SessionSummary[] | undefined) ?? []
+      // A failed ask keeps the other folders' sessions this list already holds (and what pushes added since).
+      const sessions = reply.ok ? reply.result?.sessions as SessionSummary[] | undefined : undefined
+      othersStale = !sessions
+      if (sessions) { others = sessions; othersGood = true }
     } finally { loadingOthers = false }
     requestFrame()
   }
-  /** Both lists whole; the slow safety refresh is pushed back from here. A first or overdue load (`fresh`) is the list itself arriving, so a held list takes it; the slow refresh leaves a held list as it is. */
+  /**
+   * Both lists whole; the slow safety refresh is pushed back from here, or a failed list asks again after `RETRY_MS`. A first or overdue
+   * load (`fresh`) is the list itself arriving, so a held list takes it, and so does the first good answer after a failed one; the slow
+   * refresh otherwise leaves a held list as it is.
+   */
   function loadAll(fresh = true) {
     stale = false
     safetyAt = now() + SAFETY_MS + ctx.random() * JITTER_MS
-    void Promise.all([botsOn() ? loadBots() : undefined, allProjects() ? loadOthers() : undefined]).then(() => { if (fresh) { release(); requestFrame() } }).catch(() => undefined)
+    const missing = () => (botsOn() && !input.remote && (!botsGood || botsStale)) || (allProjects() && (!othersGood || othersStale))
+    const wasMissing = missing()
+    void Promise.all([botsOn() ? loadBots() : undefined, allProjects() ? loadOthers() : undefined]).then(() => {
+      if (botsStale || othersStale) { safetyAt = Math.min(safetyAt ?? Number.POSITIVE_INFINITY, now() + RETRY_MS + ctx.random() * JITTER_MS); arm() }
+      if (fresh || (wasMissing && !missing())) { release(); requestFrame() }
+    }).catch(() => undefined)
   }
 
   /** Whether the list is on screen now: in the chat, in a size that draws it. Hidden, nothing below does any work. */
@@ -409,6 +436,7 @@ export function createSidebarBots(ctx: AppContext) {
       projects: { isProject: probe.isProject, eligible: probe.eligible, canonical: probe.canonical, count: state.tuiProfile.sidebarProjectCount, from: state.tuiProfile.sidebarProjectsFrom, hidden: hiddenSet() },
       visits: noteVisit(),
       projectsRevealed,
+      ...(othersStale || botsStale ? { stale: { ...(othersStale && allProjects() ? { projects: true } : {}), ...(botsStale ? { bots: true } : {}) } } : {}),
       ...over,
     }
   }
