@@ -946,6 +946,24 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     return cached && cached.key === key ? cached.count : linesOf(block, width).length
   }
 
+  /** The latest tool call of the conversation about each child task (its launch, or a later resume naming it): the call whose card follows the task. */
+  let latestCalls = new Map<string, string>()
+  let latestCallsOf: readonly Block[] | undefined
+  let latestCallsAt = -1
+  function latestCallOf(taskId: string): string | undefined {
+    if (latestCallsOf !== blocks || latestCallsAt !== blocks.length) {
+      latestCalls = new Map()
+      for (const entry of blocks) {
+        if (entry.kind !== "tool_call") continue
+        const named = typeof entry.meta?.taskId === "string" ? entry.meta.taskId : entry.args?.taskId
+        if (named) latestCalls.set(named, entry.itemId)
+      }
+      latestCallsOf = blocks
+      latestCallsAt = blocks.length
+    }
+    return latestCalls.get(taskId)
+  }
+
   /**
    * A background sub-agent's call ends at once, but its card is the agent's: running while the agent works, with the tools it has
    * called, and at its end the agent's answer, as the card of a call the session waits for. Other blocks are returned as they are.
@@ -960,13 +978,15 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       return { ...block, status, ...(thread.endedAt !== undefined && !thread.running ? { endAt: thread.endedAt } : {}), ...(thread.running ? { text: "" } : answer ? { text: answer } : {}), ...(thread.tools ? { meta: { ...block.meta, toolCalls: thread.tools } } : {}) }
     }
     if (!options.childTask || block.args?.background !== true) return block
+    // Only a launch that got its task id follows the child: a failed launch keeps its error, and a card follows only the latest call about its task (a resume starts another generation, and the older cards keep what they showed).
+    const taskId = typeof block.meta?.taskId === "string" ? block.meta.taskId : undefined
+    if (!taskId || block.status === "error" || latestCallOf(taskId) !== block.itemId) return block
     const description = /^task:\s*(.*)$/s.exec(block.title ?? "")?.[1]?.trim()
     if (description === undefined) return block
-    const child = options.childTask({ ...(typeof block.meta?.taskId === "string" ? { taskId: block.meta.taskId } : {}), description })
+    const child = options.childTask({ taskId, description })
     if (!child) return block
     const active = CHILD_ACTIVE.has(child.state)
     const status = active ? "running" : child.state === "completed" ? "ok" : child.state === "failed" ? "error" : child.state === "cancelled" ? "cancelled" : "interrupted"
-    const taskId = typeof block.meta?.taskId === "string" ? block.meta.taskId : undefined
     return { ...block, status, text: active ? "" : `${taskId ? `task_id: ${taskId}\n` : ""}state: ${child.state}\n${child.result}`, ...(child.endedAt !== undefined && !active ? { endAt: child.endedAt } : {}), ...(child.calls ? { meta: { ...block.meta, toolCalls: child.calls } } : {}) }
   }
 
@@ -979,7 +999,14 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if (block.kind !== "user_message" || block.notice !== true) return false
     if (block.text.startsWith("Internal child-task notification.")) {
       const ids = [...block.text.matchAll(/^task_id: (\S+)/gm)].map((match) => match[1]!)
-      return ids.length > 0 && ids.every((id) => blocks.some((entry) => entry.kind === "tool_call" && entry.meta?.taskId === id && entry.args?.background === true))
+      // Hidden only when the card shows this result: it is the latest call about the task and the child's end is known to the card.
+      return ids.length > 0 && ids.every((id) => {
+        const card = blocks.find((entry) => entry.kind === "tool_call" && entry.meta?.taskId === id && entry.args?.background === true && entry.status !== "error")
+        if (!card || latestCallOf(id) !== card.itemId) return false
+        const description = /^task:\s*(.*)$/s.exec(card.title ?? "")?.[1]?.trim() ?? ""
+        const child = options.childTask?.({ taskId: id, description })
+        return child !== undefined && !CHILD_ACTIVE.has(child.state)
+      })
     }
     const head = block.text.split("\n")[0] ?? ""
     return blocks.some((entry) => {
@@ -1235,6 +1262,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** What one event changes in the projection: `apply` without its order check and without keeping the event in `history`. */
   function project(event: SessionEvent) {
+    latestCallsAt = -1
     // The blocks this event makes carry its seq, whether it is applied live or re-applied when an older page joins.
     applying = event.seq
     // A sub-agent's item is part of the loaded history too: a rebuild for an older page gives the thread its beginning.
