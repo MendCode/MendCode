@@ -1,7 +1,7 @@
 export const EDIT_ACTIONS = [
   "newline", "move-left", "move-right", "move-up", "move-down", "select-left", "select-right", "select-up", "select-down",
   "line-home", "line-end", "select-line-home", "select-line-end", "visual-line-home", "visual-line-end", "select-visual-line-home", "select-visual-line-end",
-  "buffer-home", "buffer-end", "select-buffer-home", "select-buffer-end", "delete-line", "delete-to-line-end", "delete-to-line-start",
+  "buffer-home", "buffer-end", "select-buffer-home", "select-buffer-end", "select-all", "delete-line", "delete-to-line-end", "delete-to-line-start",
   "backspace", "delete", "word-forward", "word-backward", "select-word-forward", "select-word-backward", "delete-word-forward", "delete-word-backward",
   "yank", "yank-pop", "jump-forward", "jump-backward",
 ] as const
@@ -17,6 +17,7 @@ export const EDIT_KEYS: Record<string, EditAction> = {
   "\x1ba": "visual-line-home", "\x1be": "visual-line-end", "\x1bA": "select-visual-line-home", "\x1bE": "select-visual-line-end",
   "\x1b[97;3u": "visual-line-home", "\x1b[101;3u": "visual-line-end", "\x1b[97;4u": "select-visual-line-home", "\x1b[101;4u": "select-visual-line-end", "\x1b[13;3u": "newline",
   "\x1b[H": "buffer-home", "\x1bOH": "buffer-home", "\x1b[1~": "buffer-home", "\x1b[F": "buffer-end", "\x1bOF": "buffer-end", "\x1b[4~": "buffer-end",
+  "\x1b[97;9u": "select-all",
   "\x1b[1;2H": "select-buffer-home", "\x1b[1;2F": "select-buffer-end", "\x1b[1;2~": "select-buffer-home", "\x1b[4;2~": "select-buffer-end",
   "\x1b[100;6u": "delete-line", "\x0b": "delete-to-line-end", "\x15": "delete-to-line-start",
   "\x7f": "backspace", "\b": "backspace", "\x1b[3~": "delete", "\x04": "delete", "\x1b[3;2~": "delete",

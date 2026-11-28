@@ -53,7 +53,8 @@ import type { ViewLine } from "../../view/transcript"
 import { CHART_KEY } from "../../view/chart-picture"
 import type { StripTask } from "../../view/agents-strip"
 import type { ItemId } from "@mendcode/protocol"
-import { bodyHighlight, footerHighlight, bodyPoint, highlightLine, promptRange, type BodyLine, type SelectionMap } from "../selection"
+import { promptWindow } from "../../view/prompt-window"
+import { bodyHighlight,footerHighlight, bodyPoint, highlightLine, promptRange, type BodyLine, type SelectionMap } from "../selection"
 import type { AppContext } from "./context"
 import { asciiChrome } from "./glyph-mode"
 import { overlayRule, ruleRight } from "../../view/status-line"
@@ -305,7 +306,8 @@ export function createChatRows(ctx: AppContext, actions: {
     const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
-    const firstRow = Math.max(0, cursorAt - editorRows + 1)
+    state.promptView = promptWindow({ previous: state.promptView, cursorAt, cursor: editor.cursorOffset, rows: editorRows, total: visual.length })
+    const firstRow = state.promptView.top
     const shown = visual.slice(firstRow, firstRow + editorRows)
     const cursorText = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(visual[cursorAt]!.text)].slice(0, editor.cursorOffset - visual[cursorAt]!.start).map((cell) => cell.segment).join("")
     const replacement = !asking && !state.shellMode ? state.ext?.prompt({ ...slotContext(width, editorRows), text: editor.text, lines: shown.map((line) => line.text), cursor: { row: cursorAt - firstRow, col: textWidth(cursorText) } }) : undefined
@@ -493,7 +495,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const popupTop = bodyEnd + above.length
     state.popupArea = menu ? { top: popupTop, first: 0, count: popup.length } : undefined
     state.mentionPopupArea = mentionActive ? { top: popupTop, first: popupWindowStart(state.mentionResults.length, mentionSelected, popupRowsMax), count: popup.length } : undefined
-    const cursorRow = bodyEnd + above.length + popup.length + promptTop.length + (cursorAt - firstRow)
+    const cursorRow = bodyEnd + above.length + popup.length + promptTop.length + Math.max(0, Math.min(shown.length - 1, cursorAt - firstRow))
     const current = visual[cursorAt]!
     const before = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(current.text)].slice(0, editor.cursorOffset - current.start).map((s) => s.segment).join("")
     const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !lifted && !(home && homeMascot.drawn) })

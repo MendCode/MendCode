@@ -45,8 +45,9 @@ export type SelectionMap = {
 }
 
 /**
- * For the prompt, `anchor` and `focus` are screen positions. For the transcript their rows are transcript rows (see `bodyBase`),
- * and `pointer` is the last screen position of the drag: the focus follows it while the view scrolls under it.
+ * For the transcript the rows of `anchor` and `focus` are transcript rows (see `bodyBase`); for the prompt they are indexes in
+ * `promptLines`, on screen or not, so a selection spans rows the prompt has scrolled away. `pointer` is the last screen position of
+ * the drag: the focus follows it while the view scrolls under it.
  */
 export type Selection = { anchor: Point; focus: Point; area: "body" | "prompt" | "footer"; moved: boolean; pointer?: Point }
 
@@ -160,6 +161,16 @@ export function areaAt(map: SelectionMap, point: Point): Selection["area"] | und
   return undefined
 }
 
+/** The index in `promptLines` of the row drawn at screen row `row`, `top` being the first row the prompt shows (rows outside the prompt give indexes outside the screen window). */
+export const promptIndex = (map: SelectionMap, row: number, top = map.promptFirst) => top + row - map.promptTop
+
+/** Which way a drag at `point` pushes the prompt: -1 above its rows, 1 below them (its closing border included), with how far; undefined inside. */
+export function promptEdge(map: SelectionMap, point: Point): { direction: -1 | 1; distance: number } | undefined {
+  if (point.row < map.promptTop) return { direction: -1, distance: map.promptTop - point.row }
+  const end = map.promptTop + map.promptRows + (map.promptBelow ?? 0)
+  return point.row >= end ? { direction: 1, distance: point.row - end + 1 } : undefined
+}
+
 /** Whether `point` is on the prompt's closing border, under its last row (a press there puts the cursor at the end of the text). */
 export const belowPrompt = (map: SelectionMap, point: Point) => map.promptRows > 0 && point.row >= map.promptTop + map.promptRows
 
@@ -194,7 +205,7 @@ const clamp =(value: number, low: number, high: number) => Math.max(low, Math.mi
 
 /** The two ends in reading order, with the focus held inside the area the selection began in. */
 function ordered(map: SelectionMap, selection: Selection): [Point, Point] {
-  const [top, rows] = selection.area === "body" ? (map.bodyRows !== undefined ? [0, map.bodyRows] : [map.bodyBase ?? map.bodyTop, map.body.length]) : [map.promptTop, map.promptRows]
+  const [top, rows] = selection.area === "body" ? (map.bodyRows !== undefined ? [0, map.bodyRows] : [map.bodyBase ?? map.bodyTop, map.body.length]) : [0, map.promptLines.length]
   const focus = { row: clamp(selection.focus.row, top, top + rows - 1), col: clamp(selection.focus.col, 0, map.width - 1) }
   const anchor = selection.anchor
   return anchor.row < focus.row || (anchor.row === focus.row && anchor.col <= focus.col) ? [anchor, focus] : [focus, anchor]
@@ -279,7 +290,7 @@ export function promptRange(map: SelectionMap, selection: Selection): { start: n
   if (selection.area !== "prompt" || !selection.moved) return undefined
   const [start, end] = ordered(map, selection)
   const offsetAt = (point: Point, edge: "start" | "end") => {
-    const line = map.promptLines[clamp(map.promptFirst + point.row - map.promptTop, 0, map.promptLines.length - 1)]
+    const line = map.promptLines[clamp(point.row, 0, map.promptLines.length - 1)]
     if (!line) return 0
     // One entry per grapheme of the editor text (a tab or a control character still counts), so offsets stay the editor's.
     let at = 0
