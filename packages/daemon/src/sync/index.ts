@@ -14,6 +14,8 @@ export type SyncPorts = {
   /** A turn, queued work, an approval or a side chat is live for the session. */
   busy(sessionId: SessionId): boolean
   publish(event: SessionEvent): void
+  /** Whether a terminal holds the session open now (a subscriber): a copy of a hub chat is followed live while it is. */
+  watched?(sessionId: SessionId): boolean
   /** Calls `listener` for every event this daemon appends to a session of its own (the hub's live chats). */
   observe(listener: (event: SessionEvent) => void): void
   changed(sessionId: SessionId): void
@@ -64,6 +66,8 @@ export function createSync(ports: SyncPorts) {
     /** Why this machine may not write the session now (it is another machine's), or undefined. */
     guard,
     hubOf,
+    /** A terminal opened the chat: a copy of a hub chat is brought up to date at once and followed while it stays open. */
+    focus(sessionId: SessionId) { device?.focus(sessionId) },
     /** A local client's command that runs on the hub (a chat in the hub's folder, a prompt, cancel or approval of its chats), or undefined. */
     route(command: Command) { return device?.routes(command) ? (device.forward as (command: Command) => ReturnType<Device["forward"]>) : undefined },
     /** Whether the chat is one the hub runs (this machine holds a copy). */
