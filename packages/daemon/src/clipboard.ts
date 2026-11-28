@@ -46,10 +46,37 @@ close access fileRef
 return "ok"`
 }
 
+/**
+ * JavaScript for Automation: one process asks the pasteboard for PNG, else for TIFF (what a screenshot is) and encodes it as PNG itself,
+ * writing the file named by its argument. Prints "ok" or "none". Much faster than AppleScript's `clipboard as «class …»` plus `sips`,
+ * which took seconds, and past the timeout, for a retina screenshot.
+ */
+const DARWIN_PASTEBOARD_SCRIPT = `ObjC.import('AppKit')
+function run(argv) {
+  const pb = $.NSPasteboard.generalPasteboard
+  let data = pb.dataForType('public.png')
+  if (data.isNil()) {
+    const tiff = pb.dataForType('public.tiff')
+    if (tiff.isNil()) return 'none'
+    const rep = $.NSBitmapImageRep.imageRepWithData(tiff)
+    if (rep.isNil()) return 'none'
+    data = rep.representationUsingTypeProperties($.NSBitmapImageFileTypePNG, $())
+  }
+  data.writeToFileAtomically(argv[0], true)
+  return 'ok'
+}`
+
 async function readDarwin(run: CommandRunner, timeoutMs: number, which: (bin: string) => string | null): Promise<Uint8Array> {
   const dir = await mkdtemp(path.join(tmpdir(), "mendcode-clip-"))
   try {
     const png = path.join(dir, "clip.png")
+    const fast = await run(["osascript", "-l", "JavaScript", "-e", DARWIN_PASTEBOARD_SCRIPT, png], timeoutMs)
+    if (fast.code === 0) {
+      const answer = new TextDecoder().decode(fast.stdout).trim()
+      if (answer === "ok") return new Uint8Array(await readFile(png))
+      if (answer === "none") return new Uint8Array()
+    }
+    // The script did not run (no JavaScript for Automation, a sandbox): the AppleScript way below.
     const pngResult = await run(["osascript", "-e", readClipboardScript("PNGf", png)], timeoutMs)
     if (pngResult.code === 0 && new TextDecoder().decode(pngResult.stdout).trim() === "ok") return new Uint8Array(await readFile(png))
 
