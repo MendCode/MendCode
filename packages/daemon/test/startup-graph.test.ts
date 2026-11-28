@@ -52,7 +52,7 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     // Configuration parity with a hub loads with the first `config.parity` command or the first round of a device that follows.
     "parity", "config-bundle/export", "config-bundle/plan", "config-bundle/apply",
     // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
-    "bot-hermes",
+    "bot-hermes", "bot-hermes-disk",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // The graph's answer for a text search: its parser loads with the first grep or rg a model runs, the rest with the first one that names identifiers.
   for (const file of ["search-terms", "search-hint", "cache-name", "indexer", "query"]) expect(inputs.has(`packages/codegraph/src/${file}.ts`), file).toBe(false)

@@ -27,6 +27,18 @@ export function botIndex(report: BotListReport | undefined): Map<string, string>
   return index
 }
 
+/**
+ * A new report in which a connector failed (`connector:<origin>` in its problems) and listed nothing keeps that connector's bots from the
+ * last report, marked stale: one failed refresh never empties the Bots section. A connector that answers, even with no bots, replaces them.
+ */
+export function keepKnownExternal(previous: BotListReport | undefined, next: BotListReport): BotListReport {
+  if (!previous?.external.length) return next
+  const failed = new Set(next.problems.filter((problem) => problem.file.startsWith("connector:")).map((problem) => problem.file.slice("connector:".length)))
+  const answered = new Set(next.external.map((bot) => bot.origin))
+  const kept = previous.external.filter((bot) => failed.has(bot.origin) && !answered.has(bot.origin)).map((bot) => ({ ...bot, stale: true }))
+  return kept.length ? { ...next, external: [...next.external, ...kept] } : next
+}
+
 /** One bot (MendCode or external) with this push applied to the session it names; the same object when it lists no such session. */
 function patchBot<T extends { projects?: BotListReport["bots"][number]["projects"] | undefined; state: BotState; appState?: BotState | undefined }>(bot: T, event: ActivityEvent, status: string, now: number): T {
   const held = (project: { sessions: ReadonlyArray<{ sessionId: string }> }) => project.sessions.some((member) => member.sessionId === event.sessionId)

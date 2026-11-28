@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The sidebar no longer loses projects or bots when a refresh fails: it keeps what it showed, marks the heading `stale` and asks again within seconds.
+- Hermes bots stay listed and their chats open when the Hermes desktop app works against a server elsewhere: MendCode reads the profiles and their sessions from the Hermes folder on this machine, and bots it already knew stay, marked stale, while Hermes does not answer.
 - Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
 - A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
 - Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload. A PNG wider or taller than 2048 pixels is sent to the hub as a smaller copy (a photograph as a JPEG on a Mac); the original stays on this machine.

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { Database } from "bun:sqlite"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { BotListReport, createIdFactory } from "@mendcode/protocol"
@@ -149,22 +150,67 @@ describe("the Hermes connector lists the profiles as bots", () => {
     expect((await connector.list()).map((bot) => bot.id)).toEqual(["later"])
   })
 
-  test("a background refresh that fails is reported by the next list, once, and the list after it asks again", async () => {
+  test("a background refresh that fails keeps the bots it knew, marked stale and idle, with their chat agents; the next good one clears the mark", async () => {
     let clock = 0
     let down = false
     const fetcher = (async (url: string) => {
       if (down) throw new Error("refused")
-      return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [{ name: "ada" }] })
+      return Response.json(url.includes("/sessions") ? { sessions: [{ id: "s1", profile: "ada", is_active: true }] } : { profiles: [{ name: "ada" }] })
     }) as unknown as typeof fetch
     const connector = hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher, now: () => clock })
-    await connector.list()
+    expect((await connector.list()).map((bot) => [bot.id, bot.state])).toEqual([["ada", "working"]])
     down = true
     clock = 60_000
     expect((await connector.list()).map((bot) => bot.id)).toEqual(["ada"])
     await new Promise((resolve) => setTimeout(resolve, 10))
+    const kept = await connector.list()
+    expect(kept.map((bot) => [bot.id, bot.state, bot.stale, bot.activity])).toEqual([["ada", "idle", true, undefined]])
+    expect(BotListReport.safeParse({ bots: [], external: kept, problems: [] }).success).toBe(true)
+    expect(Object.keys(connectorAgents())).toEqual(["hermes-ada"])
+    down = false
+    clock = 120_000
+    await connector.list()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect((await connector.list()).map((bot) => [bot.id, bot.stale])).toEqual([["ada", undefined]])
+  })
+
+  test("a refresh that fails before anything was known is reported once, and the list after it asks again", async () => {
+    let clock = 0
+    let down = false
+    const fetcher = (async (url: string) => {
+      if (down) throw new Error("refused")
+      return Response.json(url.includes("/sessions") ? { sessions: [] } : { profiles: [] })
+    }) as unknown as typeof fetch
+    const connector = hermesConnector({ env: { MENDCODE_HERMES_URL: "http://hermes.test" }, fetch: fetcher, now: () => clock })
+    expect(await connector.list()).toEqual([])
+    down = true
+    clock = 60_000
+    await connector.list()
+    await new Promise((resolve) => setTimeout(resolve, 10))
     await expect(connector.list()).rejects.toThrow("[HERMES]: Hermes does not answer")
     down = false
-    expect((await connector.list()).map((bot) => bot.id)).toEqual(["ada"])
+    expect(await connector.list()).toEqual([])
+  })
+
+  test("Hermes that is no longer found keeps the bots it listed, stale, so their chats still open", async () => {
+    let clock = 0
+    let running = true
+    const port = fakeHermes().url.split(":").pop()!
+    const run = async (argv: string[]) => {
+      if (!running) return ""
+      if (argv[0] === "ps" && argv[1] === "-axo") return "  4242 /opt/py -m hermes_cli.main serve --port 0\n"
+      if (argv[0] === "lsof") return `p4242\nn127.0.0.1:${port}\n`
+      if (argv[0] === "ps" && argv[1] === "eww") return `4242 python HERMES_DASHBOARD_SESSION_TOKEN=${TOKEN}`
+      return ""
+    }
+    const connector = hermesConnector({ env: {}, run, now: () => clock })
+    expect((await connector.list()).map((bot) => bot.id)).toEqual(["default", "ada"])
+    running = false
+    clock = 60_000
+    await connector.list()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect((await connector.list()).map((bot) => [bot.id, bot.stale])).toEqual([["default", true], ["ada", true]])
+    expect(Object.keys(connectorAgents()).sort()).toEqual(["hermes-ada", "hermes-default"])
   })
 
   test("the profiles and the active sessions are requested together", async () => {
@@ -356,5 +402,79 @@ describe("nothing loads with the flag off", () => {
     expect(connectorAgents()).toEqual({})
     expect(lazyHermesConnector({ dir: temp() }).id).toBe("hermes")
     expect(connectorAgents()).toEqual({})
+  })
+})
+
+describe("Hermes read from its folder when no server of it runs here", () => {
+  /** A Hermes home like the app keeps: the root profile and a named one, each with its own sessions database. */
+  function hermesHome() {
+    const home = temp()
+    const seconds = 1_800_000_000
+    const write = (dir: string, files: Record<string, string>, sessions: Array<{ id: string; title: string | null; started: number; last: number | null; ended: number | null; messages: number; hidden?: number }>) => {
+      mkdirSync(dir, { recursive: true })
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text)
+      const db = new Database(join(dir, "state.db"))
+      db.run("create table sessions (id text primary key, source text, title text, started_at real, ended_at real, last_activity_at real, message_count integer, hidden integer, archived integer, profile_name text)")
+      db.run("create table messages (id integer primary key autoincrement, session_id text, role text, content text, tool_name text, timestamp real)")
+      for (const session of sessions) db.query("insert into sessions values (?, 'cli', ?, ?, ?, ?, ?, ?, 0, null)").run(session.id, session.title, session.started, session.ended, session.last, session.messages, session.hidden ?? 0)
+      const message = db.query("insert into messages (session_id, role, content, tool_name, timestamp) values (?, ?, ?, ?, ?)")
+      message.run("a-1", "user", "first question", null, seconds + 1)
+      message.run("a-1", "tool", "{\"ok\": true}", "search", seconds + 2)
+      message.run("a-1", "assistant", "the answer", null, seconds + 3)
+      db.close()
+    }
+    write(home, { "profile.yaml": "ui_meta:\n  app-bots:\n    title: Chief\n    pinned: true\n", "config.yaml": "model:\n  default: gpt-root\n  provider: x\n" }, [{ id: "root-1", title: "Plan the week", started: seconds, last: seconds + 50, ended: seconds + 60, messages: 4 }])
+    write(join(home, "profiles", "ada"), { "profile.yaml": "description: Embedded AI lead\ndisplay_name: 'Ada'\n", "config.yaml": "model: gpt-ada\n" }, [
+      { id: "a-1", title: "Board bring-up", started: seconds, last: seconds + 100, ended: null, messages: 3 },
+      { id: "a-2", title: null, started: seconds - 10, last: null, ended: seconds, messages: 0 },
+      { id: "a-3", title: "Hidden one", started: seconds - 5, last: null, ended: seconds, messages: 2, hidden: 1 },
+    ])
+    mkdirSync(join(home, "profiles", "bad name"), { recursive: true })
+    return { home, now: () => (seconds + 120) * 1000 }
+  }
+
+  test("a running gateway gives the program and the home: the profiles become bots with their names, models and newest sessions", async () => {
+    const { home, now } = hermesHome()
+    const run = async (argv: string[]) => {
+      if (argv[0] === "ps" && argv[1] === "-axo") return "  10 /opt/py -m hermes_cli.stderr_timestamp --log x -- /opt/py -m hermes_cli.main gateway run\n  11 /opt/py -m hermes_cli.main gateway run --replace\n"
+      if (argv[0] === "ps" && argv[1] === "eww" && argv[3] === "11") return `11 /opt/py -m hermes_cli.main gateway run HERMES_HOME=${home} OTHER=1`
+      return ""
+    }
+    const connector = hermesConnector({ env: {}, run, now })
+    const bots = await connector.list()
+    expect(bots.map((bot) => [bot.id, bot.name, bot.model, bot.description, bot.state, bot.chat])).toEqual([
+      ["default", "Chief", "gpt-root", undefined, "idle", "acp:hermes-default"],
+      ["ada", "Ada", "gpt-ada", "Embedded AI lead", "working", "acp:hermes-ada"],
+    ])
+    expect(bots[1]!.activity?.map((session) => [session.id, session.title])).toEqual([["a-1", "Board bring-up"]])
+    expect(bots[0]!.recent?.map((session) => [session.id, session.title, session.activeAt])).toEqual([["root-1", "Plan the week", 1_800_000_050_000]])
+    expect(BotListReport.safeParse({ bots: [], external: bots, problems: [] }).success).toBe(true)
+    expect(connectorAgents()["hermes-ada"]).toEqual({ command: "/opt/py", args: ["-m", "hermes_cli.main", "-p", "ada", "acp"], env: { HERMES_HOME: home } })
+    const read = await connector.session!({ bot: "ada", session: "a-1", limit: 2 })
+    expect(read.messages.map((message) => [message.role, message.text, message.tool])).toEqual([["tool", "{\"ok\": true}", "search"], ["assistant", "the answer", undefined]])
+    expect(read.more).toBe(true)
+  })
+
+  test("MENDCODE_HERMES_HOME alone reads that folder, and a running server of the app still wins over it", async () => {
+    const { home, now } = hermesHome()
+    const bots = await hermesConnector({ env: { MENDCODE_HERMES_HOME: home, MENDCODE_HERMES_COMMAND: "/opt/hermes" }, run: async () => "", now }).list()
+    expect(bots.map((bot) => bot.id)).toEqual(["default", "ada"])
+    expect(connectorAgents()["hermes-default"]).toEqual({ command: "/opt/hermes", args: ["acp"], env: { HERMES_HOME: home } })
+    const port = fakeHermes().url.split(":").pop()!
+    const run = async (argv: string[]) => {
+      if (argv[0] === "ps" && argv[1] === "-axo") return "  4242 /opt/py -m hermes_cli.main serve --port 0\n"
+      if (argv[0] === "lsof") return `p4242\nn127.0.0.1:${port}\n`
+      if (argv[0] === "ps" && argv[1] === "eww") return `4242 python HERMES_DASHBOARD_SESSION_TOKEN=${TOKEN}`
+      return ""
+    }
+    const served = await hermesConnector({ env: { MENDCODE_HERMES_HOME: home }, run }).list()
+    expect(served.map((bot) => bot.name)).toEqual(["Chief", "Ada"])
+    expect(served[0]!.model).toBe("gpt-x")
+  })
+
+  test("a home with no profiles folder and no database lists its root profile alone", async () => {
+    const home = temp()
+    const bots = await hermesConnector({ env: { MENDCODE_HERMES_HOME: home }, run: async () => "" }).list()
+    expect(bots.map((bot) => [bot.id, bot.name, bot.recent])).toEqual([["default", "default", undefined]])
   })
 })
