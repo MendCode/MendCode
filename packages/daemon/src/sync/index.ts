@@ -77,6 +77,10 @@ export function createSync(ports: SyncPorts) {
       if (!device) throw new SyncRefusal("invalid", "sync is off on this machine (`mendcode sync enable REMOTE`)")
       return device.upload(sessionId, file)
     },
+    /** Starts copying an attachment of a hub chat's prompt to the hub while it is still being written; false when there is nothing to copy there. */
+    stage(sessionId: SessionId, ref: { sha256: string; bytes: number; mime: string }) {
+      return device ? device.stage(sessionId, ref) : Promise.resolve(false)
+    },
     /** At daemon start: the role the data dir says, if any. */
     boot(asHub: boolean) {
       startDevice()

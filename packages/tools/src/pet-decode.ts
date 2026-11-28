@@ -90,37 +90,39 @@ export function* decodePngSteps(data: Uint8Array): Generator<void, PetImage, voi
 
 function unfilter({ filter, raw, base, current, previous, channels }: { filter: number; raw: Uint8Array; base: number; current: Uint8Array; previous: Uint8Array; channels: number }) {
   const stride = current.length
-  for (let i = 0; i < stride; i++) {
-    const x = raw[base + i]!
-    const left = i >= channels ? current[i - channels]! : 0
-    const up = previous[i]!
-    let value: number
-    switch (filter) {
-      case 0:
-        value = x
-        break
-      case 1:
-        value = x + left
-        break
-      case 2:
-        value = x + up
-        break
-      case 3:
-        value = x + ((left + up) >> 1)
-        break
-      case 4: {
-        const upLeft = i >= channels ? previous[i - channels]! : 0
+  // One tight loop per filter (the first pixel has no left or up-left neighbor); a Uint8Array store wraps modulo 256 by itself.
+  const lead = Math.min(channels, stride)
+  switch (filter) {
+    case 0:
+      current.set(raw.subarray(base, base + stride))
+      return
+    case 1:
+      for (let i = 0; i < lead; i++) current[i] = raw[base + i]!
+      for (let i = lead; i < stride; i++) current[i] = raw[base + i]! + current[i - channels]!
+      return
+    case 2:
+      for (let i = 0; i < stride; i++) current[i] = raw[base + i]! + previous[i]!
+      return
+    case 3:
+      for (let i = 0; i < lead; i++) current[i] = raw[base + i]! + (previous[i]! >> 1)
+      for (let i = lead; i < stride; i++) current[i] = raw[base + i]! + ((current[i - channels]! + previous[i]!) >> 1)
+      return
+    case 4:
+      // With no left or up-left neighbor the predictor is the byte above.
+      for (let i = 0; i < lead; i++) current[i] = raw[base + i]! + previous[i]!
+      for (let i = lead; i < stride; i++) {
+        const left = current[i - channels]!
+        const up = previous[i]!
+        const upLeft = previous[i - channels]!
         const estimate = left + up - upLeft
         const dLeft = Math.abs(estimate - left)
         const dUp = Math.abs(estimate - up)
         const dUpLeft = Math.abs(estimate - upLeft)
-        value = x + (dLeft <= dUp && dLeft <= dUpLeft ? left : dUp <= dUpLeft ? up : upLeft)
-        break
+        current[i] = raw[base + i]! + (dLeft <= dUp && dLeft <= dUpLeft ? left : dUp <= dUpLeft ? up : upLeft)
       }
-      default:
-        throw new RangeError(`[PETS]: PNG filter ${filter} is invalid`)
-    }
-    current[i] = value & 255
+      return
+    default:
+      throw new RangeError(`[PETS]: PNG filter ${filter} is invalid`)
   }
 }
 
