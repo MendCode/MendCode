@@ -151,6 +151,22 @@ describe("daemon lifecycle CLI", () => {
     expect(busy.calls).toContain("daemon.shutdown")
   })
 
+  test("restart starts the next daemon with the remote listener the stopped one served, and a local daemon stays local", async () => {
+    const hub = harness(true)
+    hub.report.listener = { listen: "0.0.0.0:9876", tlsCert: "/srv/hub/tls/cert.pem", tlsKey: "/srv/hub/tls/key.pem" }
+    const launched: Array<string[] | undefined> = []
+    const launch = hub.deps.launch
+    hub.deps.launch = async (remote) => { launched.push(remote); await launch(remote) }
+    expect(await hub.run("daemon", "restart")).toBe(0)
+    expect(launched).toEqual([["--listen", "0.0.0.0:9876", "--tls-cert", "/srv/hub/tls/cert.pem", "--tls-key", "/srv/hub/tls/key.pem"]])
+    const local = harness(true)
+    const plain: Array<string[] | undefined> = []
+    const localLaunch = local.deps.launch
+    local.deps.launch = async (remote) => { plain.push(remote); await localLaunch(remote) }
+    expect(await local.run("daemon", "restart")).toBe(0)
+    expect(plain).toEqual([undefined])
+  })
+
   test("restart --force first waits for the commands and background tasks that run, says which; the daemon stops by itself and this command starts the next one", async () => {
     const h = harness(true)
     h.deps.restarting = (on) => void h.calls.push(`restarting ${on}`)

@@ -6945,6 +6945,7 @@ export async function startDaemon(options: DaemonOptions) {
           dream: { configured: Boolean(options.dream), enabled: Boolean(at), at: at ?? null, handled: store.meta.get(DREAM_WINDOW_KEY) ?? null },
           /** What a process hosting this daemon must not drop when its terminal closes (apps/cli/src/solo.ts). `standing` features restart from durable state in a separate daemon; `running` work would lose its in-flight step. */
           keepAlive: keepAliveReport(),
+          ...(options.listen && !connection.remoteAddress ? { listener: { listen: options.listen, ...(options.tlsCert ? { tlsCert: path.resolve(options.tlsCert) } : {}), ...(options.tlsKey ? { tlsKey: path.resolve(options.tlsKey) } : {}) } } : {}),
           ...(restartWhenIdle ? { restartPending: true } : {}),
           ...(restartDrain?.status() ? { drain: restartDrain.status()! } : {}),
         } })

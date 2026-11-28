@@ -103,7 +103,8 @@ export type DaemonServiceDeps = {
   dir: string
   cwd: string
   connect(): Promise<Peer | undefined>
-  launch(): Promise<void>
+  /** Starts a background daemon; `remote` are listener flags (`--listen`, `--tls-cert`, `--tls-key`) in place of `--local-only`. */
+  launch(remote?: string[]): Promise<void>
   foreground(): Promise<void>
   host: { control(action: ServiceAction): Promise<ServiceResult>; status(): Promise<ServiceResult>; logs(lines: number): Promise<DaemonLogsReport> }
   out: { write(text: string): unknown }
@@ -115,6 +116,11 @@ export type DaemonServiceDeps = {
   lockOwner?(): number | undefined
   /** On while `restart` stops the daemon and starts the next: terminals that lost theirs wait for it instead of starting one (restart-mark.ts). */
   restarting?(on: boolean): void
+}
+
+/** The flags that start a daemon with this listener. */
+export function listenerArgs(listener: NonNullable<DaemonStatusReport["listener"]>) {
+  return ["--listen", listener.listen, ...(listener.tlsCert ? ["--tls-cert", listener.tlsCert] : []), ...(listener.tlsKey ? ["--tls-key", listener.tlsKey] : [])]
 }
 
 /** No daemon answered; `unanswered` is the pid of one that still holds the data directory. */
@@ -227,13 +233,13 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
       const unanswered = (report: DaemonStatusReport | NotAnswering) => {
         if (!report.running && report.unanswered) throw new Error(`Daemon process ${report.unanswered} holds ${deps.dir} but does not answer; stop it (kill ${report.unanswered}) and retry`)
       }
-      const started = async () => {
+      const started = async (remote?: string[]) => {
         const before = await readStatus()
         if (before.running) return
         unanswered(before)
         const service = await deps.host.status()
         if (service.installed && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("start")
-        else await deps.launch()
+        else await deps.launch(remote)
         const deadline = deps.now() + 5000
         while (deps.now() < deadline) {
           if ((await readStatus()).running) return
@@ -292,6 +298,9 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         result(report, daemonStatusText(report))
       } else if (command.action === "restart") {
         // Same refusal as stop: work in progress is never interrupted without --force.
+        // The next daemon serves the same remote listener: a hub started with `daemon run --listen` stays reachable after a restart.
+        const was = await readStatus()
+        const remote = was.running && was.listener ? listenerArgs(was.listener) : undefined
         await busy()
         // This command starts the next daemon, with the environment it was given; the terminals that lose theirs wait for it.
         deps.restarting?.(true)
@@ -304,7 +313,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           }
           peer?.close(); peer = undefined
           await stopped()
-          await started()
+          await started(remote)
         } finally { deps.restarting?.(false) }
         const report = await readStatus()
         result(report, daemonStatusText(report))
