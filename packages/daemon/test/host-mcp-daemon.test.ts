@@ -6,6 +6,7 @@ import { createClient } from "@mendcode/client"
 import type { SessionId } from "@mendcode/protocol"
 import type { TurnInput, TurnOutcome } from "@mendcode/kernel"
 import { startDaemon } from "../src"
+import { HOST_LINGER_MS } from "../src/host-mcp"
 import { until } from "./native-harness"
 
 const cleanups: Array<() => void | Promise<void>> = []
@@ -78,9 +79,13 @@ test("a Claude Code turn calls a native tool through the bridge: it runs as a ca
   expect(h.listed.at(-1)).toEqual({ directory: h.project, sessionId: session })
   expect(replies[1].result).toEqual({ content: [{ type: "text", text: "router.ts:10" }], isError: false })
   expect(h.hostCalls).toEqual([{ turnId, sessionId: session, name: "graph_find", args: { query: "router" } }])
-  // The turn is over: the same bearer runs nothing more.
-  expect((await h.rpc(session, "tools/call", { name: "graph_find", arguments: {} })).result.isError).toBe(true)
-  expect(h.hostCalls).toHaveLength(1)
+  // The turn is over: the same bearer still serves a background sub-agent for a bounded time, then runs nothing more.
+  expect((await h.rpc(session, "tools/call", { name: "graph_find", arguments: {} })).result.isError).toBe(false)
+  expect(h.hostCalls).toHaveLength(2)
+  const now = Date.now
+  Date.now = () => now() + HOST_LINGER_MS + 1
+  try { expect((await h.rpc(session, "tools/call", { name: "graph_find", arguments: {} })).result.isError).toBe(true) } finally { Date.now = now }
+  expect(h.hostCalls).toHaveLength(2)
 })
 
 test("minimalist and installs without a tier give Claude Code no bridge; /tier harness_tools on does", async () => {
