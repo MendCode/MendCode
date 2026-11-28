@@ -12,7 +12,9 @@ import type { BotConnector } from "./bot-service"
  * Where Hermes is: `MENDCODE_HERMES_URL` (and `MENDCODE_HERMES_TOKEN` for its session token, `MENDCODE_HERMES_COMMAND` / `MENDCODE_HERMES_HOME`
  * for the program that serves a chat), else the headless `hermes serve` a desktop app runs on this machine, found in the
  * process list. That server keeps its token only in its own environment, which the same user may read; MendCode reads it per call and never
- * stores, logs or sends it anywhere but that loopback address. Loaded by the first `bot.list` with the flag on and Hermes configured or found.
+ * stores, logs or sends it anywhere but that loopback address. With no such server (the app works against a server elsewhere), a running
+ * Hermes gateway or `MENDCODE_HERMES_HOME` alone gives the home folder, and the profiles and their sessions are read from it read-only
+ * (`bot-hermes-disk.ts`). A refresh that fails keeps the last bots, marked stale. Loaded by the first `bot.list` with the flag on.
  */
 
 export type HermesDeps = {
@@ -23,7 +25,8 @@ export type HermesDeps = {
   now?(): number
 }
 
-type Source = { url: string; token?: string; command: string; args: string[]; home?: string; app?: string }
+/** Where Hermes answers: its server (`url`), or, with `disk`, only its own folder (`home`) read in place. */
+type Source = { url: string; token?: string; command: string; args: string[]; home?: string; app?: string; disk?: boolean }
 type Profile = { name: string; path?: string; model?: string; display_name?: string; description?: string }
 
 const SOURCE_TTL_MS = 30_000
@@ -49,6 +52,8 @@ type HermesMessage = { role?: string; content?: unknown; tool_name?: string | nu
 /** Hermes keeps times in seconds with a fraction. */
 const millis = (seconds: number | null | undefined) => typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : undefined
 const SERVE = /^(.*?) -m hermes_cli\.main serve\b/
+/** Hermes' gateway (its chat platforms and schedules): it runs where the profiles live even when no `serve` does. */
+const GATEWAY = /^(.*?) -m hermes_cli\.main gateway\b/
 
 async function defaultRun(argv: string[]): Promise<string> {
   try {
@@ -61,9 +66,27 @@ async function defaultRun(argv: string[]): Promise<string> {
   }
 }
 
-/** The `hermes serve` the user's app runs: its address, token and the program that starts a chat. Undefined when none runs. */
-async function detectServe(run: (argv: string[]) => Promise<string>): Promise<Source | undefined> {
+/**
+ * The `hermes serve` the user's app runs: its address, token and the program that starts a chat. Without one (the app works against a
+ * server elsewhere, or only the gateway runs), a running Hermes gateway gives the program and the home folder, read from disk.
+ * Undefined when neither runs.
+ */
+async function detectServe(run: (argv: string[]) => Promise<string>, home: string | undefined): Promise<Source | undefined> {
   const processes = (await run(["ps", "-axo", "pid=,command="])).split("\n")
+  const served = await detectRunning(run, processes)
+  if (served) return served
+  for (const line of processes) {
+    const match = /^\s*(\d+)\s+(.*)$/.exec(line)
+    const program = match ? GATEWAY.exec(match[2]!) : null
+    // A wrapper that starts the gateway (`python -m <logger> -- python -m hermes_cli.main gateway`) is not the program itself.
+    if (!match || !program || / -m /.test(program[1]!)) continue
+    const folder = /\bHERMES_HOME=(\S+)/.exec(await run(["ps", "eww", "-p", match[1]!]))?.[1] ?? (home ? `${home}/.hermes` : undefined)
+    if (folder) return { url: "", command: program[1]!, args: ["-m", "hermes_cli.main"], home: folder, disk: true }
+  }
+  return undefined
+}
+
+async function detectRunning(run: (argv: string[]) => Promise<string>, processes: readonly string[]): Promise<Source | undefined> {
   for (const line of processes) {
     const match = /^\s*(\d+)\s+(.*)$/.exec(line)
     const program = match ? SERVE.exec(match[2]!) : null
@@ -89,9 +112,14 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
   async function resolve(): Promise<Source | undefined> {
     if (source && now() - source.at < SOURCE_TTL_MS) return source.value
     const url = env.MENDCODE_HERMES_URL?.trim()
+    const home = env.MENDCODE_HERMES_HOME?.trim()
+    const command = env.MENDCODE_HERMES_COMMAND?.trim() || "hermes"
+    // A home without an address is read from disk, unless the app's own server runs on this machine (it knows more: what runs now).
     const value: Source | undefined = url
-      ? { url: url.replace(/\/+$/, ""), ...(env.MENDCODE_HERMES_TOKEN ? { token: env.MENDCODE_HERMES_TOKEN } : {}), command: env.MENDCODE_HERMES_COMMAND?.trim() || "hermes", args: [], ...(env.MENDCODE_HERMES_HOME ? { home: env.MENDCODE_HERMES_HOME } : {}) }
-      : await detectServe(run)
+      ? { url: url.replace(/\/+$/, ""), ...(env.MENDCODE_HERMES_TOKEN ? { token: env.MENDCODE_HERMES_TOKEN } : {}), command, args: [], ...(home ? { home } : {}) }
+      : home
+        ? (await detectServe(run, env.HOME).then((found) => found && !found.disk ? found : undefined)) ?? { url: "", command, args: [], home, disk: true }
+        : await detectServe(run, env.HOME)
     source = { at: now(), value }
     return value
   }
@@ -113,6 +141,22 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
     return (await response.json()) as T
   }
 
+  /** The profiles and their newest sessions, from Hermes' server or, with a disk source, from its folder. */
+  async function readHermes(from: Source): Promise<{ profiles: Profile[]; sessions: HermesSession[] }> {
+    if (from.disk && from.home) {
+      const disk = await import("./bot-hermes-disk")
+      const profiles = disk.diskProfiles(from.home)
+      return { profiles, sessions: disk.diskSessions(from.home, profiles.map((profile) => profile.name), RECENT_MAX, now() / 1000) }
+    }
+    // Both requests go out together; the sessions only give the working mark and what each profile is doing, so a failure of theirs costs only that.
+    // The root profile (the user's own assistant) is asked for its own newest sessions too: across all profiles, other bots' runs push its chats out of the newest 50.
+    const listOf = (query: string) => get<{ sessions?: HermesSession[] }>(from, `/api/profiles/sessions?${query}`).then((report) => report.sessions ?? []).catch(() => [] as HermesSession[])
+    const activeRequest = Promise.all([listOf(`limit=${ACTIVE_SESSIONS}`), listOf(`profile=${ROOT_PROFILE}&limit=${RECENT_MAX}`)])
+      .then(([all, root]) => [...all, ...root.filter((session) => !all.some((known) => known.id !== undefined && known.id === session.id))])
+    const profiles = (await get<{ profiles?: Profile[] }>(from, "/api/profiles")).profiles ?? []
+    return { profiles, sessions: await activeRequest }
+  }
+
   /** One discovery at a time: the process scan and the two requests to Hermes cost about half a second together. */
   let running: Promise<ExternalBotInfo[]> | undefined
   /** Why the last background discovery failed, told once to the next `list()` so the problem still reaches the report. */
@@ -121,20 +165,17 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
   async function discover(): Promise<ExternalBotInfo[]> {
       const from = await resolve()
       if (!from) {
+        // Hermes was found before and is gone now (its app quit, or moved elsewhere): its bots stay, marked stale, so their chats still open.
+        if (listed?.bots.length) return keepStale()
         offerConnectorAgents("hermes-", {})
         listed = { at: now(), bots: [] }
         return []
       }
-      // Both requests go out together; the sessions only give the working mark and what each profile is doing, so a failure of theirs costs only that.
-      // The root profile (the user's own assistant) is asked for its own newest sessions too: across all profiles, other bots' runs push its chats out of the newest 50.
-      const listOf = (query: string) => get<{ sessions?: HermesSession[] }>(from, `/api/profiles/sessions?${query}`).then((report) => report.sessions ?? []).catch(() => [] as HermesSession[])
-      const activeRequest = Promise.all([listOf(`limit=${ACTIVE_SESSIONS}`), listOf(`profile=${ROOT_PROFILE}&limit=${RECENT_MAX}`)])
-        .then(([all, root]) => [...all, ...root.filter((session) => !all.some((known) => known.id !== undefined && known.id === session.id))])
-      const profiles = (await get<{ profiles?: Profile[] }>(from, "/api/profiles")).profiles ?? []
+      const { profiles, sessions } = await readHermes(from)
       // Hermes' own rule for "active now" is on its sessions: a profile with one works, and its newest ones say on what.
       const activity = new Map<string, NonNullable<ExternalBotInfo["activity"]>>()
       const finished = new Map<string, NonNullable<ExternalBotInfo["recent"]>>()
-      for (const session of await activeRequest) {
+      for (const session of sessions) {
         const profile = session.profile ?? session.profile_name ?? ""
         const running = session.is_active === true
         const listed = (running ? activity : finished).get(profile) ?? []
@@ -177,6 +218,16 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
 
   const refresh = () => (running ??= discover().finally(() => { running = undefined }))
 
+  /**
+   * The last bots Hermes gave, kept when a refresh fails or Hermes is no longer found: marked stale, idle and without the running sessions
+   * (those can no longer be known), and their chat agents stay offered so a chat with them still opens. The next refresh replaces them.
+   */
+  function keepStale(): ExternalBotInfo[] {
+    const bots = (listed?.bots ?? []).map(({ activity: _activity, ...bot }): ExternalBotInfo => ({ ...bot, state: "idle", stale: true }))
+    listed = { at: now(), bots }
+    return bots
+  }
+
   return {
     id: "hermes",
     /**
@@ -188,7 +239,9 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
       const from = await resolve()
       if (!from) throw new Error("[HERMES]: Hermes is not running; start its app, or set MENDCODE_HERMES_URL")
       const asked = Math.max(1, Math.min(MESSAGES_MAX, Math.floor(limit)))
-      const report = await get<{ messages?: HermesMessage[] }>(from, `/api/sessions/${encodeURIComponent(session)}/messages?profile=${encodeURIComponent(bot)}&limit=${asked}&order=latest`)
+      const report: { messages?: HermesMessage[] } = from.disk && from.home
+        ? { messages: (await import("./bot-hermes-disk")).diskMessages(from.home, bot, session, asked) }
+        : await get<{ messages?: HermesMessage[] }>(from, `/api/sessions/${encodeURIComponent(session)}/messages?profile=${encodeURIComponent(bot)}&limit=${asked}&order=latest`)
       const messages: BotActivityReport["messages"] = []
       for (const message of report.messages ?? []) {
         const role = message.role === "user" || message.role === "assistant" || message.role === "tool" ? message.role : undefined
@@ -206,7 +259,8 @@ export function hermesConnector({ env = process.env, fetch: request = globalThis
      */
     async list() {
       if (listed) {
-        if (now() - listed.at >= LIST_TTL_MS && !running) refresh().catch((error) => { listed = undefined; failure = error })
+        // A refresh that fails keeps what was known (stale); with nothing known, the next list reports why.
+        if (now() - listed.at >= LIST_TTL_MS && !running) refresh().catch((error) => { if (listed?.bots.length) keepStale(); else { listed = undefined; failure = error } })
         return listed.bots
       }
       if (failure !== undefined) {

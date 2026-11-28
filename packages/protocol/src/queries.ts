@@ -1597,6 +1597,8 @@ const botParts = lazyValue(() => {
     activity: z.array(appSession).max(8).optional(),
     /** The newest sessions it has finished in its own app (the running ones are in `activity`), newest first (at most 30). Read-only: the app's own history, not MendCode sessions. */
     recent: z.array(appSession).max(30).optional(),
+    /** The app did not answer the last refresh: this is the last list it gave, kept so the bot stays usable; lists mark it. */
+    stale: z.boolean().optional(),
   })
   const report = z.strictObject({
     bots: z.array(info),
