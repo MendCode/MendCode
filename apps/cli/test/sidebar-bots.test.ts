@@ -405,6 +405,16 @@ describe("keyboard stops and mouse hits agree with what is drawn", () => {
     expect(multiStops({ ...input(first), hold: undefined })).toEqual(["new:", "group:/work/app", "c", "b", "a"])
   })
 
+  test("a held list still takes the heading drawn now: the stale mark appears while the rows stay held", () => {
+    const made = (id: string, createdAt: number) => session(id, `Chat ${id}`, "/work/app", { createdAt, updatedAt: createdAt, lastSeq: 9 })
+    const list = [made("a", NOW - 30 * MINUTE), made("b", NOW - 20 * MINUTE)]
+    const hold = {}
+    const input = (stale: boolean): MultiInput => ({ ...base, sessions: list as never, current: "none", height: 40, sections: ["projects"], hold, ...(stale ? { stale: { projects: true } } : {}) })
+    expect(renderMultiSidebar(input(false)).rows.map(plain).find((row) => row.trimStart().startsWith("Projects"))).not.toContain("stale")
+    expect(renderMultiSidebar(input(true)).rows.map(plain).find((row) => row.trimStart().startsWith("Projects"))).toContain("stale")
+    expect(multiStops(input(true))).toEqual(["new:", "group:/work/app", "b", "a"])
+  })
+
   test("a held row whose session fell out of the new preview still shows that session as it is, and the header counts only what the held rows hide", () => {
     const made = (id: string, createdAt: number, over: Record<string, unknown> = {}) => session(id, `Chat ${id}`, "/work/app", { createdAt, updatedAt: createdAt, lastSeq: 9, ...over })
     const first = [made("a", NOW - 30 * MINUTE), made("b", NOW - 20 * MINUTE), made("c", NOW - 10 * MINUTE)]

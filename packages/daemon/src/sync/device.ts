@@ -247,25 +247,37 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   async function downloadBlobs(events: readonly SessionEvent[], counted = true) {
     const refs = blobRefs(events)
     for (const ref of refs.copied) {
-      try { if (ports.store.readBlob(ref.sha256).length === ref.bytes) continue } catch {}
-      // A blob of the size limit takes more requests than a round has left: what arrived stays, and the next round goes on from it.
-      const chunks = partials.get(ref.sha256) ?? []
-      partials.delete(ref.sha256)
-      partials.set(ref.sha256, chunks)
-      if (partials.size > MAX_PARTIAL_BLOBS) partials.delete(partials.keys().next().value!)
-      for (let offset = chunks.reduce((sum, chunk) => sum + chunk.length, 0); ;) {
-        const part = await call({ op: "blob-read", input: { sha256: ref.sha256, offset } }, counted) as { data: string; done: boolean; mime: string }
-        const chunk = Buffer.from(part.data, "base64")
-        chunks.push(chunk)
-        offset += chunk.length
-        if (part.done || !chunk.length) break
+      for (;;) {
+        try { if (ports.store.readBlob(ref.sha256).length === ref.bytes) break } catch {}
+        // Pulls overlap (the round, the pushed tail, an opened chat): one blob is fetched by one of them; the others wait for it and look again.
+        const running = downloading.get(ref.sha256)
+        if (running) { await running; continue }
+        const fetching = downloadBlob(ref, counted)
+        downloading.set(ref.sha256, fetching.catch(() => {}))
+        try { await fetching } finally { downloading.delete(ref.sha256) }
+        break
       }
-      partials.delete(ref.sha256)
-      const bytes = Buffer.concat(chunks)
-      if (bytes.length !== ref.bytes || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new SyncRefusal("invalid", `blob ${ref.sha256.slice(0, 12)} arrived damaged`)
-      ports.store.putBlob(bytes, ref.mime)
     }
     return refs.skipped
+  }
+  const downloading = new Map<string, Promise<void>>()
+  async function downloadBlob(ref: { sha256: string; bytes: number; mime: string }, counted: boolean) {
+    // A blob of the size limit takes more requests than a round has left: what arrived stays, and the next round goes on from it.
+    const chunks = partials.get(ref.sha256) ?? []
+    partials.delete(ref.sha256)
+    partials.set(ref.sha256, chunks)
+    if (partials.size > MAX_PARTIAL_BLOBS) partials.delete(partials.keys().next().value!)
+    for (let offset = chunks.reduce((sum, chunk) => sum + chunk.length, 0); ;) {
+      const part = await call({ op: "blob-read", input: { sha256: ref.sha256, offset } }, counted) as { data: string; done: boolean; mime: string }
+      const chunk = Buffer.from(part.data, "base64")
+      chunks.push(chunk)
+      offset += chunk.length
+      if (part.done || !chunk.length) break
+    }
+    partials.delete(ref.sha256)
+    const bytes = Buffer.concat(chunks)
+    if (bytes.length !== ref.bytes || createHash("sha256").update(bytes).digest("hex") !== ref.sha256) throw new SyncRefusal("invalid", `blob ${ref.sha256.slice(0, 12)} arrived damaged`)
+    ports.store.putBlob(bytes, ref.mime)
   }
 
   /**
@@ -380,7 +392,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       if (!Object.keys(ours).length) continue
       try {
         await call({ op: "meta", sessionId: row.sessionId, ...ours })
-        save({ ...row, meta: JSON.stringify({ ...seen, ...ours }) })
+        // A pull may have stored more events while the request was out: only the metadata changes here.
+        save({ ...(rows.get(row.sessionId) ?? row), meta: JSON.stringify({ ...seen, ...ours }) })
       } catch (error) {
         if (roundError(error)) throw error
         ports.log(`[SYNC]: session ${row.sessionId} title, archive or pin not sent: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)

@@ -180,7 +180,7 @@ export function jsonShape(lines: readonly string[]): string | undefined {
 }
 
 /** The call arguments a card draws from, picked out of the call's JSON; nothing else is kept. */
-export type CallArgs = { pattern?: string; agent?: string; model?: string; background?: boolean; description?: string; written?: WrittenText }
+export type CallArgs = { pattern?: string; agent?: string; model?: string; background?: boolean; description?: string; /** The child task a `task` call resumes. */ taskId?: string; written?: WrittenText }
 /**
  * A write's content from its call: the first `WRITTEN_LINES` lines (at most `WRITTEN_BYTES`) and how many it has in all; `cut`
  * when the event kept only the start of the call (a call's arguments are stored up to 4000 characters), so the total is unknown.
@@ -249,7 +249,8 @@ export function callArgs(tool: string, input: string): CallArgs | undefined {
       const agent = text("agent", 64) ?? text("subagent_type", 64)
       const model = text("model", 80)
       const description = text("description", 80)
-      return { ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(description ? { description } : {}), ...(args.background === true ? { background: true } : {}) }
+      const taskId = text("task_id", 80)
+      return { ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(description ? { description } : {}), ...(taskId ? { taskId } : {}), ...(args.background === true ? { background: true } : {}) }
     }
     // The card shows what a write put in the file: its tool says only the path and the size.
     if (tool === "write" && typeof args.content === "string") return { written: writtenText(args.content) }

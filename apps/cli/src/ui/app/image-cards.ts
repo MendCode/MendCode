@@ -218,6 +218,8 @@ export function createImageCards(ctx: AppContext, { host: hostOption }: { /** fa
       for (const file of state.transcript.attachmentsOf(itemId)) {
         if (!file.sha256 || !file.mime.startsWith("image/")) continue
         const known = entries.get(file.sha256)
+        // A picture already sized is read again later (a redraw at other cells) by the session on screen now, not the first that showed it: that one may be gone.
+        if (known?.status === "ready" && known.session !== sessionId) entries.set(file.sha256, { ...known, session: sessionId })
         if (known && (known.status !== "failed" || known.session === sessionId)) continue
         entries.set(file.sha256, { status: "loading", session: sessionId })
         waiting.push({ kind: "size", sessionId, sha256: file.sha256 })

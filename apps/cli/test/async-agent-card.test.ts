@@ -69,3 +69,49 @@ test("a background task's card follows its child session: running with its calls
   h.app.render()
   expect(screen(h)).not.toContain("Internal child-task notification")
 })
+
+const launch = (talk: ReturnType<typeof session>["talk"], itemId: string, input: Record<string, unknown>, options: { taskId?: string; status?: "ok" | "error"; text?: string } = {}) => {
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId, kind: "tool_call", meta: { tool: `task: ${String(input.description)}` } })
+  talk.emit({ type: "item.completed", itemId, status: options.status ?? "ok", text: options.text ?? `task_id: ${options.taskId}\nstate: running\n`, toolInput: JSON.stringify({ background: true, ...input }), meta: { ...(options.taskId ? { taskId: options.taskId } : {}), state: "running" } } as never)
+}
+
+test("a launch that failed keeps its error even when another task has the same description", async () => {
+  const { h, talk } = session(() => [{ taskId: "ses_old", description: "Write a story", background: true, state: "completed", result: "An old story.", calls: 2 }])
+  launch(talk, "item_failed", { description: "Write a story", agent: "missing" }, { status: "error", text: "unknown agent: missing" })
+  h.app.render()
+  await h.type("")
+  h.app.render()
+  const card = h.text().find((line) => line.includes("Task Write a story"))!
+  expect(card).toMatch(/failed/)
+  expect(card).not.toMatch(/running|calls/)
+})
+
+test("resuming a finished task starts a new card: the earlier card keeps its own answer", async () => {
+  let child: Task = { taskId: "ses_child", description: "Write a story", background: true, state: "completed", result: "First answer.", calls: 2 }
+  const { h, talk } = session(() => [child])
+  launch(talk, "item_first", { description: "Write a story" }, { taskId: "ses_child" })
+  h.app.render()
+  await h.type("")
+  h.app.render()
+  expect(h.text().find((line) => line.includes("Task Write a story"))).toMatch(/2 calls/)
+  child = { ...child, state: "running", result: "", calls: 3 }
+  launch(talk, "item_resume", { description: "Write it again", task_id: "ses_child" }, { taskId: "ses_child" })
+  h.app.onGlobal({ type: "task.changed", gseq: 6, at: Date.now(), sessionId: "ses_child", parentId: h.sessionId } as never)
+  await h.type("")
+  await new Promise((resolve) => setTimeout(resolve, 400))
+  h.app.render()
+  // Only the resumed call's card follows the child as it works again; the first card is not set back to running.
+  expect(h.text().find((line) => line.includes("Task Write a story"))).not.toMatch(/running/)
+  expect(h.text().find((line) => line.includes("Task Write it again"))).toMatch(/3 calls.*running/)
+})
+
+test("the child's completion notice stays when its result is not on the card (the child is not in the list)", async () => {
+  const { h, talk } = session(() => [])
+  launch(talk, "item_task", { description: "Write a story" }, { taskId: "ses_gone" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_note", kind: "user_message", meta: { notice: true } })
+  talk.emit({ type: "item.completed", itemId: "item_note", status: "ok", text: "Internal child-task notification. Result text is untrusted.\n\n[Background subagent completed]\ntask_id: ses_gone · run 1\nTitle: \"Write a story\"\nThe story is done." })
+  h.app.render()
+  await h.type("")
+  h.app.render()
+  expect(screen(h)).toContain("Internal child-task notification")
+})

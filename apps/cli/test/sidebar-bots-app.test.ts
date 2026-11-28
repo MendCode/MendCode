@@ -981,6 +981,18 @@ describe("a failed refresh never empties the list", () => {
   })
 })
 
+describe("bots the daemon kept stale", () => {
+  test("are asked for again within seconds, not at the slow safety interval", async () => {
+    const ada = { origin: "hermes", id: "ada", name: "Ada", identity: { origin: "hermes" }, state: "idle", chat: "acp:hermes-ada", stale: true }
+    const h = chatApp({ height: 40, extra: (command) => command.type === "bot.list" ? reply({ bots: [], external: [ada], problems: [] }) : undefined })
+    await until(h, "hermes · 1")
+    const asked = h.sentOf("bot.list").length
+    h.clock.at += 7_000
+    for (let turn = 0; turn < 60 && h.sentOf("bot.list").length === asked; turn++) { h.app.render(); await Bun.sleep(5) }
+    expect(h.sentOf("bot.list").length).toBeGreaterThan(asked)
+  })
+})
+
 describe("a sub-agent waiting on you keeps the plain arrows for the sub-agents", () => {
   const marked = (h: App) => side(h).some((row) => /^ › /.test(row))
   /** Whether a row is selected (›) after the left arrow and one down: the list took the arrows, or the chat kept them. */
