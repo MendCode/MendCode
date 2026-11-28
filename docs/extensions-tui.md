@@ -76,6 +76,8 @@ When the candidate is at least as good, it takes over and the previous runtime i
 
 A broken candidate never starts. Closing the terminal awaits the disposers the same way.
 
+An `api.onStart` callback that throws or returns a rejected promise stops that extension for the session: what it registered is removed, the defaults come back and a notice names it. The same holds for a promise it started without awaiting, or a timer of its own that throws, when the error's stack points into its file; errors from MendCode itself still show the crash screen.
+
 Deleting an extension file removes its registrations. Register timer/listener cleanup with `api.onDispose(cleanup)`; it runs on reload, failed setup and terminal exit.
 
 ```ts

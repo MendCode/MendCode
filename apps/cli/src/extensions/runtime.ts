@@ -20,6 +20,7 @@ import type { CustomViews } from "../view/views"
 import type { SessionStats, UsageSnapshot } from "@mendcode/extension-api"
 import { computeSessionStats, EMPTY_USAGE } from "../view/session-stats"
 import { NO_USAGE } from "../view/usage-snapshot"
+import { originFile, registerFaultSink } from "./fault"
 
 /** What `api.stats()` answers when the app gave the runtime no stats source (tests, a headless load). */
 /** How long a reload waits for the disposers of the copy it replaces (a process an extension stops) before the new copy starts. */
@@ -176,18 +177,55 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
   }
 
   /** Runs extension code; a throw disables the entry (when it has a flag) and records one problem. */
+  function trip(entry: { owner: string; disabled?: boolean }, what: string, error: unknown) {
+    if (entry.disabled === false) entry.disabled = true
+    generation++
+    problem(entry.owner, `${what} ${entry.disabled === undefined ? "failed" : "disabled"}: ${messageOf(error)}`)
+    // The entry is gone from this frame on; the app repaints without it.
+    options.onChange?.()
+  }
+
   function guard<T>(entry: { owner: string; disabled?: boolean }, what: string, work: () => T): T | undefined {
     try {
-      return work()
+      const result = work()
+      // An async hook reports its rejection here, on the extension's account; nobody else awaits it.
+      if (result instanceof Promise) result.catch((error) => trip(entry, what, error))
+      return result
     } catch (error) {
-      if (entry.disabled === false) entry.disabled = true
-      generation++
-      problem(entry.owner, `${what} ${entry.disabled === undefined ? "failed" : "disabled"}: ${messageOf(error)}`)
-      // The entry is gone from this frame on; the app repaints without it.
-      options.onChange?.()
+      trip(entry, what, error)
       return undefined
     }
   }
+
+  /** Extensions that failed after loading (an async start, a timer, a promise nobody awaited): reported once, then quiet. */
+  const faulted = new Set<string>()
+
+  /** The whole extension stops: what it registered is removed, so the app falls back to its defaults. */
+  function fault(owner: string, what: string, error: unknown) {
+    if (faulted.has(owner)) return
+    faulted.add(owner)
+    removeOwner(owner)
+    generation++
+    problem(owner, `${what} failed: ${error instanceof Error && error.name !== "Error" ? `${error.name}: ` : ""}${messageOf(error)}`)
+    options.onChange?.()
+    options.redraw()
+  }
+
+  /** The extension whose file (or folder, for `name/index.ts`) the error was thrown in; MendCode's own frames are not claimed. */
+  function ownerOf(error: unknown) {
+    const file = originFile(error)
+    if (!file) return undefined
+    for (const [name, source] of seen) if (/^index\.(ts|js)$/.test(path.basename(source)) ? file.startsWith(path.dirname(source) + path.sep) : file === source) return name
+    return undefined
+  }
+
+  const unregisterFaults = registerFaultSink((error) => {
+    if (disposed) return false
+    const owner = ownerOf(error)
+    if (owner === undefined) return false
+    fault(owner, "background work", error)
+    return true
+  })
 
   function removeOwner(owner: string) {
     for (let index = starters.length - 1; index >= 0; index--) if (starters[index]!.owner === owner) starters.splice(index, 1)
@@ -451,6 +489,7 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
     /** Safe to call more than once: each disposer runs the first time only. */
     async dispose() {
       disposed = true
+      unregisterFaults()
       starters.length = 0
       const pending = disposers.splice(0).map((entry) => guard(entry, "dispose", entry.dispose)).filter((result): result is Promise<void> => result instanceof Promise)
       viewRegistry.clear()
@@ -463,7 +502,15 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
     start() {
       if (started || disposed) return
       started = true
-      for (const entry of starters.splice(0)) guard({ ...entry, disabled: false }, "start", entry.start)
+      for (const entry of starters.splice(0)) {
+        const failed = (error: unknown) => fault(entry.owner, "start", error)
+        try {
+          const result: unknown = entry.start()
+          if (result instanceof Promise) result.catch(failed)
+        } catch (error) {
+          failed(error)
+        }
+      }
     },
     /** Bumps whenever a renderer or transform is added, removed or disabled. */
     get generation() {
