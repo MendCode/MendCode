@@ -373,6 +373,7 @@ export function createEditor(options: { wordWrap?: boolean; tokens?: () => reado
     else if (base === "line-end") target = before - col + current().length
     else if (base === "buffer-home") target = 0
     else if (base === "buffer-end") target = chars.length
+    else if (base === "all") { anchor = 0; target = chars.length }
     else if (base === "word-forward") target = word(1)
     else if (base === "word-backward") target = word(-1)
     else if (base === "visual-line-home" || base === "visual-line-end") {

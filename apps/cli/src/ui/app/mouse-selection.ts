@@ -4,9 +4,10 @@ import { graphemes } from "../../view/editor"
 import { quoteWithComment } from "../../view/quote"
 import { draftRefs } from "../../view/attachments"
 import { offsetForThumb } from "../../view/scroll-chrome"
+import { scrollWindow } from "../../view/prompt-window"
 import { sideChat } from "./aside"
 import { findLinks } from "../../view/links"
-import { areaAt,belowPrompt, bodyPoint, bodyText, dragEdge, footerRow, footerText, lineSpan, mouseEvent, promptOffsetAt, promptRange, rowText, wordSpan, wrappedRows, wrappedTextAt, type Point, type Selection, type SelectionMap } from "../selection"
+import { areaAt,belowPrompt, bodyPoint, bodyText, dragEdge, footerRow, footerText, lineSpan, mouseEvent, promptEdge, promptIndex, promptOffsetAt, promptRange, rowText, wordSpan, wrappedRows, wrappedTextAt, type Point, type Selection, type SelectionMap } from "../selection"
 
 /** A second press this close (in time) to the last one, on the same cell, is a double click; a third is a triple click. */
 export const DOUBLE_CLICK_MS = 450
@@ -49,10 +50,11 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
       const end = lineSpan(rowText(map, bottom))
       return end && rowText(map, top).trim() ? { anchor: { row: top, col: 0 }, focus: { row: bottom, col: end[1] - 1 }, area, moved: true } : undefined
     }
-    const line = map.promptLines[map.promptFirst + point.row - map.promptTop]
+    const row = promptIndex(map, point.row)
+    const line = map.promptLines[row]
     if (!line) return undefined
     const span = count === 2 ? wordSpan(line.text, point.col - map.promptInset) : lineSpan(line.text)
-    return span ? { anchor: { row: point.row, col: map.promptInset + span[0] }, focus: { row: point.row, col: map.promptInset + span[1] - 1 }, area, moved: true } : undefined
+    return span ? { anchor: { row, col: map.promptInset + span[0] }, focus: { row, col: map.promptInset + span[1] - 1 }, area, moved: true } : undefined
   }
 
   function openPathAt(map: SelectionMap, point: Point): boolean {
@@ -99,14 +101,60 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
     timer = undefined
   }
 
-  /** One autoscroll step: the transcript moves toward the pointer; the page and the selection decide when it is over. */
+  /** Which way, and how far, a drag at `point` pushes the area it began in; undefined inside it (the footer never scrolls). */
+  function edgeOf(map: SelectionMap, area: Selection["area"], point: Point) {
+    return area === "body" ? dragEdge(map, point) : area === "prompt" ? promptEdge(map, point) : undefined
+  }
+
+  /**
+   * The selection point for a pointer at screen `point`: a transcript row, an index in the prompt's wrapped rows, or the screen cell.
+   * `held` keeps a prompt point inside the rows on screen, since the autoscroll is about to move the window to it.
+   */
+  function dragPoint(map: SelectionMap, area: Selection["area"], point: Point, held = false): Point {
+    if (area === "body") return bodyPoint(map, point)
+    if (area === "footer") return point
+    const view = state.promptView
+    const row = promptIndex(map, point.row, view?.top)
+    return { row: held && view ? Math.max(view.top, Math.min(view.top + view.rows - 1, row)) : row, col: point.col }
+  }
+
+  /** One autoscroll step: the transcript or the prompt moves toward the pointer; the page and the selection decide when it is over. */
   function autoscroll() {
     const selection = state.selection
     const map = state.selectionMap
-    const edge = selection?.pointer && map ? dragEdge(map, selection.pointer) : undefined
+    const edge = selection?.pointer && map ? edgeOf(map, selection.area, selection.pointer) : undefined
     if (!selection || !edge || state.page !== "chat") return stopAutoscroll()
-    scrollUnder(-edge.direction * Math.min(AUTOSCROLL_MAX_ROWS, edge.distance))
+    const rows = Math.min(AUTOSCROLL_MAX_ROWS, edge.distance)
+    if (selection.area === "prompt") dragPrompt(selection, edge.direction * rows)
+    else scrollUnder(-edge.direction * rows)
     requestFrame()
+  }
+
+  /** The prompt's window moves by `delta` rows and the selection's focus goes to the row that edge now shows (the start or end of the text at its ends). */
+  function dragPrompt(selection: Selection, delta: number) {
+    const map = state.selectionMap
+    const view = state.promptView
+    if (!map || !view) return
+    const next = scrollWindow(view, delta)
+    state.promptView = next
+    const col = selection.pointer?.col ?? 0
+    const focus = delta < 0 ? { row: next.top, col: next.top === 0 ? 0 : col } : { row: next.top + next.rows - 1, col: next.top + next.rows >= next.total ? map.width - 1 : col }
+    state.selection = { ...selection, focus, moved: true }
+  }
+
+  /** The wheel over the prompt: a prompt taller than its box scrolls (a held drag keeps extending to the pointer); true when it was used. */
+  function wheelPrompt(point: Point, rows: number): boolean {
+    const map = state.selectionMap
+    const view = state.promptView
+    if (!map || !view || view.total <= view.rows || areaAt(map, point) !== "prompt") return false
+    const next = scrollWindow(view, rows)
+    state.promptView = next
+    const selection = state.selection
+    if (selection?.area === "prompt" && selection.pointer && next.top !== view.top) {
+      state.selection = { ...selection, focus: { row: promptIndex(map, point.row, next.top), col: point.col }, moved: true, pointer: point }
+    }
+    requestFrame()
+    return true
   }
 
   /** The transcript moves by `rows` under a transcript selection, which keeps its text (a drag's focus follows the pointer on the next frame); any other selection is dropped. */
@@ -197,18 +245,19 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
           return true
         }
       }
-      state.selection = area ? { anchor: area === "body" ? bodyPoint(map, point) : point, focus: area === "body" ? bodyPoint(map, point) : point, area, moved: false, ...(area === "body" ? { pointer: point } : {}) } : undefined
+      state.selection = area ? { anchor: dragPoint(map, area, point), focus: dragPoint(map, area, point), area, moved: false, ...(area === "body" || area === "prompt" ? { pointer: point } : {}) } : undefined
       if (had) requestFrame()
       return false
     }
     const selection = state.selection
     if (!selection) return false
     if (event.kind === "drag") {
-      const focus = selection.area === "body" ? bodyPoint(map, point) : point
+      const edge = edgeOf(map, selection.area, point)
+      const focus = dragPoint(map, selection.area, point, edge !== undefined)
       const anchor = selection.anchor
-      if (selection.moved || focus.row !== anchor.row || focus.col !== anchor.col || (selection.area === "body" && dragEdge(map, point))) {
-        state.selection = { ...selection, focus, moved: true, ...(selection.area === "body" ? { pointer: point } : {}) }
-        if (selection.area === "body" && dragEdge(map, point)) startAutoscroll()
+      if (selection.moved || focus.row !== anchor.row || focus.col !== anchor.col || edge) {
+        state.selection = { ...selection, focus, moved: true, ...(selection.area === "body" || selection.area === "prompt" ? { pointer: point } : {}) }
+        if (edge) startAutoscroll()
         else stopAutoscroll()
         requestFrame()
       }
@@ -254,7 +303,7 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
       return true
     }
     // Released past the edge, the focus is where the autoscroll left it: the pointer's row is not a transcript row.
-    const focus = selection.area === "body" ? (dragEdge(map, point) ? selection.focus : bodyPoint(map, point)) : point
+    const focus = selection.area === "footer" ? point : edgeOf(map, selection.area, point) ? selection.focus : dragPoint(map, selection.area, point)
     const { pointer: _pointer, ...rest } = selection
     const released: Selection = { ...rest, focus }
     if (state.tuiProfile.copyOnSelect) copySelection(released)
@@ -303,5 +352,5 @@ export function createMouseSelection(ctx: AppContext, scroll: { by: (rows: numbe
     requestFrame()
   }
 
-  return { onMouse, onKey, quote, scrollUnder, hover }
+  return { onMouse, onKey, quote, scrollUnder, wheelPrompt, hover }
 }

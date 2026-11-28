@@ -248,6 +248,14 @@ The column stays where it was, even across a shorter row. Columns count terminal
 
 The same motion is bound to `edit.move-up` / `edit.move-down`; `shift` selects. The scratchpad, goal and memory editors, and plan draft share this component and behavior.
 
+### A prompt taller than its box
+
+The prompt shows up to six rows and scrolls inside when the text is longer. The window stays where you leave it and moves only when the cursor leaves it (the arrows, `ctrl+home`/`End`, typing, a click), by just enough to show the cursor.
+
+- **Wheel:** over the prompt it scrolls the prompt, never the transcript behind it; over the transcript it scrolls the transcript. The cursor and the text do not move. With the button held in a drag, the selection keeps extending to the pointer while the wheel turns.
+- **Drag:** a drag that goes past the prompt's top or bottom edge scrolls it (faster the farther the pointer) and keeps selecting, to the start or the end of the text when the window reaches it. A selection covers rows that are scrolled out of sight, and copy-on-select copies all of it.
+- **Keys:** `shift`+arrows, `shift+home` and `shift+end` select past the window, which follows the cursor. `edit.select-all` (`cmd+a` where the terminal sends it with the kitty keyboard protocol, otherwise bind it) selects the whole prompt. `ctrl+c` with text selected copies all of it, off-screen rows included, and keeps the draft; with nothing selected it clears the prompt as before.
+
 In vim normal and visual mode, `j` and `k` and the arrows follow the same drawn rows. `dj` and `dk` still act on whole lines.
 
 ### Click to move or select

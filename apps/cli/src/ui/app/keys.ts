@@ -289,6 +289,13 @@ export function createKeys(ctx: AppContext, actions: {
       // v1: Ctrl+C clears what is typed; it exits only from an empty prompt (or any other page).
       if (state.page === "chat" && !state.palette && state.editingScratch) return endScratchEdit()
       if (state.page === "chat" && !state.palette && state.editingGoal) return endGoalEdit()
+      // Text selected in the prompt (shift+arrows, select-all): ctrl+c copies all of it, off screen or not, and keeps the draft.
+      const picked = state.page === "chat" && !state.palette ? editor.selectedText : ""
+      if (picked) {
+        ctx.copyText(picked, `${picked.length} chars`)
+        editor.moveTo(editor.cursorOffset)
+        return requestFrame()
+      }
       if (state.page === "chat" && !state.palette && !editor.isEmpty()) {
         editor.clear()
         state.planDraft = undefined
@@ -348,6 +355,8 @@ export function createKeys(ctx: AppContext, actions: {
     }
     if (wheel !== undefined) {
       const notch = state.tuiProfile.wheelLines
+      // Over a prompt taller than its box the wheel scrolls the prompt, never the transcript behind it.
+      if (state.page === "chat" && listPointer && mouseSelection.wheelPrompt({ row: listPointer.row, col: listPointer.col - sidebarGeometry().offset }, wheel * notch)) return
       // A transcript selection stays on its text while the wheel moves it, so a drag can reach past one screen.
       if (state.page === "chat") mouseSelection.scrollUnder(-wheel * notch)
       else state.selection = undefined
