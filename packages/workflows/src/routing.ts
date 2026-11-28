@@ -67,11 +67,13 @@ export function routingProblems(plan: WorkflowPlan): string[] {
 
 export const emptyTaskUsage = (): WorkflowTaskUsage => ({ input: 0, output: 0, calls: 0, children: 0 })
 
+export function addTaskUsage(sum: WorkflowTaskUsage, usage: WorkflowTaskUsage): WorkflowTaskUsage {
+  return { input: sum.input + usage.input, output: sum.output + usage.output, calls: sum.calls + usage.calls, children: sum.children + usage.children, costMicros: (sum.costMicros ?? 0) + (usage.costMicros ?? 0), costUnknown: sum.costUnknown || usage.costUnknown || false }
+}
+
+/** Everything the run's agents used, also what agents already removed from the run had used. */
 export function totalTaskUsage(run: WorkflowRun): WorkflowTaskUsage {
-  return run.tasks.reduce((sum, task) => {
-    const usage = task.usage ?? emptyTaskUsage()
-    return { input: sum.input + usage.input, output: sum.output + usage.output, calls: sum.calls + usage.calls, children: sum.children + usage.children, costMicros: (sum.costMicros ?? 0) + (usage.costMicros ?? 0), costUnknown: sum.costUnknown || usage.costUnknown || false }
-  }, emptyTaskUsage())
+  return run.tasks.reduce((sum, task) => addTaskUsage(sum, task.usage ?? emptyTaskUsage()), run.retiredUsage ? addTaskUsage(emptyTaskUsage(), run.retiredUsage) : emptyTaskUsage())
 }
 
 /** Once a reported limit is consumed, stop before another call or side effect. Unknown prices fail closed. */

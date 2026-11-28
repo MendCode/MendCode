@@ -1,6 +1,6 @@
 import { createVerifier, lastMarkedBlock, parseVerdict, runChecks, type CheckRunner } from "@mendcode/loops"
 import type { createIdFactory, LoopGate, QueueId, SessionEvent, SessionId, TurnId, WorkflowId, WorkflowOutputContract, WorkflowPlan, WorkflowRun, WorkflowTaskExecution, WorkflowTaskSpec } from "@mendcode/protocol"
-import { budgetReason, emptyTaskUsage, taskExecution, totalTaskUsage } from "./routing"
+import { addTaskUsage, budgetReason, emptyTaskUsage, taskExecution, totalTaskUsage } from "./routing"
 import { selectOutput, taskSpec } from "./composition"
 import { captureOutput } from "./outputs"
 import { createScriptEngine, type ScriptHostPort, type ScriptJournalPort, type ScriptMergePort, type WorktreeSummary } from "./script-engine"
@@ -791,7 +791,7 @@ export function createWorkflowService(options: {
             }
             // Agents the stopped script started with the old answer (a script's tasks list no `needs`) are still running. Their sessions end and the tasks leave the run: the replay asks for whatever the new answer needs and creates it then, so nothing starts before the script asks for it and nothing obsolete runs beside it.
             const orphans = hostStopped ? run.tasks.filter((task) => task.id !== extra.taskId && (task.state === "running" || task.state === "needs_input")) : []
-            if (orphans.length) next = { ...next, tasks: next.tasks.filter((task) => !orphans.some((orphan) => orphan.id === task.id)) }
+            if (orphans.length) next = { ...next, tasks: next.tasks.filter((task) => !orphans.some((orphan) => orphan.id === task.id)), retiredUsage: orphans.reduce((sum, orphan) => addTaskUsage(sum, orphan.usage ?? emptyTaskUsage()), next.retiredUsage ?? emptyTaskUsage()) }
             cancelTasks(run, run.tasks.filter((task) => (!next.tasks.some((entry) => entry.id === task.id) || next.tasks.find((entry) => entry.id === task.id)?.state === "pending") && (task.state === "running" || task.state === "needs_input")).map((task) => task.id))
             return { run: change(workflowId, () => next)! }
           }
