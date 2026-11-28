@@ -228,6 +228,8 @@ export type AppState = {
   /** The mouse selection in the transcript or the prompt, while it is dragged (or kept, with `copyOnSelect` off); and where the last frame put them. */
   selection?: import("../selection").Selection | undefined
   selectionMap?: import("../selection").SelectionMap | undefined
+  /** The rows of a long prompt that are on screen: the wheel and a drag past its edge move it, the cursor pulls it back into view (view/prompt-window.ts). */
+  promptView?: import("../../view/prompt-window").PromptView | undefined
   /** Unsent drafts of this project's other sessions, newest first: found at start, restored with ctrl+r or /drafts. */
   unsent: import("../drafts").UnsentDraft[]
   /** Large pastes the prompt shows as `[Pasted Content N chars]` labels; the message gets their text (view/paste-placeholders.ts). */
