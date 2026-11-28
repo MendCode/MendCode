@@ -53,9 +53,13 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
     "parity", "config-bundle/export", "config-bundle/plan", "config-bundle/apply",
     // The Hermes bot connector loads with the first `bot.list` that runs with the flag on; main.ts holds only its lazy stub (bot-connector-agents).
     "bot-hermes", "bot-hermes-disk",
+    // Chunked attachment reads keep their blob between chunks; the holder loads with the first `attachment.read`.
+    "blob-reads",
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // The graph's answer for a text search: its parser loads with the first grep or rg a model runs, the rest with the first one that names identifiers.
   for (const file of ["search-terms", "search-hint", "cache-name", "indexer", "query"]) expect(inputs.has(`packages/codegraph/src/${file}.ts`), file).toBe(false)
+  // Transcript pictures: the cards, the header sizes and the image host's client load with the first picture on screen.
+  for (const file of ["apps/cli/src/ui/app/image-cards.ts", "apps/cli/src/ui/image-decode.ts", "apps/cli/src/ui/image-host.ts", "packages/tools/src/framed-host.ts"]) expect(inputs.has(file), file).toBe(false)
   // Bot faces (text, generated picture, avatar check and frame clock) load when a bot is drawn, never at start.
   for (const file of ["apps/cli/src/ui/app/bots.ts", "apps/cli/src/view/bot.ts", "apps/cli/src/view/bot-face.ts", "apps/cli/src/view/bot-face-image.ts", "apps/cli/src/view/bot-face-anim.ts", "apps/cli/src/view/bot-avatar.ts"]) expect(inputs.has(file), file).toBe(false)
   // The bots sidebar (all projects, bots section, icons column, a bot's page) loads with the first frame that needs it.
