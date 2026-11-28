@@ -29,6 +29,7 @@ const PARTIAL = /\x1b\[\?[\d;]*$/
 const SHIFT = 1
 const ALT = 2
 const CTRL = 4
+const SUPER = 8
 const LOCKS = 64 | 128
 const KEYPAD_FIRST = 57399
 const KEYPAD = "0123456789./*-+\r="
@@ -57,6 +58,8 @@ export function translateKey(seq: string, altBound: (seq: string) => boolean = (
   const other = modifiers & ~(SHIFT | ALT | CTRL)
   // Modifier and lock keys on their own (reported with "all keys"): nothing to type.
   if (code >= 57358 && code <= 57360 || code >= 57441 && code <= 57454) return ""
+  // Cmd+V (super, bit 8) reaches the app only when the terminal had no text to paste (an image alone on the clipboard): it is Ctrl+V, the image paste.
+  if (other === SUPER && modifiers === SUPER && codepoint(base ?? code).toLowerCase() === "v") return "\x16"
   if (other) return seq
   if (code >= KEYPAD_FIRST && code < KEYPAD_FIRST + KEYPAD.length) return modifiers & ~SHIFT ? seq : KEYPAD[code - KEYPAD_FIRST]!
   if (code >= 57344) return seq
