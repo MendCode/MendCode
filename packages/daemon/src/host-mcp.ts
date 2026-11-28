@@ -18,6 +18,12 @@ const MAX_BODY = 1024 * 1024
  * user while the turn runs, and the call is answered as pending well before that.
  */
 export const HOST_PENDING_MS = 40_000
+/**
+ * The harness's background sub-agents outlive the turn that started them and keep calling this server. For this long after a turn
+ * ended normally (not stopped), a call is still served as a call of that turn; each call renews it. Claude Code stops an idle
+ * process after 10 minutes, so no call outlives it.
+ */
+export const HOST_LINGER_MS = 15 * 60_000
 export const HOST_PENDING_TEXT = "Pending: the user has not answered yet. The card is on their screen in MendCode and stays open while this turn runs; if they approve it, it takes effect then. Do not call this tool again for the same thing. Tell the user what is waiting for them and where, and check the outcome later by reading the state (for settings: action get)."
 const json = (body: unknown, status = 200) => Response.json(body, { status })
 type HostTool = Awaited<ReturnType<NonNullable<EnginePort["hostTools"]>>>[number]
@@ -114,6 +120,7 @@ export function createHostMcp(options: {
 }) {
   const sessions = new Map<SessionId, { token: string; dir: string; file: string }>()
   const turns = new Map<SessionId, TurnInput>()
+  const lingering = new Map<SessionId, { turn: TurnInput; until: number }>()
   let listener: { url: string; stop(): void } | undefined
   let pending = 0
 
@@ -146,7 +153,12 @@ export function createHostMcp(options: {
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
     const name = message.params?.name
     if (typeof name !== "string") return error(-32602, "Unknown tool")
-    const turn = turns.get(sessionId)
+    let turn = turns.get(sessionId)
+    if (!turn) {
+      // No turn runs: a background sub-agent of the last one, which ended normally, may still be working.
+      const last = lingering.get(sessionId)
+      if (last && last.until > Date.now()) { last.until = Date.now() + HOST_LINGER_MS; turn = last.turn } else lingering.delete(sessionId)
+    }
     if (!turn || turn.signal.aborted) return reply({ content: [{ type: "text", text: "No turn is running in this session" }], isError: true })
     pending++
     // The call keeps running when its answer is pending; only the reply to the harness is cut short, and only while the user is the one being waited on.
@@ -199,7 +211,12 @@ export function createHostMcp(options: {
     /** The session's running turn, which the calls made during it belong to. */
     enter(turn: TurnInput) {
       turns.set(turn.sessionId, turn)
-      return () => { if (turns.get(turn.sessionId) === turn) turns.delete(turn.sessionId) }
+      lingering.delete(turn.sessionId)
+      return () => {
+        if (turns.get(turn.sessionId) !== turn) return
+        turns.delete(turn.sessionId)
+        if (!turn.signal.aborted) lingering.set(turn.sessionId, { turn, until: Date.now() + HOST_LINGER_MS })
+      }
     },
     /** A call is waiting (on the user's approval, on the tool): the other harness is not idle. */
     waiting: () => pending > 0,
@@ -207,6 +224,7 @@ export function createHostMcp(options: {
       for (const entry of sessions.values()) rmSync(entry.dir, { recursive: true, force: true })
       sessions.clear()
       turns.clear()
+      lingering.clear()
       listener?.stop()
       listener = undefined
     },

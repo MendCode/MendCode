@@ -3,7 +3,7 @@ import path from "node:path"
 import { acpAgentKey } from "../../engine-acp/src/agents"
 import type { AgentProfile } from "@mendcode/engine-native"
 import { WorkflowEngineId, type ModelChoice, type ModelRoles, type WorkflowPlan, type WorkflowRun, type WorkflowTaskExecution, type WorkflowTaskSpec } from "@mendcode/protocol"
-import { catalogModel, invalidChoice, resolveModel, usableEffort, type ModelCatalog } from "./models"
+import { catalogModel, invalidChoice, nearModels, resolveModel, usableEffort, type ModelCatalog } from "./models"
 
 /** Worktrees are explicit, detached, and retained for review. No promotion, cleanup or shell interpolation. */
 export function createWorkflowRouter(options: {
@@ -121,6 +121,16 @@ export function createWorkflowRouter(options: {
           const engine = match[2]!
           const problem = !WorkflowEngineId.safeParse(engine).success ? `engine must be "native", "claude", "codex", "pi" or "acp:<name>"` : engine.startsWith("acp:") || !configuredEngines().includes(engine) ? engineProblem(engine, undefined, undefined, directory) : undefined
           if (problem && !problems.includes(`script: ${problem}`)) problems.push(`script: ${problem}`)
+        }
+        // A model written as a literal fails here, with the catalog ids it was likely meant to be, not in every agent of a run whose `settled` calls hide it.
+        if (options.catalog.selectable) {
+          for (const match of plan.script.source.matchAll(/\bmodel\s*:\s*(["'])([^"'\n]+)\1/g)) {
+            const id = match[2]!
+            if (id.startsWith("acp:") || catalogModel(options.catalog, id)) continue
+            const near = nearModels(options.catalog, id, 4)
+            const problem = `script: unknown model ${id}${near.length ? `; ids in the catalog: ${near.join(", ")}` : ""}`
+            if (!problems.includes(problem)) problems.push(problem)
+          }
         }
       }
       for (const entry of plan.tasks) {

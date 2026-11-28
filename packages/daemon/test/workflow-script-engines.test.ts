@@ -116,6 +116,13 @@ return [a, b, c]`
     expect(nobody.seen).toEqual([])
   }, 60_000)
 
+  test("a model written as a literal that the catalog does not have is refused before the run, with the ids it was likely meant to be", async () => {
+    const h = await boot({ tier: "full" })
+    const refused = await h.start(`export const meta = { name: "typo" }\nconst all = await parallel([1, 2].map((n) => () => agent("x" + n, { model: "native:native-a" })), { settled: true })\nreturn all.length`)
+    expect(refused).toMatchObject({ ok: false, error: { message: expect.stringContaining("unknown model native:native-a; ids in the catalog: native-a") } })
+    expect(h.seen).toEqual([])
+  }, 60_000)
+
   test("another engine needs the full tier", async () => {
     const h = await boot()
     const started = await h.start(`export const meta = { name: "tier" }\nawait agent("x", { engine: ["claude"][0], model: "claude-x" })`)
