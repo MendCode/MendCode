@@ -298,6 +298,7 @@ import { createReleaseControl, type ReleaseOptions } from "./release-control"
 import { createUsageWeather, type UsageWeatherService } from "./usage-weather"
 import { createIdeBridge, type IdeAdapter } from "./ide"
 import { createTuiRequests } from "./tui-requests"
+import { createLoopWatch, loopWatchThreshold } from "./loop-watch"
 import { DEV_VERSION } from "@mendcode/program"
 
 /** A client that cannot keep up is disconnected and resumes later with afterSeq (never unbounded buffering). */
@@ -647,6 +648,8 @@ export async function startDaemon(options: DaemonOptions) {
   const logLine = daemonLogger(() => options.logLevel ?? store.settings.get().logLevel ?? "INFO", options.log ?? ((level: "info" | "warn" | "error", message: string) => void process.stderr.write(`${level.toUpperCase()} ${message}\n`)))
   warnStore = (message) => logLine("warn", message)
   for (const message of storeWarnings.splice(0)) warnStore(message)
+  /** A loop held past a second says so in the log, with the commands it happened under (docs/performance.md). */
+  const loopWatch = createLoopWatch({ log: (message) => logLine("warn", message), thresholdMs: loopWatchThreshold(process.env), facts: () => `rss ${Math.round(process.memoryUsage.rss() / 1048576)} MB` })
 
   /** Pasted secrets (K1): markers in everything stored or shown to the model, values only in the encrypted store and in tool runs. */
   const secrets = createSecretsService({ store, log: logLine })
@@ -3965,7 +3968,13 @@ export async function startDaemon(options: DaemonOptions) {
   // A sub-agent running in the background is "launched" by its parent: nobody watches it, so its approvals reach the parent and the user like a shell-started child's.
   launcherOf = (child) => agentGate.launcherOf(child) ?? (tasks.get(child)?.background ? tasks.get(child)!.parentId : undefined)
 
+  /** Every command is noted while it runs, so a stall of the loop names the commands it happened under (loop-watch.ts). */
   async function handleOnce(connection: Connection, command: Command) {
+    const ended = loopWatch.begin(command.type)
+    try { return await admitted(connection, command) } finally { ended() }
+  }
+
+  async function admitted(connection: Connection, command: Command) {
     if (connection.rejected) return
     if (connection.remoteAddress && !activePeer(connection)) return rejectRemote(connection, "unauthorized", command.id)
     // A device daemon's sync token syncs sessions and nothing else (docs/sync.md).
@@ -4018,7 +4027,8 @@ export async function startDaemon(options: DaemonOptions) {
     const targetSessionId = "sessionId" in command ? command.sessionId : undefined
     const targetDirectory = "directory" in command ? command.directory : targetSessionId ? store.sessionDirectory(targetSessionId) : connection.directory
     if (targetDirectory && projectRest?.locked(targetDirectory) && command.type !== "project.rest" && !isReadOnlyCommand(command.type)) return send(connection, { v: PROTOCOL_VERSION, kind: "error", id: command.id, error: { code: "busy", message: "Project mutation in progress" } })
-    if ((disposingGlobal || targetDirectory && disposingDirectories.has(canonicalDir(targetDirectory))) && !isReadOnlyCommand(command.type) && !inflight.has(cacheKey(connection, command.id))) return send(connection, { v: PROTOCOL_VERSION, kind: "error", id: command.id, error: { code: "busy", message: "Instance disposal in progress" } })
+    // The folder is resolved only while some folder is being disposed: a resolve per command cost 10 ms for a hub session's folder.
+    if ((disposingGlobal || targetDirectory && disposingDirectories.size > 0 && disposingDirectories.has(canonicalDir(targetDirectory))) && !isReadOnlyCommand(command.type) && !inflight.has(cacheKey(connection, command.id))) return send(connection, { v: PROTOCOL_VERSION, kind: "error", id: command.id, error: { code: "busy", message: "Instance disposal in progress" } })
     if (connection.directory && command.type !== "hello") {
       const directory = "directory" in command ? command.directory : undefined
       const sessionId = "sessionId" in command ? command.sessionId : undefined
@@ -7714,6 +7724,7 @@ export async function startDaemon(options: DaemonOptions) {
     clearInterval(remoteWatch)
     tlsWatch?.close()
     clearInterval(idleWatch)
+    loopWatch.stop()
     httpAdapter?.close()
     pty.dispose()
     serverEventObservers.clear()

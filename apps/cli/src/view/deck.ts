@@ -1,6 +1,6 @@
 import type { ColorName, Line } from "../ui/theme"
 import { center, page, pageChrome, type Hint, type PageTab } from "./page"
-import { cells, lineWidth, textWidth } from "./wrap"
+import { cells, lineWidth, plainWidth, textWidth } from "./wrap"
 
 /**
  * Row helpers and the legacy page API. Pages build their body from titled sections (`panel`) and hand it
@@ -15,28 +15,39 @@ export { lineWidth } from "./wrap"
 
 /** Cuts a row to `width` cells, never splitting a grapheme. */
 export function clip(line: Line, width: number): Line {
+  return clipMeasured(line, width).line
+}
+
+/** `clip` with the width of what it kept. A span that fits whole is copied without walking its cells: every row of every frame passes here. */
+function clipMeasured(line: Line, width: number): { line: Line; used: number } {
   const out: Line = []
   let used = 0
   for (const span of line) {
+    const whole = plainWidth(span.text)
+    if (whole !== undefined && used + whole <= width) {
+      if (span.text) out.push({ ...span })
+      used += whole
+      continue
+    }
     let text = ""
     for (const cell of cells(span.text)) {
       if (used + cell.width > width) {
         if (text) out.push({ ...span, text })
-        return out
+        return { line: out, used }
       }
       text += cell.text
       used += cell.width
     }
     if (text) out.push({ ...span, text })
   }
-  return out
+  return { line: out, used }
 }
 
 /** Exactly `width` cells: clipped, then padded with spaces. */
 export function fit(line: Line, width: number): Line {
   if (width <= 0) return []
-  const clipped = clip(line, width)
-  const room = width - lineWidth(clipped)
+  const { line: clipped, used } = clipMeasured(line, width)
+  const room = width - used
   return room > 0 ? [...clipped, { text: " ".repeat(room) }] : clipped
 }
 

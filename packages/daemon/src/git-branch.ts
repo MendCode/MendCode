@@ -1,5 +1,6 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
+import { underAbsentMount } from "@mendcode/program/absent-mounts"
 
 export type BranchInfo = { branch?: string; detached?: boolean }
 
@@ -8,6 +9,7 @@ const MAX_LEVELS = 40
 /** Finds the nearest `.git` walking up from `directory` (a directory, or a file in a worktree/submodule). */
 function findGit(directory: string) {
   let current = path.resolve(directory)
+  if (underAbsentMount(current)) return undefined
   for (let level = 0; level < MAX_LEVELS; level++) {
     const candidate = path.join(current, ".git")
     if (existsSync(candidate)) return candidate
