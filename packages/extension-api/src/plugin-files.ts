@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import path from "node:path"
+import { underAbsentMount } from "../../program/src/absent-mounts"
 import { fileURLToPath } from "node:url"
 
 export type PluginSelection = { spec: string; options: Record<string, unknown> }
@@ -72,6 +73,8 @@ export function resolvePlugin(spec: string, root: string, dataDir: string, kind:
 }
 
 export function discoverPluginFiles(root: string, dataDir: string, kind: "server" | "tui"): PluginFile[] {
+  // A hub session's folder that is not on this machine holds no plugins (absent-mounts.ts).
+  if (underAbsentMount(path.resolve(root))) return []
   const config = pluginConfig(root).value
   const files = pluginSelections(config).flatMap((selection): PluginFile[] => {
     try {

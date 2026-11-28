@@ -1,5 +1,6 @@
 import { chmodSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { underAbsentMount } from "@mendcode/program/absent-mounts"
 import type { EngineHooks } from "@mendcode/engine-native"
 import { TURN_SNAPSHOT_MAX_BYTES, type SessionId } from "@mendcode/protocol"
 import type { FileState, Store } from "@mendcode/store"
@@ -14,6 +15,7 @@ const MAX_PATHS_PER_CALL = 50
 const BINARY_SNIFF_BYTES = 8_192
 
 export function canonicalDirectory(directory: string) {
+  if (underAbsentMount(directory)) return directory
   try { return realpathSync(directory) }
   catch { return directory }
 }

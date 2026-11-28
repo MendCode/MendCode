@@ -93,6 +93,17 @@ export function takeCells(text: string, room: number): { text: string; width: nu
   return { text: out, width }
 }
 
+/**
+ * The cell width of `text` when the terminal draws it unchanged, one cell per UTF-16 unit or wider (ASCII and simple BMP text, nearly every
+ * span of a frame); undefined when `cells` would change it (escapes, controls, tabs) or must segment it. Lets a row be cut span by span
+ * without walking the spans that fit whole.
+ */
+export function plainWidth(text: string): number | undefined {
+  if (PRINTABLE_ASCII.test(text)) return text.length
+  if (SIMPLE_BMP.test(text)) return Bun.stringWidth(text)
+  return undefined
+}
+
 /** `text` as the terminal will draw it (see `cells`). */
 export function terminalText(text: string) {
   if (PRINTABLE_ASCII.test(text)) return text

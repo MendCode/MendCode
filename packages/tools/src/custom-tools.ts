@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs"
+import { underAbsentMount } from "@mendcode/program/absent-mounts"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { defaultLayers, layerAllows, type ExtensionLayer } from "@mendcode/packages"
@@ -35,6 +36,8 @@ const manifestSchema = z.strictObject({
 /** A directory with symlinks resolved (macOS /tmp → /private/tmp), so trust matches however the path was spelled. */
 export function canonicalDir(directory: string): string {
   const absolute = resolve(directory)
+  // A folder of a hub session under an automounted /home that is not here: absent, without the 10 ms lookup (absent-mounts.ts).
+  if (underAbsentMount(absolute)) return absolute
   try {
     return realpathSync(absolute)
   } catch {

@@ -2,6 +2,7 @@ import { existsSync, readdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { walkProject } from "./walk"
+import { underAbsentMount } from "../../program/src/absent-mounts"
 
 /** The home folder or a directory above it: indexing it would read every project and private file of the user for one lookup. */
 export function holdsHome(cwd: string, home = homedir()): boolean {
@@ -103,6 +104,8 @@ export function createIndexGate(options: { home?: string | undefined; maxFiles?:
 
   function quick(cwd: string, mode: GraphIndexMode): GraphGate | "measure" {
     if (mode === "off") return skip("off")
+    // A hub session's folder that is not on this machine: nothing to index, and every check below would cost 10 ms (absent-mounts.ts).
+    if (underAbsentMount(cwd)) return skip("no git repo")
     if (holdsHome(cwd, home)) return skip("home folder")
     if (mode === "on") return INDEX
     if (gitRoot(cwd, home)) return "measure"

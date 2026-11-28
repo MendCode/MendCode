@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { underAbsentMount } from "../../program/src/absent-mounts"
 import { SWITCHABLE_KINDS } from "@mendcode/protocol/wire"
 
 /**
@@ -86,7 +87,8 @@ export function extensionLayers({ userDir, directory, disabled = [], disabledRes
       })
   const builtin: ExtensionLayer[] = builtinDir ? [{ dir: builtinDir, source: "user", pkg: BUILTIN_PACKAGE }] : []
   const user: ExtensionLayer[] = [...builtin, ...packages("user"), { dir: userDir, source: "user" }]
-  if (projectIsUserDir({ userDir, directory })) return user
+  // A hub session's folder that is not on this machine has no layers of its own, and asking would cost 10 ms a path (absent-mounts.ts).
+  if (underAbsentMount(path.resolve(directory)) || projectIsUserDir({ userDir, directory })) return user
   return [...user, ...packages("project"), { dir: path.join(directory, ".mendcode"), source: "project" }]
 }
 
@@ -125,7 +127,7 @@ export function foreignLayers({ directory, home }: { directory: string; home?: s
     }
     return layers
   }
-  return { user: home ? make(home, "user") : [], project: make(directory, "project", directory) }
+  return { user: home ? make(home, "user") : [], project: underAbsentMount(path.resolve(directory)) ? [] : make(directory, "project", directory) }
 }
 
 /**
@@ -136,6 +138,7 @@ export function foreignLayers({ directory, home }: { directory: string; home?: s
  */
 export function ancestorLayers({ directory, home = homedir(), userDir }: { directory: string; home?: string; userDir?: string }): ExtensionLayer[] {
   const chain: string[] = []
+  if (underAbsentMount(path.resolve(directory))) return []
   let current = path.dirname(path.resolve(directory))
   // Inside the project's own repository the project folder is the root: nothing above it is read.
   if (existsSync(path.join(path.resolve(directory), ".git"))) return []
