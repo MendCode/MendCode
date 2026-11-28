@@ -80,16 +80,18 @@ A generated image takes the box its wait canvas held instead ([web and image too
 
 ### Loading and clipping
 
-The client requests images for on-screen blocks with `attachment.read`: a session, hash and offset, in chunks of 96 KB. It reads only blobs that session's events reference, never a path. This is local clients only and not in the read-only set.
+The client requests images for on-screen blocks with `attachment.read`: a session, hash and offset, in chunks of 96 KB. It reads only blobs that session's events reference, never a path. This is local clients only and not in the read-only set. The daemon keeps a blob between its chunks (up to three being read at once), so a picture is read from disk once.
+
+A picture's size comes from its header in the first chunk, so its rows are reserved at once. Only a picture placed on screen is decoded, and only at the pixels of its cells. That work runs in a helper process (`__image-host`, the binary itself) with every JIT tier on, beside the terminal, so keys and frames never wait for it; it starts with the first picture and stops after 5 idle seconds. If it cannot run, the terminal decodes in its own process, in slices.
 
 | Decode limit | Value |
 |---|---|
 | Per image | Up to 8 MB |
 | Formats | PNG, WebP, JPEG (baseline), GIF (first frame) |
-| Longest side retained | At most 1280 px |
-| Images kept | 24 |
+| Longest side retained | At most 1280 px, before scaling to the cells |
+| Pictures kept at their cells' size | 32 |
 
-A progressive JPEG, oversized or broken file, or failed read leaves the text card unchanged and takes no rows.
+A progressive JPEG, oversized or broken file, or failed read leaves the text card unchanged; one found broken only when it is decoded gives its rows back.
 
 A picture partly scrolled out of view keeps its on-screen rows, cut at the edge. Rows under the pet or a label at the screen's edge are cut the same way.
 

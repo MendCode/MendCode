@@ -4074,6 +4074,7 @@ export async function startDaemon(options: DaemonOptions) {
     return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)
   }
   const restArchives = readRestArchives(options.dir)
+  let blobReads: import("./blob-reads").BlobReads | undefined
   let restSessions: ReturnType<typeof createRestSessions> | undefined
   async function restSessionService() {
     if (restSessions) return restSessions
@@ -6129,7 +6130,8 @@ export async function startDaemon(options: DaemonOptions) {
         const offset = command.offset ?? 0
         if (offset > info.bytes) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: offset is past the end of the attachment" })
         const length = Math.min(ATTACHMENT_READ_CHUNK, info.bytes - offset)
-        const chunk = store.readBlob(command.sha256).subarray(offset, offset + length)
+        blobReads ??= (await import("./blob-reads")).createBlobReads({ read: (sha256) => store.readBlob(sha256) })
+        const chunk = blobReads.chunk(command.sha256, offset, length)
         return reply(connection, command.id, { ok: true, result: { sha256: command.sha256, mime: info.mime, bytes: info.bytes, offset, data: chunk.toString("base64"), done: offset + length >= info.bytes } })
       }
       case "attachment.paste":
