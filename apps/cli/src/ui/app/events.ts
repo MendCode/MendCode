@@ -310,6 +310,8 @@ export function createEvents(ctx: AppContext, actions: {
       // Most pushes of a working session move only its clock and current tool: no frame and no request of their own.
       const shows = activityMemory.changed(event)
       noteActivity(event)
+      // A background sub-agent's card in the chat counts its tool calls as it works: the list is asked again, at the bounded pace, while it does.
+      if (event.sessionId !== state.sessionId && state.liveTasks?.some((task) => task.taskId === event.sessionId && task.background && task.parentId === state.sessionId && task.state === "running")) askLiveTasks()
       // A sub-agent of the open session started or stopped working: the pet's `agents` state follows it.
       if (event.sessionId !== state.sessionId) followPet(state)
       // Background work starts and ends with a change of state: the list of it is asked again then, not on every push of every session.
