@@ -16,6 +16,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Hermes bots stay listed and their chats open when the Hermes desktop app works against a server elsewhere: MendCode reads the profiles and their sessions from the Hermes folder on this machine, and bots it already knew stay, marked stale, while Hermes does not answer.
 - A long prompt scrolls inside its box: the mouse wheel over it scrolls it, a drag past its top or bottom edge keeps scrolling and selecting, and a selection can cover text that is scrolled out of view and copies all of it. `ctrl+c` copies selected prompt text, and `edit.select-all` selects the whole prompt (`cmd+a` in terminals that send it).
 - Sending or opening a message with many pictures shows the ones on screen almost at once: their rows are reserved right away, only the pictures you can see are decoded, and the decoding runs beside the terminal so typing never waits for it.
+- On a Mac with chats synced from a Linux hub, the daemon no longer stops answering for seconds or minutes: folders of those chats that are not on this machine are recognized at once instead of being looked up again and again.
+- The daemon's log names the commands that were running when its event loop was held for over a second.
+
 - Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
 - A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
 - Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload. A PNG wider or taller than 2048 pixels is sent to the hub as a smaller copy (a photograph as a JPEG on a Mac); the original stays on this machine.

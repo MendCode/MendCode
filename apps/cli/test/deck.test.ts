@@ -32,6 +32,16 @@ describe("deck primitives", () => {
     expect(clip([{ text: "hello" }, { text: "world" }], 7).map((s) => s.text)).toEqual(["hello", "wo"])
   })
 
+  test("clip keeps whole spans as they are and still draws escapes, tabs and wide text the way the terminal does", () => {
+    const row: Line = [{ text: "plain ", fg: "muted" }, { text: "猫ü│", fg: "primary" }, { text: "a\tb\x1b[31mc" }, { text: "", fg: "accent" }, { text: "end" }]
+    expect(clip(row, 100)).toEqual([{ text: "plain ", fg: "muted" }, { text: "猫ü│", fg: "primary" }, { text: "a    bc" }, { text: "end" }])
+    expect(clip(row, 8).map((span) => span.text)).toEqual(["plain ", "猫"])
+    expect(clip(row, 12).map((span) => span.text)).toEqual(["plain ", "猫ü│", "a"])
+    expect(fit(row, 30).map((span) => span.text).join("")).toBe("plain 猫ü│a    bcend" + " ".repeat(10))
+    const kept = clip(row, 100)
+    expect(kept[0]).not.toBe(row[0])
+  })
+
   test("columns split the width by weight with gaps, summing exactly", () => {
     expect(columns(100, [1, 1, 1, 1], 1)).toEqual([25, 24, 24, 24])
     for (const width of [20, 57, 143]) expect(columns(width, [2, 1, 3], 1).reduce((a, b) => a + b, 0) + 2).toBe(width)
