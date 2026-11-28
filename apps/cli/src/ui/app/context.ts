@@ -221,6 +221,8 @@ export type AppState = {
   queueState?: import("../../view/queue-page").QueuePageState | undefined
   /** The mode this session was in when it entered plan mode, so leaving plan with the cycle key or `/plan` goes back to it (memory only; unknown after a restart). */
   modeBeforePlan?: { sessionId: string; mode: import("@mendcode/protocol").PermissionMode } | undefined
+  /** Messages sent while a turn runs whose answer from the daemon is still on its way (a chat on a hub takes a few round trips): shown as queued from the keypress, dropped when the reply arrives, which follows the real queue. */
+  optimisticQueue?: Array<{ sessionId: string; preview: string; delivery?: import("@mendcode/protocol").QueueDelivery | undefined }> | undefined
   /** Set by the flip-send key for the next `user.submit` only: how that one message meets a running turn. */
   nextDelivery?: import("@mendcode/protocol").QueueDelivery | undefined
   /** The mouse selection in the transcript or the prompt, while it is dragged (or kept, with `copyOnSelect` off); and where the last frame put them. */

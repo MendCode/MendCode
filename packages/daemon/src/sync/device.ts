@@ -67,7 +67,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   const status = { connected: false, lastOkAt: 0, lastError: "" }
   const following = { at: 0, ok: true, summary: "", running: undefined as Promise<void> | undefined }
   /** Chats this machine started or prompted on the hub: their running turn is copied as it happens (not only once settled) until it ends. */
-  const live = new Map<string, { directory: string; since: number }>()
+  const live = new Map<string, { directory: string; since: number; run?: true; watch?: true }>()
   const LIVE_TICK_MS = 300
   /** While the hub pushes a live chat's events, the polling round is only a safety net. */
   const LIVE_PUSHED_TICK_MS = 1_500
@@ -83,7 +83,9 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   const uploaded = new Set<string>()
   const partials = new Map<string, Buffer[]>()
 
-  const liveTick = () => (tailHealthy ? LIVE_PUSHED_TICK_MS : LIVE_TICK_MS)
+  /** A chat this machine runs on the hub (its turn is copied as it happens) is "hot"; one only on screen ("watch") rests between the hub's pushes. */
+  const hot = () => { for (const entry of live.values()) if (entry.run) return true; return false }
+  const liveTick = () => (tailHealthy && hot() ? LIVE_PUSHED_TICK_MS : hot() ? LIVE_TICK_MS : tailHealthy ? ports.tickMs : LIVE_PUSHED_TICK_MS)
   const save = (row: SyncSessionRow) => { rows.set(row.sessionId, row); state.sessions.put(row) }
   const drop = (sessionId: string) => { rows.delete(sessionId); state.sessions.delete(sessionId) }
 
@@ -369,9 +371,15 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   /** Copies what the hub has written of the chats this machine runs there; a chat leaves the list once its turn has ended here. */
   async function pullLive() {
     for (const [sessionId, entry] of [...live]) {
+      // A chat on a terminal's screen is followed while it is there; once no terminal holds it, it is followed like any other.
+      if (entry.watch && !ports.watched?.(sessionId as SessionId)) {
+        delete entry.watch
+        if (!entry.run) { live.delete(sessionId); continue }
+        entry.since = ports.now()
+      }
       const stored = await pull({ sessionId: sessionId as SessionId, cseq: 0, directory: entry.directory, lastSeq: Number.MAX_SAFE_INTEGER }, true)
       const running = ports.store.hasSession(sessionId as SessionId) && (ports.store.lastTurnStatus(sessionId as SessionId) === "running" || ports.store.queueOf(sessionId as SessionId).length > 0)
-      if (!stored && !running && ports.now() - entry.since > 2 * LIVE_TICK_MS) live.delete(sessionId)
+      if (!stored && !running && ports.now() - entry.since > 2 * LIVE_TICK_MS) { if (entry.watch) delete entry.run; else live.delete(sessionId) }
     }
     if (!live.size) abortTail?.()
   }
@@ -537,7 +545,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       await pullLive()
       // While a chat runs on the hub for this machine, rounds are quick and carry only that chat; the full round comes every few.
       await sendHeld()
-      if (live.size && ports.now() - lastFull < LIVE_FULL_ROUND_MS) { delay = liveTick(); status.connected = true; status.lastOkAt = ports.now(); status.lastError = ""; return }
+      if (hot() && ports.now() - lastFull < LIVE_FULL_ROUND_MS) { delay = liveTick(); status.connected = true; status.lastOkAt = ports.now(); status.lastError = ""; return }
       lastFull = ports.now()
       await syncOwned()
       await pullChanges()
@@ -638,7 +646,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       if (bare.type === "session.dirs") return { ok: true as const, ...(reply.result ? { result: reply.result } : {}) }
       const sessionId = (bare.type === "session.create" ? reply.result?.sessionId : (bare as { sessionId: string }).sessionId) as SessionId | undefined
       if (typeof sessionId === "string") {
-        live.set(sessionId, { directory: bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })
+        live.set(sessionId, { directory: bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now(), run: true, ...(live.get(sessionId)?.watch ? { watch: true as const } : {}) })
         try { await pullLive() } catch (error) { if (!roundError(error)) throw error }
         if (HUB_COMMANDS.has(bare.type) || bare.type === "session.create") startTail()
       }
@@ -662,8 +670,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       held.shift()
       if (!reply.ok) ports.log(`[SYNC]: ${next.command.type} held while ${hub} was away was refused: ${reply.error.message.slice(0, 300)}`)
       const sessionId = (next.command as { sessionId?: SessionId }).sessionId
-      if (sessionId && live.has(sessionId)) live.get(sessionId)!.since = ports.now()
-      else if (sessionId && next.command.type === "user.submit") live.set(sessionId, { directory: live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now() })
+      if (sessionId && live.has(sessionId)) { const entry = live.get(sessionId)!; entry.since = ports.now(); entry.run = true }
+      else if (sessionId && next.command.type === "user.submit") live.set(sessionId, { directory: live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now(), run: true, ...(live.get(sessionId)?.watch ? { watch: true as const } : {}) })
     }
   }
 
@@ -740,8 +748,26 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     return { sessionId, owner: hub }
   }
 
+  /**
+   * A terminal opened a chat this machine holds a copy of: what the hub has of it is copied at once, and its new events come as the hub
+   * stores them while a terminal keeps it open, instead of at the next polling round. A chat of this machine's own is nothing to copy.
+   */
+  function focus(sessionId: SessionId) {
+    const row = rows.get(sessionId)
+    if (stopped || row?.role !== "mirror" || row.state !== "ok") return
+    const known = live.get(sessionId)
+    if (known) known.watch = true
+    else live.set(sessionId, { directory: ports.store.sessionDirectory(sessionId) ?? "", since: ports.now(), watch: true })
+    // The long poll in flight names the chats it waits for: it starts again with this one among them.
+    if (!known) abortTail?.()
+    startTail()
+    const directory = live.get(sessionId)!.directory
+    void exclusive(() => pull({ sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true)).catch(() => {})
+  }
+
   return {
     guard,
+    focus,
     /** A chat the hub owns (this machine holds only its copy): the hub's name and the hub's own folder, for the lists and the footer. */
     hubOf(sessionId: string): { hub: string; hubDirectory?: string } | undefined {
       const row = rows.get(sessionId)
