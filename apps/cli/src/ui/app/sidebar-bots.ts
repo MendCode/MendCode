@@ -223,8 +223,8 @@ export function createSidebarBots(ctx: AppContext) {
       if (reply.ok) {
         const answered = reply.result as BotListReport
         const next = keepKnownExternal(report, answered)
-        // Only what this terminal kept asks again soon; bots the daemon itself kept stale are refreshed by the daemon when asked.
-        botsStale = next.external.length > answered.external.length
+        // What this terminal kept, or the daemon kept stale for a failed connector, asks again soon: the daemon refreshes a connector only when it is asked.
+        botsStale = next.external.length > answered.external.length || answered.external.some((bot) => bot.stale === true)
         botsGood = true
         report = next
         // The answer is older than the pushes that came while it was on its way: they move the new report as they moved the old one.

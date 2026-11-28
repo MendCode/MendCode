@@ -61,7 +61,11 @@ export function diskProfiles(home: string): DiskProfile[] {
   const names: string[] = []
   try {
     for (const entry of readdirSync(join(home, "profiles"), { withFileTypes: true })) if (entry.isDirectory() && PROFILE_NAME.test(entry.name) && entry.name !== ROOT_PROFILE) names.push(entry.name)
-  } catch { /* no profiles folder: the root profile alone */ }
+  } catch (error) {
+    // No profiles folder: the root profile alone. A folder that cannot be read now is a failed refresh, so the bots known before stay (stale).
+    const code = (error as NodeJS.ErrnoException).code
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error
+  }
   names.sort()
   names.unshift(ROOT_PROFILE)
   return names.map((name) => {
