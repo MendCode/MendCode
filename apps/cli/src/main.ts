@@ -212,7 +212,7 @@ if (argv.includes("daemon") || argv.includes("service")) {
         const client = createClient({ ...(defaultLocalTransport() === "tcp" || readLocalEndpoint(dir) ? { localTcp: () => readLocalEndpoint(dir) } : { socketPath: path.join(dir, "mendd.sock") }), name: "daemon-control", reconnect: false, timeoutMs: 2000 })
         try { await client.connect(); return client } catch { client.close(); return undefined }
       },
-      launch: async () => { await runtime.launchUserDaemon(options) },
+      launch: async (remote) => { await runtime.launchUserDaemon(remote ? { ...options, remote } : options) },
       restarting: (on) => (on ? markRestart(dir) : clearRestart(dir)),
       foreground: async () => {
         // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).

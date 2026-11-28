@@ -236,3 +236,16 @@ test("real CLI uses remote project paths, --ca and --socket without launching a 
   expect(existsSync(path.join(localDir, "mendd.sock"))).toBe(false)
   expect(existsSync(path.join(localDir, "mendcode.db"))).toBe(false)
 })
+
+test("daemon.status tells a local client the listener it serves, so a restart keeps it; a remote client is not told", async () => {
+  const dir = tempDir()
+  const daemon = await boot({ dir, listen: "127.0.0.1:0" })
+  const local = createClient({ name: "local-status", socketPath: path.join(dir, "mendd.sock"), timeoutMs: 1000 })
+  cleanups.push(() => local.close())
+  await local.connect()
+  const mine = await local.send({ type: "daemon.status" })
+  expect(mine.ok && (mine.result as { listener?: unknown }).listener).toEqual({ listen: "127.0.0.1:0" })
+  const remote = await attach(daemon, remoteTokens(dir).create().token)
+  const theirs = await remote.send({ type: "daemon.status" })
+  expect(theirs.ok && "listener" in (theirs.result as object)).toBe(false)
+})

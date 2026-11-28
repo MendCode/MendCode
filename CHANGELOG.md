@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- `mendcode daemon restart` keeps a daemon's remote listener: a hub started with `--listen` and TLS comes back listening on the same address instead of local-only.
+
 ## v0.0.21 - 2026-11-27
 
 Workflows and sync get most of this release. Say `fanout` and the model writes and runs a workflow for it, workflows show their expected cost first, `/workflows` gains run-again, save, filter and a Saved tab, and a live run view shows each agent working. A chat running on a sync hub streams as the hub writes it, forwards Esc, steer, drop and edit, holds an action while the hub is away, and follows `/cd`; `sync parity` and `sync enable --follow` keep a hub level with this machine. Hermes bots list their own chats, MendCode runs on Bun 1.4.5, and several fixes land for project profiles, the Linux service and long chats. Chats on a sync hub stream and copy at once, pictures in the transcript and pasted screenshots show far faster, a long prompt scrolls inside its box, pasting images and files works on a Mac, and the daemon no longer stops answering for chats synced from a Linux hub.
