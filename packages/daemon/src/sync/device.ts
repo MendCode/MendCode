@@ -28,6 +28,8 @@ const FOLLOW_SUMMARY_MAX = 300
 const MAX_PARTIAL_BLOBS = 2
 /** Chunks of one attachment sent to the hub before the first is answered. */
 const PUT_WINDOW = 6
+/** A PNG smaller than this is sent as it is, without looking at its size in pixels. */
+const MIN_SHRINK_BYTES = 256 * 1024
 
 type Summary = { sessionId: SessionId; cseq: number; deleted?: true; title?: string; directory?: string; project?: SyncProjectRef; lastSeq?: number; createdAt?: number; updatedAt?: number; archived?: boolean; pinned?: boolean; busy?: boolean; lease?: { holder: string; epoch: number; until: number } }
 /** Commands of a chat the hub owns that run there: the prompt, the cancel, an approval, and the queue's actions (send now, steer, drop, edit, move). */
@@ -147,7 +149,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   /** Sends one blob to the hub in chunks (the hub keeps it once whole and checked). A prompt's attachments are not counted against the round's requests. */
   async function putBlob(ref: { sha256: string; bytes: number; mime: string }, counted: boolean) {
     if (uploaded.has(ref.sha256)) return
-    const bytes = ports.store.readBlob(ref.sha256)
+    const bytes = shrunk.get(ref.sha256) ?? ports.store.readBlob(ref.sha256)
     const put = (offset: number) => call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
     const offsets = Array.from({ length: Math.ceil(bytes.length / MAX_SYNC_BLOB_CHUNK_BYTES) }, (_, at) => at * MAX_SYNC_BLOB_CHUNK_BYTES)
     // A prompt's attachment keeps several chunks on the way (the hub takes a connection's requests in order); a round's blobs go one by one, counted.
@@ -155,6 +157,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       for (const offset of offsets) if ((await put(offset)).stored) break
     }
     uploaded.add(ref.sha256)
+    shrunk.delete(ref.sha256)
     if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
   }
   /** Sends the chunks with at most `PUT_WINDOW` unanswered; false when the hub refused them (taken out of order by an older hub), so the caller sends them again one by one. */
@@ -178,16 +181,48 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const row = rows.get(sessionId)
     if (row?.role !== "mirror" || row.state !== "ok" || ref.bytes > MAX_SYNC_UPLOAD_BLOB_BYTES) return false
     try {
-      await exclusive(async () => { await connect(); await putBlob(ref, false) })
+      await exclusive(async () => { await connect(); await putBlob(await hubRef(ref), false) })
       return true
     } catch {
       return false
     }
   }
   /** The attachments of a prompt for a chat the hub runs: its images, PDFs and pasted text go to the hub first, so the prompt can name them there. */
-  async function putAttachments(command: { type: string }) {
-    if (command.type !== "user.submit") return
-    for (const ref of (command as unknown as { attachments: Array<{ sha256: string; bytes: number; mime: string }> }).attachments) await putBlob(ref, false)
+  async function putAttachments<T extends { type: string }>(command: T): Promise<T> {
+    if (command.type !== "user.submit") return command
+    const sent = []
+    for (const original of (command as unknown as { attachments: Array<{ sha256: string; bytes: number; mime: string }> }).attachments) {
+      const ref = await hubRef(original)
+      await putBlob(ref, false)
+      sent.push(ref)
+    }
+    return { ...command, attachments: sent }
+  }
+  /** Pictures copied for the hub, by the hash of the picture they were made from: the file this machine holds stays whole, only the copy sent is smaller. */
+  const hubRefs = new Map<string, Promise<{ sha256: string; bytes: number; mime: string }>>()
+  /** The bytes of those smaller copies, until they have been sent (a few at most). */
+  const shrunk = new Map<string, Buffer | Uint8Array>()
+  /**
+   * What the hub is sent for an attachment: a PNG over 2048 pixels on its longest side goes as a smaller PNG (the models shrink it
+   * to that or less themselves), when that is smaller in bytes; anything else goes as it is.
+   */
+  function hubRef<R extends { sha256: string; bytes: number; mime: string }>(ref: R): Promise<R> {
+    if (ref.mime !== "image/png" || ref.bytes < MIN_SHRINK_BYTES) return Promise.resolve(ref)
+    let known = hubRefs.get(ref.sha256) as Promise<R> | undefined
+    if (!known) {
+      known = import("@mendcode/tools/image-downscale").then(async ({ shrinkForHub }) => {
+        const smaller = await shrinkForHub(ports.store.readBlob(ref.sha256))
+        if (!smaller) return ref
+        const sha256 = createHash("sha256").update(smaller.bytes).digest("hex")
+        shrunk.set(sha256, smaller.bytes)
+        if (shrunk.size > 32) shrunk.delete(shrunk.keys().next().value!)
+        const name = (ref as { name?: string }).name
+        return { ...ref, sha256, bytes: smaller.bytes.length, mime: smaller.mime, ...(name && smaller.mime === "image/jpeg" ? { name: name.replace(/\.png$/i, ".jpg") } : {}) }
+      }).catch(() => ref)
+      hubRefs.set(ref.sha256, known)
+      if (hubRefs.size > 16) hubRefs.delete(hubRefs.keys().next().value!)
+    }
+    return known
   }
   async function downloadBlobs(events: readonly SessionEvent[]) {
     const refs = blobRefs(events)
@@ -654,8 +689,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       for (let attempt = 0; ; attempt++) {
         try {
           await connect()
-          await putAttachments(outgoing)
-          reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(outgoing)
+          const toSend = await putAttachments(outgoing)
+          reply = await (client as unknown as { send(command: unknown): Promise<typeof reply> }).send(toSend)
           // A connection the hub's restart or a dropped network ended answers with this error instead of throwing.
           if (!reply.ok && reply.error.code === "internal" && /connection closed/.test(reply.error.message)) throw new TransportError(reply.error.message)
           break

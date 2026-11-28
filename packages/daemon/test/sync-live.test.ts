@@ -309,3 +309,34 @@ test("an attachment staged while the prompt is written is already on the hub whe
   expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "see this", attachments: [ref] })).toMatchObject({ ok: true })
   await until(() => events(hub, seed).some((event) => event.type === "queue.added" && event.text === "see this"), "the prompt reached the hub")
 }, 30_000)
+
+test("a PNG over 2048 pixels goes to the hub as a smaller PNG and the prompt names that copy; this machine keeps the original", async () => {
+  const { encodeImagePng } = await import("../../tools/src/pet-png")
+  const { decodePng } = await import("../../tools/src/pet-decode")
+  const { hub, device, seed } = await pair()
+  const width = 3000
+  const height = 1900
+  const rgba = new Uint8Array(width * height * 4)
+  let state = 7
+  for (let at = 0; at < rgba.length; at += 4) {
+    state = (state * 1103515245 + 12345) & 0x7fffffff
+    rgba.set([(at / 4) % 251, ((at / 4) >> 8) & 255, (state >> 16) & 63, 255], at)
+  }
+  const original = encodeImagePng({ width, height, rgba })
+  const ref = device.daemon.store.putBlob(original, "image/png")
+  expect(await device.client.send({ type: "attachment.stage", sessionId: seed, attachment: ref })).toMatchObject({ ok: true, result: { staged: true } })
+  expect(await Bun.file(hub.daemon.store.blobPath(ref.sha256)).exists()).toBe(false)
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "see this", attachments: [ref] })).toMatchObject({ ok: true })
+  await until(() => events(hub, seed).some((event) => event.type === "queue.added" && event.text === "see this"), "the prompt reached the hub")
+  const added = events(hub, seed).find((event) => event.type === "queue.added" && event.text === "see this") as unknown as { attachments: Array<{ sha256: string; bytes: number }> }
+  const sent = added.attachments[0]! as { sha256: string; bytes: number; mime: string }
+  expect(sent.sha256).not.toBe(ref.sha256)
+  expect(sent.bytes).toBeLessThan(ref.bytes)
+  expect(hub.daemon.store.readBlob(sent.sha256).length).toBe(sent.bytes)
+  // Noise is photograph-like: a JPEG where macOS writes one, else a smaller PNG.
+  if (sent.mime === "image/png") {
+    const onHub = decodePng(hub.daemon.store.readBlob(sent.sha256))
+    expect(Math.max(onHub.width, onHub.height)).toBe(2048)
+  } else expect(sent.mime).toBe("image/jpeg")
+  expect(device.daemon.store.readBlob(ref.sha256).length).toBe(original.length)
+}, 60_000)
