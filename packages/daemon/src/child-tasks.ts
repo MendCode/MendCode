@@ -21,9 +21,9 @@ function editedFiles(toolInput: string | undefined): string[] {
 }
 
 /** Usage and edits of one child, counted from its session's events while a generation runs and kept on the record when it ends. */
-type Tally = { input: number; output: number; costMicros: number; priced: boolean; files: string[]; tools: Map<string, string> }
-const tallyOf = (task: TaskRecord): Tally => ({ input: task.stats?.input ?? 0, output: task.stats?.output ?? 0, costMicros: task.stats?.costMicros ?? 0, priced: !task.stats || task.stats.costMicros !== undefined || task.stats.input + task.stats.output === 0, files: [...(task.stats?.files ?? [])], tools: new Map() })
-const statsOf = (tally: Tally): NonNullable<TaskRecord["stats"]> => ({ input: tally.input, output: tally.output, ...(tally.priced && tally.costMicros ? { costMicros: tally.costMicros } : {}), files: tally.files })
+type Tally = { input: number; output: number; costMicros: number; priced: boolean; files: string[]; tools: Map<string, string>; /** Tool calls over all its generations. */ calls: number }
+const tallyOf = (task: TaskRecord): Tally => ({ calls: task.stats?.calls ?? 0, input: task.stats?.input ?? 0, output: task.stats?.output ?? 0, costMicros: task.stats?.costMicros ?? 0, priced: !task.stats || task.stats.costMicros !== undefined || task.stats.input + task.stats.output === 0, files: [...(task.stats?.files ?? [])], tools: new Map() })
+const statsOf = (tally: Tally): NonNullable<TaskRecord["stats"]> => ({ input: tally.input, output: tally.output, ...(tally.calls ? { calls: tally.calls } : {}), ...(tally.priced && tally.costMicros ? { costMicros: tally.costMicros } : {}), files: tally.files })
 
 export function createChildTasks(options: {
   store: Store
@@ -227,6 +227,8 @@ export function createChildTasks(options: {
     },
     start: (parentId: SessionId, input: TaskInput, command: { displayText: string; attachments: BlobRef[]; model?: ModelChoice }) => port.run(parentId, input, new AbortController().signal, command),
     get,
+    /** The tool calls a running child has made so far, from its own session's events (never stored before it ends). */
+    liveCalls: (taskId: SessionId) => tallies.get(taskId)?.calls,
     list: (parentId?: SessionId) => store.tasks.list(parentId).slice(-40),
     detach(parentId: SessionId, taskId: SessionId) {
       const task = get(taskId)
@@ -248,6 +250,7 @@ export function createChildTasks(options: {
         if (event.costMicros === undefined) tally.priced = false
         else tally.costMicros += event.costMicros
       }
+      if (event.type === "item.started" && event.kind === "tool_call") tally.calls++
       if (event.type === "item.started" && event.kind === "tool_call") tally.tools.set(event.itemId, String(event.meta?.tool ?? "").split(":")[0]!)
       if (event.type === "item.completed" && tally.tools.has(event.itemId)) {
         if (event.status === "ok" && EDIT_TOOLS.has(tally.tools.get(event.itemId)!)) for (const file of editedFiles(event.toolInput)) if (!tally.files.includes(file) && tally.files.length < MAX_FILES) tally.files.push(file)
