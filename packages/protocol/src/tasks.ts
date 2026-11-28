@@ -59,7 +59,11 @@ export const TaskRecord = lazySchema(() => z.strictObject({
     output: z.number().int().nonnegative(),
     costMicros: z.number().int().nonnegative().optional(),
     files: z.array(z.string().max(300)).max(20),
+    /** The tool calls it made over all its generations. */
+    calls: z.number().int().positive().optional(),
   }).optional(),
+  /** The tool calls a running child has made so far. Added when the list is asked for, never stored. */
+  calls: z.number().int().positive().optional(),
   /**
    * How full the child's context is while it works: the tokens its last model call carried and the limit they count against (the
    * compaction point or the model's window), as the child's own session recorded them. Added when the list is asked for, never stored;

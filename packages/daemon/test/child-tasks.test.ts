@@ -226,9 +226,9 @@ test("a child's record keeps what it spent and the files it wrote, summed over i
   const h = await start({ steps: [callTool("write", { path: "notes.txt", content: "a\n" }), answer("wrote it", { input: 1200, output: 80 }), answer("again", { input: 300, output: 20 })] })
   const parent = await openSession(h)
   const first = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Write", prompt: "Write notes.txt" } }))
-  expect(first.stats).toEqual({ input: 1200, output: 80, files: ["notes.txt"] })
+  expect(first.stats).toEqual({ input: 1200, output: 80, calls: 1, files: ["notes.txt"] })
   const second = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Again", prompt: "Once more", task_id: first.taskId } }))
-  expect(second.stats).toEqual({ input: 1500, output: 100, files: ["notes.txt"] })
+  expect(second.stats).toEqual({ input: 1500, output: 100, calls: 1, files: ["notes.txt"] })
 })
 
 test("a child resumed with task_id and another model goes on with its own history on that model, and keeps it after", async () => {

@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Sub-agents launched in the background now look like any other sub-agent in the conversation: the same card, running with its tool count while it works, and its result lands in that card when it ends instead of repeating in a separate notice.
 - The sidebar no longer loses projects or bots when a refresh fails: it keeps what it showed, marks the heading `stale` and asks again within seconds.
 - Hermes bots stay listed and their chats open when the Hermes desktop app works against a server elsewhere: MendCode reads the profiles and their sessions from the Hermes folder on this machine, and bots it already knew stay, marked stale, while Hermes does not answer.
 - Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.

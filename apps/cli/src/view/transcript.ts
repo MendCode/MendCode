@@ -158,11 +158,17 @@ export type AgentThread = {
 type ItemEvent = Extract<SessionEvent, { type: "item.started" | "item.delta" | "item.completed" }>
 type TurnEndEvent = Extract<SessionEvent, { type: "turn.completed" | "turn.cancelled" | "turn.interrupted" | "turn.failed" }>
 const TURN_ENDS = new Set<string>(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
+/** The most of a sub-agent's last answer a thread keeps for its call's card. */
+const AGENT_ANSWER_CHARS = 8_000
+
+/** What the daemon says of a child session a background `task` call started: the card of the call follows it. */
+export type ChildTaskView = { state: "queued" | "running" | "needs_input" | "completed" | "failed" | "cancelled" | "interrupted"; result: string; calls?: number; endedAt?: number }
+const CHILD_ACTIVE: ReadonlySet<ChildTaskView["state"]> = new Set(["queued", "running", "needs_input"])
 const isTurnEnd = (event: SessionEvent): event is TurnEndEvent => TURN_ENDS.has(event.type)
 const bySeq = (a: SessionEvent, b: SessionEvent) => a.seq - b.seq
 /** Blocks named after the event that made them (`note:<seq>:<i>`, `goal:<seq>`, …): the seq the walk in `joinOlder` reads. */
 const SEQ_NAMED = /^(?:note|goal|limit|checkpoint):(\d+)/
-type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[], missed?: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; open: Map<ItemId, RunningItem>; steps: number; stepAt: number | undefined; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
+type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[], missed?: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last: string | undefined; model: string | undefined; open: Map<ItemId, RunningItem>; steps: number; stepAt: number | undefined; /** The text of its last answer: the result its call's card shows once it ends. */ answer?: string; ended: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser: boolean } | undefined }
 
 export type ImageRow = { sha256: string; index: number; row: number; rows: number; cols: number; col: number }
 
@@ -239,7 +245,7 @@ export const PRESENTATION_MODES: readonly PresentationMode[] = ["minimal", "bala
  * Finished blocks are wrapped once per width and cached; only the live block is re-wrapped,
  * and the viewport reads just the visible slice (the fix for the O(n)-per-token redraw, FC-35).
  */
-export function createTranscript(options: { appearance?: Partial<TuiProfile>; /** The full tier: what the sub-agent of a `task` call runs on, by its session id or, while it runs, by what it was asked. */ subagentRun?: (ref: { taskId?: string; description: string }) => Span[] | undefined; glyphs?: Glyphs; mode?: PresentationMode; frame?: () => number; /** False while motion is reduced (setting, env or screen-reader mode): animated cards hold their first frame. */ motion?: () => boolean; now?: () => number; agent?: () => string; hooks?: TranscriptHooks; views?: ViewHost; secretTail?: (n: number) => string | undefined; images?: TranscriptImages; /** How a model id is shown on a turn's end line and a sub-agent card; the app passes the catalog's names, the default prettifies the id. */ modelLabel?: (id: string) => string; /** The notice before a compaction (usage-notes.ts); absent or returning undefined, none is said. */ compactNotice?: () => CompactNoticeConfig | undefined; /** What the terminal gives a generated picture (its rows and cell size): the wait canvas and the finished picture share that box. */ imageRoom?: () => ImageRoom; /** Whether the daemon still runs the session's background item named `description` (a background sub-agent outlives its turn). */ backgroundRunning?: (description: string) => boolean; /** How many of the session's shells and sub-agents run now, for the latest turn's closing line (`timestamps: bottom`). */ background?: () => { shells: number; agents: number }; /** Whether an edit's diff is drawn split; absent, `diffView` decides by the transcript's width. A preview narrower than the chat it shows decides by the chat's. */ splitDiff?: (width: number) => boolean } = {}) {
+export function createTranscript(options: { appearance?: Partial<TuiProfile>; /** The full tier: what the sub-agent of a `task` call runs on, by its session id or, while it runs, by what it was asked. */ subagentRun?: (ref: { taskId?: string; description: string }) => Span[] | undefined; glyphs?: Glyphs; mode?: PresentationMode; frame?: () => number; /** False while motion is reduced (setting, env or screen-reader mode): animated cards hold their first frame. */ motion?: () => boolean; now?: () => number; agent?: () => string; hooks?: TranscriptHooks; views?: ViewHost; secretTail?: (n: number) => string | undefined; images?: TranscriptImages; /** How a model id is shown on a turn's end line and a sub-agent card; the app passes the catalog's names, the default prettifies the id. */ modelLabel?: (id: string) => string; /** The notice before a compaction (usage-notes.ts); absent or returning undefined, none is said. */ compactNotice?: () => CompactNoticeConfig | undefined; /** What the terminal gives a generated picture (its rows and cell size): the wait canvas and the finished picture share that box. */ imageRoom?: () => ImageRoom; /** Whether the daemon still runs the session's background item named `description` (a background sub-agent outlives its turn). */ backgroundRunning?: (description: string) => boolean; /** The child session a background `task` call started, by its id or what it was asked: its card follows the child like a call the session waits for. */ childTask?: (ref: { taskId?: string; description: string }) => ChildTaskView | undefined; /** How many of the session's shells and sub-agents run now, for the latest turn's closing line (`timestamps: bottom`). */ background?: () => { shells: number; agents: number }; /** Whether an edit's diff is drawn split; absent, `diffView` decides by the transcript's width. A preview narrower than the chat it shows decides by the chat's. */ splitDiff?: (width: number) => boolean } = {}) {
   const g = options.glyphs ?? defaultGlyphs()
   const shownModel = options.modelLabel ?? ((id: string) => modelLabel(id))
   const images = options.images
@@ -897,7 +903,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   function layoutOf(block: Block, width: number) {
     // mermaidGeneration bumps once, the moment the diagram module finishes loading, so any message
     // rendered with its "loading diagram…" placeholder is recomputed with the real diagram after that.
-    const hidden = block.kind === "tool_call" && collapsePlan().has(block.itemId)
+    const hidden = block.kind === "tool_call" && collapsePlan().has(block.itemId) || coveredNotice(block)
     const open = block.kind === "tool_call" ? toolsExpanded : block.kind === "user_message" || block.kind === "compaction" ? detailsOpen() || openItems.has(block.itemId) || commentsOpen(block) : block.kind === "agent_message" ? detailsAllOpen() : false
     // A tool card's rows also follow how much of it shows and its page.
     const tool = block.kind === "tool_call" || block.kind === "artifact" && block.meta?.memorySaved === true ? `:${levelOf(block)}${isOrientation(block) && mapOpen(block) ? "m" : ""}${toolPage.get(block.itemId) ?? 0}${block.kind === "tool_call" ? densityPlan().get(block.itemId)?.[0] ?? "" : ""}` : ""
@@ -905,7 +911,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     const live = block.kind === "status" && timestamps === "bottom" && block.itemId === lastEndId() ? (({ shells, agents }) => `:r${shells},${agents}`)(stillRunning()) : ""
     const key = `${doneSymbol}:${reasoningVisibility}:${toolOutput}:${width}:${mode}:${open ? "x" : "c"}${tool}:${mermaidGeneration()}:${hidden ? "h" : "-"}:${block.kind === "reasoning" ? reasoningRows : ""}${live}${hooks ? `:${hooks.generation()}` : ""}${images && block.attachments?.length ? `:i${images.generation()}${generatedPicture(block) ? `:r${roomKey()}` : ""}` : ""}`
     const thread = block.meta?.subagent === true ? threads.get(block.itemId) : undefined
-    return { hidden, key: thread ? `${key}:a${thread.tools}${thread.ended ? "e" : ""}${thread.last ?? ""}` : key }
+    const followedKey = followKey(block)
+    return { hidden, key: thread ? `${key}:a${thread.tools}${thread.ended ? "e" : ""}${thread.last ?? ""}${followedKey}` : `${key}${followedKey}` }
   }
 
   /** Marks a block's rows as just used; the oldest ones past `ROWS_CACHE_BLOCKS` give their rows back and keep only their count. */
@@ -932,13 +939,65 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** Rows a block takes at `width`: from the cache without laying it out again, so scrolling a long history costs numbers, not rows. */
   function countOf(block: Block, width: number) {
+    block = followed(block)
     if (block.status === "running") return linesOf(block, width).length
     const { key } = layoutOf(block, width)
     const cached = cachedAt(block, key)
     return cached && cached.key === key ? cached.count : linesOf(block, width).length
   }
 
+  /**
+   * A background sub-agent's call ends at once, but its card is the agent's: running while the agent works, with the tools it has
+   * called, and at its end the agent's answer, as the card of a call the session waits for. Other blocks are returned as they are.
+   */
+  function followed(block: Block): Block {
+    if (block.kind !== "tool_call") return block
+    if (block.meta?.subagent === true) {
+      if (block.meta.background !== true) return block
+      const thread = agentThread(block)
+      const answer = threads.get(block.itemId)?.answer
+      const status = thread.running ? "running" : thread.status === "ok" || thread.status === "error" || thread.status === "cancelled" || thread.status === "interrupted" ? thread.status : "ok"
+      return { ...block, status, ...(thread.endedAt !== undefined && !thread.running ? { endAt: thread.endedAt } : {}), ...(thread.running ? { text: "" } : answer ? { text: answer } : {}), ...(thread.tools ? { meta: { ...block.meta, toolCalls: thread.tools } } : {}) }
+    }
+    if (!options.childTask || block.args?.background !== true) return block
+    const description = /^task:\s*(.*)$/s.exec(block.title ?? "")?.[1]?.trim()
+    if (description === undefined) return block
+    const child = options.childTask({ ...(typeof block.meta?.taskId === "string" ? { taskId: block.meta.taskId } : {}), description })
+    if (!child) return block
+    const active = CHILD_ACTIVE.has(child.state)
+    const status = active ? "running" : child.state === "completed" ? "ok" : child.state === "failed" ? "error" : child.state === "cancelled" ? "cancelled" : "interrupted"
+    const taskId = typeof block.meta?.taskId === "string" ? block.meta.taskId : undefined
+    return { ...block, status, text: active ? "" : `${taskId ? `task_id: ${taskId}\n` : ""}state: ${child.state}\n${child.result}`, ...(child.endedAt !== undefined && !active ? { endAt: child.endedAt } : {}), ...(child.calls ? { meta: { ...block.meta, toolCalls: child.calls } } : {}) }
+  }
+
+  /**
+   * The notice that a background sub-agent ended says what its card already shows (its result lands there), so the notice is not drawn
+   * a second time: the daemon's child-task notice when every child it names has a card here, and an engine's note when it names a
+   * background agent of this conversation whose thread ended. The model still reads it; only the chat leaves it out.
+   */
+  function coveredNotice(block: Block): boolean {
+    if (block.kind !== "user_message" || block.notice !== true) return false
+    if (block.text.startsWith("Internal child-task notification.")) {
+      const ids = [...block.text.matchAll(/^task_id: (\S+)/gm)].map((match) => match[1]!)
+      return ids.length > 0 && ids.every((id) => blocks.some((entry) => entry.kind === "tool_call" && entry.meta?.taskId === id && entry.args?.background === true))
+    }
+    const head = block.text.split("\n")[0] ?? ""
+    return blocks.some((entry) => {
+      if (entry.kind !== "tool_call" || entry.meta?.subagent !== true || entry.meta.background !== true) return false
+      const description = (entry.title ?? "").replace(/^agent\s+/, "")
+      return description.length > 0 && head.includes(description) && threads.get(entry.itemId)?.ended !== undefined
+    })
+  }
+
+  /** What of a followed block changes its rows besides its status: the child's state and how many calls it has made. */
+  function followKey(block: Block): string {
+    if (block.kind !== "tool_call" || !(block.meta?.background === true || block.args?.background === true)) return ""
+    const shown = followed(block)
+    return `:f${shown.status}${shown.meta?.toolCalls ?? ""}${shown.text.length}`
+  }
+
   function linesOf(block: Block, width: number): ViewLine[] {
+    block = followed(block)
     const finished = block.status !== "running"
     const { hidden, key } = layoutOf(block, width)
     const cached = cachedAt(block, key)
@@ -1121,11 +1180,13 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     }
     if (event.type === "item.completed") {
       const kind = thread.open.get(event.itemId)?.kind
+      if (kind === "agent_message" && event.text?.trim()) thread.answer = event.text.slice(0, AGENT_ANSWER_CHARS)
       if (thread.open.delete(event.itemId) && event.meta?.agentEnd !== true && (kind === "tool_call" || kind === "reasoning" || kind === "agent_message")) thread.steps++
       thread.stepAt = event.at
     }
     if (event.type === "item.completed" && event.meta?.agentEnd === true) {
       const count = (value: unknown) => (typeof value === "number" ? value : 0)
+      if (event.text?.trim()) thread.answer = event.text.slice(0, AGENT_ANSWER_CHARS)
       thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), byUser: event.meta.stoppedBy === "user" }
     }
   }

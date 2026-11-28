@@ -2198,12 +2198,14 @@ export async function startDaemon(options: DaemonOptions) {
     },
   })
   /** A running child with how full its context is, from the last model call its own session recorded (the Agents strip shows it). */
-  function withContext<T extends { taskId: SessionId; state: string }>(task: T): T & { context?: { tokens: number; limit?: number } } {
+  function withContext<T extends { taskId: SessionId; state: string }>(task: T): T & { context?: { tokens: number; limit?: number }; calls?: number } {
     if (task.state !== "running" && task.state !== "needs_input") return task
+    const calls = tasks.liveCalls(task.taskId)
+    const counted = calls ? { ...task, calls } : task
     const last = store.recentUsage(task.taskId, 1).at(-1)
-    if (last?.context === undefined) return task
+    if (last?.context === undefined) return counted
     const limit = last.contextWindow ?? last.compactAt
-    return { ...task, context: { tokens: last.context, ...(limit ? { limit } : {}) } }
+    return { ...counted, context: { tokens: last.context, ...(limit ? { limit } : {}) } }
   }
   /** Chats a terminal's "new chat" handed out that nothing was typed in yet: other terminals do not hear of them until they have something. */
   const quietEmpties = new Set<SessionId>()
