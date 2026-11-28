@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { totalTaskUsage } from "../src/routing"
 import { scriptHarness, settle } from "./script-harness"
 
 const wf = (body: string) => `export const meta = { name: "t", description: "test", budget: { agents: 6 } }\n${body}`
@@ -43,6 +44,23 @@ describe("restarting one agent of a run (r on /workflows)", () => {
     expect(h.get(run).tasks.filter((task) => task.state === "running")).toHaveLength(1)
     // It did not start from the old answer a second time before the script asked for the new one.
     expect(h.prompts.filter((prompt) => prompt === "second answer-1")).toHaveLength(1)
+  })
+
+  test("what an agent removed by a restart had used still counts in the run's total", async () => {
+    let answers = 0
+    const h = scriptHarness({ responder: (prompt) => (prompt.startsWith("first") ? `answer-${++answers}` : "HOLD") })
+    const run = h.start(wf(`const a = await agent("first")\nreturn await agent("second " + a)`))
+    await settle(30)
+    const first = h.get(run).tasks.find((task) => task.title === "first")!
+    const second = h.get(run).tasks.find((task) => task.title.startsWith("second"))!
+    h.service.recordUsage(second.sessionId!, { type: "usage.recorded", sessionId: second.sessionId!, seq: 1, at: 0, turnId: h.ids("turn"), provider: "fake", model: "fake", input: 7, output: 3, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
+    expect("error" in h.service.control(run.workflowId, "retry", { taskId: first.id })).toBe(false)
+    await settle(30)
+    const after = h.get(run)
+    expect(after.tasks.some((task) => task.id === second.id)).toBe(false)
+    expect(after.retiredUsage?.input).toBe(7)
+    expect(after.retiredUsage?.output).toBe(3)
+    expect(totalTaskUsage(after).input).toBeGreaterThanOrEqual(7)
   })
 
   test("a script whose second call does not depend on the first is not stuck after the first is restarted: both finish", async () => {

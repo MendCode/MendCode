@@ -489,6 +489,8 @@ export const WorkflowRun = lazySchema(() => z.strictObject({
   /** Daemon-resolved package root, never accepted from a workflow plan. */
   packageRoot: z.string().min(1).max(4096).optional(),
   tasks: z.array(WorkflowTask).max(256),
+  /** What agents removed from the run (a restarted script agent ends the agents its old answer started) had already used; budgets keep counting it. */
+  retiredUsage: WorkflowTaskUsage.optional(),
   verifications: z.array(WorkflowVerification).max(6),
   repairs: z.number().int().min(0).max(5),
   override: Override.optional(),
