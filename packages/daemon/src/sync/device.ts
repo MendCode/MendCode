@@ -83,6 +83,12 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   let tailRetryAt = 0
   /** Ends the wait of the long poll in flight (the chat ended, or this daemon is stopping); the hub's side times out on its own. */
   let abortTail: (() => void) | undefined
+  /** Asks the wait in flight again with the chats followed now; `tailKey` names the chats it waits on. */
+  let retargetTail: (() => void) | undefined
+  let tailKey = ""
+  /** Copies whose chat runs a turn on the hub (its change feed says `busy`), and the copies it changed last (newest first). */
+  const busyOnHub = new Set<string>()
+  let recent: string[] | undefined
   const held: Array<{ command: Command; at: number }> = []
   const uploaded = new Set<string>()
   const partials = new Map<string, Buffer[]>()
@@ -116,14 +122,18 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   const folderRefusal = (name: string, what: string, error: { code: string; message: string }) => hubLacksFolders(error) ? `[SYNC]: ${name} refused ${what}: either this device's token was not made with \`remote token create --sync --run\`, or ${name} runs an older MendCode that does not know it yet (update ${name})` : error.message
   const unreachable = (what: string) => `[SYNC]: ${hub} is not connected, so ${what} cannot run there now; try again when it is back, or clone the project here`
 
-  async function connect() {
-    if (client) return
-    const target = syncTarget(ports.dir, config)
-    const { createClient } = await import("@mendcode/client")
-    const next = createClient({ name: "sync", remote: target, reconnect: false, timeoutMs: 30_000, onConnection: (value) => { if (value === "closed" && client === next) client = undefined } })
-    await next.connect()
-    client = next as unknown as typeof client
-    status.connected = true
+  /** One connection to the hub, shared by the rounds, the commands and the copies of open chats; callers that meet while it opens wait for the same one. */
+  let connecting: Promise<void> | undefined
+  function connect(): Promise<void> {
+    if (client) return Promise.resolve()
+    return connecting ??= (async () => {
+      const target = syncTarget(ports.dir, config)
+      const { createClient } = await import("@mendcode/client")
+      const next = createClient({ name: "sync", remote: target, reconnect: false, timeoutMs: 30_000, onConnection: (value) => { if (value === "closed" && client === next) client = undefined } })
+      await next.connect()
+      client = next as unknown as typeof client
+      status.connected = true
+    })().finally(() => { connecting = undefined })
   }
   async function call(input: SyncPeerInput, counted = true): Promise<Record<string, unknown>> {
     if (counted && budget-- <= 0) throw new RoundDone()
@@ -152,13 +162,23 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const bytes = shrunk.get(ref.sha256) ?? ports.store.readBlob(ref.sha256)
     const put = (offset: number) => call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
     const offsets = Array.from({ length: Math.ceil(bytes.length / MAX_SYNC_BLOB_CHUNK_BYTES) }, (_, at) => at * MAX_SYNC_BLOB_CHUNK_BYTES)
+    // A picture the hub already holds (sent before, to this chat or another) is not sent again: one small question instead of its bytes.
+    if (!counted && offsets.length > 1 && await hubHolds(ref)) return remember(ref.sha256)
     // A prompt's attachment keeps several chunks on the way (the hub takes a connection's requests in order); a round's blobs go one by one, counted.
     if (counted || !(await putWindowed(offsets, put))) {
       for (const offset of offsets) if ((await put(offset)).stored) break
     }
-    uploaded.add(ref.sha256)
-    shrunk.delete(ref.sha256)
+    remember(ref.sha256)
+  }
+  function remember(sha256: string) {
+    uploaded.add(sha256)
+    shrunk.delete(sha256)
     if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+  }
+  /** Whether the hub holds the blob whole already: a read at its end answers its size without any of its bytes (a refusal means no). */
+  async function hubHolds(ref: { sha256: string; bytes: number }): Promise<boolean> {
+    try { return (await call({ op: "blob-read", input: { sha256: ref.sha256, offset: ref.bytes } }, false)).bytes === ref.bytes }
+    catch (error) { if (error instanceof SyncRefusal) return false; throw error }
   }
   /** Sends the chunks with at most `PUT_WINDOW` unanswered; false when the hub refused them (taken out of order by an older hub), so the caller sends them again one by one. */
   async function putWindowed(offsets: readonly number[], put: (offset: number) => Promise<Record<string, unknown>>): Promise<boolean> {
@@ -224,7 +244,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     }
     return known
   }
-  async function downloadBlobs(events: readonly SessionEvent[]) {
+  async function downloadBlobs(events: readonly SessionEvent[], counted = true) {
     const refs = blobRefs(events)
     for (const ref of refs.copied) {
       try { if (ports.store.readBlob(ref.sha256).length === ref.bytes) continue } catch {}
@@ -234,7 +254,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       partials.set(ref.sha256, chunks)
       if (partials.size > MAX_PARTIAL_BLOBS) partials.delete(partials.keys().next().value!)
       for (let offset = chunks.reduce((sum, chunk) => sum + chunk.length, 0); ;) {
-        const part = await call({ op: "blob-read", input: { sha256: ref.sha256, offset } }) as { data: string; done: boolean; mime: string }
+        const part = await call({ op: "blob-read", input: { sha256: ref.sha256, offset } }, counted) as { data: string; done: boolean; mime: string }
         const chunk = Buffer.from(part.data, "base64")
         chunks.push(chunk)
         offset += chunk.length
@@ -340,7 +360,8 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       else ports.store.setSessionPinned(row.sessionId, remote.pinned)
     }
     if (Object.keys(ours).length) await call({ op: "meta", sessionId: row.sessionId, ...ours })
-    const next = { ...row, meta: JSON.stringify({ ...remote, ...ours }) }
+    // A live copy of the chat may have stored more meanwhile: only the metadata changes here.
+    const next = { ...(rows.get(row.sessionId) ?? row), meta: JSON.stringify({ ...remote, ...ours }) }
     save(next)
     return next
   }
@@ -367,8 +388,13 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     }
   }
 
-  /** Copies the hub's settled new events of one session here. Returns false when the round's budget ran out before its end. */
-  async function pull(summary: Summary, tail = false, pushed?: TailPage): Promise<number> {
+  /**
+   * Copies the hub's new events of one session here: settled turns, and also the running one when `tail` (a live chat) or the hub
+   * says a turn runs (`busy`), so a running chat is copied once as it goes instead of fetched whole again every round until it ends.
+   * Several pulls of one session may overlap (the round, the push of the live tail, an opened chat): each takes only the events
+   * after what is stored when it writes. `counted`: the request counts against the round's budget.
+   */
+  async function pull(summary: Summary, tail = false, pushed?: TailPage, counted = true): Promise<number> {
     let row = rows.get(summary.sessionId)
     const exists = ports.store.hasSession(summary.sessionId)
     if (row && (row.role === "owned" || row.state !== "ok")) return 0
@@ -391,11 +417,11 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     let first = pushed ? { events: pushed.events.filter((event) => event.seq > after), hasMore: pushed.hasMore, lastSeq: pushed.lastSeq } : undefined
     for (;;) {
       if (after >= summary.lastSeq! && !carry.length) break
-      const page = first ?? await call({ op: "history", sessionId: summary.sessionId, after: carry.at(-1)?.seq ?? after }) as { events: SessionEvent[]; hasMore: boolean; lastSeq: number }
+      const page = first ?? await call({ op: "history", sessionId: summary.sessionId, after: carry.at(-1)?.seq ?? after }, counted) as { events: SessionEvent[]; hasMore: boolean; lastSeq: number }
       first = undefined
       for (const event of page.events) { carry.push(event); carryBytes += JSON.stringify(event).length }
       // `tail`: a chat running on the hub for this machine is copied as it runs, so its approvals and output show here at once.
-      const count = tail ? carry.length : settledPrefix(carry)
+      const count = tail || summary.busy ? carry.length : settledPrefix(carry)
       const complete = !page.hasMore && count === carry.length
       if (count) {
         const ready = carry.slice(0, count)
@@ -403,23 +429,30 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
         for (const directory of new Set(ready.flatMap((event) => event.type === "session.created" || event.type === "session.workspace.changed" ? [event.directory] : []))) {
           localDirs.set(directory, (await projects.resolve({ directory, ...(directory === summary.directory && summary.project ? { project: summary.project } : {}) })).directory)
         }
-        const events = withDirectory(ready, (directory) => localDirs.get(directory) ?? directory)
-        skippedBlobs += await downloadBlobs(events)
-        const first = events[0]!
-        const create = ports.store.hasSession(summary.sessionId) ? undefined : first.type === "session.created" ? { directory: first.directory, title: summary.title ?? first.title, createdAt: first.at } : undefined
-        if (!create && !ports.store.hasSession(summary.sessionId)) throw new SyncRefusal("invalid", "the hub's history of this session does not start with its creation")
-        const lastSeq = complete ? Math.max(page.lastSeq, events.at(-1)!.seq) : events.at(-1)!.seq
-        const added = ports.store.projectSync.ingest({ sessionId: summary.sessionId, events, messages: syncedMessages(events), lastSeq, ...(create ? { create } : {}) })
-        stored += added.length
-        for (const event of added) ports.publish(event as SessionEvent)
-        // A batch of streamed text changes nothing about the session's state: only other events refresh it.
-        if (added.some((event) => event.type !== "item.delta")) {
-          ports.release(summary.sessionId)
-          ports.changed(summary.sessionId)
+        const mapped = withDirectory(ready, (directory) => localDirs.get(directory) ?? directory)
+        skippedBlobs += await downloadBlobs(mapped, counted)
+        // From here to the save nothing waits: another pull of this session that stored meanwhile is not stored twice.
+        const current = rows.get(summary.sessionId)
+        if (current && (current.role !== "mirror" || current.state !== "ok")) return stored
+        const storedSeq = current?.remoteSeq ?? 0
+        const events = mapped.filter((event) => event.seq > storedSeq)
+        const lastSeq = Math.max(storedSeq, complete ? Math.max(page.lastSeq, ready.at(-1)!.seq) : ready.at(-1)!.seq)
+        if (events.length) {
+          const first = events[0]!
+          const create = ports.store.hasSession(summary.sessionId) ? undefined : first.type === "session.created" ? { directory: first.directory, title: summary.title ?? first.title, createdAt: first.at } : undefined
+          if (!create && !ports.store.hasSession(summary.sessionId)) throw new SyncRefusal("invalid", "the hub's history of this session does not start with its creation")
+          const added = ports.store.projectSync.ingest({ sessionId: summary.sessionId, events, messages: syncedMessages(events), lastSeq, ...(create ? { create } : {}) })
+          stored += added.length
+          for (const event of added) ports.publish(event as SessionEvent)
+          // A batch of streamed text changes nothing about the session's state: only other events refresh it.
+          if (added.some((event) => event.type !== "item.delta")) {
+            ports.release(summary.sessionId)
+            ports.changed(summary.sessionId)
+          }
         }
-        row = { ...(row ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(!tail && summary.directory ? { hubDir: summary.directory } : {}) }
+        row = { ...(current ?? { sessionId: summary.sessionId, role: "mirror", epoch: 0, leaseUntil: 0, state: "ok", note: "", meta: "", activeAt: 0 }), remoteSeq: lastSeq, ...(!tail && summary.directory ? { hubDir: summary.directory } : {}) }
         if (skippedBlobs) row.note = `${skippedBlobs} attachment${skippedBlobs === 1 ? "" : "s"} over 8 MiB stay on ${hub}`
-        save(row)
+        if (events.length || lastSeq !== current?.remoteSeq || row.hubDir !== current?.hubDir || row.note !== current?.note) save(row)
         after = lastSeq
         carry = carry.slice(count)
         carryBytes = carry.reduce((sum, event) => sum + JSON.stringify(event).length, 0)
@@ -447,62 +480,141 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       const running = ports.store.hasSession(sessionId as SessionId) && (ports.store.lastTurnStatus(sessionId as SessionId) === "running" || ports.store.queueOf(sessionId as SessionId).length > 0)
       if (!stored && !running && ports.now() - entry.since > 2 * LIVE_TICK_MS) { if (entry.watch) delete entry.run; else live.delete(sessionId) }
     }
-    if (!live.size) abortTail?.()
+    tailChanged()
+  }
+
+  /**
+   * The chats the live tail waits on, at most `SYNC_TAIL_SESSIONS`: the live ones first, then those the hub says run a turn, then
+   * the copies the hub changed most recently. A turn that starts, streams or ends in any of them reaches this machine one round trip
+   * after the hub stored it, so the lists show it and opening the chat finds it already copied.
+   */
+  function followed(): SessionId[] {
+    const ids = new Set<string>(live.keys())
+    const add = (id: string) => { if (ids.size < SYNC_TAIL_SESSIONS) { const row = rows.get(id); if (row?.role === "mirror" && row.state === "ok") ids.add(id) } }
+    for (const id of busyOnHub) add(id)
+    for (const id of recentCopies()) add(id)
+    return [...ids].slice(0, SYNC_TAIL_SESSIONS) as SessionId[]
+  }
+  /** Copies most recently changed on the hub, newest first: read once from the store, then kept by the change feed. */
+  function recentCopies(): string[] {
+    if (recent) return recent
+    const mirrors = [...rows.values()].filter((row) => row.role === "mirror" && row.state === "ok").map((row) => ({ id: row.sessionId, at: state.sessionHead(row.sessionId)?.updated_at ?? 0 }))
+    return recent = mirrors.sort((a, b) => b.at - a.at).slice(0, SYNC_TAIL_SESSIONS).map((entry) => entry.id)
+  }
+  function noteChange(change: Summary) {
+    if (change.deleted || rows.get(change.sessionId)?.role !== "mirror") { busyOnHub.delete(change.sessionId); if (recent) recent = recent.filter((id) => id !== change.sessionId); return }
+    if (change.busy) busyOnHub.add(change.sessionId)
+    else busyOnHub.delete(change.sessionId)
+    recent = [change.sessionId, ...recentCopies().filter((id) => id !== change.sessionId)].slice(0, SYNC_TAIL_SESSIONS)
+  }
+  /** The set of followed chats may have changed: the wait in flight is asked again with the new set (on the same connection), or the tail starts. */
+  function tailChanged() {
+    if (!tailing) return startTail()
+    const key = followed().join(",")
+    if (key !== tailKey) retargetTail?.()
   }
 
   /** The hub's connection for the live tail: its own, so a wait for news never holds up a round or a command. */
   async function openTail() {
     const target = syncTarget(ports.dir, config)
     const { createClient } = await import("@mendcode/client")
-    const next = createClient({ name: "sync-tail", remote: target, reconnect: false, timeoutMs: TAIL_WAIT_MS + 15_000, onConnection: (value) => { if (value === "closed" && tailClient === (next as unknown as typeof client)) tailClient = undefined } })
+    const next = createClient({ name: "sync-tail", remote: target, reconnect: false, timeoutMs: TAIL_WAIT_MS + 15_000, onGlobal: (body) => pushedPage(body as unknown as Record<string, unknown>), onConnection:(value) => { if (value === "closed" && tailClient === (next as unknown as typeof client)) tailClient = undefined } })
     await next.connect()
     tailClient = next as unknown as typeof client
     return tailClient!
   }
   /**
-   * While a chat runs on the hub for this machine, a long poll on its own connection hands over the hub's new events as they are
-   * stored, one round trip after the hub wrote them. A hub that does not know `tail` (an older build) or a failing connection
-   * leaves the 300 ms polling round to do the work.
+   * A wait on its own connection hands over the hub's new events of the followed chats as they are stored: pushed as frames by a
+   * current hub, as the answer of a long poll by an older one. A hub that does not know `tail` (an older build still) or a failing
+   * connection leaves the polling round to do the work.
    */
   function startTail() {
-    if (tailing || stopped || !live.size || ports.now() < tailRetryAt) return
+    if (tailing || stopped || ports.now() < tailRetryAt || !followed().length) return
     tailing = runTail().catch(() => {}).finally(() => {
       tailing = undefined
       tailHealthy = false
+      tailKey = ""
       try { tailClient?.close() } catch {}
       tailClient = undefined
     })
   }
+  /** A hub built before pushed tails refused `push` once: it is asked with plain long polls from then on. */
+  let pushUnsupported = false
+  /** Pushed batches are copied one after another, in the order the hub sent them (the hub already gathers a steady stream into few frames). */
+  let pushChain: Promise<void> = Promise.resolve()
+  function pushedPage(body: Record<string, unknown>) {
+    if (body.type !== "sync.tail" || typeof body.sessionId !== "string" || !Array.isArray(body.events)) return
+    const page = body as unknown as TailPage & { from: number }
+    pushChain = pushChain.then(async () => {
+      if (stopped) return
+      // A batch that starts after what is stored here would leave a gap (an earlier one was not stored): the wait is asked again from here.
+      if (page.from > (rows.get(page.sessionId)?.remoteSeq ?? 0)) { retargetTail?.(); return }
+      const directory = live.get(page.sessionId)?.directory ?? ports.store.sessionDirectory(page.sessionId) ?? ""
+      await pull({ sessionId: page.sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true, page, false)
+    }).catch((error: unknown) => {
+      if (!roundError(error)) ports.log(`[SYNC]: a live chat was not copied: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
+      retargetTail?.()
+    })
+  }
+  type TailReply = Awaited<ReturnType<NonNullable<typeof client>["send"]>>
   async function runTail() {
-    for (let failures = 0; !stopped && live.size;) {
-      const sessions = [...live.keys()].slice(0, SYNC_TAIL_SESSIONS).map((sessionId) => ({ sessionId: sessionId as SessionId, after: rows.get(sessionId)?.remoteSeq ?? 0 }))
-      const before = sessions.reduce((sum, item) => sum + item.after, 0)
-      let result: { sessions?: TailPage[] } | undefined
+    let waiting: Promise<TailReply> | undefined
+    let asked: "push" | "poll" = "push"
+    /** Asks the hub for the followed chats' news after what is stored here. */
+    const ask = (connection: NonNullable<typeof client>) => {
+      const ids = followed()
+      tailKey = ids.join(",")
+      const sessions = ids.map((sessionId) => ({ sessionId, after: rows.get(sessionId)?.remoteSeq ?? 0 }))
+      asked = pushUnsupported ? "poll" : "push"
+      const sent = connection.send({ type: "sync.peer", input: { op: "tail", sessions, waitMs: TAIL_WAIT_MS, ...(pushUnsupported ? {} : { push: true as const }) } })
+      // An answer the loop no longer waits for (the set changed) is dropped; the newer wait gets the same news.
+      sent.catch(() => {})
+      return sent
+    }
+    for (let failures = 0; !stopped && followed().length;) {
+      let result: { sessions?: TailPage[]; pushed?: boolean } | undefined
+      let connection: NonNullable<typeof client>
       try {
-        const connection = tailClient ?? await openTail()
-        // Connecting took long enough for the chat to end or this daemon to stop: no wait is started.
-        if (stopped || !live.size) { connection.close(); return }
+        connection = tailClient ?? await openTail()
+        // Connecting took long enough for every followed chat to go or this daemon to stop: no wait is started.
+        if (stopped || !followed().length) { connection.close(); return }
         tailHealthy = true
+        waiting ??= ask(connection)
         const reply = await Promise.race([
-          connection.send({ type: "sync.peer", input: { op: "tail", sessions, waitMs: TAIL_WAIT_MS } }),
-          new Promise<never>((_, reject) => { abortTail = () => { abortTail = undefined; try { connection.close() } catch {} ; reject(new Error("stopped")) } }),
+          waiting,
+          new Promise<"retarget">((resolve, reject) => {
+            retargetTail = () => { retargetTail = undefined; resolve("retarget") }
+            abortTail = () => { abortTail = undefined; retargetTail = undefined; try { connection.close() } catch {} ; reject(new Error("stopped")) }
+          }),
         ])
+        retargetTail = undefined
+        // The followed chats changed: the hub is asked again on the same connection (its older wait ends there).
+        if (reply === "retarget") { waiting = undefined; continue }
+        waiting = undefined
+        // An older hub refuses the `push` field: plain long polls from now on. One that refuses `tail` itself is polled by the rounds.
+        if (!reply.ok && reply.error.code === "invalid_command" && asked === "push") { pushUnsupported = true; continue }
         if (!reply.ok && reply.error.code === "invalid_command") { tailHealthy = false; tailRetryAt = ports.now() + TAIL_UNSUPPORTED_MS; return }
         if (!reply.ok) throw new Error(reply.error.message)
-        result = reply.result as { sessions?: TailPage[] }
+        result = reply.result as { sessions?: TailPage[]; pushed?: boolean }
+        // Pushed batches came as frames before this answer: they are copied before the next wait names where it starts.
+        if (result.pushed) await pushChain
       } catch {
         tailHealthy = false
+        waiting = undefined
+        retargetTail = undefined
         try { tailClient?.close() } catch {}
         tailClient = undefined
-        if (stopped || !live.size) return
-        await Bun.sleep(Math.min(TAIL_RETRY_MS * 2 ** failures++, TAIL_RETRY_MAX_MS))
+        if (stopped || !followed().length) return
+        await Bun.sleep(Math.min(TAIL_RETRY_MS * 2 ** failures++, live.size ? TAIL_RETRY_MAX_MS : MAX_BACKOFF_MS))
         continue
       }
       failures = 0
+      const pages = result.sessions ?? []
+      const before = pages.reduce((sum, page) => sum + (rows.get(page.sessionId)?.remoteSeq ?? 0), 0)
       try {
-        for (const page of result.sessions ?? []) {
-          const entry = live.get(page.sessionId)
-          if (entry) await exclusive(() => pull({ sessionId: page.sessionId, cseq: 0, directory: entry.directory, lastSeq: Number.MAX_SAFE_INTEGER }, true, page))
+        for (const page of pages) {
+          const directory = live.get(page.sessionId)?.directory ?? ports.store.sessionDirectory(page.sessionId) ?? ""
+          await pull({ sessionId: page.sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true, page, false)
         }
       } catch (error) {
         if (!roundError(error)) ports.log(`[SYNC]: a live chat was not copied: ${error instanceof Error ? error.message.slice(0, 300) : String(error)}`)
@@ -511,7 +623,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
         continue
       }
       // Events the copy would not take (a chat kept apart) must not turn the wait into a busy loop.
-      if (sessions.reduce((sum, item) => sum + (rows.get(item.sessionId)?.remoteSeq ?? 0), 0) === before && (result.sessions?.length ?? 0) > 0) await Bun.sleep(LIVE_TICK_MS)
+      if (pages.length && pages.reduce((sum, page) => sum + (rows.get(page.sessionId)?.remoteSeq ?? 0), 0) === before) await Bun.sleep(LIVE_TICK_MS)
     }
   }
 
@@ -558,8 +670,10 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
             save({ ...(row ?? { sessionId: change.sessionId, role: "mirror", remoteSeq: 0, epoch: 0, leaseUntil: 0, meta: "", activeAt: 0 }), state: "unsyncable", note: why } as SyncSessionRow)
           }
         }
+        noteChange(change)
         state.meta.set("session-cursor", String(change.cseq))
       }
+      if (page.changes.length) tailChanged()
       if (!page.hasMore) return
     }
   }
@@ -643,7 +757,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   }
   function schedule() {
     if (stopped) return
-    if (live.size) startTail()
+    startTail()
     // A live chat quickens the rounds while the hub answers; while it does not, the round waits its back-off (it doubles up to RECONNECT_MAX_MS) instead of reconnecting three times a second.
     timer = setTimeout(() => void now().catch(() => {}), live.size ? Math.min(delay, status.connected ? liveTick() : RECONNECT_MAX_MS) : delay)
     ;(timer as { unref?(): void }).unref?.()
@@ -681,12 +795,18 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   async function forward(command: Command): Promise<{ ok: true; result?: Record<string, unknown> } | { ok: false; code: string; message: string }> {
     const { id: _id, clientId: _clientId, ...bare } = command as Command & { id: string; clientId: string }
     const what = command.type === "session.create" ? "a new chat" : command.type === "user.submit" ? "this prompt" : command.type === "turn.cancel" ? "a cancel" : command.type === "session.cd" ? "a directory change" : command.type === "session.dirs" ? "the folder list" : command.type === "request.resolve" ? "an answer" : "this change to the queue"
-    return exclusive(async () => {
+    return inOrder(async () => {
       let reply: Awaited<ReturnType<NonNullable<typeof client>["send"]>>
       // The model of a hub chat is the hub's: the one this device picked is not sent, and the hub refuses a prompt that names one.
       const outgoing = bare.type === "session.create" ? { ...bare, directory: projects.toRemote(bare.directory), reuseEmpty: undefined } : bare.type === "session.cd" || bare.type === "session.dirs" ? { ...bare, path: projects.toRemote(bare.path) } : bare.type === "user.submit" && bare.selection?.model ? { ...bare, selection: bare.selection.agent ? { agent: bare.selection.agent } : undefined } : bare
       // A connection the hub's restart ended is found out by this send: it reconnects once before the hub counts as away.
       for (let attempt = 0; ; attempt++) {
+        // Commands held while the hub was away go first, so this one never overtakes them.
+        if (held.length && HUB_COMMANDS.has(bare.type) && held.length < MAX_HELD) {
+          held.push({ command: (bare.type === "user.submit" ? outgoing : bare) as Command, at: ports.now() })
+          void now().catch(() => {})
+          return { ok: true as const, result: { held: true } }
+        }
         try {
           await connect()
           const toSend = await putAttachments(outgoing)
@@ -712,12 +832,32 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
       if (bare.type === "session.dirs") return { ok: true as const, ...(reply.result ? { result: reply.result } : {}) }
       const sessionId = (bare.type === "session.create" ? reply.result?.sessionId : (bare as { sessionId: string }).sessionId) as SessionId | undefined
       if (typeof sessionId === "string") {
-        live.set(sessionId, { directory: bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? "", since: ports.now(), run: true, ...(live.get(sessionId)?.watch ? { watch: true as const } : {}) })
-        try { await pullLive() } catch (error) { if (!roundError(error)) throw error }
-        if (HUB_COMMANDS.has(bare.type) || bare.type === "session.create") startTail()
+        const directory = bare.type === "session.create" ? projects.toRemote(bare.directory) : live.get(sessionId)?.directory ?? ports.store.sessionDirectory(sessionId) ?? ""
+        live.set(sessionId, { directory, since: ports.now(), run: true, ...(live.get(sessionId)?.watch ? { watch: true as const } : {}) })
+        // A new chat is copied before the answer, so the terminal opens it here at once. Otherwise the answer goes back now and the
+        // turn's events follow by the live tail, which already waits on an open chat; without the tail (an older hub) they are copied
+        // at once beside it.
+        tailChanged()
+        const copy = () => pull({ sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true, undefined, false)
+        if (bare.type === "session.create") { try { await copy() } catch (error) { if (!roundError(error)) throw error } }
+        else if (!tailHealthy) void copy().catch(() => {})
+        soon()
       }
       return { ok: true as const, ...(reply.result ? { result: reply.result } : {}) }
     })
+  }
+  /** Commands to the hub go out one at a time in the order given, beside the background rounds (they share the connection). */
+  let commandChain: Promise<unknown> = Promise.resolve()
+  function inOrder<T>(work: () => Promise<T>): Promise<T> {
+    const run = commandChain.then(work, work)
+    commandChain = run.catch(() => {})
+    return run
+  }
+  /** A live chat changed the pace: the next round comes at the live pace instead of waiting out the quiet one. */
+  function soon() {
+    if (round || stopped) return
+    clearTimeout(timer)
+    schedule()
   }
 
   /** Sends what waited for the link, oldest first, in the order it was given; one that is too old is dropped, and a failed link keeps the rest. */
@@ -824,11 +964,11 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     const known = live.get(sessionId)
     if (known) known.watch = true
     else live.set(sessionId, { directory: ports.store.sessionDirectory(sessionId) ?? "", since: ports.now(), watch: true })
-    // The long poll in flight names the chats it waits for: it starts again with this one among them.
-    if (!known) abortTail?.()
-    startTail()
+    // The long poll in flight names the chats it waits for: it is asked again with this one among them.
+    tailChanged()
+    // Copied at once, beside a round that may be running: overlapping copies store each event once.
     const directory = live.get(sessionId)!.directory
-    void exclusive(() => pull({ sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true)).catch(() => {})
+    void pull({ sessionId, cseq: 0, directory, lastSeq: Number.MAX_SAFE_INTEGER }, true, undefined, false).catch(() => {})
   }
 
   return {

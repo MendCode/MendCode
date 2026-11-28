@@ -7055,7 +7055,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (!connection.peer || connection.peer.readOnly || connection.agent) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: session sync needs a remote sync or full token" })
         // Writing a file into this machine's folders is more than syncing sessions: it takes a run or full token.
         if (command.input.op === "file-put" && connection.peer.scope === "sync") return reply(connection, command.id, { ok: false, code: "forbidden", message: "[SYNC]: copying a file to this machine needs a token made with `remote token create --sync --run`" })
-        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input, clientGone(connection)) }) }
+        try { return reply(connection, command.id, { ok: true, result: await (await syncService()).peer(connection.peer.name, command.input, clientGone(connection), (body) => send(connection, { v: PROTOCOL_VERSION, kind: "global", body: body as unknown as GlobalEvent })) }) }
         catch (error) { return reply(connection, command.id, syncFailure(error)) }
       }
       case "sync.control": {

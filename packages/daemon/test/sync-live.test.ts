@@ -48,11 +48,17 @@ const engine = () => ({
   compact: async () => ({ status: "ok" }),
 }) as unknown as EnginePort
 
-type Relay = { port: number; cut(): void; pause(): void; resume(): void; olderHub(): void }
-/** A TCP relay in front of the hub: `cut` drops every connection, `pause` also refuses new ones, `olderHub` hides the `tail` op like a build that lacks it. */
+type Relay = { port: number; cut(): void; pause(): void; resume(): void; olderHub(): void; prePushHub(): void; upBytes(): number }
+/**
+ * A TCP relay in front of the hub: `cut` drops every connection, `pause` also refuses new ones, `olderHub` hides the `tail` op like a
+ * build that lacks it, `prePushHub` refuses a pushed tail like a build that knows only long polls (both start from new connections).
+ */
 function relay(target: number): Relay {
   let paused = false
   let older = false
+  let prePush = false
+  /** Bytes the device sent toward the hub. */
+  let sentUp = 0
   const open = new Set<{ end(): void }>()
   type Writable = { write(data: Uint8Array): number; end(): void }
   type Side = { up?: Writable; early: Uint8Array[] }
@@ -87,7 +93,8 @@ function relay(target: number): Relay {
       },
       drain(socket) { flush(socket) },
       data(socket, data) {
-        const bytes = older ? Buffer.from(Buffer.from(data).toString("utf8").replaceAll('"op":"tail"', '"op":"tailx"')) : new Uint8Array(data)
+        sentUp += data.byteLength
+        const bytes = older || prePush ? Buffer.from(Buffer.from(data).toString("utf8").replaceAll(older ? '"op":"tail"' : '"push":true', older ? '"op":"tailx"' : '"pushx":true')) : new Uint8Array(data)
         if (socket.data.up) send(socket.data.up, bytes)
         else socket.data.early.push(bytes)
       },
@@ -101,7 +108,9 @@ function relay(target: number): Relay {
     cut: () => { for (const socket of [...open]) socket.end(); open.clear() },
     pause() { paused = true; this.cut() },
     resume() { paused = false },
-    olderHub() { older = true },
+    olderHub() { older = true; this.cut() },
+    prePushHub() { prePush = true; this.cut() },
+    upBytes: () => sentUp,
   }
 }
 
@@ -181,30 +190,32 @@ test("a chat running on the hub streams to the device as the hub stores it, in o
   expect(Math.max(...delays)).toBeLessThan(300)
 }, 30_000)
 
-test("with the live tail in place, nothing polls faster than the safety round and an idle hub costs the device no live connection", async () => {
+test("a hub chat nobody holds open is still followed by push: a turn the hub starts there shows as running on the device at once, and its end too", async () => {
   const { hub, device, seed } = await pair()
-  // The terminal holding the chat open follows it by push; once it lets go, an idle hub costs no connection.
   await until(async () => (await deviceStatus(device)).live === "pushed", "the open chat is followed by push")
   await device.client.send({ type: "client.unsubscribe", sessionId: seed })
   await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
-  await until(async () => (await deviceStatus(device)).live === undefined, "the device stops following a chat nobody holds open")
-  expect(await submit(device, seed, "wait here")).toMatchObject({ ok: true })
-  await until(async () => (await deviceStatus(device)).live === "pushed", "the device follows the chat by push")
-  const started = events(device, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
-  expect(await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
-  await until(() => events(hub, seed).some((event) => event.type === "turn.cancelled"), "the cancel ran on the hub")
-  await until(async () => (await deviceStatus(device)).live === undefined, "the device stops following once the turn ended")
+  // One wait stays on the hub for its recent chats; the device's round is ten minutes away.
+  expect((await deviceStatus(device)).live).toBe("pushed")
+  const before = performance.now()
+  expect(await submit(hub, seed, "wait here")).toMatchObject({ ok: true })
+  await until(() => device.daemon.store.lastTurnStatus(seed) === "running", "the hub's turn shows as running on the device")
+  expect(performance.now() - before).toBeLessThan(1_000)
+  const started = events(hub, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
+  expect(await hub.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
+  await until(() => device.daemon.store.lastTurnStatus(seed) !== "running", "the end reached the device")
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
 }, 30_000)
 
-test("a chat opened on the device while the hub runs a turn is brought up to date at once, not at the next polling round", async () => {
+test("a chat opened on the device while the hub runs a turn is already copied, not waiting for the next polling round", async () => {
   const { hub, device, seed } = await pair()
   await device.client.send({ type: "client.unsubscribe", sessionId: seed })
   await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
-  // Someone else starts a turn on the hub; the device's round is ten minutes away.
+  // Someone else starts a turn on the hub; the device's round is ten minutes away, and no terminal holds the chat.
   await hub.client.subscribe(seed, events(hub, seed).at(-1)?.seq ?? 0)
   expect(await submit(hub, seed, "stream")).toMatchObject({ ok: true })
   await until(() => events(hub, seed).filter((event) => event.type === "item.delta").length >= 6, "the hub streams")
-  expect(events(device, seed).filter((event) => event.type === "item.delta").length).toBe(0)
+  await until(() => events(device, seed).filter((event) => event.type === "item.delta").length >= 3, "the running turn is copied while no terminal holds it")
   const before = performance.now()
   expect(await device.client.subscribe(seed, events(device, seed).at(-1)?.seq ?? 0)).toMatchObject({ ok: true })
   await until(() => device.stamps.size >= 6, "the open chat caught up")
@@ -220,6 +231,34 @@ test("a hub without the tail op is followed by polling and the chat still arrive
   await streamed(hub, device, seed)
   expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
   expect(await deviceStatus(device)).not.toHaveProperty("live")
+}, 30_000)
+
+test("a hub that knows only long polls (no pushed tail) is followed by them: the stream arrives whole and in order", async () => {
+  const { hub, device, link, seed } = await pair()
+  link.prePushHub()
+  await streamed(hub, device, seed)
+  await until(() => device.stamps.size >= STREAM_DELTAS, "every word reached the device's subscriber")
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
+  expect((await deviceStatus(device)).live).toBe("pushed")
+}, 30_000)
+
+test("without the tail op, a round copies a turn running on the hub as far as it got, and the next round takes only what is new", async () => {
+  const { hub, device, link, seed } = await pair()
+  link.olderHub()
+  await device.client.send({ type: "client.unsubscribe", sessionId: seed })
+  await hub.client.subscribe(seed, events(hub, seed).at(-1)?.seq ?? 0)
+  expect(await submit(hub, seed, "wait here")).toMatchObject({ ok: true })
+  await until(() => hub.daemon.store.lastTurnStatus(seed) === "running", "the turn runs on the hub")
+  await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+  expect(device.daemon.store.lastTurnStatus(seed)).toBe("running")
+  const copied = events(device, seed).length
+  await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+  expect(events(device, seed).length).toBe(copied)
+  const started = events(hub, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
+  expect(await hub.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
+  await until(() => hub.daemon.store.lastTurnStatus(seed) !== "running", "the turn ended on the hub")
+  await device.client.send({ type: "sync.control", input: { action: "now" } } as never)
+  expect(bare(events(device, seed))).toEqual(bare(events(hub, seed)))
 }, 30_000)
 
 test("a cut link in the middle of a stream is picked up again: every event arrives once and in order", async () => {
@@ -263,8 +302,9 @@ test("the queue of a hub chat is acted on from the device: edit, move, steer, dr
 
 test("an action taken while the hub is away waits and goes out, in order, when the link is back", async () => {
   const { hub, device, link, seed } = await pair()
+  const startedBefore = events(device, seed).filter((event) => event.type === "turn.started").length
   expect(await submit(device, seed, "wait for it")).toMatchObject({ ok: true })
-  await until(() => hub.daemon.store.lastTurnStatus(seed) === "running", "the turn runs on the hub")
+  await until(() => hub.daemon.store.lastTurnStatus(seed) === "running" && events(device, seed).filter((event) => event.type === "turn.started").length > startedBefore, "the turn runs on the hub and its start reached the device")
   const started = events(device, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
 
   link.pause()
@@ -308,6 +348,23 @@ test("an attachment staged while the prompt is written is already on the hub whe
   // Sending the prompt finds it there: nothing more to copy.
   expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "see this", attachments: [ref] })).toMatchObject({ ok: true })
   await until(() => events(hub, seed).some((event) => event.type === "queue.added" && event.text === "see this"), "the prompt reached the hub")
+}, 30_000)
+
+test("a picture the hub already holds is not sent again, also after this machine's daemon restarted", async () => {
+  const { hub, device, link, seed } = await pair()
+  const bytes = new Uint8Array(900 * 1024)
+  for (let at = 0; at < bytes.length; at++) bytes[at] = (at * 2246822519) >>> 24
+  const ref = device.daemon.store.putBlob(bytes, "application/pdf")
+  expect(await submit(device, seed, "first look").then(() => device.client.send({ type: "user.submit", sessionId: seed, text: "see this", attachments: [ref] }))).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub, seed) === 3, "both prompts ran on the hub")
+  device.client.close()
+  await device.daemon.stop()
+  const again = await boot(device.dir, { sync: { tickMs: 600_000, leaseMs: 60_000, idleReleaseMs: 600_000 } })
+  const before = link.upBytes()
+  expect(await again.client.send({ type: "user.submit", sessionId: seed, text: "and again", attachments: [ref] })).toMatchObject({ ok: true })
+  await until(() => turnsDone(hub, seed) === 4, "the prompt ran on the hub")
+  // A new connection, a question and the prompt: far less than one chunk of the picture.
+  expect(link.upBytes() - before).toBeLessThan(64 * 1024)
 }, 30_000)
 
 test("a PNG over 2048 pixels goes to the hub as a smaller PNG and the prompt names that copy; this machine keeps the original", async () => {

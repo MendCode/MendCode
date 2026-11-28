@@ -19,6 +19,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - On a Mac with chats synced from a Linux hub, the daemon no longer stops answering for seconds or minutes: folders of those chats that are not on this machine are recognized at once instead of being looked up again and again.
 - The daemon's log names the commands that were running when its event loop was held for over a second.
 
+- Chats on a sync hub feel closer to local ones: streamed text arrives as the hub writes it, sending a message is answered sooner, and the sidebar shows a hub chat as running or idle within a moment, also when it is not open and the turn started elsewhere. The full gain needs the hub updated too; an older hub keeps working at its old pace.
+- A picture the hub already has is not uploaded again when it is attached to another hub chat, also after a restart.
 - Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
 - A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
 - Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload. A PNG wider or taller than 2048 pixels is sent to the hub as a smaller copy (a photograph as a JPEG on a Mac); the original stays on this machine.
