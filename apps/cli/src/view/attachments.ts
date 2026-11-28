@@ -215,19 +215,46 @@ function fileFence(content: string): string {
   return "`".repeat(Math.max(3, longest + 1))
 }
 
-/** A single line that looks like one local path: a quoted path (may contain spaces), or an unquoted `file://`, `~/` or absolute path with escaped spaces. */
-const PATH_LINE = /^(?:"[^"]+"|'[^']+'|(?:file:\/\/|~\/|\/)(?:\\.|\S)*)$/
+/** What a path starts with: an optional quote, then `file://`, `~/` or `/`. */
+const PATH_START = /^["']?(?:file:\/\/|~\/|\/)/
+/** A name that ends in a file extension: the mark of one path whose spaces were not escaped. */
+const PATH_EXTENSION = /\.[A-Za-z0-9]{1,8}["']?$/
 
 /**
- * When every non-empty line of a bracketed paste looks like a local path, returns them in order so the
- * caller can resolve and attach each one instead of inserting the paste as text. `undefined` for any
- * other paste (plain text, a mix of prose and paths, or an empty paste).
+ * One line cut into the words a shell sees: a space or tab ends a word unless a backslash escapes it or it is inside quotes. Each word
+ * keeps its quotes and escapes (the daemon undoes them). A no-break or narrow no-break space, as in a macOS screenshot's name, belongs to its word.
+ */
+function shellWords(line: string): string[] {
+  const words: string[] = []
+  let word = ""
+  let quote = ""
+  for (let at = 0; at < line.length; at++) {
+    const char = line[at]!
+    if (char === "\\" && quote !== "'" && at + 1 < line.length) { word += char + line[++at]; continue }
+    if (quote) { if (char === quote) quote = ""; word += char; continue }
+    if (char === "'" || char === '"') { quote = char; word += char; continue }
+    if (char === " " || char === "\t") { if (word) words.push(word); word = ""; continue }
+    word += char
+  }
+  if (word) words.push(word)
+  return words
+}
+
+/**
+ * When every non-empty line of a bracketed paste is made of local paths, returns them in order so the caller can resolve and attach
+ * each one instead of inserting the paste as text. A line holds one path or several (a terminal puts a dropped selection on one line,
+ * separated by spaces), quoted or with escaped spaces; a line that is one path ending in a file extension may also keep plain spaces.
+ * `undefined` for any other paste (plain text, a mix of prose and paths, or an empty paste).
  */
 export function pastedPaths(text: string): string[] | undefined {
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-  if (lines.length === 0 || !lines.every((line) => PATH_LINE.test(line))) return undefined
-  return lines
+  const paths: string[] = []
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/^[ \t\r]+|[ \t\r]+$/g, "")
+    if (!line) continue
+    const words = shellWords(line)
+    if (words.length > 0 && words.every((word) => PATH_START.test(word))) paths.push(...words)
+    else if (PATH_START.test(line) && PATH_EXTENSION.test(line) && !/["']/.test(line.slice(1, -1))) paths.push(line)
+    else return undefined
+  }
+  return paths.length ? paths : undefined
 }
