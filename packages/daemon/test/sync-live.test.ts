@@ -54,7 +54,25 @@ function relay(target: number): Relay {
   let paused = false
   let older = false
   const open = new Set<{ end(): void }>()
-  type Side = { up?: { write(data: Uint8Array): number; end(): void }; early: Uint8Array[] }
+  type Writable = { write(data: Uint8Array): number; end(): void }
+  type Side = { up?: Writable; early: Uint8Array[] }
+  // A socket that is full takes part of a write: the rest waits here until it drains, so a burst of large frames arrives whole.
+  const backlog = new WeakMap<object, Uint8Array[]>()
+  const flush = (to: Writable) => {
+    const queue = backlog.get(to)
+    while (queue?.length) {
+      const head = queue[0]!
+      const taken = to.write(head)
+      if (taken < head.length) { queue[0] = head.subarray(Math.max(taken, 0)); return }
+      queue.shift()
+    }
+  }
+  const send = (to: Writable, data: Uint8Array) => {
+    const queue = backlog.get(to) ?? []
+    backlog.set(to, queue)
+    queue.push(data)
+    flush(to)
+  }
   const server = Bun.listen<Side>({
     hostname: "127.0.0.1", port: 0,
     socket: {
@@ -62,14 +80,15 @@ function relay(target: number): Relay {
         socket.data = { early: [] }
         if (paused) { socket.end(); return }
         open.add(socket)
-        const up = await Bun.connect({ hostname: "127.0.0.1", port: target, socket: { data(_up, data) { socket.write(data) }, close() { socket.end() }, error() {} } })
+        const up = await Bun.connect({ hostname: "127.0.0.1", port: target, socket: { data(_up, data) { send(socket, new Uint8Array(data)) }, drain(up) { flush(up) }, close() { socket.end() }, error() {} } })
         open.add(up)
         socket.data.up = up
-        for (const chunk of socket.data.early.splice(0)) up.write(chunk)
+        for (const chunk of socket.data.early.splice(0)) send(up, chunk)
       },
+      drain(socket) { flush(socket) },
       data(socket, data) {
         const bytes = older ? Buffer.from(Buffer.from(data).toString("utf8").replaceAll('"op":"tail"', '"op":"tailx"')) : new Uint8Array(data)
-        if (socket.data.up) socket.data.up.write(bytes)
+        if (socket.data.up) send(socket.data.up, bytes)
         else socket.data.early.push(bytes)
       },
       close(socket) { open.delete(socket); socket.data.up?.end() },
@@ -274,4 +293,19 @@ test("a new chat is not held while the hub is away: it is refused saying the hub
   const here = (await device.client.send({ type: "session.list", limit: 5 } as never) as unknown as { result: { sessions: Array<{ directory: string }> } }).result.sessions[0]!.directory
   const created = await device.client.send({ type: "session.create", directory: here, reuseEmpty: true })
   expect(created).toMatchObject({ ok: false, error: { code: "forbidden", message: expect.stringContaining("hub is not connected") } })
+}, 30_000)
+
+test("an attachment staged while the prompt is written is already on the hub when the prompt goes, and a local chat stages nothing", async () => {
+  const { hub, device, seed } = await pair()
+  const bytes = new Uint8Array(900 * 1024)
+  for (let at = 0; at < bytes.length; at++) bytes[at] = (at * 2654435761) >>> 24
+  const ref = device.daemon.store.putBlob(bytes, "image/png")
+  expect(hub.daemon.store.blobPath(ref.sha256) && (await Bun.file(hub.daemon.store.blobPath(ref.sha256)).exists())).toBe(false)
+  expect(await device.client.send({ type: "attachment.stage", sessionId: seed, attachment: ref })).toMatchObject({ ok: true, result: { staged: true } })
+  expect(Buffer.from(hub.daemon.store.readBlob(ref.sha256)).equals(Buffer.from(bytes))).toBe(true)
+  const local = (await device.client.send({ type: "session.create", directory: tempDir("local") }) as unknown as { result: { sessionId: SessionId } }).result.sessionId
+  expect(await device.client.send({ type: "attachment.stage", sessionId: local, attachment: ref })).toMatchObject({ ok: true, result: { staged: false } })
+  // Sending the prompt finds it there: nothing more to copy.
+  expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "see this", attachments: [ref] })).toMatchObject({ ok: true })
+  await until(() => events(hub, seed).some((event) => event.type === "queue.added" && event.text === "see this"), "the prompt reached the hub")
 }, 30_000)

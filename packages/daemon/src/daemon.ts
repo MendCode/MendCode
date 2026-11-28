@@ -6151,6 +6151,15 @@ export async function startDaemon(options: DaemonOptions) {
         try { return reply(connection, command.id, { ok: true, result: await (await syncService()).upload(command.sessionId, file) }) }
         catch (error) { return reply(connection, command.id, syncFailure(error)) }
       }
+      case "attachment.stage": {
+        // Best effort: the prompt copies whatever is still missing when it goes. Only blobs this machine holds, whole, are sent.
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[ATTACHMENT]: files are attached from this machine only" })
+        if (!syncHubOf?.(command.sessionId)) return reply(connection, command.id, { ok: true, result: { staged: false } })
+        const held = existsSync(store.blobPath(command.attachment.sha256)) && store.readBlob(command.attachment.sha256).length === command.attachment.bytes
+        if (!held) return reply(connection, command.id, { ok: true, result: { staged: false } })
+        const staged = await (await syncService()).stage(command.sessionId, command.attachment)
+        return reply(connection, command.id, { ok: true, result: { staged } })
+      }
       case "review.query":
       case "review.update":
         if (!store.sessionDirectory(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[REVIEW]: session not found" })

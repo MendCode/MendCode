@@ -104,6 +104,11 @@ export function scalePixels(source: PetImage, width: number, height: number): Pe
   const fit = pixelFit(source, width, height)
   const rgba = new Uint8Array(width * height * 4)
   if (!fit) return { width, height, rgba }
+  if (fit.scale === 1 && fit.divisor === 1) {
+    // Not scaled, only centered: whole rows are copied.
+    for (let y = 0; y < fit.height; y++) rgba.set(source.rgba.subarray(y * source.width * 4, (y + 1) * source.width * 4), ((fit.y + y) * width + fit.x) * 4)
+    return { width, height, rgba }
+  }
   for (let y = 0; y < fit.height; y++) {
     for (let x = 0; x < fit.width; x++) {
       const from = (Math.floor(y / fit.scale) * fit.divisor * source.width + Math.floor(x / fit.scale) * fit.divisor) * 4
