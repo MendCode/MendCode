@@ -54,9 +54,12 @@ export const SyncPeerInput = lazySchema(() => z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("history"), sessionId: SessionId, after: seq }),
   /**
    * Long poll for live chats: answers as soon as any listed session has events after its `after` (or empty after `waitMs`), so a
-   * device follows a chat running on the hub at the hub's own pace. Each session's events come as in `history`.
+   * device follows a chat running on the hub at the hub's own pace. Each session's events come as in `history`. `push`: the hub
+   * instead sends each batch of new events as it is stored, as a `sync.tail` frame on the same connection (`sessionId`, `from`,
+   * `events`, `hasMore`, `lastSeq`), until `waitMs` ends or a newer wait replaces this one, then answers `{ sessions: [], pushed: true }`.
+   * A hub built before `push` refuses the field; the device asks again without it.
    */
-  z.strictObject({ op: z.literal("tail"), sessions: z.array(z.strictObject({ sessionId: SessionId, after: seq })).min(1).max(SYNC_TAIL_SESSIONS), waitMs: z.number().int().min(0).max(SYNC_TAIL_MAX_WAIT_MS) }),
+  z.strictObject({ op: z.literal("tail"), sessions: z.array(z.strictObject({ sessionId: SessionId, after: seq })).min(1).max(SYNC_TAIL_SESSIONS), waitMs: z.number().int().min(0).max(SYNC_TAIL_MAX_WAIT_MS), push: z.literal(true).optional() }),
   /**
    * New settled events of a session this device holds the lease of (`epoch`), or of a new session it hands to the hub
    * (`create`). `base` is the hub's last seq as the device last saw it; anything else is a conflict.
