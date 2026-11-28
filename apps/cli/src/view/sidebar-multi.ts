@@ -134,7 +134,7 @@ const STATE_MARK: Record<BotState, readonly [string, string]> = { working: ["●
 /** A row that works or waits for you: its header counts it while it is not drawn, and it keeps its project listed. */
 const busyMark = (value: SessionMark) => value === "running" || waitsOnYou(value)
 
-type Entry = { line: Line; lead?: Line; id?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> }; /** A folding header: its ▸/▾ glyph starts `col` cells in from the line's start. */ fold?: { col: number; open: boolean }; /** The row ends in a `+` that starts a chat. */ plus?: boolean }
+type Entry = { line: Line; lead?: Line; id?: string; /** A group heading's title: a held list takes the heading drawn now (its count, its stale mark) instead of the held one. */ heading?: string; fill?: boolean; /** A bot's picture over the cells `col` in from the line's start. */ picture?: { col: number; at: NonNullable<BotIcon["image"]> }; /** A folding header: its ▸/▾ glyph starts `col` cells in from the line's start. */ fold?: { col: number; open: boolean }; /** The row ends in a `+` that starts a chat. */ plus?: boolean }
 type Push = (line: Line, id?: string, picture?: { col: number; at: NonNullable<BotIcon["image"]> }, fold?: { col: number; open: boolean }, extra?: { /** A folded header that holds the open session carries its bar. */ holds?: boolean; plus?: boolean }) => void
 
 export const isGroupId = (id: string) => id.startsWith(GROUP)
@@ -260,7 +260,9 @@ function build(raw: MultiInput): Built {
   const now = new Map<string, Entry>()
   for (const entry of current.entries) if (entry.id !== undefined && !now.has(entry.id)) now.set(entry.id, entry)
   // A held row that is gone keeps its place, without the selection's fill, until the list is taken again.
-  const entries = held.map((entry): Entry => entry.id === undefined ? entry : now.get(entry.id) ?? { line: entry.line.map((span) => ({ ...span, fg: "muted" as const, bold: false })), id: entry.id, lead: [{ text: "  " }] })
+  const headings = new Map<string, Entry>()
+  for (const entry of current.entries) if (entry.heading !== undefined && !headings.has(entry.heading)) headings.set(entry.heading, entry)
+  const entries = held.map((entry): Entry => entry.id === undefined ? (entry.heading !== undefined ? headings.get(entry.heading) ?? entry : entry) : now.get(entry.id) ?? { line: entry.line.map((span) => ({ ...span, fg: "muted" as const, bold: false })), id: entry.id, lead: [{ text: "  " }] })
   const shown = new Set(entries.flatMap((entry) => entry.id !== undefined ? [entry.id] : []))
   return { entries, names: current.names, starts: current.starts.filter((start) => shown.has(start.id)) }
 }
@@ -307,7 +309,9 @@ function buildLive(raw: MultiInput, only?: ReadonlySet<string>): Built {
   /** The `+` that ends a row a chat can be started from; its cells (and the blank before the rule) are the row's own hit zone. */
   const plus: Line = [{ text: " +", fg: "muted" }]
   const blankBetween = () => { if (entries.length) entries.push({ line: [] }) }
-  const heading = (title: string, count: number, stale = false) => push(spread([{ text: title, fg: "muted" }], [...(stale ? [{ text: "stale ", fg: "warning" as const }] : []), { text: String(count), fg: "muted" }], inner))
+  const heading = (title: string, count: number, stale = false) => { push(spread([{ text: title, fg: "muted" }], [...(stale ? [{ text: "stale ", fg: "warning" as const }] : []), { text: String(count), fg: "muted" }], inner))
+    entries.at(-1)!.heading = title
+  }
   /** `slot` names the picture for the image layer when the terminal draws images: one per row. */
   const icon = (bot: { name: string; state?: BotState; identity: { shape?: never; color?: never } | BotListReport["bots"][number]["identity"] }, slot: string) => botIcon({ name: bot.name, shape: bot.identity.shape, color: bot.identity.color, ascii: input.ascii, state: bot.state, ...(input.faces ? { faces: { ...input.faces, slot: `${input.faces.slot}:${slot}` } } : {}) })
   /** The icon cells of a session row: the bot's icon, else blanks of the same width. */
