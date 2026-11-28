@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { existsSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import path from "node:path"
-import { MAX_SYNC_BLOB_CHUNK_BYTES, MAX_SYNC_UPLOAD_FILE_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
+import { MAX_SYNC_BLOB_CHUNK_BYTES, MAX_SYNC_UPLOAD_BLOB_BYTES, MAX_SYNC_UPLOAD_FILE_BYTES, type Command, SYNC_PAGE_BYTES, SYNC_PAGE_EVENTS, SYNC_TAIL_SESSIONS, type SessionEvent, type SessionId, type SyncPeerInput, type SyncProjectRef } from "@mendcode/protocol"
 import type { SyncSessionRow, SyncState } from "@mendcode/store"
 import { PORTABLE_SETTINGS } from "../config-bundle/classify"
 import { hubLacksFolders } from "./run-peer"
@@ -26,6 +26,8 @@ const RECONNECT_MAX_MS = 2_000
 const FOLLOW_SUMMARY_MAX = 300
 /** Blobs whose download a round left unfinished keep their chunks for the next one (at most this many, 8 MiB each). */
 const MAX_PARTIAL_BLOBS = 2
+/** Chunks of one attachment sent to the hub before the first is answered. */
+const PUT_WINDOW = 6
 
 type Summary = { sessionId: SessionId; cseq: number; deleted?: true; title?: string; directory?: string; project?: SyncProjectRef; lastSeq?: number; createdAt?: number; updatedAt?: number; archived?: boolean; pinned?: boolean; busy?: boolean; lease?: { holder: string; epoch: number; until: number } }
 /** Commands of a chat the hub owns that run there: the prompt, the cancel, an approval, and the queue's actions (send now, steer, drop, edit, move). */
@@ -146,12 +148,41 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
   async function putBlob(ref: { sha256: string; bytes: number; mime: string }, counted: boolean) {
     if (uploaded.has(ref.sha256)) return
     const bytes = ports.store.readBlob(ref.sha256)
-    for (let offset = 0; offset < bytes.length; offset += MAX_SYNC_BLOB_CHUNK_BYTES) {
-      const result = await call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
-      if (result.stored) break
+    const put = (offset: number) => call({ op: "blob-put", input: { sha256: ref.sha256, bytes: ref.bytes, mime: ref.mime, offset, data: Buffer.from(bytes.subarray(offset, offset + MAX_SYNC_BLOB_CHUNK_BYTES)).toString("base64") } }, counted)
+    const offsets = Array.from({ length: Math.ceil(bytes.length / MAX_SYNC_BLOB_CHUNK_BYTES) }, (_, at) => at * MAX_SYNC_BLOB_CHUNK_BYTES)
+    // A prompt's attachment keeps several chunks on the way (the hub takes a connection's requests in order); a round's blobs go one by one, counted.
+    if (counted || !(await putWindowed(offsets, put))) {
+      for (const offset of offsets) if ((await put(offset)).stored) break
     }
     uploaded.add(ref.sha256)
     if (uploaded.size > 4096) uploaded.delete(uploaded.values().next().value!)
+  }
+  /** Sends the chunks with at most `PUT_WINDOW` unanswered; false when the hub refused them (taken out of order by an older hub), so the caller sends them again one by one. */
+  async function putWindowed(offsets: readonly number[], put: (offset: number) => Promise<Record<string, unknown>>): Promise<boolean> {
+    const flying = new Set<Promise<void>>()
+    let failure: unknown
+    let stored = false
+    for (const offset of offsets) {
+      if (failure !== undefined || stored) break
+      if (flying.size >= PUT_WINDOW) await Promise.race(flying)
+      const sent: Promise<void> = put(offset).then((result) => { if (result.stored) stored = true }, (error: unknown) => { failure ??= error }).finally(() => flying.delete(sent))
+      flying.add(sent)
+    }
+    await Promise.all(flying)
+    if (failure === undefined) return true
+    if (failure instanceof SyncRefusal) return false
+    throw failure
+  }
+  /** Starts copying an attachment of a prompt being written, so the prompt finds it on the hub already; false for a chat this machine runs or a hub that is away. */
+  async function stage(sessionId: SessionId, ref: { sha256: string; bytes: number; mime: string }): Promise<boolean> {
+    const row = rows.get(sessionId)
+    if (row?.role !== "mirror" || row.state !== "ok" || ref.bytes > MAX_SYNC_UPLOAD_BLOB_BYTES) return false
+    try {
+      await exclusive(async () => { await connect(); await putBlob(ref, false) })
+      return true
+    } catch {
+      return false
+    }
   }
   /** The attachments of a prompt for a chat the hub runs: its images, PDFs and pasted text go to the hub first, so the prompt can name them there. */
   async function putAttachments(command: { type: string }) {
@@ -776,6 +807,7 @@ export function createDevice(ports: SyncPorts, state: SyncState, config: SyncCon
     routes,
     forward,
     upload,
+    stage,
     /** A round that starts now, after any one already running (`mendcode sync now`). */
     async fresh() {
       while (round) await round.catch(() => {})

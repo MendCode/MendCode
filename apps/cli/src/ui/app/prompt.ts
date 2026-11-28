@@ -86,6 +86,8 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean; /** A
    * cursor, where the model will read it; with the chip row only (`above`) it waits after the text.
    */
   function addAttachment(item: PendingAttachment) {
+    // A chat a hub owns gets the file while the prompt is still being written; the daemon ignores any other chat.
+    if ((item.kind === "image" || item.kind === "document") && !input.remote) void input.send({ type: "attachment.stage", sessionId: state.sessionId, attachment: item.ref }).catch(() => {})
     if (state.tuiProfile.attachmentChips === "above") {
       state.attachments = [...state.attachments, item]
       return

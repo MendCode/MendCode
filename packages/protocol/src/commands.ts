@@ -1091,6 +1091,18 @@ export const AttachmentUpload = lazySchema(() => z.strictObject({
   path: z.string().min(1).max(4096),
 }))
 
+/**
+ * Starts copying an attachment of a prompt that is being written to the hub that owns the chat, so it is already there when the prompt
+ * is sent. Best effort and local clients only. Ack: `{ staged }` (false for a chat this machine runs, or when the hub is away: the
+ * prompt then copies it as it goes).
+ */
+export const AttachmentStage = lazySchema(() => z.strictObject({
+  ...base,
+  type: z.literal("attachment.stage"),
+  sessionId: SessionId,
+  attachment: BlobRef,
+}))
+
 /** Ack: `{ commands: Array<{ name, description, argumentHint, source }> }` from .mendcode/commands and the user folder. */
 export const CustomCommandsList = lazySchema(() => z.strictObject({
   ...base,
@@ -2204,6 +2216,7 @@ export const COMMAND_SCHEMAS = {
   "attachment.read": AttachmentRead,
   "attachment.paste": AttachmentPaste,
   "attachment.upload": AttachmentUpload,
+  "attachment.stage": AttachmentStage,
   "commands.list": CustomCommandsList,
   "commands.expand": CustomCommandExpand,
   "scratchpad.get": ScratchpadGet,

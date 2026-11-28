@@ -13,6 +13,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Opening a chat that runs on a hub shows what the hub has of it at once and follows it live while it stays open, instead of showing the old copy for a few seconds.
 - A message sent while a turn runs shows as queued the moment you press Enter, also in chats on a hub.
+- Several pictures in the transcript appear much faster, and an image pasted into a chat that runs on a sync hub starts copying to the hub right away, with several pieces on the way at once, so sending the message no longer waits for the whole upload.
 - On a Mac, pasting a screenshot from the clipboard is instant instead of taking seconds, and no longer fails with "no image in the clipboard" for a large one.
 - On a Mac, Cmd+V attaches an image that is alone on the clipboard, in terminals with the kitty keyboard protocol (Ghostty, for one); it used to do nothing.
 - Pasting or dropping files into the prompt attaches them when the name holds a narrow no-break space (macOS screenshots), when several files arrive on one line, and when a single path keeps plain spaces.
