@@ -86,9 +86,10 @@ export function createSync(ports: SyncPorts) {
       startDevice()
       if (!device && asHub) startHub()
     },
-    async peer(holder: string, input: SyncPeerInput, gone?: AbortSignal) {
+    /** `push` sends a frame to the asking device's connection (a pushed `tail`). */
+    async peer(holder: string, input: SyncPeerInput, gone?: AbortSignal, push?: (body: Record<string, unknown>) => void) {
       if (device) throw new SyncRefusal("forbidden", "this machine syncs with another hub; it does not serve as one")
-      return startHub().handle(holder, input, gone)
+      return startHub().handle(holder, input, gone, push)
     },
     async control(input: SyncControlInput): Promise<Record<string, unknown>> {
       switch (input.action) {

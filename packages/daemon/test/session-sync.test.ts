@@ -561,8 +561,10 @@ test("a prompt to a mirrored hub chat runs on the hub; its approval is answered 
   await until(() => texts(events(device.daemon, seed)).includes("re: ask first (approve)"), "the approved turn finished and came back")
   sameElsewhere(events(device.daemon, seed), hubLast(hub, seed))
 
+  const startedBefore = events(device.daemon, seed).filter((event) => event.type === "turn.started").length
   expect(await device.client.send({ type: "user.submit", sessionId: seed, text: "wait forever", attachments: [] })).toMatchObject({ ok: true })
-  await until(() => events(device.daemon, seed).some((event) => event.type === "turn.started" && hub.daemon.store.lastTurnStatus(seed) === "running"), "the second turn runs")
+  // The answer comes as soon as the hub took the prompt; the turn's start follows through the mirror.
+  await until(() => events(device.daemon, seed).filter((event) => event.type === "turn.started").length > startedBefore && hub.daemon.store.lastTurnStatus(seed) === "running", "the second turn runs")
   const started = events(device.daemon, seed).filter((event) => event.type === "turn.started").at(-1) as Extract<SessionEvent, { type: "turn.started" }>
   expect(await device.client.send({ type: "turn.cancel", sessionId: seed, turnId: started.turnId })).toMatchObject({ ok: true })
   await until(() => hub.daemon.store.lastTurnStatus(seed) !== "running" && device.daemon.store.lastTurnStatus(seed) !== "running", "the cancel ended the turn on both")

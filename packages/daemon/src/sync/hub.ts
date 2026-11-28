@@ -118,41 +118,72 @@ export function createHub(ports: SyncPorts, state: SyncState) {
     return { released: true, lastSeq: head.last_seq }
   }
 
-  /** Devices waiting in a `tail` for news of their chats: one per device (a newer wait replaces the older), woken by the hub's own events. */
-  const tails = new Map<string, { ids: ReadonlySet<string>; wake(): void }>()
+  /**
+   * Devices waiting in a `tail` for news of their chats: one per device (a newer wait ends the older), told of the hub's own
+   * events by `wake`.
+   */
+  const tails = new Map<string, { ids: ReadonlySet<string>; wake(): void; end(): void }>()
   ports.observe((event) => { if (tails.size) for (const entry of tails.values()) if (entry.ids.has(event.sessionId)) entry.wake() })
   /** What gathers after a first event before the answer leaves, so one answer carries a few events instead of each alone. */
-  const TAIL_COALESCE_MS = 40
+  const TAIL_COALESCE_MS = 15
+  /**
+   * A pushed tail sends what a burst of events stored within `PUSH_COALESCE_MS` in one frame, and during a steady stream at most one
+   * frame per `PUSH_GAP_MS` (what arrives meanwhile goes in the next): the first event after a pause leaves at once.
+   */
+  const PUSH_COALESCE_MS = 4
+  const PUSH_GAP_MS = 80
 
-  async function tail(holder: string, input: Extract<SyncPeerInput, { op: "tail" }>, gone?: AbortSignal) {
+  async function tail(holder: string, input: Extract<SyncPeerInput, { op: "tail" }>, gone?: AbortSignal, frame?: (body: Record<string, unknown>) => void) {
+    const cursors = new Map(input.sessions.map((item) => [item.sessionId, item.after]))
     const collect = () => {
-      const out: Array<{ sessionId: SessionId; events: SessionEvent[]; hasMore: boolean; lastSeq: number }> = []
-      for (const { sessionId, after } of input.sessions) {
+      const out: Array<{ sessionId: SessionId; from: number; events: SessionEvent[]; hasMore: boolean; lastSeq: number }> = []
+      for (const [sessionId, after] of cursors) {
         const head = state.sessionHead(sessionId)
         if (!head || head.parent_id || head.last_seq <= after) continue
         const page = store.projectSync.sessionHistory(sessionId, after)!
-        if (page.events.length) out.push({ sessionId, events: page.events, hasMore: page.hasMore, lastSeq: page.lastSeq })
+        if (page.events.length) out.push({ sessionId, from: after, events: page.events, hasMore: page.hasMore, lastSeq: page.lastSeq })
       }
       return out
     }
+    const wait = (onWake: (finish: (value: boolean) => void) => void) => new Promise<boolean>((resolve) => {
+      let done = false
+      const finish = (value: boolean) => { if (done) return; done = true; clearTimeout(timer); if (tails.get(holder) === entry) tails.delete(holder); resolve(value) }
+      const entry = { ids: new Set<string>(cursors.keys()), wake: () => onWake(finish), end: () => finish(false) }
+      const timer = setTimeout(() => finish(false), input.waitMs)
+      gone?.addEventListener("abort", () => finish(false), { once: true })
+      tails.get(holder)?.end()
+      tails.set(holder, entry)
+    })
+    if (input.push && frame) {
+      // Pushed: every batch of new events goes to the device as a frame of its own on this connection as soon as it is stored, until
+      // the wait ends (its time, the device gone, or a newer wait). `from` is where the batch starts, so the device sees a gap.
+      const flush = () => {
+        for (let pages = collect(); pages.length; pages = pages.some((page) => page.hasMore) ? collect() : []) {
+          for (const page of pages) {
+            cursors.set(page.sessionId, page.events.at(-1)!.seq)
+            frame({ type: "sync.tail", ...page })
+          }
+        }
+      }
+      flush()
+      let pending: ReturnType<typeof setTimeout> | undefined
+      let sentAt = 0
+      await wait(() => { pending ??= setTimeout(() => { pending = undefined; sentAt = ports.now(); flush() }, Math.max(PUSH_COALESCE_MS, sentAt + PUSH_GAP_MS - ports.now())) })
+      clearTimeout(pending)
+      flush()
+      return { sessions: [], pushed: true }
+    }
     let sessions = collect()
     if (!sessions.length && input.waitMs > 0) {
-      const woken = await new Promise<boolean>((resolve) => {
-        let done = false
-        const finish = (value: boolean) => { if (done) return; done = true; clearTimeout(timer); if (tails.get(holder) === entry) tails.delete(holder); resolve(value) }
-        const entry = { ids: new Set<string>(input.sessions.map((item) => item.sessionId)), wake: () => finish(true) }
-        const timer = setTimeout(() => finish(false), input.waitMs)
-        gone?.addEventListener("abort", () => finish(false), { once: true })
-        tails.get(holder)?.wake()
-        tails.set(holder, entry)
-      })
+      const woken = await wait((finish) => finish(true))
       if (woken) await new Promise((resolve) => setTimeout(resolve, TAIL_COALESCE_MS))
       sessions = collect()
     }
-    return { sessions }
+    return { sessions: sessions.map(({ from: _from, ...page }) => page) }
   }
 
-  async function handle(holder: string, input: SyncPeerInput, gone?: AbortSignal): Promise<Record<string, unknown>> {
+  /** `frame` sends a frame of its own to the asking device's connection (a pushed `tail`). */
+  async function handle(holder: string, input: SyncPeerInput, gone?: AbortSignal, frame?: (body: Record<string, unknown>) => void): Promise<Record<string, unknown>> {
     switch (input.op) {
       case "hello": return { hub: true, leaseMs, now: ports.now() }
       case "changes": {
@@ -169,7 +200,7 @@ export function createHub(ports: SyncPorts, state: SyncState) {
         const page = store.projectSync.sessionHistory(input.sessionId, input.after)!
         return { events: page.events, hasMore: page.hasMore, lastSeq: page.lastSeq }
       }
-      case "tail": return tail(holder, input, gone)
+      case "tail": return tail(holder, input, gone, frame)
       case "push": return push(holder, input)
       case "lease": return lease(holder, input)
       case "meta": {
