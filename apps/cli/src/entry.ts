@@ -8,6 +8,8 @@ if (process.argv[2] === "__daemon") await import("../../../packages/daemon/src/m
 else if (process.argv[2] === "__codegraph-scan") await (await import("../../../packages/codegraph/src/scan-host")).runScanHost()
 // The code panel's overview of a project the daemon does not hold: its index loads, refreshes and leaves with this process.
 else if (process.argv[2] === "__codegraph-overview") await (await import("../../../packages/codegraph/src/overview-host")).runOverviewHost()
+// Transcript pictures are decoded and scaled there, with every JIT tier on (apps/cli/src/ui/image-host.ts).
+else if (process.argv[2] === "__image-host") await (await import("./ui/image-host")).runImageHost()
 else if (process.argv[2] === "__script-host") await (await import("../../../packages/workflows/src/script-host")).runScriptHost()
 else {
   // Before main reads the data directory: an earlier version's ~/.mendcode-v2 becomes ~/.mendcode once (data-dir-move.ts).
